@@ -6,7 +6,9 @@ from psycopg import errors
 from psycopg import sql as pg_sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from typing_extensions import NotRequired
 
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "CockroachPsycopgADKConfig",
     "CockroachPsycopgAsyncADKMemoryStore",
     "CockroachPsycopgAsyncADKStore",
     "CockroachPsycopgSyncADKMemoryStore",
@@ -26,6 +29,46 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.cockroach_psycopg.adk.store")
+
+
+class CockroachPsycopgADKConfig(ADKConfig):
+    """CockroachDB psycopg ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with the CockroachDB psycopg ADK stores.
+    """
+
+    table_locality: NotRequired[str]
+    """Default raw CockroachDB LOCALITY clause for ADK tables."""
+
+    session_table_locality: NotRequired[str]
+    """Raw CockroachDB LOCALITY clause for the ADK session table."""
+
+    events_table_locality: NotRequired[str]
+    """Raw CockroachDB LOCALITY clause for the ADK events table."""
+
+    app_state_table_locality: NotRequired[str]
+    """Raw CockroachDB LOCALITY clause for the ADK app state table."""
+
+    user_state_table_locality: NotRequired[str]
+    """Raw CockroachDB LOCALITY clause for the ADK user state table."""
+
+    metadata_table_locality: NotRequired[str]
+    """Raw CockroachDB LOCALITY clause for the ADK metadata table."""
+
+    memory_table_locality: NotRequired[str]
+    """Raw CockroachDB LOCALITY clause for the ADK memory table."""
+
+    enable_hash_sharded_indexes: NotRequired[bool]
+    """Create CockroachDB hash-sharded secondary indexes on hot timestamp access paths."""
+
+    hash_shard_bucket_count: NotRequired[int]
+    """Optional bucket count for CockroachDB hash-sharded secondary indexes."""
+
+    enable_storing_indexes: NotRequired[bool]
+    """Add CockroachDB STORING columns to common ADK replay/session indexes."""
+
+    enable_memory_trigram_index: NotRequired[bool]
+    """Create a CockroachDB trigram GIN index for simple ILIKE memory search."""
 
 
 class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConfig"]):
@@ -390,9 +433,13 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await conn.commit()
 
     async def _get_create_sessions_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
+        session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
@@ -402,13 +449,13 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
+        ){session_locality};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
+            ON {self._session_table}(app_name, user_id){session_storing_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
+            ON {self._session_table}(update_time DESC){hash_shard_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
             ON {self._session_table} USING GIN (state)
@@ -416,6 +463,11 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         """
 
     async def _get_create_events_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -424,25 +476,31 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
+        ){events_locality};
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
+            ON {self._events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
             ON {self._events_table} USING GIN (event_data);
         """
 
     async def _get_create_app_states_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
+        ){app_state_locality};
         """
 
     async def _get_create_user_states_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -450,15 +508,18 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (app_name, user_id)
-        );
+        ){user_state_locality};
         """
 
     async def _get_create_metadata_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
             key VARCHAR(128) PRIMARY KEY,
             value VARCHAR(512) NOT NULL
-        );
+        ){metadata_locality};
         """
 
     async def _get_seed_metadata_sql(self) -> str:
@@ -587,9 +648,13 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         self._set_metadata(key, value)
 
     def _get_create_sessions_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
+        session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
@@ -599,13 +664,13 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
+        ){session_locality};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
+            ON {self._session_table}(app_name, user_id){session_storing_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
+            ON {self._session_table}(update_time DESC){hash_shard_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
             ON {self._session_table} USING GIN (state)
@@ -613,6 +678,11 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """
 
     def _get_create_events_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -621,25 +691,31 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL,
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
+        ){events_locality};
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
+            ON {self._events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
             ON {self._events_table} USING GIN (event_data);
         """
 
     def _get_create_app_states_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
+        ){app_state_locality};
         """
 
     def _get_create_user_states_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -647,15 +723,18 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (app_name, user_id)
-        );
+        ){user_state_locality};
         """
 
     def _get_create_metadata_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
             key VARCHAR(128) PRIMARY KEY,
             value VARCHAR(512) NOT NULL
-        );
+        ){metadata_locality};
         """
 
     def _get_seed_metadata_sql(self) -> str:
@@ -1168,15 +1247,24 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
     async def _get_create_memory_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
+        memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
 
         fts_index = ""
         if self._use_fts:
             fts_index = f"""
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+        trigram_index = ""
+        if adk_config.get("enable_memory_trigram_index", False):
+            trigram_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_content_trgm
+            ON {self._memory_table} USING GIN (content_text gin_trgm_ops);
             """
 
         return f"""
@@ -1192,14 +1280,15 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             content_text TEXT NOT NULL,
             metadata_json JSONB,
             inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
+        ){memory_locality};
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+            ON {self._memory_table}(app_name, user_id, timestamp DESC){hash_shard_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
             ON {self._memory_table}(session_id);
         {fts_index}
+        {trigram_index}
         """
 
     def _get_drop_memory_table_sql(self) -> "list[str]":
@@ -1237,15 +1326,24 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         return self._delete_entries_older_than(days)
 
     def _get_create_memory_table_sql(self) -> str:
+        adk_config = _get_cockroach_psycopg_adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
+        memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
 
         fts_index = ""
         if self._use_fts:
             fts_index = f"""
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+        trigram_index = ""
+        if adk_config.get("enable_memory_trigram_index", False):
+            trigram_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_content_trgm
+            ON {self._memory_table} USING GIN (content_text gin_trgm_ops);
             """
 
         return f"""
@@ -1261,14 +1359,15 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             content_text TEXT NOT NULL,
             metadata_json JSONB,
             inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
+        ){memory_locality};
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+            ON {self._memory_table}(app_name, user_id, timestamp DESC){hash_shard_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
             ON {self._memory_table}(session_id);
         {fts_index}
+        {trigram_index}
         """
 
     def _get_drop_memory_table_sql(self) -> "list[str]":
@@ -1427,3 +1526,42 @@ def _build_insert_params_with_owner(entry: "MemoryRecord", owner_id: "object | N
 def _raise_missing_session(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _get_cockroach_psycopg_adk_config(config: Any) -> CockroachPsycopgADKConfig:
+    """Return CockroachDB psycopg ADK extension settings from ``extension_config["adk"]``."""
+
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return {}
+    return cast("CockroachPsycopgADKConfig", adk_config)
+
+
+def _cockroach_table_locality_clause(adk_config: CockroachPsycopgADKConfig, table_key: str) -> str:
+    locality = adk_config.get(table_key) or adk_config.get("table_locality")
+    if not isinstance(locality, str):
+        return ""
+    clause = locality.strip()
+    if not clause:
+        return ""
+    if not clause.upper().startswith("LOCALITY "):
+        clause = f"LOCALITY {clause}"
+    return f"\n        {clause}"
+
+
+def _cockroach_hash_shard_clause(adk_config: CockroachPsycopgADKConfig) -> str:
+    if not adk_config.get("enable_hash_sharded_indexes", False):
+        return ""
+    bucket_count = adk_config.get("hash_shard_bucket_count")
+    if isinstance(bucket_count, int) and not isinstance(bucket_count, bool) and bucket_count > 0:
+        return f" USING HASH WITH (bucket_count = {bucket_count})"
+    return " USING HASH"
+
+
+def _cockroach_storing_clause(adk_config: CockroachPsycopgADKConfig, columns: tuple[str, ...]) -> str:
+    if not adk_config.get("enable_storing_indexes", False):
+        return ""
+    return f" STORING ({', '.join(columns)})"
