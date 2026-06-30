@@ -8,9 +8,13 @@ DuckDB is an OLAP database optimized for analytical queries. This adapter provid
 """
 
 import contextlib
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import NotRequired, TypedDict
+
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -21,11 +25,60 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import MemoryRecord
 
 
-__all__ = ("DuckdbADKMemoryStore", "DuckdbADKStore")
+__all__ = ("DuckdbADKConfig", "DuckdbADKFTSOptions", "DuckdbADKMemoryStore", "DuckdbADKStore")
 
 logger = get_logger("sqlspec.adapters.duckdb.adk.store")
 
 DUCKDB_TABLE_NOT_FOUND_ERROR: Final = "does not exist"
+DUCKDB_EVENT_PROJECTION_STRUCT: Final = "STRUCT(author VARCHAR, node_info STRUCT(path VARCHAR))"
+DUCKDB_FTS_ALLOWED_OPTIONS: Final = ("stemmer", "stopwords", "ignore", "strip_accents", "lower", "overwrite")
+DUCKDB_FTS_CREATE_OPTION_ORDER: Final = ("stemmer", "stopwords", "ignore", "strip_accents", "lower", "overwrite")
+DUCKDB_FTS_REFRESH_OPTION_ORDER: Final = ("overwrite", "stemmer", "stopwords", "ignore", "strip_accents", "lower")
+DUCKDB_FTS_DEFAULT_OPTIONS: Final[dict[str, str | int]] = {
+    "stemmer": "porter",
+    "stopwords": "english",
+    "strip_accents": 1,
+    "lower": 1,
+}
+
+
+class DuckdbADKFTSOptions(TypedDict):
+    """DuckDB FTS ``PRAGMA create_fts_index`` options for ADK memory search."""
+
+    stemmer: NotRequired[str]
+    """Stemmer name. Defaults to ``"porter"``."""
+
+    stopwords: NotRequired[str]
+    """Stopword table/name. Defaults to ``"english"``."""
+
+    ignore: NotRequired[str]
+    """Regular expression ignored by DuckDB tokenization."""
+
+    strip_accents: NotRequired[bool | int]
+    """Whether DuckDB strips accents during tokenization. Defaults to ``1``."""
+
+    lower: NotRequired[bool | int]
+    """Whether DuckDB lowercases text during tokenization. Defaults to ``1``."""
+
+    overwrite: NotRequired[bool | int]
+    """Whether initial FTS index creation overwrites an existing index. Defaults to ``0``."""
+
+
+class DuckdbADKConfig(ADKConfig):
+    """DuckDB-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with the DuckDB ADK stores.
+    Shared ADK table and service settings are inherited from :class:`ADKConfig`.
+    """
+
+    enable_event_generated_columns: NotRequired[bool]
+    """Create DuckDB virtual generated columns for common ADK event JSON paths."""
+
+    enable_event_generated_column_indexes: NotRequired[bool]
+    """Index generated event projection columns when generated columns are enabled."""
+
+    memory_fts_options: NotRequired[DuckdbADKFTSOptions]
+    """DuckDB FTS ``PRAGMA create_fts_index`` options for ADK memory search."""
 
 
 class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
@@ -246,16 +299,46 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         Returns:
             SQL statement to create adk_event table with indexes.
         """
+        generated_columns = self._get_event_generated_columns_sql()
+        generated_indexes = self._get_event_generated_column_indexes_sql()
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
             session_id VARCHAR NOT NULL,
             invocation_id VARCHAR,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSON NOT NULL,
+            event_data JSON NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
+        {generated_indexes}
+        """
+
+    def _get_event_generated_columns_sql(self) -> str:
+        """Return DuckDB ADK generated event projection columns."""
+        adk_config = _get_duckdb_adk_config(self._config)
+        if not adk_config.get("enable_event_generated_columns", False):
+            return ""
+
+        return f""",
+            author_gc VARCHAR GENERATED ALWAYS AS ((event_data::{DUCKDB_EVENT_PROJECTION_STRUCT}).author) VIRTUAL,
+            node_path_gc VARCHAR GENERATED ALWAYS AS ((event_data::{DUCKDB_EVENT_PROJECTION_STRUCT}).node_info.path) VIRTUAL"""
+
+    def _get_event_generated_column_indexes_sql(self) -> str:
+        """Return optional indexes for generated event projection columns."""
+        adk_config = _get_duckdb_adk_config(self._config)
+        if not (
+            adk_config.get("enable_event_generated_columns", False)
+            and adk_config.get("enable_event_generated_column_indexes", False)
+        ):
+            return ""
+
+        return f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_author_gc
+            ON {self._events_table}(session_id, author_gc, timestamp ASC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_node_path_gc
+            ON {self._events_table}(session_id, node_path_gc, timestamp ASC);
         """
 
     def _get_create_app_states_table_sql(self) -> str:
@@ -355,16 +438,19 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def __get_create_events_table_sql_sync(self) -> str:
         """Synchronous version of DDL generation for use in _create_tables."""
+        generated_columns = self._get_event_generated_columns_sql()
+        generated_indexes = self._get_event_generated_column_indexes_sql()
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
             session_id VARCHAR NOT NULL,
             invocation_id VARCHAR,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSON NOT NULL,
+            event_data JSON NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
+        {generated_indexes}
         """
 
     def _create_session(
@@ -849,10 +935,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             return
 
         try:
-            conn.execute(
-                f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
-                f"stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
-            )
+            conn.execute(self._get_create_fts_index_sql(overwrite=False))
             conn.commit()
         except Exception as exc:
             logger.debug("Failed to create DuckDB FTS index: %s", exc)
@@ -867,13 +950,35 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             return
 
         try:
-            conn.execute(
-                f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
-                f"overwrite=1, stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
-            )
+            conn.execute(self._get_create_fts_index_sql(overwrite=True))
             conn.commit()
         except Exception as exc:
             logger.debug("Failed to refresh DuckDB FTS index: %s", exc)
+
+    def _get_create_fts_index_sql(self, *, overwrite: bool) -> str:
+        """Return DuckDB FTS index PRAGMA SQL for the memory table."""
+        return (
+            f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
+            f"{self._render_fts_options(overwrite=overwrite)})"
+        )
+
+    def _render_fts_options(self, *, overwrite: bool) -> str:
+        """Render DuckDB FTS options from adapter-local ADK config."""
+        options: dict[str, object] = dict(DUCKDB_FTS_DEFAULT_OPTIONS)
+        adk_config = _get_duckdb_adk_config(self._config)
+        configured_options = adk_config.get("memory_fts_options", {})
+        if configured_options:
+            _validate_duckdb_fts_options(configured_options)
+            options.update(configured_options)
+        if overwrite:
+            options["overwrite"] = 1
+
+        option_order = DUCKDB_FTS_REFRESH_OPTION_ORDER if overwrite else DUCKDB_FTS_CREATE_OPTION_ORDER
+        return ", ".join(
+            f"{option_name}={_format_duckdb_fts_option(options[option_name])}"
+            for option_name in option_order
+            if option_name in options
+        )
 
     def _get_create_memory_table_sql(self) -> str:
         """Get DuckDB CREATE TABLE SQL for memory entries.
@@ -1113,3 +1218,35 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 def _raise_session_not_found(session_id: str) -> None:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _get_duckdb_adk_config(config: Any) -> DuckdbADKConfig:
+    """Return DuckDB ADK extension settings from ``extension_config["adk"]``."""
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return cast("DuckdbADKConfig", {})
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return cast("DuckdbADKConfig", {})
+    return cast("DuckdbADKConfig", adk_config)
+
+
+def _validate_duckdb_fts_options(options: Mapping[str, object]) -> None:
+    """Validate DuckDB FTS option names before rendering a PRAGMA."""
+    unknown_options = sorted(set(options) - set(DUCKDB_FTS_ALLOWED_OPTIONS))
+    if unknown_options:
+        msg = f"Unsupported DuckDB ADK memory_fts_options: {', '.join(unknown_options)}"
+        raise ValueError(msg)
+
+
+def _format_duckdb_fts_option(value: object) -> str:
+    """Render a DuckDB FTS option value."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        escaped_value = value.replace("'", "''")
+        return f"'{escaped_value}'"
+    msg = f"DuckDB ADK memory_fts_options values must be str, int, or bool; got {type(value).__name__}"
+    raise TypeError(msg)
