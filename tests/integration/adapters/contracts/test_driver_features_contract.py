@@ -4,6 +4,7 @@ from tests.integration.adapters.contracts._cases import DriverCaseContext, get_d
 from tests.integration.adapters.contracts.behaviors import (
     assert_async_driver_features_contract,
     assert_sync_driver_features_contract,
+    validate_extra_assertions,
 )
 
 
@@ -22,6 +23,17 @@ def test_bigquery_contract_declares_job_control_assertion() -> None:
     case = get_driver_case("bigquery-sync")
 
     assert "driver_features:bigquery_job_controls" in case.extra_assertions
+
+
+def test_oracle_contract_declares_batch_error_assertions() -> None:
+    """Oracle keeps batch-errors metadata covered in the shared contract matrix."""
+    sync_case = get_driver_case("oracledb-sync")
+    async_case = get_driver_case("oracledb-async")
+
+    assert "driver_features:oracle_batch_errors" in sync_case.extra_assertions
+    assert "driver_features:oracle_batch_errors" in async_case.extra_assertions
+    validate_extra_assertions(sync_case)
+    validate_extra_assertions(async_case)
 
 
 def test_spanner_contract_status_defers_session_controls_explicitly() -> None:

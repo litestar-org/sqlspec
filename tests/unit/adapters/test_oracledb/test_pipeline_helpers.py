@@ -14,6 +14,7 @@ from sqlspec.adapters.oracledb.core import (
     normalize_execute_many_parameters_sync,
 )
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.data_dictionary import VersionInfo
 from sqlspec.driver import StackExecutionObserver
 
 pytest.importorskip("oracledb")
@@ -24,6 +25,28 @@ class _StubAsyncConnection:
 
     def __init__(self) -> None:
         self.in_transaction = False
+
+
+class _PipelineConnection:
+    """Connection stub exposing the python-oracledb pipeline API."""
+
+    def __init__(self, *, thin: bool = True) -> None:
+        self.in_transaction = False
+        self.thin = thin
+
+    def run_pipeline(self, *_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+
+class _AsyncPipelineConnection:
+    """Async connection stub exposing the python-oracledb async pipeline API."""
+
+    def __init__(self, *, thin: bool = True) -> None:
+        self.in_transaction = False
+        self.thin = thin
+
+    async def run_pipeline(self, *_args: object, **_kwargs: object) -> list[object]:
+        return []
 
 
 class _StubPipelineResult:
@@ -143,6 +166,74 @@ def _make_sync_driver() -> OracleSyncDriver:
     connection_mock = MagicMock()
     connection_mock.in_transaction = False
     return OracleSyncDriver(connection=cast("OracleSyncConnection", connection_mock))
+
+
+def _make_sync_pipeline_driver() -> OracleSyncDriver:
+    return OracleSyncDriver(
+        connection=cast("OracleSyncConnection", _PipelineConnection()),
+        statement_config=default_statement_config,
+        driver_features={},
+    )
+
+
+def _make_async_pipeline_driver(*, thin: bool = True) -> OracleAsyncDriver:
+    return OracleAsyncDriver(
+        connection=cast("OracleAsyncConnection", _AsyncPipelineConnection(thin=thin)),
+        statement_config=default_statement_config,
+        driver_features={},
+    )
+
+
+def test_sync_pipeline_gate_requires_async_thin_26ai(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync Oracle connections must not claim native pipeline support."""
+    driver = _make_sync_pipeline_driver()
+    monkeypatch.setattr(OracleSyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
+    monkeypatch.setattr(OracleSyncDriver, "_detect_oracle_version", lambda _self: VersionInfo(26, 0, 0))
+
+    assert driver._pipeline_native_supported() is False
+    assert driver._pipeline_support_reason == "asyncio_thin_required"
+
+
+async def test_async_pipeline_gate_requires_thin_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async Oracle pipeline support is Thin-mode only."""
+    driver = _make_async_pipeline_driver(thin=False)
+
+    async def detect_oracle_version(_self: OracleAsyncDriver) -> VersionInfo:
+        return VersionInfo(26, 0, 0)
+
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracle_version", detect_oracle_version)
+
+    assert await driver._pipeline_native_supported() is False
+    assert driver._pipeline_support_reason == "thin_mode_required"
+
+
+async def test_async_pipeline_gate_requires_26ai(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async Thin pipelines on pre-26ai databases do not reduce round trips."""
+    driver = _make_async_pipeline_driver(thin=True)
+
+    async def detect_oracle_version(_self: OracleAsyncDriver) -> VersionInfo:
+        return VersionInfo(23, 0, 0)
+
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracle_version", detect_oracle_version)
+
+    assert await driver._pipeline_native_supported() is False
+    assert driver._pipeline_support_reason == "database_version"
+
+
+async def test_async_pipeline_gate_accepts_thin_26ai(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async Thin connections on Oracle 26ai can use native pipeline execution."""
+    driver = _make_async_pipeline_driver(thin=True)
+
+    async def detect_oracle_version(_self: OracleAsyncDriver) -> VersionInfo:
+        return VersionInfo(26, 0, 0)
+
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracle_version", detect_oracle_version)
+
+    assert await driver._pipeline_native_supported() is True
+    assert driver._pipeline_support_reason is None
 
 
 def test_dispatch_execute_force_select_sync_dispatch_execute_force_select_fallback() -> None:

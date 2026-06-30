@@ -10,7 +10,7 @@ from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 import msgspec
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementStack, sql
+from sqlspec import SQL, SQLResult, StatementConfig, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
@@ -110,6 +110,8 @@ register_async_extra_assertion(DRIVER_BASICS_PROOF_KEY, DRIVER_BASICS_SCOPE, _dr
 class SyncContractDriver(Protocol):
     """Sync driver surface used by adapter contract helpers."""
 
+    statement_config: StatementConfig
+
     def begin(self) -> None: ...
 
     def commit(self) -> None: ...
@@ -147,6 +149,8 @@ class SyncContractDriver(Protocol):
 
 class AsyncContractDriver(Protocol):
     """Async driver surface used by adapter contract helpers."""
+
+    statement_config: StatementConfig
 
     async def begin(self) -> None: ...
 
@@ -2348,6 +2352,63 @@ async def _oracle_sequence_async(driver: object, case: DriverCase) -> None:
 
 register_sync_extra_assertion("driver_features:oracle_sequence", DRIVER_FEATURES_SCOPE, _oracle_sequence)
 register_async_extra_assertion("driver_features:oracle_sequence", DRIVER_FEATURES_SCOPE, _oracle_sequence_async)
+
+
+def _assert_oracle_batch_errors_result(result: SQLResult) -> None:
+    """Verify Oracle batch-errors metadata from a three-row insert with one duplicate."""
+    assert result.rows_affected == 2
+    errors = result.metadata["oracle_batch_errors"]
+    assert len(errors) == 1
+    assert errors[0]["offset"] == 1
+    assert errors[0]["code"] == 1
+    assert "ORA-" in errors[0]["message"]
+
+    row_counts = result.metadata["oracle_dml_row_counts"]
+    assert sum(row_counts) == 2
+
+
+def _oracle_batch_errors(driver: object, case: DriverCase) -> None:
+    """Fold Oracle batcherrors/arraydmlrowcounts metadata via per-call execution_args."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "batcherr")
+    sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    sync_driver.execute_script(f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    config = sync_driver.statement_config.replace(
+        execution_args={"oracle_batch_errors": True, "oracle_array_dml_row_counts": True}
+    )
+    try:
+        result = sync_driver.execute_many(
+            f"INSERT INTO {table} (id, name) VALUES (:1, :2)",
+            [(1, "first"), (1, "duplicate"), (3, "third")],
+            statement_config=config,
+        )
+        _assert_oracle_batch_errors_result(result)
+    finally:
+        sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+async def _oracle_batch_errors_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of _oracle_batch_errors."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "batcherr")
+    await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    await async_driver.execute_script(f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    config = async_driver.statement_config.replace(
+        execution_args={"oracle_batch_errors": True, "oracle_array_dml_row_counts": True}
+    )
+    try:
+        result = await async_driver.execute_many(
+            f"INSERT INTO {table} (id, name) VALUES (:1, :2)",
+            [(1, "first"), (1, "duplicate"), (3, "third")],
+            statement_config=config,
+        )
+        _assert_oracle_batch_errors_result(result)
+    finally:
+        await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+register_sync_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEATURES_SCOPE, _oracle_batch_errors)
+register_async_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEATURES_SCOPE, _oracle_batch_errors_async)
 
 
 def _oracle_json_payloads() -> "list[object]":

@@ -200,9 +200,10 @@ class OracleDriverFeatures(TypedDict):
      Thin-mode only; falls back to executemany when the API is absent or the
      connection is in Thick mode. Defaults to True; set to False to force
      executemany.
-    Native pipeline execution is runtime-gated by driver API support, Oracle Database
-     version, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment override; there is
-     no adapter config switch that can force-enable unsupported pipeline execution.
+    Native pipeline execution is runtime-gated by async Thin-mode driver API support,
+     Oracle Database 26ai or newer, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment
+     override; there is no adapter config switch that can force-enable unsupported
+     pipeline execution.
     """
 
     enable_numpy_vectors: NotRequired[bool]
