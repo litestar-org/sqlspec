@@ -77,6 +77,16 @@ def test_get_runtime_hints_config_with_provider() -> None:
     assert hints.lease_seconds == 10
 
 
+def test_oracle_event_runtime_hints_enable_row_locking() -> None:
+    """Oracle table-backed event queues use SKIP LOCKED row claims by default."""
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+
+    for config in (OracleSyncConfig(), OracleAsyncConfig()):
+        hints = get_runtime_hints("oracledb", config)
+        assert hints.select_for_update is True
+        assert hints.skip_locked is True
+
+
 def test_get_runtime_hints_provider_returns_non_hints() -> None:
     """get_runtime_hints returns defaults if provider returns non-hints."""
 

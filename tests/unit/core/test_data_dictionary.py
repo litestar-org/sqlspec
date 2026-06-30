@@ -9,6 +9,7 @@ from sqlspec.core import SQL
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
     DialectConfig,
+    VersionInfo,
     get_data_dictionary_loader,
     get_dialect_config,
     list_registered_dialects,
@@ -80,6 +81,39 @@ def test_get_dialect_config_features() -> None:
     assert config.get_feature_flag("supports_transactions") is True
     assert config.get_feature_version("supports_json") is not None
     assert config.get_optimal_type("json") == "JSONB"
+
+
+def test_row_locking_capability_flags_are_introspectable() -> None:
+    """Dialect configs expose row-locking support for queue claim logic."""
+    expected_for_update = {
+        "bigquery": False,
+        "cockroachdb": True,
+        "duckdb": False,
+        "mssql": False,
+        "mysql": True,
+        "oracle": True,
+        "postgres": True,
+        "spanner": False,
+        "sqlite": False,
+    }
+    expected_static_skip_locked = {
+        "bigquery": False,
+        "cockroachdb": True,
+        "duckdb": False,
+        "mssql": False,
+        "oracle": True,
+        "spanner": False,
+        "sqlite": False,
+    }
+
+    for dialect, expected in expected_for_update.items():
+        assert get_dialect_config(dialect).get_feature_flag("supports_for_update") is expected
+
+    for dialect, expected in expected_static_skip_locked.items():
+        assert get_dialect_config(dialect).get_feature_flag("supports_skip_locked") is expected
+
+    assert get_dialect_config("postgres").get_feature_version("supports_skip_locked") == VersionInfo(9, 5, 0)
+    assert get_dialect_config("mysql").get_feature_version("supports_skip_locked") == VersionInfo(8, 0, 1)
 
 
 def test_registry_dialects_loaded_annotation_is_bool() -> None:

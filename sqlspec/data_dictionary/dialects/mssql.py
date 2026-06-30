@@ -44,6 +44,8 @@ MSSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_prepared_statements": True,
     "supports_schemas": True,
     "supports_in_memory": True,
+    "supports_for_update": False,
+    "supports_skip_locked": False,
 }
 
 MSSQL_TYPE_MAPPINGS: dict[str, str] = {

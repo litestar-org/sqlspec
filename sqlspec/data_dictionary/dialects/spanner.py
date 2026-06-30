@@ -11,6 +11,8 @@ SPANNER_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_generators": False,
     "supports_index_clustering": True,
     "supports_interleaved_tables": True,
+    "supports_for_update": False,
+    "supports_skip_locked": False,
 }
 
 SPANNER_TYPE_MAPPINGS: dict[str, str] = {

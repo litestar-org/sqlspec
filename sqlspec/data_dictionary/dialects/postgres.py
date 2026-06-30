@@ -15,6 +15,7 @@ POSTGRES_FEATURE_VERSIONS: "FeatureVersions" = {
     "supports_window_functions": VersionInfo(8, 4, 0),
     "supports_cte": VersionInfo(8, 4, 0),
     "supports_partitioning": VersionInfo(10, 0, 0),
+    "supports_skip_locked": VersionInfo(9, 5, 0),
 }
 
 POSTGRES_FEATURE_FLAGS: "FeatureFlags" = {
@@ -23,6 +24,7 @@ POSTGRES_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_transactions": True,
     "supports_prepared_statements": True,
     "supports_schemas": True,
+    "supports_for_update": True,
 }
 
 POSTGRES_TYPE_MAPPINGS: dict[str, str] = {

@@ -286,6 +286,22 @@ def test_mysql_dialect_resolves_json_type_by_version() -> None:
     assert resolve_mysql_json_type(None) == "TEXT"
 
 
+def test_mysql_skip_locked_feature_is_version_gated() -> None:
+    """MySQL exposes SKIP LOCKED only for versions that support it."""
+    mock_driver = Mock(spec=SyncDriverAdapterBase)
+    data_dict = PyMysqlDataDictionary()
+
+    mock_driver.select_value_or_none.return_value = "8.0.1"
+    assert data_dict.get_feature_flag(mock_driver, "supports_for_update") is True
+    assert data_dict.get_feature_flag(mock_driver, "supports_skip_locked") is True
+
+    mock_driver.select_value_or_none.reset_mock()
+    data_dict = PyMysqlDataDictionary()
+    mock_driver.select_value_or_none.return_value = "8.0.0"
+    assert data_dict.get_feature_flag(mock_driver, "supports_for_update") is True
+    assert data_dict.get_feature_flag(mock_driver, "supports_skip_locked") is False
+
+
 async def test_mysql_family_json_type_selection_matches_adbc() -> None:
     """MySQL-family adapters and ADBC-as-MySQL should agree on JSON type selection."""
     sync_driver = Mock(spec=SyncDriverAdapterBase)
