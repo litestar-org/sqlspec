@@ -1,12 +1,20 @@
 """Unit tests for psycopg ADK store sync wrappers."""
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast, get_args, get_origin
+from unittest.mock import MagicMock
 
 from psycopg.types.json import Jsonb
-from typing_extensions import Self
+from typing_extensions import NotRequired, Self
 
-from sqlspec.adapters.psycopg.adk import PsycopgSyncADKStore
+from sqlspec.adapters.psycopg.adk import PsycopgADKConfig, PsycopgAsyncADKStore, PsycopgSyncADKStore
+from sqlspec.config import ADKConfig
+
+
+def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
+    config = MagicMock()
+    config.extension_config = {"adk": adk_config or {}}
+    return config
 
 
 class _DummyCursor:
@@ -72,6 +80,75 @@ def _build_store(
     store._owner_id_column_ddl = None  # type: ignore[attr-defined]
     store._owner_id_column_name = None  # type: ignore[attr-defined]
     return store, cursor, connection
+
+
+def test_psycopg_adk_config_types_adapter_local_optimizations() -> None:
+    """Psycopg ADK optimization switches live on the adapter-local extension config."""
+
+    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", PsycopgADKConfig).__optional_keys__
+    assert cast("Any", PsycopgADKConfig).__optional_keys__ - cast("Any", ADKConfig).__optional_keys__ == {
+        "enable_event_generated_columns",
+        "enable_covering_indexes",
+    }
+
+    for feature_name in ("enable_event_generated_columns", "enable_covering_indexes"):
+        annotation = cast("Any", PsycopgADKConfig.__annotations__[feature_name])
+        assert get_origin(annotation) is NotRequired
+        assert get_args(annotation) == (bool,)
+
+
+async def test_psycopg_async_adk_events_table_uses_plain_schema_by_default() -> None:
+    """Psycopg async ADK optimization DDL stays opt-in through extension config."""
+
+    store = PsycopgAsyncADKStore(_mock_config())
+
+    sql = await store._get_create_events_table_sql()
+
+    assert "author_gc" not in sql
+    assert "node_path_gc" not in sql
+    assert "INCLUDE (invocation_id)" not in sql
+
+
+async def test_psycopg_async_adk_events_table_applies_adapter_local_extension_config() -> None:
+    """Psycopg async ADK extension settings enable PostgreSQL-specific event DDL."""
+
+    store = PsycopgAsyncADKStore(
+        _mock_config({"enable_event_generated_columns": True, "enable_covering_indexes": True})
+    )
+
+    sql = await store._get_create_events_table_sql()
+
+    assert "author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED" in sql
+    assert "node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED" in sql
+    assert "idx_adk_event_author_gc" in sql
+    assert "idx_adk_event_node_path_gc" in sql
+    assert "INCLUDE (invocation_id)" in sql
+
+
+def test_psycopg_sync_adk_events_table_uses_plain_schema_by_default() -> None:
+    """Psycopg sync ADK optimization DDL stays opt-in through extension config."""
+
+    store = PsycopgSyncADKStore(_mock_config())
+
+    sql = store._get_create_events_table_sql()
+
+    assert "author_gc" not in sql
+    assert "node_path_gc" not in sql
+    assert "INCLUDE (invocation_id)" not in sql
+
+
+def test_psycopg_sync_adk_events_table_applies_adapter_local_extension_config() -> None:
+    """Psycopg sync ADK extension settings enable PostgreSQL-specific event DDL."""
+
+    store = PsycopgSyncADKStore(_mock_config({"enable_event_generated_columns": True, "enable_covering_indexes": True}))
+
+    sql = store._get_create_events_table_sql()
+
+    assert "author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED" in sql
+    assert "node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED" in sql
+    assert "idx_adk_event_author_gc" in sql
+    assert "idx_adk_event_node_path_gc" in sql
+    assert "INCLUDE (invocation_id)" in sql
 
 
 def test_sync_append_event_inserts_without_session_update() -> None:

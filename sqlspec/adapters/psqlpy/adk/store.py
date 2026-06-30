@@ -1,8 +1,11 @@
 """Psqlpy ADK store for Google Agent Development Kit session/event storage."""
 
 import re
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -15,12 +18,25 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import MemoryRecord
 
 
-__all__ = ("PsqlpyADKMemoryStore", "PsqlpyADKStore")
+__all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore")
 
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
 POSTGRES_TABLE_NOT_FOUND_SQLSTATE: Final = "42P01"
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+
+
+class PsqlpyADKConfig(ADKConfig):
+    """Psqlpy-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with the psqlpy ADK store.
+    """
+
+    enable_event_generated_columns: NotRequired[bool]
+    """Create PostgreSQL generated columns and indexes for common ADK event JSON paths."""
+
+    enable_covering_indexes: NotRequired[bool]
+    """Add PostgreSQL INCLUDE columns to ADK event replay indexes."""
 
 
 class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
@@ -453,18 +469,24 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
+        adk_config = _get_psqlpy_adk_config(self._config)
+        generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
+            adk_config, self._events_table
+        )
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
+            event_data JSONB NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ) WITH (fillfactor = 80);
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC);
+            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
+        {generated_indexes}
         """
 
     async def _get_create_app_states_table_sql(self) -> str:
@@ -818,6 +840,41 @@ def _is_table_missing_error(exc: Exception) -> bool:
         return False
     error_msg = str(exc).lower()
     return "does not exist" in error_msg or "relation" in error_msg
+
+
+def _get_psqlpy_adk_config(config: Any) -> PsqlpyADKConfig:
+    """Return psqlpy ADK extension settings from ``extension_config["adk"]``."""
+
+    extension_config = getattr(config, "extension_config", {})
+    if not isinstance(extension_config, dict):
+        return {}
+    adk_config = extension_config.get("adk", {})
+    if not isinstance(adk_config, dict):
+        return {}
+    return cast("PsqlpyADKConfig", adk_config)
+
+
+def _postgres_event_ddl_options(adk_config: PsqlpyADKConfig, events_table: str) -> "tuple[str, str, str]":
+    generated_columns = ""
+    generated_indexes = ""
+    if adk_config.get("enable_event_generated_columns", False):
+        generated_columns = """,
+            author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED,
+            node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED"""
+        generated_indexes = f"""
+
+        CREATE INDEX IF NOT EXISTS idx_{events_table}_author_gc
+            ON {events_table}(session_id, author_gc, timestamp ASC);
+
+        CREATE INDEX IF NOT EXISTS idx_{events_table}_node_path_gc
+            ON {events_table}(session_id, node_path_gc, timestamp ASC);
+        """
+
+    covering_columns = ""
+    if adk_config.get("enable_covering_indexes", False):
+        covering_columns = " INCLUDE (invocation_id)"
+
+    return generated_columns, generated_indexes, covering_columns
 
 
 def _raise_missing_session(session_id: str) -> NoReturn:
