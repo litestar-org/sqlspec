@@ -1,9 +1,16 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
+import re
 import sqlite3
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.adapters.aiosqlite.config import _render_pragmas
+from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -12,12 +19,84 @@ if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
     from sqlspec.extensions.adk import MemoryRecord
 
-__all__ = ("AiosqliteADKMemoryStore", "AiosqliteADKStore")
+__all__ = ("AiosqliteADKConfig", "AiosqliteADKMemoryStore", "AiosqliteADKStore")
 
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
+_FTS_DETAIL_VALUES: Final = frozenset({"full", "column", "none"})
+_FTS_TOKENIZE_PATTERN: Final = re.compile(r"^[A-Za-z0-9_ -]+$")
+
+
+class AiosqliteADKConfig(ADKConfig):
+    """Aiosqlite-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with aiosqlite ADK stores.
+    """
+
+    pragma_overrides: "NotRequired[Mapping[str, str | int | bool]]"
+    """Additional validated PRAGMA settings applied after the built-in ADK profile."""
+
+    fts_tokenize: NotRequired[str]
+    """Optional FTS5 tokenizer spec used when ``memory_use_fts`` is enabled."""
+
+    fts_detail: NotRequired[Literal["full", "column", "none"]]
+    """Optional FTS5 detail mode used when ``memory_use_fts`` is enabled."""
+
+
+def _get_adk_config(config: "AiosqliteConfig") -> "dict[str, Any]":
+    """Return the adapter-local ADK extension configuration."""
+
+    return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
+
+
+def _get_pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
+    """Return validated ADK PRAGMA overrides for aiosqlite stores."""
+
+    adk_config = _get_adk_config(config)
+    pragma_overrides = adk_config.get("pragma_overrides")
+    if pragma_overrides is None:
+        return []
+    if not isinstance(pragma_overrides, Mapping):
+        msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        return _render_pragmas(pragma_overrides)
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
+        raise ImproperConfigurationError(msg) from exc
+
+
+def _get_fts_options(config: "AiosqliteConfig") -> "tuple[str, ...]":
+    """Return validated FTS5 options for aiosqlite memory DDL."""
+
+    adk_config = _get_adk_config(config)
+    options: list[str] = []
+
+    fts_tokenize = adk_config.get("fts_tokenize")
+    if fts_tokenize is not None:
+        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.match(fts_tokenize) is None:
+            msg = "extension_config['adk']['fts_tokenize'] must contain only safe FTS5 tokenizer characters"
+            raise ImproperConfigurationError(msg)
+        options.append(f"tokenize = '{fts_tokenize}'")
+
+    fts_detail = adk_config.get("fts_detail")
+    if fts_detail is not None:
+        if not isinstance(fts_detail, str) or fts_detail not in _FTS_DETAIL_VALUES:
+            msg = "extension_config['adk']['fts_detail'] must be 'full', 'column', or 'none'"
+            raise ImproperConfigurationError(msg)
+        options.append(f"detail = {fts_detail}")
+
+    return tuple(options)
+
+
+def _format_fts_options(options: "tuple[str, ...]") -> str:
+    """Format validated FTS5 options for a CREATE VIRTUAL TABLE statement."""
+
+    if not options:
+        return ""
+    return ",\n            " + ",\n            ".join(options)
 
 
 class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
@@ -38,7 +117,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         config: AiosqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ()
+    __slots__ = ("_pragma_overrides",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize Aiosqlite ADK store.
@@ -47,6 +126,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             config: AiosqliteConfig instance.
         """
         super().__init__(config)
+        self._pragma_overrides = _get_pragma_overrides(config)
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -576,6 +656,8 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         await connection.execute("PRAGMA cache_size = -64000")
         await connection.execute("PRAGMA mmap_size = 30000000")
         await connection.execute("PRAGMA journal_size_limit = 67108864")
+        for pragma_name, pragma_value in self._pragma_overrides:
+            await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
 
     async def _get_create_sessions_table_sql(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
@@ -701,7 +783,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         config: AiosqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ()
+    __slots__ = ("_fts_options",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize Aiosqlite ADK memory store.
@@ -710,6 +792,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             config: AiosqliteConfig instance.
         """
         super().__init__(config)
+        self._fts_options = _get_fts_options(config)
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
@@ -869,11 +952,12 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         fts_table = ""
         if self._use_fts:
+            fts_options = _format_fts_options(self._fts_options)
             fts_table = f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
             content_text,
             content={self._memory_table},
-            content_rowid=rowid
+            content_rowid=rowid{fts_options}
         );
 
         CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ai AFTER INSERT ON {self._memory_table} BEGIN
