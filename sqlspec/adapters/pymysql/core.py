@@ -271,6 +271,7 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
+    features.setdefault("enable_cloud_sql", False)
 
     if json_serializer is not None:
         parameter_config = statement_config.parameter_config.with_json_serializers(
