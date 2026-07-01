@@ -31,6 +31,7 @@ async def _wait_for_message(received: "list[Any]", count: int = 1) -> None:
 
 
 def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncConfig:
+    events_config: dict[str, Any] = {"backend": "advanced_queue", **events}
     return OracleAsyncConfig(
         connection_config={
             "host": oracle_service.host,
@@ -41,7 +42,7 @@ def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncCo
             "min": 1,
             "max": 5,
         },
-        extension_config={"events": {"backend": "advanced_queue", **events}},
+        extension_config={"events": events_config},
     )
 
 

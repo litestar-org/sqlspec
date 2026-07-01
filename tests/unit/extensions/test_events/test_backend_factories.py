@@ -285,7 +285,7 @@ def test_oracle_txeventq_sync_backend_rejects_async_config() -> None:
 
     config = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
     with pytest.raises(ImproperConfigurationError, match="OracleSyncTxEventQEventBackend requires a sync adapter"):
-        OracleSyncTxEventQEventBackend(config, {})
+        OracleSyncTxEventQEventBackend(config, {})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def test_oracle_txeventq_async_backend_rejects_sync_config() -> None:
@@ -297,7 +297,7 @@ def test_oracle_txeventq_async_backend_rejects_sync_config() -> None:
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
     with pytest.raises(ImproperConfigurationError, match="OracleAsyncTxEventQEventBackend requires an async adapter"):
-        OracleAsyncTxEventQEventBackend(config, {})
+        OracleAsyncTxEventQEventBackend(config, {})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def test_oracle_backend_envelope_round_trip() -> None:

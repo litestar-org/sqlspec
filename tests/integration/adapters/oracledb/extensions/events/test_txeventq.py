@@ -40,6 +40,7 @@ async def _async_wait_for_message(received: "list[Any]", count: int = 1) -> None
 
 
 def _sync_config(oracle_service: OracleService, **events: Any) -> OracleSyncConfig:
+    events_config: dict[str, Any] = {"backend": "transactional_event_queue", "aq_queue": _QUEUE_NAME, **events}
     return OracleSyncConfig(
         connection_config={
             "host": oracle_service.host,
@@ -48,11 +49,12 @@ def _sync_config(oracle_service: OracleService, **events: Any) -> OracleSyncConf
             "user": oracle_service.user,
             "password": oracle_service.password,
         },
-        extension_config={"events": {"backend": "transactional_event_queue", "aq_queue": _QUEUE_NAME, **events}},
+        extension_config={"events": events_config},
     )
 
 
 def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncConfig:
+    events_config: dict[str, Any] = {"backend": "transactional_event_queue", "aq_queue": _QUEUE_NAME, **events}
     return OracleAsyncConfig(
         connection_config={
             "host": oracle_service.host,
@@ -63,7 +65,7 @@ def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncCo
             "min": 1,
             "max": 5,
         },
-        extension_config={"events": {"backend": "transactional_event_queue", "aq_queue": _QUEUE_NAME, **events}},
+        extension_config={"events": events_config},
     )
 
 
