@@ -5,6 +5,27 @@ Psycopg
 PostgreSQL adapter using `psycopg 3 <https://www.psycopg.org/psycopg3/>`_ with both
 sync and async support. Features native pipeline mode for multi-statement batching.
 
+Cloud Connectivity
+==================
+
+``PsycopgSyncConfig`` can create sync pools through the Google AlloyDB in-process
+connector when both ``psycopg`` and ``google-cloud-alloydb-connector`` are installed:
+
+.. code-block:: python
+
+   from sqlspec.adapters.psycopg import PsycopgSyncConfig
+
+   config = PsycopgSyncConfig(
+       connection_config={"user": "app", "password": "secret", "dbname": "orders"},
+       driver_features={
+           "enable_alloydb": True,
+           "alloydb_instance_uri": "projects/project/locations/us-central1/clusters/cluster/instances/instance",
+       },
+   )
+
+This connector path is sync-only. ``PsycopgAsyncConfig`` continues to use regular
+psycopg async connection configuration.
+
 Sync Configuration
 ==================
 
