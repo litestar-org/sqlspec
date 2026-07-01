@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import pymysql
-from pymysql.constants import FIELD_TYPE
+from pymysql.constants import FIELD_TYPE, SERVER_STATUS
 
 from sqlspec.adapters.pymysql._typing import PyMysqlCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import (
@@ -289,16 +289,10 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        get_autocommit = getattr(self.connection, "get_autocommit", None)
-        if callable(get_autocommit):
-            return not bool(get_autocommit())
-        autocommit = getattr(self.connection, "autocommit", None)
-        if autocommit is not None:
-            try:
-                return not bool(autocommit)
-            except Exception:
-                return False
-        return False
+        try:
+            return bool(self.connection.server_status & SERVER_STATUS.SERVER_STATUS_IN_TRANS)
+        except Exception:
+            return False
 
 
 register_driver_profile("pymysql", driver_profile)
