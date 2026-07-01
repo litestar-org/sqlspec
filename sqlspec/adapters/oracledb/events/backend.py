@@ -93,7 +93,7 @@ class OracleSyncAQEventBackend:
             msg = "Oracle AQ backend requires an Oracle adapter"
             raise ImproperConfigurationError(msg)
         if config.is_async:
-            msg = "OracleSyncAQEventBackend requires a sync adapter"
+            msg = f"{type(self).__name__} requires a sync adapter"
             raise ImproperConfigurationError(msg)
         if not _ORACLEDB_AVAILABLE:
             msg = "oracledb"
@@ -177,7 +177,7 @@ class OracleAsyncAQEventBackend:
             msg = "Oracle AQ backend requires an Oracle adapter"
             raise ImproperConfigurationError(msg)
         if not config.is_async:
-            msg = "OracleAsyncAQEventBackend requires an async adapter"
+            msg = f"{type(self).__name__} requires an async adapter"
             raise ImproperConfigurationError(msg)
         if not _ORACLEDB_AVAILABLE:
             msg = "oracledb"
