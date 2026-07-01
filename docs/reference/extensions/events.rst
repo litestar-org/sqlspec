@@ -21,14 +21,66 @@ backend owns its own listener hub that:
 * Serializes subscribe / unsubscribe under a lock so concurrent callers
   cannot race on driver-level statements that share the connection.
 
-The Oracle Advanced Queuing backend uses an analogous pattern: a
-per-channel queue-handle cache backed by a single dedicated session per
-backend instance. ``dequeue`` honors ``min(poll_interval, aq_wait_seconds)``
-as its wait bound so the caller's polling cadence is respected.
+The Oracle native backends (``advanced_queue`` and
+``transactional_event_queue``) use an analogous pattern: a per-channel
+queue-handle cache backed by a single dedicated session per backend instance.
+``dequeue`` honors ``min(poll_interval, aq_wait_seconds)`` as its wait bound so
+the caller's polling cadence is respected.
 
 ``ack`` / ``nack`` semantics are unchanged. Native backends remain
 fire-and-forget; hybrid (``listen_notify_durable``) backends acknowledge
 through the durable table queue.
+
+Oracle native event backends
+============================
+
+Oracle provides two **native** messaging backends in addition to the default
+``table_queue``:
+
+* ``advanced_queue`` — classic Oracle Advanced Queuing (AQ).
+* ``transactional_event_queue`` — Oracle Transactional Event Queues (TxEventQ).
+
+Both share the same client path and JSON payloads; they differ only in how the
+underlying queue is provisioned. Select one via ``events.backend``:
+
+.. code-block:: python
+
+    from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+    config = OracleAsyncConfig(
+        connection_config={"dsn": "..."},
+        extension_config={"events": {"backend": "transactional_event_queue"}},
+    )
+
+The default remains ``table_queue``, which works on every Oracle edition
+without extra privileges; both native backends are opt-in.
+
+Requirements
+------------
+
+* **Thin mode** — both backends run in python-oracledb's default Thin mode; no
+  Instant Client / Thick mode is required.
+* **JSON payloads** require **Oracle Database 21c or newer** (23ai satisfies this).
+* **Privileges** — the connecting user needs ``DBMS_AQADM`` access. Grant
+  ``aq_administrator_role, aq_user_role`` and ``EXECUTE ON dbms_aq``.
+
+Provisioning
+------------
+
+The backend attaches to an existing queue; it does not create one. Provision the
+queue with ``DBMS_AQADM`` first:
+
+* ``advanced_queue`` — ``create_queue_table(queue_payload_type => 'JSON')`` +
+  ``create_queue`` + ``start_queue``.
+* ``transactional_event_queue`` —
+  ``create_transactional_event_queue(queue_payload_type => 'JSON', multiple_consumers => FALSE)``
+  + ``start_queue``.
+
+By default all channels route through a single physical queue
+(``SQLSPEC_EVENTS_QUEUE``) with the channel carried in the event envelope. To
+isolate channels onto per-channel physical queues, template the queue name with
+``{channel}`` via the ``aq_queue`` setting (for example
+``"aq_queue": "SQLSPEC_EVT_{channel}"``) and provision one queue per channel.
 
 Channels
 ========

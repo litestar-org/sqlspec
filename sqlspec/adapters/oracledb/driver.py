@@ -29,6 +29,7 @@ from sqlspec.adapters.oracledb.core import (
     coerce_large_parameters_sync,
     collect_async_rows,
     collect_sync_rows,
+    connection_is_thin,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
@@ -109,7 +110,7 @@ def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
 
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
-PIPELINE_MIN_DATABASE_MAJOR: int = 23
+PIPELINE_MIN_DATABASE_MAJOR: int = 26
 
 
 class _CompiledStackOperation(NamedTuple):
@@ -868,24 +869,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self._pipeline_support_reason = "env_override"
             return False
 
-        if self._detect_oracledb_version() < PIPELINE_MIN_DRIVER_VERSION:
-            self._pipeline_support = False
-            self._pipeline_support_reason = "driver_version"
-            return False
-
-        if not has_pipeline_capability(self.connection):
-            self._pipeline_support = False
-            self._pipeline_support_reason = "driver_api_missing"
-            return False
-
-        version_info = self._detect_oracle_version()
-        if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
-            self._pipeline_support = True
-            self._pipeline_support_reason = None
-            return True
-
         self._pipeline_support = False
-        self._pipeline_support_reason = "database_version"
+        self._pipeline_support_reason = "asyncio_thin_required"
         return False
 
 
@@ -1482,6 +1467,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if not has_pipeline_capability(self.connection):
             self._pipeline_support = False
             self._pipeline_support_reason = "driver_api_missing"
+            return False
+
+        if not connection_is_thin(self.connection):
+            self._pipeline_support = False
+            self._pipeline_support_reason = "thin_mode_required"
             return False
 
         version_info = await self._detect_oracle_version()

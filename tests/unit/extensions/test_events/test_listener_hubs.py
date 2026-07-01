@@ -234,6 +234,11 @@ class _Options:
         self.visibility: int | None = None
 
 
+class _Queue:
+    def __init__(self) -> None:
+        self.deqoptions = _Options()
+
+
 class _Thread:
     def __init__(self) -> None:
         self.join_timeout: float | None = None
@@ -399,12 +404,12 @@ async def test_asyncpg_hybrid_dequeue_polls_durable_queue_after_notify_timeout()
     assert queue.dequeue_calls == [("alerts", None)]
 
 
-def test_oracle_aq_options_round_subsecond_wait_up_to_one_second(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(oracle_hub, "AQDequeueOptions", _Options)
+def test_oracle_aq_options_round_subsecond_wait_up_to_one_second() -> None:
+    queue = _Queue()
 
-    options = oracle_hub._resolve_options(None, None, 0.5)
+    oracle_hub._apply_deq_options(queue, None, None, 0.5)
 
-    assert options.wait == 1
+    assert queue.deqoptions.wait == 1
 
 
 def test_psycopg_sync_shutdown_submits_stop_before_setting_stop_flag(monkeypatch: pytest.MonkeyPatch) -> None:

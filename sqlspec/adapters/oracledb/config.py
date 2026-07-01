@@ -57,7 +57,7 @@ OracleProtocol = Literal["tcp", "tcps"]
 OracleServerType = Literal["dedicated", "shared", "pooled"]
 OraclePoolBoundary = Literal["statement", "transaction"]
 OracleVectorReturnFormat = Literal["array", "list", "numpy"]
-OracleEventsBackend = Literal["advanced_queue", "table_queue"]
+OracleEventsBackend = Literal["advanced_queue", "table_queue", "transactional_event_queue"]
 
 
 class OracleConnectionParams(TypedDict):
@@ -192,17 +192,20 @@ class OracleDriverFeatures(TypedDict):
      This is separate from connection_config["events"], which enables python-oracledb
      Thick mode database event notifications for HA and continuous query notification.
     events_backend: Event channel backend selection.
-     Options: "advanced_queue", "table_queue"
+     Options: "advanced_queue", "table_queue", "transactional_event_queue"
      - "advanced_queue": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
+     - "transactional_event_queue": Oracle Transactional Event Queues (native messaging, requires
+       DBMS_AQADM privileges; provisioned via DBMS_AQADM.CREATE_TRANSACTIONAL_EVENT_QUEUE)
      - "table_queue": Durable table-backed queue with retries and exactly-once delivery
      Defaults to "table_queue" (works on all Oracle editions without special privileges).
     enable_direct_path_load: Route load_from_arrow through Connection.direct_path_load.
      Thin-mode only; falls back to executemany when the API is absent or the
      connection is in Thick mode. Defaults to True; set to False to force
      executemany.
-    Native pipeline execution is runtime-gated by driver API support, Oracle Database
-     version, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment override; there is
-     no adapter config switch that can force-enable unsupported pipeline execution.
+    Native pipeline execution is runtime-gated by async Thin-mode driver API support,
+     Oracle Database 26ai or newer, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment
+     override; there is no adapter config switch that can force-enable unsupported
+     pipeline execution.
     """
 
     enable_numpy_vectors: NotRequired[bool]

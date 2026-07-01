@@ -219,6 +219,101 @@ def test_oracle_factory_unknown_returns_none() -> None:
     assert backend is None
 
 
+def test_oracle_factory_transactional_event_queue_backend() -> None:
+    """Oracle factory creates a transactional_event_queue backend (sync)."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleSyncTxEventQEventBackend, create_event_backend
+
+    config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    backend = create_event_backend(config, "transactional_event_queue", {})
+
+    assert isinstance(backend, OracleSyncTxEventQEventBackend)
+    assert backend.backend_name == "transactional_event_queue"
+    assert backend.supports_sync is True
+    assert backend.supports_async is False
+
+
+def test_oracle_factory_transactional_event_queue_async() -> None:
+    """Oracle factory creates a transactional_event_queue backend (async)."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleAsyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleAsyncTxEventQEventBackend, create_event_backend
+
+    config = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
+    backend = create_event_backend(config, "transactional_event_queue", {})
+
+    assert isinstance(backend, OracleAsyncTxEventQEventBackend)
+    assert backend.backend_name == "transactional_event_queue"
+    assert backend.supports_sync is False
+    assert backend.supports_async is True
+
+
+def test_oracle_factory_transactional_event_queue_custom_queue_name() -> None:
+    """TxEventQ factory honors a custom queue name."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.backend import create_event_backend
+
+    config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    backend = create_event_backend(config, "transactional_event_queue", {"aq_queue": "MY_TXEVENTQ"})
+
+    assert backend is not None
+    assert backend._queue_name == "MY_TXEVENTQ"
+
+
+def test_oracle_txeventq_backend_labels_hub_with_backend_name() -> None:
+    """TxEventQ backend propagates its backend_name to the shared AQ hub for logging."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleSyncTxEventQEventBackend, create_event_backend
+
+    config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    backend = create_event_backend(config, "transactional_event_queue", {})
+
+    assert isinstance(backend, OracleSyncTxEventQEventBackend)
+    hub = backend._ensure_hub()
+    assert hub._backend_name == "transactional_event_queue"
+
+
+def test_oracle_txeventq_sync_backend_rejects_async_config() -> None:
+    """The sync TxEventQ backend rejects an async config with a class-aware message."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleAsyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleSyncTxEventQEventBackend
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
+    with pytest.raises(ImproperConfigurationError, match="OracleSyncTxEventQEventBackend requires a sync adapter"):
+        OracleSyncTxEventQEventBackend(config, {})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+def test_oracle_txeventq_async_backend_rejects_sync_config() -> None:
+    """The async TxEventQ backend rejects a sync config with a class-aware message."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleAsyncTxEventQEventBackend
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    with pytest.raises(ImproperConfigurationError, match="OracleAsyncTxEventQEventBackend requires an async adapter"):
+        OracleAsyncTxEventQEventBackend(config, {})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+def test_oracle_backend_envelope_round_trip() -> None:
+    """An Oracle event envelope parses back into an equivalent EventMessage."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.events.backend import _build_envelope, _parse_message
+
+    envelope = _build_envelope("alerts", "evt_round_trip", {"level": "high"}, {"source": "api"})
+    message = _parse_message("alerts", envelope)
+
+    assert message.event_id == "evt_round_trip"
+    assert message.channel == "alerts"
+    assert message.payload == {"level": "high"}
+    assert message.metadata == {"source": "api"}
+
+
 def test_shared_payload_max_notify_bytes_constant() -> None:
     """Shared payload module has MAX_NOTIFY_BYTES constant."""
     from sqlspec.extensions.events import _payload

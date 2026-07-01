@@ -1,7 +1,8 @@
 """Regression test for Oracle AQ backend poll_interval handling."""
 
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager
 
 import pytest
 from pytest_databases.docker.oracle import OracleService
@@ -17,8 +18,10 @@ _LATENCY_TOLERANCE = 4.0
 
 
 @pytest.fixture
-def oracle_aq_poll_config(oracle_23ai_service: OracleService) -> Generator[OracleSyncConfig, None, None]:
-    """Provision Oracle config with a high aq_wait_seconds and ensure the AQ queue exists."""
+def oracle_aq_poll_config(
+    provision_classic_aq: "Callable[..., AbstractContextManager[None]]", oracle_23ai_service: OracleService
+) -> Generator[OracleSyncConfig, None, None]:
+    """Provision Oracle config with a high aq_wait_seconds and a live AQ queue."""
 
     config = OracleSyncConfig(
         connection_config={
@@ -31,54 +34,11 @@ def oracle_aq_poll_config(oracle_23ai_service: OracleService) -> Generator[Oracl
         extension_config={"events": {"backend": "advanced_queue", "aq_wait_seconds": _AQ_WAIT_SECONDS}},
     )
 
-    queue_table = "SQLSPEC_EVENTS_QUEUE_TABLE"
-    queue_name = "SQLSPEC_EVENTS_QUEUE"
-
-    created = False
-    try:
+    with provision_classic_aq():
         try:
-            with config.provide_session() as session:
-                session.execute_script(
-                    f"""
-                    DECLARE
-                        table_count INTEGER;
-                    BEGIN
-                        SELECT COUNT(*) INTO table_count FROM user_queue_tables WHERE queue_table = '{queue_table}';
-                        IF table_count = 0 THEN
-                            dbms_aqadm.create_queue_table(queue_table => '{queue_table}', queue_payload_type => 'JSON');
-                        END IF;
-                        BEGIN
-                            dbms_aqadm.create_queue(queue_name => '{queue_name}', queue_table => '{queue_table}');
-                        EXCEPTION
-                            WHEN OTHERS THEN
-                                IF SQLCODE != -24005 THEN
-                                    RAISE;
-                                END IF;
-                        END;
-                        dbms_aqadm.start_queue(queue_name => '{queue_name}');
-                    END;
-                    """
-                )
-            created = True
-        except Exception:  # pragma: no cover - privilege detection path
-            pytest.skip("Oracle AQ privileges unavailable")
-        yield config
-    finally:
-        if created:
-            try:
-                with config.provide_session() as session:
-                    session.execute_script(
-                        f"""
-                        BEGIN
-                            BEGIN dbms_aqadm.stop_queue(queue_name => '{queue_name}'); EXCEPTION WHEN OTHERS THEN NULL; END;
-                            BEGIN dbms_aqadm.drop_queue(queue_name => '{queue_name}'); EXCEPTION WHEN OTHERS THEN NULL; END;
-                            BEGIN dbms_aqadm.drop_queue_table(queue_table => '{queue_table}'); EXCEPTION WHEN OTHERS THEN NULL; END;
-                        END;
-                        """
-                    )
-            except Exception:  # pragma: no cover - cleanup best-effort
-                pass
-        config.close_pool()
+            yield config
+        finally:
+            config.close_pool()
 
 
 def test_oracle_aq_dequeue_honors_caller_poll_interval(oracle_aq_poll_config: OracleSyncConfig) -> None:

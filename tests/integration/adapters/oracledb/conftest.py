@@ -28,6 +28,37 @@ def oracle_connection_config(oracle_23ai_service: "OracleService") -> "OraclePoo
 
 
 @pytest.fixture(scope="session")
+def oracle_aq_privileges(oracle_23ai_service: "OracleService") -> None:
+    """Grant the container app user the privileges required to run DBMS_AQADM.
+
+    Unlocks both classic Advanced Queuing and Transactional Event Queues for the
+    ``advanced_queue`` / ``transactional_event_queue`` events backends. The grants persist
+    for the container lifetime, so session scope is sufficient and naturally idempotent
+    (re-granting an existing role/privilege is a no-op in Oracle).
+    """
+
+    app_user = oracle_23ai_service.user
+    config = OracleSyncConfig(
+        connection_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": "system",
+            "password": oracle_23ai_service.system_password,
+        }
+    )
+    grants = (f"GRANT aq_administrator_role, aq_user_role TO {app_user}", f"GRANT EXECUTE ON dbms_aq TO {app_user}")
+    try:
+        with config.provide_session() as driver:
+            for grant in grants:
+                driver.execute_script(grant)
+            driver.commit()
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
+
+
+@pytest.fixture(scope="session")
 def oracle_sync_config(oracle_connection_config: "OraclePoolParams") -> "OracleSyncConfig":
     """Create Oracle sync configuration."""
 
