@@ -115,6 +115,12 @@ exports a typed config class and a driver implementation.
 
       Sync + Async SQL Server via Microsoft's official mssql-python driver.
 
+   .. grid-item-card:: pymssql
+      :link: pymssql
+      :link-type: doc
+
+      Sync SQL Server via pymssql / FreeTDS.
+
 Feature Comparison
 ==================
 
@@ -235,6 +241,12 @@ Feature Comparison
      - Yes
      -
      -
+   * - pymssql
+     - Yes
+     -
+     - Yes
+     -
+     -
 
 .. toctree::
    :hidden:
@@ -257,3 +269,4 @@ Feature Comparison
    adbc
    arrow_odbc
    mssql_python
+   pymssql

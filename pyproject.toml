@@ -497,6 +497,8 @@ module = [
   "asyncmy.*",
   "mssql_python",
   "mssql_python.*",
+  "pymssql",
+  "pymssql.*",
   "pyarrow",
   "pyarrow.*",
   "opentelemetry.*",
