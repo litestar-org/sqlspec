@@ -219,6 +219,36 @@ def test_oracle_factory_unknown_returns_none() -> None:
     assert backend is None
 
 
+def test_oracle_factory_transactional_event_queue_backend() -> None:
+    """Oracle factory creates a transactional_event_queue backend (sync)."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleSyncTxEventQEventBackend, create_event_backend
+
+    config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    backend = create_event_backend(config, "transactional_event_queue", {})
+
+    assert isinstance(backend, OracleSyncTxEventQEventBackend)
+    assert backend.backend_name == "transactional_event_queue"
+    assert backend.supports_sync is True
+    assert backend.supports_async is False
+
+
+def test_oracle_factory_transactional_event_queue_async() -> None:
+    """Oracle factory creates a transactional_event_queue backend (async)."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb.config import OracleAsyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleAsyncTxEventQEventBackend, create_event_backend
+
+    config = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
+    backend = create_event_backend(config, "transactional_event_queue", {})
+
+    assert isinstance(backend, OracleAsyncTxEventQEventBackend)
+    assert backend.backend_name == "transactional_event_queue"
+    assert backend.supports_sync is False
+    assert backend.supports_async is True
+
+
 def test_shared_payload_max_notify_bytes_constant() -> None:
     """Shared payload module has MAX_NOTIFY_BYTES constant."""
     from sqlspec.extensions.events import _payload

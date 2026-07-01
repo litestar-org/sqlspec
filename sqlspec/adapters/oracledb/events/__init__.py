@@ -2,7 +2,9 @@
 
 from sqlspec.adapters.oracledb.events.backend import (
     OracleAsyncAQEventBackend,
+    OracleAsyncTxEventQEventBackend,
     OracleSyncAQEventBackend,
+    OracleSyncTxEventQEventBackend,
     create_event_backend,
 )
 from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, OracleSyncEventQueueStore
@@ -10,7 +12,9 @@ from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, O
 __all__ = (
     "OracleAsyncAQEventBackend",
     "OracleAsyncEventQueueStore",
+    "OracleAsyncTxEventQEventBackend",
     "OracleSyncAQEventBackend",
     "OracleSyncEventQueueStore",
+    "OracleSyncTxEventQEventBackend",
     "create_event_backend",
 )

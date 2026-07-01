@@ -90,6 +90,7 @@ class OracleSyncAQHub:
     """Per-channel persistent queue-handle cache for sync Oracle AQ."""
 
     __slots__ = (
+        "_backend_name",
         "_config",
         "_default_visibility",
         "_lock",
@@ -111,12 +112,14 @@ class OracleSyncAQHub:
         visibility: "int | None",
         default_visibility: "int | None",
         wait_ceiling: int,
+        backend_name: str = "advanced_queue",
     ) -> None:
         self._config = config
         self._queue_name_template = queue_name_template
         self._visibility = visibility
         self._default_visibility = default_visibility
         self._wait_ceiling = wait_ceiling
+        self._backend_name = backend_name
         self._lock = threading.Lock()
         self._queues: dict[str, Any] = {}
         self._session_cm: Any | None = None
@@ -148,7 +151,7 @@ class OracleSyncAQHub:
                     logging.WARNING,
                     "event.receive",
                     adapter_name="oracledb",
-                    backend_name="advanced_queue",
+                    backend_name=self._backend_name,
                     mode="sync",
                     error_type=type(error).__name__,
                     status="failed",
@@ -217,6 +220,7 @@ class OracleAsyncAQHub:
     """Per-channel persistent queue-handle cache for async Oracle AQ."""
 
     __slots__ = (
+        "_backend_name",
         "_config",
         "_default_visibility",
         "_lock",
@@ -238,12 +242,14 @@ class OracleAsyncAQHub:
         visibility: "int | None",
         default_visibility: "int | None",
         wait_ceiling: int,
+        backend_name: str = "advanced_queue",
     ) -> None:
         self._config = config
         self._queue_name_template = queue_name_template
         self._visibility = visibility
         self._default_visibility = default_visibility
         self._wait_ceiling = wait_ceiling
+        self._backend_name = backend_name
         self._lock = asyncio.Lock()
         self._queues: dict[str, Any] = {}
         self._session_cm: Any | None = None
@@ -275,7 +281,7 @@ class OracleAsyncAQHub:
                     logging.WARNING,
                     "event.receive",
                     adapter_name="oracledb",
-                    backend_name="advanced_queue",
+                    backend_name=self._backend_name,
                     mode="async",
                     error_type=type(error).__name__,
                     status="failed",
