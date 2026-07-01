@@ -32,6 +32,7 @@ SQLSpec provides stores for async adapters:
 
 - ``AsyncpgStore`` - PostgreSQL via asyncpg
 - ``AiosqliteStore`` - SQLite via aiosqlite
+- ``ArrowOdbcStore`` - SQL Server via arrow-odbc and Microsoft ODBC Driver 18
 
 Each store automatically creates its session table on first use if it doesn't exist.
 

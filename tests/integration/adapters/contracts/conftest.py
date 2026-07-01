@@ -12,6 +12,7 @@ from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials
 from pytest_databases.docker.bigquery import BigQueryService
 from pytest_databases.docker.cockroachdb import CockroachDBService
+from pytest_databases.docker.mssql import MSSQLService
 from pytest_databases.docker.mysql import MySQLService
 from pytest_databases.docker.oracle import OracleService
 from pytest_databases.docker.postgres import PostgresService
@@ -24,6 +25,9 @@ from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver, AiosqliteDriverFeatures
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
+from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver
+from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyDriverFeatures
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
@@ -108,6 +112,7 @@ from tests.integration.adapters.contracts._migration_cases import (
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
+    MSSQL_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
     ORACLE_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
@@ -318,6 +323,27 @@ def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator
             driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
             driver.commit()
             yield driver
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def contract_arrow_odbc_mssql_driver(mssql_service: MSSQLService) -> Generator[ArrowOdbcDriver, None, None]:
+    """Provide a fresh arrow-odbc driver backed by SQL Server."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": mssql_service.connection_string},
+        driver_features={"dbms_name": "Microsoft SQL Server"},
+    )
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script("DROP TABLE IF EXISTS contract_items")
+            driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
+            driver.commit()
+            yield driver
+            with contextlib.suppress(Exception):
+                driver.rollback()
+            driver.execute_script("DROP TABLE IF EXISTS contract_items")
+            driver.commit()
     finally:
         config.close_pool()
 
@@ -827,6 +853,21 @@ def events_config_psqlpy(postgres_service: PostgresService, tmp_path: Path) -> C
             connection_config={"dsn": _psqlpy_dsn(postgres_service)},
             migration_config=_events_migration_config(tmp_path, suffix),
             extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) -> Callable[..., Any]:
+    """Build arrow-odbc SQL Server event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> ArrowOdbcConfig:
+        return ArrowOdbcConfig(
+            connection_config={"connection_string": mssql_service.connection_string},
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+            driver_features={"dbms_name": "Microsoft SQL Server"},
         )
 
     return make
@@ -1504,6 +1545,22 @@ async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator
     config.close_pool()
 
 
+@pytest.fixture
+async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenerator[ArrowOdbcStore, None]":
+    """Provide a ready arrow-odbc SQL Server Litestar store for contract tests."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": mssql_service.connection_string},
+        extension_config=_STORE_EXTENSION_CONFIG,
+        driver_features={"dbms_name": "Microsoft SQL Server"},
+    )
+    store = ArrowOdbcStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
 def _adk_extension_config(suffix: str) -> dict[str, Any]:
     return {
         "adk": {
@@ -1837,6 +1894,22 @@ def adk_store_adbc_postgres(postgres_service: PostgresService) -> Callable[..., 
         )
         _ensure_adbc_store_driver_available(config)
         return config, AdbcADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> Callable[..., Any]:
+    """Build a fresh arrow-odbc SQL Server ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = ArrowOdbcConfig(
+            connection_config={"connection_string": mssql_service.connection_string},
+            extension_config=_adk_extension_config(suffix),
+            driver_features={"dbms_name": "Microsoft SQL Server"},
+        )
+        return config, ArrowOdbcADKStore(config)
 
     return make
 

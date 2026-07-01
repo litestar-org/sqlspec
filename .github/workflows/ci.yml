@@ -235,7 +235,7 @@ jobs:
   test-integration:
     needs: [ci-scope, test-unit]
     if: needs.ci-scope.outputs.ci_required == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: true
       matrix:
@@ -288,12 +288,22 @@ jobs:
           sudo apt-get clean
           df -h /
 
+      - name: Install SQL Server ODBC driver
+        run: |
+          set -eu
+          curl -sSL -O https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          rm packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+          odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
+
       - name: Cache docker images
         id: docker-image-cache
         uses: actions/cache@v6
         with:
           path: /tmp/docker-images
-          key: docker-images-v1-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: docker-images-v2-${{ hashFiles('.github/workflows/ci.yml') }}
 
       - name: Load cached docker images
         if: steps.docker-image-cache.outputs.cache-hit == 'true'
@@ -312,6 +322,7 @@ jobs:
             paradedb/paradedb:0.21.5-pg16
             cockroachdb/cockroach:latest
             mysql:8.4
+            mcr.microsoft.com/mssql/server:2022-latest
             gvenzl/oracle-free:23-slim-faststart
             ghcr.io/goccy/bigquery-emulator:latest
             gcr.io/cloud-spanner-emulator/emulator:latest

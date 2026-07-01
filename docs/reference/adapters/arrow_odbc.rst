@@ -7,6 +7,16 @@ Streams ``pyarrow.RecordBatchReader`` results from any ODBC-compliant driver,
 making it a good fit for read-heavy analytical transfer between SQL Server,
 PostgreSQL, MySQL, or other ODBC sources and the Arrow ecosystem.
 
+SQL Server coverage is exercised in CI against SQL Server 2022 through
+``pytest-databases`` and Microsoft ODBC Driver 18. The shared contract matrix
+verifies native Arrow reads, Arrow reader/batch output, and Arrow bulk ingest
+for this adapter. Row-oriented ``execute_many()`` is intentionally unsupported;
+use ``load_from_arrow()`` for bulk writes.
+
+Extension support is SQL Server-backed. The adapter exports a table-backed
+events queue store, a Litestar session store, and Google ADK session/event and
+memory stores for SQL Server connections through Microsoft ODBC Driver 18.
+
 Configuration
 =============
 
@@ -33,6 +43,25 @@ Data Dictionary
 ===============
 
 .. autoclass:: sqlspec.adapters.arrow_odbc.data_dictionary.ArrowOdbcDataDictionary
+   :members:
+   :show-inheritance:
+
+Extensions
+==========
+
+.. autoclass:: sqlspec.adapters.arrow_odbc.events.ArrowOdbcEventQueueStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.arrow_odbc.litestar.ArrowOdbcStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKMemoryStore
    :members:
    :show-inheritance:
 

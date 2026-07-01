@@ -120,7 +120,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             )
 
         cursor.execute(query=sql, parameters=parameters)
-        return self.create_execution_result(cursor, rowcount_override=0)
+        return self.create_execution_result(cursor, rowcount_override=-1)
 
     def dispatch_execute_many(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         msg = "arrow-odbc does not expose a row-oriented executemany API; use bulk_insert_arrow() for Arrow ingestion."
@@ -128,6 +128,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        if self._dialect == "mssql":
+            cursor.execute(query=sql, parameters=_odbc_parameters(prepared_parameters))
+            return self.create_execution_result(
+                cursor, rowcount_override=-1, statement_count=1, successful_statements=1, is_script_result=True
+            )
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         parameters = _odbc_parameters(prepared_parameters)
         successful_count = 0
@@ -143,6 +148,14 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def resolve_rowcount(self, cursor: "ArrowOdbcRawCursor") -> int:
         return 0
+
+    def _connection_in_transaction(self) -> bool:
+        """Return whether the generic ODBC connection is in an active transaction.
+
+        arrow-odbc does not expose a portable transaction-state API, so stack
+        execution relies on SQLSpec's explicit transaction management.
+        """
+        return False
 
     def begin(self) -> None:
         statement = "BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN"
