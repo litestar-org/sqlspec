@@ -133,6 +133,9 @@ Package groups
    * - ``mssql-python``
      - ``mssql-python``
      - Microsoft SQL Server driver.
+   * - ``mypyc``
+     - ``sqlglot[c]``
+     - C-compiled sqlglot internals for faster SQL parsing.
    * - ``mysql-connector``
      - ``mysql-connector-python``
      - MySQL connector driver.

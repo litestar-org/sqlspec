@@ -10,7 +10,6 @@ except ImportError:  # pragma: no cover
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-INTERNAL_EXTRAS = {"mypyc"}
 
 
 def _normalize_dependency_name(requirement: str) -> str:
@@ -18,15 +17,21 @@ def _normalize_dependency_name(requirement: str) -> str:
     return re.split(r"[<>=!~]", requirement, maxsplit=1)[0].strip()
 
 
-def _documented_extras() -> dict[str, set[str]]:
+def _package_groups_table() -> str:
     docs = (PROJECT_ROOT / "docs/getting_started/installation.rst").read_text()
+    _, table = docs.split("Package groups\n--------------", maxsplit=1)
+    return table.split("Multiple extras\n---------------", maxsplit=1)[0]
+
+
+def _documented_extras() -> dict[str, set[str]]:
+    table = _package_groups_table()
     rows: dict[str, set[str]] = {}
-    matches = list(re.finditer(r"^\s+\* - ``([^`]+)``\s*$", docs, flags=re.MULTILINE))
+    matches = list(re.finditer(r"^\s+\* - ``([^`]+)``\s*$", table, flags=re.MULTILINE))
 
     for index, match in enumerate(matches):
         extra_name = match.group(1)
-        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(docs)
-        row = docs[match.end() : next_start]
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(table)
+        row = table[match.end() : next_start]
         includes_match = re.search(r"^\s+- (.+)$", row, flags=re.MULTILINE)
         if includes_match is None:
             rows[extra_name] = set()
@@ -39,8 +44,7 @@ def _documented_extras() -> dict[str, set[str]]:
 
 
 def _documented_extra_names() -> list[str]:
-    docs = (PROJECT_ROOT / "docs/getting_started/installation.rst").read_text()
-    return re.findall(r"^\s+\* - ``([^`]+)``\s*$", docs, flags=re.MULTILINE)
+    return re.findall(r"^\s+\* - ``([^`]+)``\s*$", _package_groups_table(), flags=re.MULTILINE)
 
 
 def _pyproject_extras() -> dict[str, set[str]]:
@@ -48,7 +52,6 @@ def _pyproject_extras() -> dict[str, set[str]]:
     return {
         extra_name: {_normalize_dependency_name(dependency) for dependency in dependencies}
         for extra_name, dependencies in pyproject["project"]["optional-dependencies"].items()
-        if extra_name not in INTERNAL_EXTRAS
     }
 
 
