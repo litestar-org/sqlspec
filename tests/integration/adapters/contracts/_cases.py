@@ -675,6 +675,18 @@ DEFERRED_DRIVER_CASES = (
         reason="No active integration fixture exists for mssql_python.",
     ),
     DriverCase(
+        "pymssql-sync",
+        "",
+        "pymssql",
+        "tsql",
+        "sync",
+        integration_status="deferred",
+        reason="No active SQL Server fixture exists for pymssql.",
+        supports_execute_many=True,
+        supports_migrations=True,
+        supports_data_dictionary=True,
+    ),
+    DriverCase(
         "spanner-sync",
         "",
         "spanner",

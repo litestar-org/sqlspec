@@ -10,6 +10,7 @@ Supported Drivers (High Level)
 - **PostgreSQL**: asyncpg, psycopg (sync/async), psqlpy, ADBC
 - **SQLite**: sqlite3, aiosqlite, ADBC
 - **MySQL**: asyncmy, mysql-connector, pymysql
+- **SQL Server**: mssql-python, pymssql, arrow-odbc
 - **Analytics / Cloud**: DuckDB, BigQuery, Spanner, Oracle, ADBC
 
 Core Execution Pattern
