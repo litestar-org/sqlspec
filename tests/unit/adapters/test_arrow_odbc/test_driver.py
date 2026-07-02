@@ -417,7 +417,7 @@ def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers() -> None:
     driver.execute("SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1))
 
     call = connection.read_calls[-1]
-    assert "OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY" in call["query"]
+    assert "OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY" in call["query"]
     assert call["parameters"] is None
 
 
