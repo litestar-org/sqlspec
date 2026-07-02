@@ -22,8 +22,8 @@ from sqlspec.adapters.pymssql.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.pymssql.data_dictionary import PymssqlSyncDataDictionary
-from sqlspec.core import get_cache_config, register_driver_profile
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
+from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -31,9 +31,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from pymssql._pymssql import QueryParams
-
-    from sqlspec.core import SQL, StatementConfig
-    from sqlspec.driver import ExecutionResult
 
 __all__ = ("PymssqlCursor", "PymssqlDriver", "PymssqlExceptionHandler", "PymssqlSessionContext")
 
