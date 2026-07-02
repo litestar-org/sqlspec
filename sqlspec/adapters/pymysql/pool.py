@@ -76,7 +76,7 @@ class PyMysqlConnectionPool:
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
 
-        return cast("PyMysqlConnection", connection)
+        return connection
 
     def _is_connection_alive(self, connection: PyMysqlConnection) -> bool:
         try:
