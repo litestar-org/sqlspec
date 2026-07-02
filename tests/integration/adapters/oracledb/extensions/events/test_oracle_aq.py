@@ -30,7 +30,7 @@ def _wait_for_message(received: "list[Any]", count: int = 1) -> None:
 def oracle_aq_config(
     provision_classic_aq: "Callable[..., AbstractContextManager[None]]", oracle_23ai_service: OracleService
 ) -> Generator[OracleSyncConfig, None, None]:
-    """Provision Oracle config with a live advanced_queue queue for tests."""
+    """Provision Oracle config with a live aq queue for tests."""
 
     config = OracleSyncConfig(
         connection_config={
@@ -40,7 +40,7 @@ def oracle_aq_config(
             "user": oracle_23ai_service.user,
             "password": oracle_23ai_service.password,
         },
-        extension_config={"events": {"backend": "advanced_queue"}},
+        extension_config={"events": {"backend": "aq"}},
     )
 
     with provision_classic_aq():
@@ -59,7 +59,7 @@ def test_oracle_aq_publish_receive(oracle_aq_config: OracleSyncConfig) -> None:
 
     assert isinstance(channel, SyncEventChannel)
 
-    assert channel._backend_name == "advanced_queue"  # pyright: ignore[reportPrivateUsage]
+    assert channel._backend_name == "aq"  # pyright: ignore[reportPrivateUsage]
 
     event_id = channel.publish("alerts", {"action": "refresh"})
     iterator = channel.iter_events("alerts", poll_interval=1.0)
