@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, build_statement_config_from_profile
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -61,6 +61,9 @@ def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
 
 def create_mapped_exception(exc: Exception) -> Exception:
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
+    message = str(exc)
+    if "Native error: 102" in message or "Incorrect syntax near" in message:
+        return SQLParsingError(f"ODBC SQL parsing error. Original error: {exc}")
     return SQLSpecError(f"ODBC database error. Original error: {exc}")
 
 

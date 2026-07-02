@@ -1,8 +1,9 @@
 """arrow-odbc sync driver."""
 
+import re
 from collections.abc import Iterable, Mapping
 from itertools import chain
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
 from sqlspec.adapters.arrow_odbc.core import (
@@ -103,6 +104,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def dispatch_execute(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        if self._dialect == "mssql":
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
         parameters = _odbc_parameters(prepared_parameters)
 
         if statement.returns_rows():
@@ -336,6 +339,33 @@ def _statement_dialect_for(dialect: str) -> str:
     if dialect == "mssql":
         return "tsql"
     return dialect
+
+
+_MSSQL_OFFSET_FETCH_PATTERN = re.compile(
+    r"OFFSET\s+\?\s+ROWS\s+FETCH\s+(?P<fetch_keyword>NEXT|FIRST)\s+\?\s+ROWS\s+ONLY", re.IGNORECASE
+)
+_MSSQL_PAGINATION_PARAMETER_COUNT: Final = 2
+
+
+def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[str, object]:
+    match = _MSSQL_OFFSET_FETCH_PATTERN.search(sql)
+    if (
+        match is None
+        or not isinstance(parameters, (list, tuple))
+        or len(parameters) < _MSSQL_PAGINATION_PARAMETER_COUNT
+    ):
+        return sql, parameters
+
+    offset_value = _pagination_int(parameters[-2])
+    limit_value = _pagination_int(parameters[-1])
+    replacement = f"OFFSET {offset_value} ROWS FETCH {match.group('fetch_keyword')} {limit_value} ROWS ONLY"
+    remaining_parameters = parameters[:-2]
+    return _MSSQL_OFFSET_FETCH_PATTERN.sub(replacement, sql, count=1), remaining_parameters
+
+
+def _pagination_int(value: object) -> int:
+    unwrapped = getattr(value, "value", value)
+    return int(cast("Any", unwrapped))
 
 
 def _unwrap_parameter(value: Any) -> Any:

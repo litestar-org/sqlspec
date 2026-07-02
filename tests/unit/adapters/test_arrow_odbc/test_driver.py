@@ -14,11 +14,13 @@ from sqlspec.adapters.arrow_odbc import (
     ArrowOdbcDriver,
     ArrowOdbcDriverFeatures,
     build_connection_config,
+    create_mapped_exception,
     odbc_type_to_arrow,
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.exceptions import SQLFileNotFoundError, SQLSpecError
+from sqlspec.core import LimitOffsetFilter, OrderByFilter
+from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
@@ -403,6 +405,32 @@ def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     assert driver.statement_config.dialect == "tsql"
     assert sql == "SELECT ?"
     assert parameters == (1,)
+
+
+def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers() -> None:
+    """SQL Server ODBC requires literal integer OFFSET/FETCH control values."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    driver.execute("SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1))
+
+    call = connection.read_calls[-1]
+    assert "OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY" in call["query"]
+    assert call["parameters"] is None
+
+
+def test_arrow_odbc_mssql_syntax_error_maps_to_sql_parsing_error() -> None:
+    """SQL Server syntax errors should satisfy the shared parsing-error contract."""
+    mapped = create_mapped_exception(
+        FakeOdbcError(
+            "ODBC emitted an error calling 'SQLExecDirect': State: 42000, Native error: 102, "
+            "Message: [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Incorrect syntax near '*'."
+        )
+    )
+
+    assert isinstance(mapped, SQLParsingError)
 
 
 def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
