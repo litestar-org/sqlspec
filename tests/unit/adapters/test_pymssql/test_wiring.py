@@ -14,9 +14,10 @@ def test_deferred_driver_case_is_registered_with_sync_metadata() -> None:
     assert case.mode == "sync"
     assert case.integration_status == "deferred"
     assert case.supports_migrations is True
-    assert case.supports_pooling is True
-    assert case.supports_connection_hook is True
+    assert case.supports_pooling is False
+    assert case.supports_connection_hook is False
     assert case.supports_execute_many is True
+    assert case.supports_data_dictionary is True
     assert case.supports_arrow is False
 
 

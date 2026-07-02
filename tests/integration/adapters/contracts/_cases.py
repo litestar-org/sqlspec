@@ -672,8 +672,6 @@ DEFERRED_DRIVER_CASES = (
         reason="No active SQL Server fixture exists for pymssql.",
         supports_execute_many=True,
         supports_migrations=True,
-        supports_pooling=True,
-        supports_connection_hook=True,
         supports_data_dictionary=True,
     ),
     DriverCase(
