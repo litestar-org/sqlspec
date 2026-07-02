@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from mypy_extensions import mypyc_attr
 from psycopg import Connection as PsycopgConnection
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
-from typing_extensions import NotRequired
+from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -177,8 +177,18 @@ def _make_alloydb_connection_class(
 
     class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
         @classmethod
-        def connect(cls, conninfo: str = "", **kwargs: Any) -> "PsycopgSyncConnection":
-            _ = (cls, conninfo)
+        def connect(
+            cls,
+            conninfo: str = "",
+            *,
+            autocommit: bool = False,
+            prepare_threshold: int | None = 5,
+            context: "AdaptContext | None" = None,
+            row_factory: "RowFactory[Any] | None" = None,
+            cursor_factory: "type[Cursor[Any]] | None" = None,
+            **kwargs: str | int | None,
+        ) -> Self:
+            _ = (cls, conninfo, autocommit, prepare_threshold, context, row_factory, cursor_factory)
             connector_kwargs = dict(kwargs)
             connector_kwargs["enable_iam_auth"] = enable_iam_auth
             connector_kwargs["ip_type"] = ip_type
@@ -188,7 +198,7 @@ def _make_alloydb_connection_class(
                 connector_kwargs["password"] = password
             if database is not None:
                 connector_kwargs["db"] = database
-            return cast("PsycopgSyncConnection", connector.connect(instance_uri, "psycopg", **connector_kwargs))
+            return cast("Self", connector.connect(instance_uri, "psycopg", **connector_kwargs))
 
     return _AlloyDBPsycopgConnection
 
