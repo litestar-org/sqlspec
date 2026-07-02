@@ -101,7 +101,7 @@ def test_event_channel_backend_fallback(tmp_path) -> None:
     config = SqliteConfig(
         connection_config={"database": str(db_path)},
         migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
-        extension_config={"events": {"backend": "advanced_queue"}},
+        extension_config={"events": {"backend": "aq"}},
     )
     commands = SyncMigrationCommands(config)
     commands.upgrade()

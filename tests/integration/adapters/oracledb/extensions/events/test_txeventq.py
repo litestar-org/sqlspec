@@ -1,6 +1,6 @@
 """Oracle Transactional Event Queues (TxEventQ) event channel integration tests.
 
-Mirrors the advanced_queue parity bar for the transactional_event_queue backend, which
+Mirrors the aq parity bar for the txeventq backend, which
 shares the AQ client path and differs only in provisioning (CREATE_TRANSACTIONAL_EVENT_QUEUE).
 """
 
@@ -40,7 +40,7 @@ async def _async_wait_for_message(received: "list[Any]", count: int = 1) -> None
 
 
 def _sync_config(oracle_service: OracleService, **events: Any) -> OracleSyncConfig:
-    events_config: dict[str, Any] = {"backend": "transactional_event_queue", "aq_queue": _QUEUE_NAME, **events}
+    events_config: dict[str, Any] = {"backend": "txeventq", "aq_queue": _QUEUE_NAME, **events}
     return OracleSyncConfig(
         connection_config={
             "host": oracle_service.host,
@@ -54,7 +54,7 @@ def _sync_config(oracle_service: OracleService, **events: Any) -> OracleSyncConf
 
 
 def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncConfig:
-    events_config: dict[str, Any] = {"backend": "transactional_event_queue", "aq_queue": _QUEUE_NAME, **events}
+    events_config: dict[str, Any] = {"backend": "txeventq", "aq_queue": _QUEUE_NAME, **events}
     return OracleAsyncConfig(
         connection_config={
             "host": oracle_service.host,
@@ -106,7 +106,7 @@ def test_txeventq_publish_receive(oracle_txeventq_config: OracleSyncConfig) -> N
     channel = spec.event_channel(oracle_txeventq_config)
 
     assert isinstance(channel, SyncEventChannel)
-    assert channel._backend_name == "transactional_event_queue"  # pyright: ignore[reportPrivateUsage]
+    assert channel._backend_name == "txeventq"  # pyright: ignore[reportPrivateUsage]
 
     event_id = channel.publish("alerts", {"action": "refresh"})
     message = next(channel.iter_events("alerts", poll_interval=1.0))
@@ -187,7 +187,7 @@ async def test_txeventq_async_publish_and_ack(oracle_txeventq_async_config: Orac
     channel = spec.event_channel(oracle_txeventq_async_config)
 
     assert isinstance(channel, AsyncEventChannel)
-    assert channel._backend_name == "transactional_event_queue"  # pyright: ignore[reportPrivateUsage]
+    assert channel._backend_name == "txeventq"  # pyright: ignore[reportPrivateUsage]
 
     event_id = await channel.publish("alerts", {"action": "test"})
     assert len(event_id) == 32
