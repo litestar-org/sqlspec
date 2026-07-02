@@ -3,7 +3,13 @@
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlCursor, PymssqlSessionContext
+from sqlspec.adapters.pymssql._typing import (
+    PYMSSQL_MODULE,
+    PymssqlConnection,
+    PymssqlCursor,
+    PymssqlRawCursor,
+    PymssqlSessionContext,
+)
 from sqlspec.adapters.pymssql.core import (
     collect_rows,
     create_mapped_exception,
@@ -26,7 +32,6 @@ if TYPE_CHECKING:
 
     from pymssql._pymssql import QueryParams
 
-    from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
 
