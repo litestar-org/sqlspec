@@ -57,7 +57,7 @@ OracleProtocol = Literal["tcp", "tcps"]
 OracleServerType = Literal["dedicated", "shared", "pooled"]
 OraclePoolBoundary = Literal["statement", "transaction"]
 OracleVectorReturnFormat = Literal["array", "list", "numpy"]
-OracleEventsBackend = Literal["advanced_queue", "table_queue", "transactional_event_queue"]
+OracleEventsBackend = Literal["aq", "table_queue", "txeventq"]
 
 
 class OracleConnectionParams(TypedDict):
@@ -192,9 +192,9 @@ class OracleDriverFeatures(TypedDict):
      This is separate from connection_config["events"], which enables python-oracledb
      Thick mode database event notifications for HA and continuous query notification.
     events_backend: Event channel backend selection.
-     Options: "advanced_queue", "table_queue", "transactional_event_queue"
-     - "advanced_queue": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
-     - "transactional_event_queue": Oracle Transactional Event Queues (native messaging, requires
+     Options: "aq", "table_queue", "txeventq"
+     - "aq": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
+     - "txeventq": Oracle Transactional Event Queues (native messaging, requires
        DBMS_AQADM privileges; provisioned via DBMS_AQADM.CREATE_TRANSACTIONAL_EVENT_QUEUE)
      - "table_queue": Durable table-backed queue with retries and exactly-once delivery
      Defaults to "table_queue" (works on all Oracle editions without special privileges).
