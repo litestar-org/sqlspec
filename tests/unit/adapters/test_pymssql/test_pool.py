@@ -1,6 +1,6 @@
 """pymssql pool tests."""
 
-from typing import Any
+from typing import Any, cast
 
 from tests.unit.adapters.test_pymssql.conftest import FakeConnection, FakePymssqlModule
 
@@ -24,7 +24,7 @@ def test_pool_connects_with_config_and_runs_hook(monkeypatch) -> None:
 
     acquired = pool.acquire()
 
-    assert acquired is connection
+    assert cast(object, acquired) is connection
     assert fake_module.connect_calls == [{"server": "sql.example.test", "user": "sa"}]
     assert seen == [connection]
     assert pool.size() == 1
@@ -50,8 +50,8 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
 
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=-1.0)
 
-    assert pool.acquire() is first
-    assert pool.acquire() is second
+    assert cast(object, pool.acquire()) is first
+    assert cast(object, pool.acquire()) is second
     assert first.closed is True
     assert len(fake_module.connect_calls) == 2
 
@@ -65,7 +65,7 @@ def test_pool_close_removes_thread_local_connection(monkeypatch) -> None:
     monkeypatch.setattr(pool_module, "pymssql", FakePymssqlModule(connection))
     pool = PymssqlConnectionPool({"server": "sql.example.test"})
 
-    assert pool.acquire() is connection
+    assert cast(object, pool.acquire()) is connection
     pool.close()
 
     assert connection.closed is True
