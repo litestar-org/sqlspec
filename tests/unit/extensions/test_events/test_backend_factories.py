@@ -165,17 +165,17 @@ def test_psqlpy_factory_unknown_returns_none() -> None:
     assert backend is None
 
 
-def test_oracle_factory_advanced_queue_backend() -> None:
-    """Oracle factory creates advanced_queue backend."""
+def test_oracle_factory_aq_backend() -> None:
+    """Oracle factory creates aq backend."""
     pytest.importorskip("oracledb")
     from sqlspec.adapters.oracledb.config import OracleSyncConfig
     from sqlspec.adapters.oracledb.events.backend import OracleSyncAQEventBackend, create_event_backend
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "advanced_queue", {})
+    backend = create_event_backend(config, "aq", {})
 
     assert isinstance(backend, OracleSyncAQEventBackend)
-    assert backend.backend_name == "advanced_queue"
+    assert backend.backend_name == "aq"
     assert backend.supports_sync is True
     assert backend.supports_async is False
 
@@ -187,7 +187,7 @@ def test_oracle_factory_custom_queue_name() -> None:
     from sqlspec.adapters.oracledb.events.backend import create_event_backend
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "advanced_queue", {"aq_queue": "MY_CUSTOM_QUEUE"})
+    backend = create_event_backend(config, "aq", {"aq_queue": "MY_CUSTOM_QUEUE"})
     assert backend is not None
     assert backend._queue_name == "MY_CUSTOM_QUEUE"
 
@@ -199,10 +199,10 @@ def test_oracle_factory_async_config() -> None:
     from sqlspec.adapters.oracledb.events.backend import OracleAsyncAQEventBackend, create_event_backend
 
     config = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "advanced_queue", {})
+    backend = create_event_backend(config, "aq", {})
 
     assert isinstance(backend, OracleAsyncAQEventBackend)
-    assert backend.backend_name == "advanced_queue"
+    assert backend.backend_name == "aq"
     assert backend.supports_sync is False
     assert backend.supports_async is True
 
@@ -219,44 +219,44 @@ def test_oracle_factory_unknown_returns_none() -> None:
     assert backend is None
 
 
-def test_oracle_factory_transactional_event_queue_backend() -> None:
-    """Oracle factory creates a transactional_event_queue backend (sync)."""
+def test_oracle_factory_txeventq_backend() -> None:
+    """Oracle factory creates a txeventq backend (sync)."""
     pytest.importorskip("oracledb")
     from sqlspec.adapters.oracledb.config import OracleSyncConfig
     from sqlspec.adapters.oracledb.events.backend import OracleSyncTxEventQEventBackend, create_event_backend
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "transactional_event_queue", {})
+    backend = create_event_backend(config, "txeventq", {})
 
     assert isinstance(backend, OracleSyncTxEventQEventBackend)
-    assert backend.backend_name == "transactional_event_queue"
+    assert backend.backend_name == "txeventq"
     assert backend.supports_sync is True
     assert backend.supports_async is False
 
 
-def test_oracle_factory_transactional_event_queue_async() -> None:
-    """Oracle factory creates a transactional_event_queue backend (async)."""
+def test_oracle_factory_txeventq_async() -> None:
+    """Oracle factory creates a txeventq backend (async)."""
     pytest.importorskip("oracledb")
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig
     from sqlspec.adapters.oracledb.events.backend import OracleAsyncTxEventQEventBackend, create_event_backend
 
     config = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "transactional_event_queue", {})
+    backend = create_event_backend(config, "txeventq", {})
 
     assert isinstance(backend, OracleAsyncTxEventQEventBackend)
-    assert backend.backend_name == "transactional_event_queue"
+    assert backend.backend_name == "txeventq"
     assert backend.supports_sync is False
     assert backend.supports_async is True
 
 
-def test_oracle_factory_transactional_event_queue_custom_queue_name() -> None:
+def test_oracle_factory_txeventq_custom_queue_name() -> None:
     """TxEventQ factory honors a custom queue name."""
     pytest.importorskip("oracledb")
     from sqlspec.adapters.oracledb.config import OracleSyncConfig
     from sqlspec.adapters.oracledb.events.backend import create_event_backend
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "transactional_event_queue", {"aq_queue": "MY_TXEVENTQ"})
+    backend = create_event_backend(config, "txeventq", {"aq_queue": "MY_TXEVENTQ"})
 
     assert backend is not None
     assert backend._queue_name == "MY_TXEVENTQ"
@@ -269,11 +269,11 @@ def test_oracle_txeventq_backend_labels_hub_with_backend_name() -> None:
     from sqlspec.adapters.oracledb.events.backend import OracleSyncTxEventQEventBackend, create_event_backend
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "transactional_event_queue", {})
+    backend = create_event_backend(config, "txeventq", {})
 
     assert isinstance(backend, OracleSyncTxEventQEventBackend)
     hub = backend._ensure_hub()
-    assert hub._backend_name == "transactional_event_queue"
+    assert hub._backend_name == "txeventq"
 
 
 def test_oracle_txeventq_sync_backend_rejects_async_config() -> None:

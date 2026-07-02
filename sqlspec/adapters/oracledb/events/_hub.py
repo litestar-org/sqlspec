@@ -112,7 +112,7 @@ class OracleSyncAQHub:
         visibility: "int | None",
         default_visibility: "int | None",
         wait_ceiling: int,
-        backend_name: str = "advanced_queue",
+        backend_name: str = "aq",
     ) -> None:
         self._config = config
         self._queue_name_template = queue_name_template
@@ -242,7 +242,7 @@ class OracleAsyncAQHub:
         visibility: "int | None",
         default_visibility: "int | None",
         wait_ceiling: int,
-        backend_name: str = "advanced_queue",
+        backend_name: str = "aq",
     ) -> None:
         self._config = config
         self._queue_name_template = queue_name_template

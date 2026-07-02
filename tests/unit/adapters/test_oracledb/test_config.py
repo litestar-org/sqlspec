@@ -137,9 +137,9 @@ def test_oracle_config_finite_options_use_literals_and_driver_enums() -> None:
         "numpy",
     }
     assert set(get_args(_unwrap_not_required(driver_feature_hints["events_backend"]))) == {
-        "advanced_queue",
+        "aq",
         "table_queue",
-        "transactional_event_queue",
+        "txeventq",
     }
 
 

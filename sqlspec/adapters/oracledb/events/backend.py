@@ -86,7 +86,7 @@ class OracleSyncAQEventBackend:
 
     supports_sync = True
     supports_async = False
-    backend_name = "advanced_queue"
+    backend_name = "aq"
 
     def __init__(self, config: "OracleSyncConfig", settings: "dict[str, Any] | None" = None) -> None:
         if "oracledb" not in type(config).__module__:
@@ -170,7 +170,7 @@ class OracleAsyncAQEventBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "advanced_queue"
+    backend_name = "aq"
 
     def __init__(self, config: "OracleAsyncConfig", settings: "dict[str, Any] | None" = None) -> None:
         if "oracledb" not in type(config).__module__:
@@ -247,7 +247,7 @@ class OracleSyncTxEventQEventBackend(OracleSyncAQEventBackend):
 
     __slots__ = ()
 
-    backend_name = "transactional_event_queue"
+    backend_name = "txeventq"
 
 
 class OracleAsyncTxEventQEventBackend(OracleAsyncAQEventBackend):
@@ -255,7 +255,7 @@ class OracleAsyncTxEventQEventBackend(OracleAsyncAQEventBackend):
 
     __slots__ = ()
 
-    backend_name = "transactional_event_queue"
+    backend_name = "txeventq"
 
 
 def _get_publish_queue(connection: Any, channel: str, queue_name: str) -> Any:
@@ -315,22 +315,22 @@ def create_event_backend(
     """EventChannel factory for the Oracle AQ backend."""
     is_async = config.is_async
     match (backend_name, is_async):
-        case ("advanced_queue", False):
+        case ("aq", False):
             try:
                 return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
-        case ("advanced_queue", True):
+        case ("aq", True):
             try:
                 return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
-        case ("transactional_event_queue", False):
+        case ("txeventq", False):
             try:
                 return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
-        case ("transactional_event_queue", True):
+        case ("txeventq", True):
             try:
                 return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
             except (ImproperConfigurationError, MissingDependencyError):

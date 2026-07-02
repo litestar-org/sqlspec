@@ -32,7 +32,7 @@ def oracle_aq_privileges(oracle_23ai_service: "OracleService") -> None:
     """Grant the container app user the privileges required to run DBMS_AQADM.
 
     Unlocks both classic Advanced Queuing and Transactional Event Queues for the
-    ``advanced_queue`` / ``transactional_event_queue`` events backends. The grants persist
+    ``aq`` / ``txeventq`` events backends. The grants persist
     for the container lifetime, so session scope is sufficient and naturally idempotent
     (re-granting an existing role/privilege is a no-op in Oracle).
     """
