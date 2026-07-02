@@ -16,11 +16,15 @@ def test_profile_uses_tsql_and_pyformat_execution() -> None:
 
     assert default_statement_config.dialect == "tsql"
     assert driver_profile.default_execution_style is ParameterStyle.POSITIONAL_PYFORMAT
-    assert ParameterStyle.POSITIONAL_PYFORMAT in driver_profile.supported_execution_styles
-    assert ParameterStyle.NAMED_PYFORMAT in driver_profile.supported_execution_styles
+    supported_execution_styles = driver_profile.supported_execution_styles
+    assert supported_execution_styles is not None
+    assert ParameterStyle.POSITIONAL_PYFORMAT in supported_execution_styles
+    assert ParameterStyle.NAMED_PYFORMAT in supported_execution_styles
     assert parameter_config.default_execution_parameter_style is ParameterStyle.POSITIONAL_PYFORMAT
-    assert ParameterStyle.POSITIONAL_PYFORMAT in parameter_config.supported_execution_parameter_styles
-    assert ParameterStyle.NAMED_PYFORMAT in parameter_config.supported_execution_parameter_styles
+    supported_execution_parameter_styles = parameter_config.supported_execution_parameter_styles
+    assert supported_execution_parameter_styles is not None
+    assert ParameterStyle.POSITIONAL_PYFORMAT in supported_execution_parameter_styles
+    assert ParameterStyle.NAMED_PYFORMAT in supported_execution_parameter_styles
 
 
 def test_statement_config_compiles_qmark_input_to_percent_s() -> None:

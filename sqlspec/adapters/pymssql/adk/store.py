@@ -443,7 +443,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         inserted = 0
         with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
             for entry in entries:
-                params = (
+                params: tuple[Any, ...] = (
                     entry["event_id"],
                     entry["id"],
                     entry["session_id"],

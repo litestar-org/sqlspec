@@ -53,9 +53,6 @@ class PymssqlConnectionParams(TypedDict):
 class PymssqlPoolParams(PymssqlConnectionParams):
     """pymssql pool parameters."""
 
-    pool_recycle_seconds: NotRequired[int]
-    health_check_interval: NotRequired[float]
-
 
 class PymssqlDriverFeatures(TypedDict):
     """pymssql driver feature flags.
