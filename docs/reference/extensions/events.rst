@@ -21,8 +21,8 @@ backend owns its own listener hub that:
 * Serializes subscribe / unsubscribe under a lock so concurrent callers
   cannot race on driver-level statements that share the connection.
 
-The Oracle native backends (``advanced_queue`` and
-``transactional_event_queue``) use an analogous pattern: a per-channel
+The Oracle native backends (``aq`` and
+``txeventq``) use an analogous pattern: a per-channel
 queue-handle cache backed by a single dedicated session per backend instance.
 ``dequeue`` honors ``min(poll_interval, aq_wait_seconds)`` as its wait bound so
 the caller's polling cadence is respected.
@@ -37,8 +37,8 @@ Oracle native event backends
 Oracle provides two **native** messaging backends in addition to the default
 ``table_queue``:
 
-* ``advanced_queue`` — classic Oracle Advanced Queuing (AQ).
-* ``transactional_event_queue`` — Oracle Transactional Event Queues (TxEventQ).
+* ``aq`` — classic Oracle Advanced Queuing (AQ).
+* ``txeventq`` — Oracle Transactional Event Queues (TxEventQ).
 
 Both share the same client path and JSON payloads; they differ only in how the
 underlying queue is provisioned. Select one via ``events.backend``:
@@ -49,7 +49,7 @@ underlying queue is provisioned. Select one via ``events.backend``:
 
     config = OracleAsyncConfig(
         connection_config={"dsn": "..."},
-        extension_config={"events": {"backend": "transactional_event_queue"}},
+        extension_config={"events": {"backend": "txeventq"}},
     )
 
 The default remains ``table_queue``, which works on every Oracle edition
@@ -70,9 +70,9 @@ Provisioning
 The backend attaches to an existing queue; it does not create one. Provision the
 queue with ``DBMS_AQADM`` first:
 
-* ``advanced_queue`` — ``create_queue_table(queue_payload_type => 'JSON')`` +
+* ``aq`` — ``create_queue_table(queue_payload_type => 'JSON')`` +
   ``create_queue`` + ``start_queue``.
-* ``transactional_event_queue`` —
+* ``txeventq`` —
   ``create_transactional_event_queue(queue_payload_type => 'JSON', multiple_consumers => FALSE)``
   + ``start_queue``.
 

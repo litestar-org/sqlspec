@@ -31,7 +31,7 @@ def oracle_aq_poll_config(
             "user": oracle_23ai_service.user,
             "password": oracle_23ai_service.password,
         },
-        extension_config={"events": {"backend": "advanced_queue", "aq_wait_seconds": _AQ_WAIT_SECONDS}},
+        extension_config={"events": {"backend": "aq", "aq_wait_seconds": _AQ_WAIT_SECONDS}},
     )
 
     with provision_classic_aq():
