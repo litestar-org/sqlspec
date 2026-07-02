@@ -7,8 +7,11 @@ from _pytest.mark.structures import Mark, MarkDecorator
 
 from tests.integration.adapters.contracts._cases import (
     ADBC_MARK,
+    ARROW_ODBC_MARK,
     COCKROACH_XDIST_MARK,
     DUCKDB_XDIST_MARK,
+    MSSQL_MARK,
+    MSSQL_XDIST_MARK,
     MYSQL_XDIST_MARK,
     ORACLE_XDIST_MARK,
     POSTGRES_XDIST_MARK,
@@ -94,6 +97,12 @@ ADK_STORE_CASES = (
     ),
     AdkStoreCase(
         "adbc-postgres", "adk_store_adbc_postgres", "adbc", marks=(ADBC_MARK, POSTGRES_XDIST_MARK, pytest.mark.anyio)
+    ),
+    AdkStoreCase(
+        "arrow-odbc",
+        "adk_store_arrow_odbc_mssql",
+        "arrow_odbc",
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK, ARROW_ODBC_MARK, pytest.mark.anyio),
     ),
 )
 

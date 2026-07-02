@@ -230,18 +230,50 @@ def _should_assert_execute_rows_affected(case: DriverCase) -> bool:
     return "execute-rows-affected-unavailable" not in case.deviations
 
 
+def _sqlglot_dialect(case: DriverCase) -> str:
+    return "tsql" if case.dialect == "mssql" else case.dialect
+
+
+def _contract_rows_to_arrow(rows: tuple[ContractRow, ...]) -> Any:
+    import pyarrow as pa
+
+    return pa.table({
+        "name": pa.array([row.name for row in rows], type=pa.string()),
+        "value": pa.array([row.value for row in rows], type=pa.int64()),
+        "note": pa.array([None if row.note is None else str(row.note) for row in rows], type=pa.string()),
+    })
+
+
 def _seed_sync(
-    driver: SyncContractDriver, rows: tuple[ContractRow, ...], table: ContractTable = DEFAULT_CONTRACT_TABLE
+    driver: SyncContractDriver,
+    rows: tuple[ContractRow, ...],
+    table: ContractTable = DEFAULT_CONTRACT_TABLE,
+    case: DriverCase | None = None,
 ) -> None:
     if rows:
+        if case is not None and not case.supports_execute_many:
+            if not case.supports_native_bulk_ingest:
+                pytest.skip(f"{case.adapter} cannot seed contract rows without execute_many or native bulk ingest")
+            driver.load_from_arrow(table.name, _contract_rows_to_arrow(rows), overwrite=True)
+            driver.commit()
+            return
         driver.execute_many(table.insert_qmark_sql, _row_parameters(rows))
         driver.commit()
 
 
 async def _seed_async(
-    driver: AsyncContractDriver, rows: tuple[ContractRow, ...], table: ContractTable = DEFAULT_CONTRACT_TABLE
+    driver: AsyncContractDriver,
+    rows: tuple[ContractRow, ...],
+    table: ContractTable = DEFAULT_CONTRACT_TABLE,
+    case: DriverCase | None = None,
 ) -> None:
     if rows:
+        if case is not None and not case.supports_execute_many:
+            if not case.supports_native_bulk_ingest:
+                pytest.skip(f"{case.adapter} cannot seed contract rows without execute_many or native bulk ingest")
+            await driver.load_from_arrow(table.name, _contract_rows_to_arrow(rows), overwrite=True)
+            await driver.commit()
+            return
         await driver.execute_many(table.insert_qmark_sql, _row_parameters(rows))
         await driver.commit()
 
@@ -347,7 +379,7 @@ def assert_sync_streaming_unsupported_contract(driver: object, case: DriverCase)
     table = case.table
     sync_driver.execute(table.delete_sql)
     sync_driver.commit()
-    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2)), table, case)
 
     with pytest.raises(ImproperConfigurationError):
         sync_driver.select_stream(table.select_ordered_sql, native_only=True)
@@ -365,7 +397,7 @@ async def assert_async_streaming_unsupported_contract(driver: object, case: Driv
     table = case.table
     await async_driver.execute(table.delete_sql)
     await async_driver.commit()
-    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2)), table, case)
 
     with pytest.raises(ImproperConfigurationError):
         async_driver.select_stream(table.select_ordered_sql, native_only=True)
@@ -688,7 +720,7 @@ def assert_sync_filter_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers apply OrderBy/LimitOffset, InCollection, and Search filters."""
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    _seed_sync(sync_driver, _FILTER_SEED_ROWS, table)
+    _seed_sync(sync_driver, _FILTER_SEED_ROWS, table, case)
     base = f"SELECT name, value FROM {table.name}"
 
     paged = sync_driver.execute(base, OrderByFilter("value", "desc"), LimitOffsetFilter(limit=2, offset=1))
@@ -706,7 +738,7 @@ async def assert_async_filter_contract(driver: object, case: DriverCase) -> None
     """Assert async drivers apply OrderBy/LimitOffset, InCollection, and Search filters."""
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
-    await _seed_async(async_driver, _FILTER_SEED_ROWS, table)
+    await _seed_async(async_driver, _FILTER_SEED_ROWS, table, case)
     base = f"SELECT name, value FROM {table.name}"
 
     paged = await async_driver.execute(base, OrderByFilter("value", "desc"), LimitOffsetFilter(limit=2, offset=1))
@@ -728,7 +760,7 @@ def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None
         pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    _seed_sync(sync_driver, _GROUPED_SEED_ROWS, table)
+    _seed_sync(sync_driver, _GROUPED_SEED_ROWS, table, case)
 
     grouped = sync_driver.execute(
         f"SELECT value, COUNT(*) AS count FROM {table.name} GROUP BY value HAVING COUNT(*) >= 2 ORDER BY value"
@@ -747,7 +779,7 @@ async def assert_async_complex_query_contract(driver: object, case: DriverCase) 
         pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
-    await _seed_async(async_driver, _GROUPED_SEED_ROWS, table)
+    await _seed_async(async_driver, _GROUPED_SEED_ROWS, table, case)
 
     grouped = await async_driver.execute(
         f"SELECT value, COUNT(*) AS count FROM {table.name} GROUP BY value HAVING COUNT(*) >= 2 ORDER BY value"
@@ -820,6 +852,8 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
 
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert sync execute-many behavior for a driver case."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
@@ -840,6 +874,8 @@ def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
 
 async def assert_async_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert async execute-many behavior for a driver case."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
@@ -860,6 +896,8 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
 
 def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers batch insert, update, and delete with accurate row counts."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
@@ -880,6 +918,8 @@ def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase)
 
 async def assert_async_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers batch insert, update, and delete with accurate row counts."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
@@ -900,6 +940,8 @@ async def assert_async_execute_many_mutation_contract(driver: object, case: Driv
 
 def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers batch a large sequence and an is_many SQL object."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
@@ -918,6 +960,8 @@ def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) ->
 
 async def assert_async_execute_many_input_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers batch a large sequence and an is_many SQL object."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
@@ -3092,9 +3136,9 @@ def assert_sync_custom_type_adapters_contract(make_config: SyncConfigFactory, ca
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:
     """Assert sync drivers return equivalent rows for one statement input shape."""
     sync_driver = cast("SyncContractDriver", driver)
-    _seed_sync(sync_driver, input_case.setup_rows, case.table)
+    _seed_sync(sync_driver, input_case.setup_rows, case.table, case)
 
-    statement = input_case.statement_factory(case.table.name, case.dialect)
+    statement = input_case.statement_factory(case.table.name, _sqlglot_dialect(case))
     result = _execute_sync(sync_driver, statement, input_case.parameters)
     assert_result_data(result, input_case.expected_data)
 
@@ -3107,9 +3151,9 @@ async def assert_async_statement_input_contract(
 ) -> None:
     """Assert async drivers return equivalent rows for one statement input shape."""
     async_driver = cast("AsyncContractDriver", driver)
-    await _seed_async(async_driver, input_case.setup_rows, case.table)
+    await _seed_async(async_driver, input_case.setup_rows, case.table, case)
 
-    statement = input_case.statement_factory(case.table.name, case.dialect)
+    statement = input_case.statement_factory(case.table.name, _sqlglot_dialect(case))
     result = await _execute_async(async_driver, statement, input_case.parameters)
     assert_result_data(result, input_case.expected_data)
 
@@ -3120,7 +3164,7 @@ async def assert_async_statement_input_contract(
 def assert_sync_parameter_contract(driver: object, case: DriverCase, parameter_case: ParameterProfileCase) -> None:
     """Assert sync drivers bind one parameter profile case correctly."""
     sync_driver = cast("SyncContractDriver", driver)
-    _seed_sync(sync_driver, parameter_case.setup_rows, case.table)
+    _seed_sync(sync_driver, parameter_case.setup_rows, case.table, case)
 
     result = _execute_sync(sync_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters)
     if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
@@ -3141,7 +3185,7 @@ async def assert_async_parameter_contract(
 ) -> None:
     """Assert async drivers bind one parameter profile case correctly."""
     async_driver = cast("AsyncContractDriver", driver)
-    await _seed_async(async_driver, parameter_case.setup_rows, case.table)
+    await _seed_async(async_driver, parameter_case.setup_rows, case.table, case)
 
     result = await _execute_async(
         async_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters
@@ -3163,8 +3207,10 @@ def assert_sync_parameter_style_contract(
     driver: object, case: DriverCase, parameter_style_case: ParameterStyleCase
 ) -> None:
     """Assert sync drivers bind one parameter style case correctly."""
+    if parameter_style_case.method == "execute_many" and not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     sync_driver = cast("SyncContractDriver", driver)
-    _seed_sync(sync_driver, parameter_style_case.setup_rows, case.table)
+    _seed_sync(sync_driver, parameter_style_case.setup_rows, case.table, case)
 
     style_statement = _with_table(parameter_style_case.statement, case.table)
     if parameter_style_case.method == "execute_many":
@@ -3194,8 +3240,10 @@ async def assert_async_parameter_style_contract(
     driver: object, case: DriverCase, parameter_style_case: ParameterStyleCase
 ) -> None:
     """Assert async drivers bind one parameter style case correctly."""
+    if parameter_style_case.method == "execute_many" and not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
     async_driver = cast("AsyncContractDriver", driver)
-    await _seed_async(async_driver, parameter_style_case.setup_rows, case.table)
+    await _seed_async(async_driver, parameter_style_case.setup_rows, case.table, case)
 
     style_statement = _with_table(parameter_style_case.statement, case.table)
     if parameter_style_case.method == "execute_many":
@@ -3225,7 +3273,9 @@ def assert_sync_result_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers expose common result helper behavior."""
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    _seed_sync(sync_driver, (ContractRow("result1", 10), ContractRow("result2", 20), ContractRow("result3", 30)), table)
+    _seed_sync(
+        sync_driver, (ContractRow("result1", 10), ContractRow("result2", 20), ContractRow("result3", 30)), table, case
+    )
 
     result = assert_sql_result(sync_driver.execute(table.select_ordered_sql))
     assert result.get_first() == {"name": "result1", "value": 10, "note": None}
@@ -3249,7 +3299,7 @@ async def assert_async_result_contract(driver: object, case: DriverCase) -> None
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
     await _seed_async(
-        async_driver, (ContractRow("result1", 10), ContractRow("result2", 20), ContractRow("result3", 30)), table
+        async_driver, (ContractRow("result1", 10), ContractRow("result2", 20), ContractRow("result3", 30)), table, case
     )
 
     result = assert_sql_result(await async_driver.execute(table.select_ordered_sql))
@@ -3328,7 +3378,7 @@ def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case:
     if not case.supports_explain:
         pytest.skip(_explain_skip_reason(case))
     sync_driver = cast("SyncContractDriver", driver)
-    result = assert_sql_result(sync_driver.execute(explain_case.build(case.table, case.dialect)))
+    result = assert_sql_result(sync_driver.execute(explain_case.build(case.table, _sqlglot_dialect(case))))
     assert result.data is not None
 
 
@@ -3337,7 +3387,7 @@ async def assert_async_explain_contract(driver: object, case: DriverCase, explai
     if not case.supports_explain:
         pytest.skip(_explain_skip_reason(case))
     async_driver = cast("AsyncContractDriver", driver)
-    result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, case.dialect)))
+    result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, _sqlglot_dialect(case))))
     assert result.data is not None
 
 
@@ -3460,7 +3510,7 @@ def assert_sync_arrow_contract(driver: object, case: DriverCase) -> None:
 
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2), ContractRow("c", 3)), table)
+    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2), ContractRow("c", 3)), table, case)
 
     table_result = sync_driver.select_to_arrow(table.select_ordered_sql)
     assert isinstance(table_result.data, pa.Table)
@@ -3490,7 +3540,7 @@ async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
 
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
-    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2), ContractRow("c", 3)), table)
+    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2), ContractRow("c", 3)), table, case)
 
     table_result = await async_driver.select_to_arrow(table.select_ordered_sql)
     assert isinstance(table_result.data, pa.Table)
@@ -3606,14 +3656,14 @@ def assert_sync_arrow_extras_contract(driver: object, case: DriverCase) -> None:
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
 
-    _seed_sync(sync_driver, (ContractRow("a", 1, None), ContractRow("b", 2, "noted")), table)
+    _seed_sync(sync_driver, (ContractRow("a", 1, None), ContractRow("b", 2, "noted")), table, case)
     null_result = sync_driver.select_to_arrow(table.select_ordered_sql)
     assert isinstance(null_result.data, pa.Table)
     assert null_result.data.column("note").to_pylist() == [None, "noted"]
 
     sync_driver.execute(table.delete_sql)
     sync_driver.commit()
-    _seed_sync(sync_driver, tuple(ContractRow(f"n{i}", i) for i in range(1, _ARROW_LARGE_ROW_COUNT + 1)), table)
+    _seed_sync(sync_driver, tuple(ContractRow(f"n{i}", i) for i in range(1, _ARROW_LARGE_ROW_COUNT + 1)), table, case)
     large_result = sync_driver.select_to_arrow(table.select_ordered_sql)
     assert large_result.rows_affected == _ARROW_LARGE_ROW_COUNT
     assert sum(large_result.data.column("value").to_pylist()) == sum(range(1, _ARROW_LARGE_ROW_COUNT + 1))
@@ -3628,14 +3678,16 @@ async def assert_async_arrow_extras_contract(driver: object, case: DriverCase) -
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
 
-    await _seed_async(async_driver, (ContractRow("a", 1, None), ContractRow("b", 2, "noted")), table)
+    await _seed_async(async_driver, (ContractRow("a", 1, None), ContractRow("b", 2, "noted")), table, case)
     null_result = await async_driver.select_to_arrow(table.select_ordered_sql)
     assert isinstance(null_result.data, pa.Table)
     assert null_result.data.column("note").to_pylist() == [None, "noted"]
 
     await async_driver.execute(table.delete_sql)
     await async_driver.commit()
-    await _seed_async(async_driver, tuple(ContractRow(f"n{i}", i) for i in range(1, _ARROW_LARGE_ROW_COUNT + 1)), table)
+    await _seed_async(
+        async_driver, tuple(ContractRow(f"n{i}", i) for i in range(1, _ARROW_LARGE_ROW_COUNT + 1)), table, case
+    )
     large_result = await async_driver.select_to_arrow(table.select_ordered_sql)
     assert large_result.rows_affected == _ARROW_LARGE_ROW_COUNT
     assert sum(large_result.data.column("value").to_pylist()) == sum(range(1, _ARROW_LARGE_ROW_COUNT + 1))
@@ -3649,7 +3701,7 @@ def assert_sync_arrow_polars_contract(driver: object, case: DriverCase) -> None:
 
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+    _seed_sync(sync_driver, (ContractRow("a", 1), ContractRow("b", 2)), table, case)
 
     frame = sync_driver.select_to_arrow(table.select_ordered_sql).to_polars()
     assert len(frame) == 2
@@ -3664,7 +3716,7 @@ async def assert_async_arrow_polars_contract(driver: object, case: DriverCase) -
 
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
-    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2)), table)
+    await _seed_async(async_driver, (ContractRow("a", 1), ContractRow("b", 2)), table, case)
 
     frame = (await async_driver.select_to_arrow(table.select_ordered_sql)).to_polars()
     assert len(frame) == 2
@@ -4184,7 +4236,7 @@ def assert_sync_storage_bridge_rustfs_contract(
     storage_registry.clear()
     try:
         _register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
-        _seed_sync(sync_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table)
+        _seed_sync(sync_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table, case)
 
         export_job = sync_driver.select_to_storage(
             _storage_bridge_export_sql(table), destination, 1, format_hint="parquet"
@@ -4216,7 +4268,9 @@ async def assert_async_storage_bridge_rustfs_contract(
     storage_registry.clear()
     try:
         _register_rustfs_alias(alias, rustfs_service, rustfs_bucket_name, prefix=prefix)
-        await _seed_async(async_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table)
+        await _seed_async(
+            async_driver, (ContractRow("alpha", 1, "first"), ContractRow("beta", 2, "second")), table, case
+        )
 
         export_job = await async_driver.select_to_storage(
             _storage_bridge_export_sql(table), destination, 1, format_hint="parquet"

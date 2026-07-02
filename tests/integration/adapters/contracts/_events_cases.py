@@ -7,7 +7,10 @@ import pytest
 from _pytest.mark.structures import Mark, MarkDecorator
 
 from tests.integration.adapters.contracts._cases import (
+    ARROW_ODBC_MARK,
     DUCKDB_XDIST_MARK,
+    MSSQL_MARK,
+    MSSQL_XDIST_MARK,
     MYSQL_XDIST_MARK,
     POSTGRES_XDIST_MARK,
     SQLITE_XDIST_MARK,
@@ -37,6 +40,13 @@ class EventsCaseContext:
 SYNC_EVENTS_CASES = (
     EventsCase("sqlite-sync", "events_config_sqlite", "sqlite", "sync", marks=(SQLITE_XDIST_MARK,)),
     EventsCase("duckdb-sync", "events_config_duckdb", "duckdb", "sync", marks=(DUCKDB_XDIST_MARK,)),
+    EventsCase(
+        "arrow-odbc-sync",
+        "events_config_arrow_odbc_mssql",
+        "arrow_odbc",
+        "sync",
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK, ARROW_ODBC_MARK),
+    ),
     EventsCase("pymysql-sync", "events_config_pymysql", "pymysql", "sync", marks=(MYSQL_XDIST_MARK,)),
     EventsCase(
         "psycopg-sync",

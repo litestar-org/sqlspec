@@ -5,7 +5,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcSessionContext, arrow_odbc_connect
-from sqlspec.adapters.arrow_odbc.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.arrow_odbc.core import (
+    apply_driver_features,
+    build_connection_config,
+    build_statement_config,
+    default_statement_config,
+    resolve_dialect_from_dbms_name,
+)
 from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
@@ -147,7 +153,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             connection_config=normalized,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or default_statement_config,
+            statement_config=statement_config or _resolve_statement_config(features),
             driver_features=features,
             bind_key=bind_key,
             extension_config=extension_config,
@@ -207,3 +213,12 @@ def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
     """Close connection objects from compatible wrappers when they expose close()."""
     if isinstance(connection, SupportsCloseProtocol):
         connection.close()
+
+
+def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":
+    dialect = resolve_dialect_from_dbms_name(str(features.get("dbms_name") or features.get("connection_string") or ""))
+    if dialect == "sqlite":
+        return default_statement_config
+    if dialect == "mssql":
+        return build_statement_config(dialect="tsql")
+    return build_statement_config(dialect=dialect)
