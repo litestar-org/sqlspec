@@ -1,4 +1,4 @@
-"""Thin-mode JSON payload verification for the Oracle advanced_queue events backend.
+"""Thin-mode JSON payload verification for the Oracle aq events backend.
 
 Confirms that classic Advanced Queuing carries a structured JSON payload through a full
 enqueue/dequeue cycle while the adapter is in its default thin mode (no Instant Client).
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.xdist_group("oracle")
 def oracle_aq_json_config(
     provision_classic_aq: "Callable[..., AbstractContextManager[None]]", oracle_23ai_service: OracleService
 ) -> Generator[OracleSyncConfig, None, None]:
-    """Provision a JSON-payload AQ queue for the advanced_queue backend."""
+    """Provision a JSON-payload AQ queue for the aq backend."""
 
     config = OracleSyncConfig(
         connection_config={
@@ -31,7 +31,7 @@ def oracle_aq_json_config(
             "user": oracle_23ai_service.user,
             "password": oracle_23ai_service.password,
         },
-        extension_config={"events": {"backend": "advanced_queue"}},
+        extension_config={"events": {"backend": "aq"}},
     )
 
     with provision_classic_aq(payload_type="JSON"):
@@ -41,7 +41,7 @@ def oracle_aq_json_config(
             config.close_pool()
 
 
-def test_advanced_queue_json_round_trips_in_thin_mode(oracle_aq_json_config: OracleSyncConfig) -> None:
+def test_aq_json_round_trips_in_thin_mode(oracle_aq_json_config: OracleSyncConfig) -> None:
     """A nested JSON payload survives enqueue/dequeue unchanged with a thin-mode connection."""
 
     with oracle_aq_json_config.provide_session() as driver:

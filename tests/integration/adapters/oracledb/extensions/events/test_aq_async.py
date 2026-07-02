@@ -1,6 +1,6 @@
 """Async Oracle Advanced Queuing event channel parity tests.
 
-Mirrors the asyncpg listen/notify parity bar for the async advanced_queue backend
+Mirrors the asyncpg listen/notify parity bar for the async aq backend
 (OracleAsyncAQEventBackend), which had no live-queue coverage before this suite.
 """
 
@@ -31,7 +31,7 @@ async def _wait_for_message(received: "list[Any]", count: int = 1) -> None:
 
 
 def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncConfig:
-    events_config: dict[str, Any] = {"backend": "advanced_queue", **events}
+    events_config: dict[str, Any] = {"backend": "aq", **events}
     return OracleAsyncConfig(
         connection_config={
             "host": oracle_service.host,
@@ -50,7 +50,7 @@ def _async_config(oracle_service: OracleService, **events: Any) -> OracleAsyncCo
 async def oracle_aq_async_config(
     provision_classic_aq: "Callable[..., AbstractContextManager[None]]", oracle_23ai_service: OracleService
 ) -> "AsyncGenerator[OracleAsyncConfig, None]":
-    """Async Oracle config backed by a live advanced_queue queue."""
+    """Async Oracle config backed by a live aq queue."""
 
     config = _async_config(oracle_23ai_service)
     with provision_classic_aq():
@@ -69,7 +69,7 @@ async def test_oracle_aq_async_publish_and_ack(oracle_aq_async_config: OracleAsy
     channel = spec.event_channel(oracle_aq_async_config)
 
     assert isinstance(channel, AsyncEventChannel)
-    assert channel._backend_name == "advanced_queue"  # pyright: ignore[reportPrivateUsage]
+    assert channel._backend_name == "aq"  # pyright: ignore[reportPrivateUsage]
 
     event_id = await channel.publish("alerts", {"action": "test"})
     assert len(event_id) == 32
@@ -147,7 +147,7 @@ async def test_oracle_aq_async_concurrent_multi_channel(
 ) -> None:
     """Concurrent listeners on distinct per-channel queues stay isolated and race-free.
 
-    The advanced_queue backend routes a channel to its own physical queue via the
+    The aq backend routes a channel to its own physical queue via the
     ``{channel}`` template, so each listener must see only its own channel's events even
     while both drain the shared hub connection under an asyncio lock.
     """
