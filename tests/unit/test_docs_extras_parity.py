@@ -1,11 +1,12 @@
 """Installation docs parity tests for optional extras."""
 
 import re
+import sys
 from pathlib import Path
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib
-except ImportError:  # pragma: no cover
+else:  # pragma: no cover
     import tomli as tomllib
 
 
