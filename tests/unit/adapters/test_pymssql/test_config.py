@@ -2,6 +2,8 @@
 
 from typing import get_type_hints
 
+import pytest
+
 from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -94,3 +96,21 @@ def test_signature_namespace_exposes_public_adapter_types() -> None:
     assert namespace["PymssqlConnectionParams"] is PymssqlConnectionParams
     assert namespace["PymssqlConnectionPool"] is PymssqlConnectionPool
     assert namespace["PymssqlDriver"] is PymssqlDriver
+
+
+def test_pymssql_runtime_aliases_resolve_to_installed_classes() -> None:
+    """pymssql public runtime aliases should expose installed pymssql classes."""
+    pymssql = pytest.importorskip("pymssql")
+    from sqlspec.adapters.pymssql import PymssqlConnection as PublicPymssqlConnection
+    from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlConnection, PymssqlRawCursor
+
+    namespace = PymssqlConfig().get_signature_namespace()
+
+    assert PYMSSQL_MODULE is pymssql
+    assert PymssqlConnection is pymssql.Connection
+    assert PublicPymssqlConnection is pymssql.Connection
+    assert PymssqlRawCursor is pymssql.Cursor
+    assert PymssqlConfig.connection_type is pymssql.Connection
+    assert namespace["PymssqlConnection"] is pymssql.Connection
+    assert namespace["PymssqlRawCursor"] is pymssql.Cursor
+    assert isinstance(object(), PymssqlConnection) is False

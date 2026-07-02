@@ -7,9 +7,11 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.typing import import_optional, import_optional_attr
+import pymssql as _pymssql  # pyright: ignore[reportMissingTypeStubs]
+from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMissingTypeStubs]
+from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
 
-PYMSSQL_MODULE: Any = import_optional("pymssql")
+PYMSSQL_MODULE = _pymssql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -19,12 +21,12 @@ if TYPE_CHECKING:
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
 
-    PymssqlConnection: TypeAlias = Any
-    PymssqlRawCursor: TypeAlias = Any
+    PymssqlConnection: TypeAlias = _PymssqlConnection
+    PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
 
 if not TYPE_CHECKING:
-    PymssqlConnection = import_optional_attr("pymssql", "Connection") or Any
-    PymssqlRawCursor = import_optional_attr("pymssql", "Cursor") or Any
+    PymssqlConnection = _PymssqlConnection
+    PymssqlRawCursor = _PymssqlRawCursor
 
 __all__ = ("PYMSSQL_MODULE", "PymssqlConnection", "PymssqlCursor", "PymssqlRawCursor", "PymssqlSessionContext")
 

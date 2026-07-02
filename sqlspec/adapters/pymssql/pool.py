@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlConnection
-from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -20,7 +19,7 @@ __all__ = ("PymssqlConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "pymssql"
-pymssql: Any = PYMSSQL_MODULE
+pymssql = PYMSSQL_MODULE
 
 
 class PymssqlConnectionPool:
@@ -63,9 +62,6 @@ class PymssqlConnectionPool:
         return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PymssqlConnection:
-        if pymssql is None:
-            msg = "pymssql is not installed. Install SQLSpec with the 'pymssql' extra to use this adapter."
-            raise ImproperConfigurationError(msg)
         connection = pymssql.connect(**self._connection_parameters)
 
         # Call user-provided callback after connection creation

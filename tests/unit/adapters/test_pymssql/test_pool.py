@@ -12,7 +12,7 @@ def test_pool_connects_with_config_and_runs_hook(monkeypatch) -> None:
 
     connection = FakeConnection()
     fake_module = FakePymssqlModule(connection)
-    seen: list[FakeConnection] = []
+    seen: list[object] = []
     monkeypatch.setattr(pool_module, "pymssql", fake_module)
 
     pool = PymssqlConnectionPool(

@@ -36,10 +36,7 @@ class _UnavailablePymssqlError(Exception):
 
 
 MSSQL_ERROR: Final[type[BaseException]] = cast(
-    "type[BaseException]",
-    getattr(PYMSSQL_MODULE, "Error", _UnavailablePymssqlError)
-    if PYMSSQL_MODULE is not None
-    else _UnavailablePymssqlError,
+    "type[BaseException]", getattr(PYMSSQL_MODULE, "Error", _UnavailablePymssqlError)
 )
 
 

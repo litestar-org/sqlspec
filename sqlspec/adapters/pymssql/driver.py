@@ -22,6 +22,10 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from pymssql._pymssql import QueryParams
+
     from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -29,7 +33,7 @@ if TYPE_CHECKING:
 __all__ = ("PymssqlCursor", "PymssqlDriver", "PymssqlExceptionHandler", "PymssqlSessionContext")
 
 logger = get_logger("sqlspec.adapters.pymssql")
-pymssql: Any = PYMSSQL_MODULE
+pymssql = PYMSSQL_MODULE
 
 
 class _UnavailablePymssqlError(Exception):
@@ -95,7 +99,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
-        cursor.executemany(sql, prepared_parameters)
+        cursor.executemany(sql, cast("Sequence[QueryParams]", prepared_parameters))
 
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -170,8 +174,6 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
 
 def _pymssql_error_type() -> "type[BaseException]":
-    if pymssql is None:
-        return _UnavailablePymssqlError
     return cast("type[BaseException]", getattr(pymssql, "Error", _UnavailablePymssqlError))
 
 
