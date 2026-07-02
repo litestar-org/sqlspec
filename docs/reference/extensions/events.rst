@@ -107,6 +107,10 @@ Listeners
 Event Queue
 ===========
 
+The durable table queue is available for SQL Server through ``arrow_odbc`` when
+configured with Microsoft ODBC Driver 18. It uses SQL Server ``DATETIME2(6)``
+timestamps and ``NVARCHAR`` payload columns.
+
 .. autoclass:: sqlspec.extensions.events.AsyncTableEventQueue
    :members:
    :show-inheritance:

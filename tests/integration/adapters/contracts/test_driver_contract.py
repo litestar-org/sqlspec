@@ -59,4 +59,4 @@ def test_driver_case_metadata_resolves_fixture(driver_case: DriverCaseContext) -
     assert driver_case.case.adapter
     assert driver_case.case.dialect
     assert driver_case.case.fixture_name
-    assert driver_case.case.supports_execute_many
+    assert driver_case.case.supports_execute_many or driver_case.case.supports_native_bulk_ingest

@@ -14,11 +14,13 @@ from sqlspec.adapters.arrow_odbc import (
     ArrowOdbcDriver,
     ArrowOdbcDriverFeatures,
     build_connection_config,
+    create_mapped_exception,
     odbc_type_to_arrow,
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.exceptions import SQLFileNotFoundError, SQLSpecError
+from sqlspec.core import LimitOffsetFilter, OrderByFilter
+from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
@@ -368,6 +370,7 @@ def test_arrow_odbc_config_init_no_pre_super_assign_connection_string() -> None:
 
     assert config.connection_config == {"connection_string": connection_string}
     assert config.driver_features.get("connection_string") == connection_string
+    assert config.statement_config.dialect == "tsql"
 
 
 def test_arrow_odbc_config_init_no_pre_super_assign_driver_key() -> None:
@@ -378,6 +381,7 @@ def test_arrow_odbc_config_init_no_pre_super_assign_driver_key() -> None:
 
     assert config.connection_config["driver"] == "ODBC Driver 17 for SQL Server"
     assert config.driver_features.get("dbms_name") == "ODBC Driver 17 for SQL Server"
+    assert config.statement_config.dialect == "tsql"
 
 
 def test_arrow_odbc_config_init_no_pre_super_assign_none_input() -> None:
@@ -403,6 +407,32 @@ def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     assert parameters == (1,)
 
 
+def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers() -> None:
+    """SQL Server ODBC requires literal integer OFFSET/FETCH control values."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    driver.execute("SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1))
+
+    call = connection.read_calls[-1]
+    assert "OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY" in call["query"]
+    assert call["parameters"] is None
+
+
+def test_arrow_odbc_mssql_syntax_error_maps_to_sql_parsing_error() -> None:
+    """SQL Server syntax errors should satisfy the shared parsing-error contract."""
+    mapped = create_mapped_exception(
+        FakeOdbcError(
+            "ODBC emitted an error calling 'SQLExecDirect': State: 42000, Native error: 102, "
+            "Message: [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Incorrect syntax near '*'."
+        )
+    )
+
+    assert isinstance(mapped, SQLParsingError)
+
+
 def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
     """The public dialect slot stores the resolved statement dialect without a private mirror slot."""
     connection = FakeConnection()
@@ -413,6 +443,39 @@ def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
     assert driver.dialect == "tsql"
     assert "_statement_dialect" not in ArrowOdbcDriver.__slots__
     assert not hasattr(driver, "_statement_dialect")
+
+
+def test_arrow_odbc_connection_in_transaction_uses_explicit_management_fallback() -> None:
+    """Generic ODBC connections do not expose a portable transaction-state API."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_arrow_odbc_execute_marks_dml_rowcount_unknown() -> None:
+    """arrow-odbc does not expose portable rows-affected metadata for DML."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    result = driver.execute("DELETE FROM items WHERE id = ?", (1,))
+
+    assert result.rows_affected == -1
+    assert connection.executed == [("DELETE FROM items WHERE id = ?", ["1"])]
+
+
+def test_arrow_odbc_mssql_execute_script_sends_batch_without_splitting() -> None:
+    """SQL Server IF/BEGIN batches should stay intact for ODBC execution."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+    script = "IF OBJECT_ID(N'dbo.items', N'U') IS NULL BEGIN CREATE TABLE dbo.items (id INT); END;"
+
+    result = driver.execute_script(script)
+
+    assert result.rows_affected == -1
+    assert connection.executed == [(script, None)]
 
 
 def test_arrow_odbc_driver_slots_populated_from_features() -> None:

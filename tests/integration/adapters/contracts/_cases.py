@@ -11,6 +11,7 @@ from sqlspec.config import DatabaseConfigProtocol
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
+    MSSQL_CONTRACT_TABLE,
     MYSQL_CONTRACT_TABLE,
     ORACLE_CONTRACT_TABLE,
     POSTGRES_CONTRACT_TABLE,
@@ -88,9 +89,12 @@ class DriverCaseContext:
 SQLITE_XDIST_MARK = pytest.mark.xdist_group("sqlite")
 DUCKDB_XDIST_MARK = pytest.mark.xdist_group("duckdb")
 MYSQL_XDIST_MARK = pytest.mark.xdist_group("mysql")
+MSSQL_XDIST_MARK = pytest.mark.xdist_group("mssql")
 POSTGRES_XDIST_MARK = pytest.mark.xdist_group("postgres")
 COCKROACH_XDIST_MARK = pytest.mark.xdist_group("cockroachdb")
 ADBC_MARK = pytest.mark.adbc
+ARROW_ODBC_MARK = pytest.mark.arrow_odbc
+MSSQL_MARK = pytest.mark.mssql
 ORACLE_XDIST_MARK = pytest.mark.xdist_group("oracle")
 BIGQUERY_MARK = pytest.mark.bigquery
 BIGQUERY_XDIST_MARK = pytest.mark.xdist_group("bigquery")
@@ -337,6 +341,23 @@ SYNC_DRIVER_CASES = (
             "driver_features:oracle_batch_errors",
             "streaming_native:oracledb",
         ),
+    ),
+    DriverCase(
+        id="arrow-odbc-sync",
+        fixture_name="contract_arrow_odbc_mssql_driver",
+        adapter="arrow_odbc",
+        dialect="mssql",
+        mode="sync",
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK, ARROW_ODBC_MARK),
+        table=MSSQL_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        supports_native_bulk_ingest=True,
+        supports_execute_many=False,
+        supports_load_from_records=False,
+        supports_exception_translation=False,
+        deviations=("execute-rows-affected-unavailable",),
     ),
     DriverCase(
         id="bigquery-sync",
@@ -644,15 +665,6 @@ ASYNC_DRIVER_CASES = (
 )
 
 DEFERRED_DRIVER_CASES = (
-    DriverCase(
-        "arrow-odbc-sync",
-        "",
-        "arrow_odbc",
-        "odbc",
-        "sync",
-        integration_status="deferred",
-        reason="No active integration fixture exists for arrow_odbc.",
-    ),
     DriverCase(
         "mssql-python-sync",
         "",

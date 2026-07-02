@@ -82,15 +82,18 @@ Package groups
    * - ``adk``
      - ``google-adk``
      - Google ADK storage extension.
-   * - ``aioodbc``
-     - ``aioodbc``
-     - Async ODBC connections.
+   * - ``aiomysql``
+     - ``aiomysql``
+     - Async MySQL driver.
    * - ``aiosqlite``
      - ``aiosqlite``
      - Async SQLite driver.
    * - ``alloydb``
      - ``google-cloud-alloydb-connector``
      - AlloyDB connector.
+   * - ``arrow-odbc``
+     - ``arrow-odbc``, ``pyarrow``
+     - ODBC Arrow export and ingest.
    * - ``asyncmy``
      - ``asyncmy``
      - Async MySQL driver.
@@ -101,11 +104,8 @@ Package groups
      - ``attrs``, ``cattrs``
      - Result mapping with attrs models.
    * - ``bigquery``
-     - ``google-cloud-bigquery``, ``google-cloud-storage``
+     - ``google-cloud-bigquery``, ``google-cloud-bigquery-storage``, ``google-cloud-storage``
      - BigQuery adapter dependencies.
-   * - ``cli``
-     - ``rich-click``, ``tomli`` (Py<3.11)
-     - CLI enhancements.
    * - ``cloud-sql``
      - ``cloud-sql-python-connector``
      - Google Cloud SQL connector.
@@ -113,7 +113,7 @@ Package groups
      - ``psycopg[binary,pool]``, ``asyncpg``
      - CockroachDB drivers.
    * - ``duckdb``
-     - ``duckdb``
+     - ``duckdb``, ``pytz``
      - DuckDB adapter.
    * - ``fastapi``
      - ``fastapi``
@@ -130,9 +130,9 @@ Package groups
    * - ``msgspec``
      - ``msgspec``
      - High-performance result mapping.
-   * - ``performance``
-     - ``librt``, ``msgspec``
-     - Runtime helpers for compiled hot paths and high-speed serialization.
+   * - ``mssql-python``
+     - ``mssql-python``
+     - Microsoft SQL Server driver.
    * - ``mypyc``
      - ``sqlglot[c]``
      - C-compiled sqlglot internals for faster SQL parsing.
@@ -158,8 +158,8 @@ Package groups
      - ``pandas``, ``pyarrow``
      - Pandas data export.
    * - ``performance``
-     - ``sqlglot[rs]``, ``msgspec``
-     - Rust-based SQL parsing + msgspec.
+     - ``librt``, ``msgspec``
+     - Runtime helpers for compiled hot paths and high-speed serialization.
    * - ``polars``
      - ``polars``, ``pyarrow``
      - Polars data export.
@@ -181,9 +181,15 @@ Package groups
    * - ``pymysql``
      - ``pymysql``
      - MySQL driver.
+   * - ``sanic``
+     - ``sanic``
+     - Sanic integration helpers.
    * - ``spanner``
      - ``google-cloud-spanner``
      - Cloud Spanner adapter.
+   * - ``starlette``
+     - ``starlette``
+     - Starlette integration helpers.
    * - ``uuid``
      - ``uuid-utils``
      - UUID helpers.

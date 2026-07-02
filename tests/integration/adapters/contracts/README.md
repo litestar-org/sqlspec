@@ -63,7 +63,7 @@ Every contract is the cross product of three things:
 | `test_statement_inputs_contract.py` | Statement input variants (raw SQL, `SQL(...)` objects, filtered statements, loader input). |
 | `test_result_contract.py` | `SQLResult` API (`get_first`/`get_count`/`is_empty`/`one_or_none`). |
 | `test_query_contract.py` | Filters (`InCollection`/`LimitOffset`/`OrderBy`/`Search`) and complex queries (joins/subqueries/aggregates/CTEs). |
-| `test_execute_many_contract.py` | `execute_many` mutation/input variants and per-adapter specifics. |
+| `test_execute_many_contract.py` | `execute_many` mutation/input variants and per-adapter specifics; skipped for active bulk-only cases. |
 | `test_explain_contract.py` | `EXPLAIN` plans (gated by `supports_explain`). |
 | `test_arrow_contract.py` | Arrow result export (gated by `supports_arrow`). |
 | `test_script_error_contract.py` | `execute_script` and script error handling. |
@@ -84,7 +84,8 @@ exactly as it did before the flag existed.
 
 Complete flag set:
 
-- **Result / IO**: `supports_arrow`, `supports_explain`, `supports_storage_bridge`, `supports_copy`
+- **Result / IO**: `supports_arrow`, `supports_arrow_streaming`, `supports_native_arrow`,
+  `supports_storage_bridge`, `supports_native_bulk_ingest`, `supports_copy`
 - **Statements**: `supports_execute_many`, `supports_execute_script`, `supports_filtered_statement`,
   `supports_loader_input`, `supports_merge`, `supports_returning`, `supports_for_update`
 - **Types / codecs**: `supports_json`, `supports_json_native`, `supports_arrays`,
@@ -190,7 +191,7 @@ deliberately leaves **irreducible** per-adapter tests in place. Do not fold thes
   pool sizing, read-only/PRAGMA settings) — the shared "data persists across pooled sessions"
   guarantee is contracted, but adapter-internal assertions stay local.
 - Extension/vector detection deferred to its own chapter (e.g. pgvector/paradedb "not enabled").
-- Deferred adapters (spanner, arrow_odbc, mssql_python) until their cases move from
+- Deferred adapters (spanner, mssql_python) until their cases move from
   `DEFERRED_DRIVER_CASES` to active rows.
 
 ## Adding A Case

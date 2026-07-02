@@ -93,6 +93,11 @@ The table below classifies every backend by its ADK support level.
      - Full
      - Basic
      - Portability layer; native adapters provide optimized search.
+   * - arrow_odbc
+     - Supported
+     - Full
+     - Basic
+     - SQL Server through Microsoft ODBC Driver 18.
    * - spanner
      - Supported
      - Full
@@ -269,6 +274,20 @@ ADBC (Arrow Database Connectivity) provides a driver-agnostic interface:
 - Backend capabilities depend on the underlying database driver.
 - Memory search uses the portable baseline path; choose a native adapter for
   backend-specific FTS, retention, and storage tuning.
+
+arrow-odbc
+----------
+
+``arrow_odbc`` provides SQL Server-backed ADK storage through Microsoft ODBC
+Driver 18:
+
+- Session and event storage use SQL Server tables with ``DATETIME2(6)`` and
+  ``NVARCHAR(MAX)`` JSON payload columns.
+- ``append_event_and_update_state()`` writes the session update, event row, and
+  scoped state in one committed session.
+- Memory storage uses the portable text-search path with ``LIKE`` matching.
+- Row-oriented ``execute_many()`` is not available; use native Arrow ingest for
+  bulk database writes outside the ADK store.
 
 Spanner
 -------

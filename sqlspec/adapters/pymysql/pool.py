@@ -27,6 +27,7 @@ class PyMysqlConnectionPool:
     """Thread-local connection manager for PyMySQL."""
 
     __slots__ = (
+        "_connection_factory",
         "_connection_parameters",
         "_health_check_interval",
         "_on_connection_create",
@@ -41,6 +42,7 @@ class PyMysqlConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[PyMysqlConnection], None] | None" = None,
+        connection_factory: "Callable[[], PyMysqlConnection] | None" = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -49,8 +51,10 @@ class PyMysqlConnectionPool:
             recycle_seconds: Connection recycle time in seconds (default 24h)
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Callback executed when connection is created
+            connection_factory: Optional factory for custom connection creation
         """
         self._connection_parameters = connection_parameters
+        self._connection_factory = connection_factory
         self._thread_local = threading.local()
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
@@ -63,13 +67,16 @@ class PyMysqlConnectionPool:
         return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PyMysqlConnection:
-        connection = pymysql.connect(**self._connection_parameters)
+        if self._connection_factory is not None:
+            connection = self._connection_factory()
+        else:
+            connection = pymysql.connect(**self._connection_parameters)
 
         # Call user-provided callback after connection creation
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
 
-        return cast("PyMysqlConnection", connection)
+        return connection
 
     def _is_connection_alive(self, connection: PyMysqlConnection) -> bool:
         try:

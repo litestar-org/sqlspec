@@ -90,9 +90,10 @@ class _BaseTableEventQueue:
         return f"INSERT INTO {self._table_name} ({columns}) VALUES ({values})"
 
     def _build_select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
-        limit_clause = " FETCH FIRST 1 ROWS ONLY" if "oracle" in self._dialect else " LIMIT 1"
+        top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
+        limit_clause = self._row_limit_clause()
         base = (
-            f"SELECT event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
+            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
             f"FROM {self._table_name} "
             "WHERE channel = :channel AND available_at <= :available_cutoff AND ("
             "status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))"
@@ -106,11 +107,22 @@ class _BaseTableEventQueue:
         return base + limit_clause + locking_clause
 
     def _build_select_by_id_sql(self) -> str:
-        limit_clause = " FETCH FIRST 1 ROWS ONLY" if "oracle" in self._dialect else " LIMIT 1"
+        top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
+        limit_clause = self._row_limit_clause()
         return (
-            f"SELECT event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
+            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
             f"FROM {self._table_name} WHERE event_id = :event_id" + limit_clause
         )
+
+    def _uses_tsql_limit(self) -> bool:
+        return self._dialect in {"mssql", "tsql"} or "sql server" in self._dialect
+
+    def _row_limit_clause(self) -> str:
+        if self._uses_tsql_limit():
+            return ""
+        if "oracle" in self._dialect:
+            return " FETCH FIRST 1 ROWS ONLY"
+        return " LIMIT 1"
 
     def _build_claim_sql(self) -> str:
         return (

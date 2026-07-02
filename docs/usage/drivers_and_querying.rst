@@ -98,7 +98,10 @@ asyncpg and CockroachDB-asyncpg (cursors inside a stream-owned transaction),
 pymysql/aiomysql/asyncmy (``SSCursor``), mysql-connector (unbuffered cursors),
 sqlite/aiosqlite and oracledb (chunked ``fetchmany``), psqlpy (server-side
 cursor with ``array_size``), and BigQuery (page-wise result iteration).
-ADBC, DuckDB, mssql-python, arrow-odbc, and Spanner are eager-fallback only.
+ADBC, DuckDB, mssql-python, and Spanner are eager-fallback only for row
+streaming. ``arrow-odbc`` row streaming also materializes dict rows eagerly, but
+``select_to_arrow(..., return_format="reader" | "batches")`` uses the native
+``arrow_odbc`` ``RecordBatchReader`` path.
 
 Lifetime and transaction rules:
 
