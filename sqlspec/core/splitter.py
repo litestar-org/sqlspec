@@ -917,18 +917,3 @@ def clear_splitter_caches() -> None:
         _splitter_cache.clear()
     with _unknown_dialect_warning_lock:
         _warned_unknown_dialects.clear()
-
-
-def get_splitter_cache_stats() -> "dict[str, Any]":
-    """Get statistics from splitter caches.
-
-    Returns:
-        Dictionary containing cache statistics
-    """
-    pattern_cache = _get_pattern_cache()
-    result_cache = _get_result_cache()
-
-    return {
-        "pattern_cache": {"size": len(pattern_cache), "stats": pattern_cache.get_stats()},
-        "result_cache": {"size": len(result_cache), "stats": result_cache.get_stats()},
-    }

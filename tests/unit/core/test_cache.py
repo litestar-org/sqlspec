@@ -207,6 +207,14 @@ def test_lru_cache_uses_non_reentrant_lock() -> None:
     assert "threading.RLock()" not in source
 
 
+def test_lru_cache_nodes_do_not_keep_write_only_access_counts() -> None:
+    """LRU cache nodes should not track unused per-node access counts."""
+    source = inspect.getsource(cache_module)
+
+    assert "access_count" not in source
+    assert "CACHE_STATS_UPDATE_INTERVAL" not in source
+
+
 def test_lru_cache_basic_operations() -> None:
     """Test basic cache operations - get, put, delete."""
     cache = LRUCache(max_size=3)

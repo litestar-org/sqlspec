@@ -79,7 +79,7 @@ def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
 
     Mirrors ``advanced_alchemy.utils.serialization.DEFAULT_TYPE_ENCODERS`` in
     shape, with one deliberate divergence: ``Decimal`` encodes to ``float`` to
-    preserve sqlspec's prior behaviour from ``_normalize_supported_value``.
+    preserve SQLSpec's historical JSON normalization behavior.
     """
     encoders: dict[type, Callable[[Any], Any]] = {
         datetime.datetime: convert_datetime_to_gmt_iso,
@@ -87,7 +87,7 @@ def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
         datetime.time: lambda v: v.isoformat(),
         datetime.timedelta: lambda v: v.total_seconds(),
         # NOTE: Diverges from advanced_alchemy (str): sqlspec keeps Decimal -> float
-        # to match the legacy _normalize_supported_value behaviour.
+        # to match the historical JSON normalization behavior.
         Decimal: float,
         uuid_mod.UUID: str,
         Path: str,
@@ -187,15 +187,6 @@ def _create_enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "C
 
 
 _DEFAULT_ENC_HOOK: Final["Callable[[Any], Any]"] = _create_enc_hook(DEFAULT_TYPE_ENCODERS)
-
-
-def _normalize_supported_value(value: Any) -> Any:
-    """Convert supported non-native values into JSON-compatible objects.
-
-    Thin shim over the default enc_hook for backwards compatibility with any
-    callers that imported this private helper.
-    """
-    return _DEFAULT_ENC_HOOK(value)
 
 
 def _is_explicit_unsupported_error(exc: Exception) -> bool:

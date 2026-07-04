@@ -2,12 +2,12 @@
 
 import inspect
 import logging
-import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _get_adk_session_store_config
+from sqlspec.extensions.adk._table_utils import deduplicate_statements, parse_owner_id_column, validate_table_name
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -22,9 +22,6 @@ ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.store")
 
-VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
-MAX_TABLE_NAME_LENGTH: Final = 63
 ADK_RESET_TABLE_PROFILES: Final = (
     ("adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_internal_metadata"),
     ("adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_metadata"),
@@ -96,13 +93,13 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         self._metadata_table: str = str(store_config["metadata_table"])
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        _validate_table_name(self._session_table)
-        _validate_table_name(self._events_table)
-        _validate_table_name(self._app_state_table)
-        _validate_table_name(self._user_state_table)
-        _validate_table_name(self._metadata_table)
+        validate_table_name(self._session_table)
+        validate_table_name(self._events_table)
+        validate_table_name(self._app_state_table)
+        validate_table_name(self._user_state_table)
+        validate_table_name(self._metadata_table)
 
     async def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
@@ -411,7 +408,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         statements = list(self._get_drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
             statements.extend(self._get_drop_tables_sql_for_table_profile(table_profile))
-        return _deduplicate_statements(statements)
+        return deduplicate_statements(statements)
 
     def _get_store_config_from_extension(self) -> "dict[str, Any]":
         """Extract ADK store configuration from config.extension_config.
@@ -439,19 +436,6 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             return None
 
         return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
-
-    def _value_to_bytes(self, value: "str | bytes") -> bytes:
-        """Convert value to bytes if needed.
-
-        Args:
-            value: String or bytes value.
-
-        Returns:
-            Value as bytes.
-        """
-        if isinstance(value, str):
-            return value.encode("utf-8")
-        return value
 
     async def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         """Execute lifecycle DDL scripts for async and sync-backed configs."""
@@ -663,13 +647,13 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         self._metadata_table: str = str(store_config["metadata_table"])
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        _validate_table_name(self._session_table)
-        _validate_table_name(self._events_table)
-        _validate_table_name(self._app_state_table)
-        _validate_table_name(self._user_state_table)
-        _validate_table_name(self._metadata_table)
+        validate_table_name(self._session_table)
+        validate_table_name(self._events_table)
+        validate_table_name(self._app_state_table)
+        validate_table_name(self._user_state_table)
+        validate_table_name(self._metadata_table)
 
     @abstractmethod
     def create_tables(self) -> None:
@@ -850,12 +834,6 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
 
         return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
 
-    def _value_to_bytes(self, value: "str | bytes") -> bytes:
-        """Convert value to bytes if needed."""
-        if isinstance(value, str):
-            return value.encode("utf-8")
-        return value
-
     def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         """Execute lifecycle DDL scripts using the sync driver session."""
         with cast("Any", self._config.provide_session()) as driver:
@@ -920,7 +898,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         statements = list(self._get_drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
             statements.extend(self._get_drop_tables_sql_for_table_profile(table_profile))
-        return _deduplicate_statements(statements)
+        return deduplicate_statements(statements)
 
     def _get_drop_tables_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
@@ -972,68 +950,3 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             session_table=self._session_table,
             events_table=self._events_table,
         )
-
-
-def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
-    """Extract column name from owner ID column DDL definition.
-
-    Args:
-        owner_id_column_ddl: Full column DDL string (e.g., "user_id INTEGER REFERENCES users(id)").
-
-    Returns:
-        Column name only (first word).
-
-    Raises:
-        ValueError: If DDL format is invalid.
-
-    Examples:
-        "account_id INTEGER NOT NULL" -> "account_id"
-        "user_id UUID REFERENCES users(id)" -> "user_id"
-        "tenant VARCHAR(64) DEFAULT 'public'" -> "tenant"
-
-    Notes:
-        Only the column name is parsed. The rest of the DDL is passed through
-        verbatim to CREATE TABLE statements.
-    """
-    match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
-    if not match:
-        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
-        raise ValueError(msg)
-
-    return match.group(1)
-
-
-def _deduplicate_statements(statements: "list[str]") -> "list[str]":
-    seen: set[str] = set()
-    result: list[str] = []
-    for statement in statements:
-        if statement in seen:
-            continue
-        result.append(statement)
-        seen.add(statement)
-    return result
-
-
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)

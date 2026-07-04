@@ -1,11 +1,11 @@
 """Base store classes for ADK memory backend (sync and async)."""
 
 import logging
-import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
 from sqlspec.extensions.adk._config_utils import _ADKMemoryStoreConfig, _get_adk_memory_store_config
+from sqlspec.extensions.adk._table_utils import parse_owner_id_column, reset_drop_statements, validate_table_name
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -20,9 +20,6 @@ ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 logger = get_logger("sqlspec.extensions.adk.memory.store")
 
 
-VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
-MAX_TABLE_NAME_LENGTH: Final = 63
 ADK_RESET_MEMORY_TABLES: Final = ("adk_memory", "adk_memory_entries")
 
 
@@ -70,9 +67,9 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         self._max_results: int = store_config.get("max_results", 20)
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        _validate_table_name(self._memory_table)
+        validate_table_name(self._memory_table)
 
     @property
     def config(self) -> ConfigT:
@@ -220,10 +217,9 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
 
     def _get_reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
-        statements = list(self._get_drop_memory_table_sql())
-        for table_name in ADK_RESET_MEMORY_TABLES:
-            statements.extend(self._get_drop_memory_table_sql_for_table(table_name))
-        return _deduplicate_statements(statements)
+        return reset_drop_statements(
+            list(self._get_drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._get_drop_memory_table_sql_for_table
+        )
 
     def _get_drop_memory_table_sql_for_table(self, table_name: str) -> "list[str]":
         current_table = self._memory_table
@@ -297,9 +293,9 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         self._max_results: int = store_config.get("max_results", 20)
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            _parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        _validate_table_name(self._memory_table)
+        validate_table_name(self._memory_table)
 
     @property
     def config(self) -> ConfigT:
@@ -438,10 +434,9 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
 
     def _get_reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
-        statements = list(self._get_drop_memory_table_sql())
-        for table_name in ADK_RESET_MEMORY_TABLES:
-            statements.extend(self._get_drop_memory_table_sql_for_table(table_name))
-        return _deduplicate_statements(statements)
+        return reset_drop_statements(
+            list(self._get_drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._get_drop_memory_table_sql_for_table
+        )
 
     def _get_drop_memory_table_sql_for_table(self, table_name: str) -> "list[str]":
         current_table = self._memory_table
@@ -478,59 +473,3 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
             List of SQL statements to drop the memory table and indexes.
         """
         raise NotImplementedError
-
-
-def _deduplicate_statements(statements: "list[str]") -> "list[str]":
-    seen: set[str] = set()
-    result: list[str] = []
-    for statement in statements:
-        if statement in seen:
-            continue
-        result.append(statement)
-        seen.add(statement)
-    return result
-
-
-def _parse_owner_id_column(owner_id_column_ddl: str) -> str:
-    """Extract column name from owner ID column DDL definition.
-
-    Args:
-        owner_id_column_ddl: Full column DDL string.
-
-    Returns:
-        Column name only (first word).
-
-    Raises:
-        ValueError: If DDL format is invalid.
-    """
-    match = COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
-    if not match:
-        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
-        raise ValueError(msg)
-
-    return match.group(1)
-
-
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)

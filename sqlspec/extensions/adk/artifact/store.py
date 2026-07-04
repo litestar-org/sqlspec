@@ -9,11 +9,11 @@ Concrete subclasses implement the abstract methods with dialect-specific SQL.
 """
 
 import logging
-import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from sqlspec.extensions.adk._config_utils import _get_adk_artifact_store_config, _get_adk_config_from_extension
+from sqlspec.extensions.adk._config_utils import _get_adk_artifact_store_config
+from sqlspec.extensions.adk._table_utils import validate_table_name
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -26,10 +26,6 @@ __all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.artifact.store")
-
-
-VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-MAX_TABLE_NAME_LENGTH: Final = 63
 
 
 class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
@@ -56,15 +52,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         self._config = config
         store_config = _get_adk_artifact_store_config(self._config)
         self._artifact_table: str = store_config["artifact_table"]
-        _validate_table_name(self._artifact_table)
-
-    def _get_adk_config(self) -> "dict[str, Any]":
-        """Extract ADK configuration from extension_config.
-
-        Returns:
-            Dict with ADK configuration values.
-        """
-        return _get_adk_config_from_extension(self._config)
+        validate_table_name(self._artifact_table)
 
     @property
     def config(self) -> ConfigT:
@@ -191,31 +179,6 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         )
 
 
-def _validate_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety.
-
-    Args:
-        table_name: Table name to validate.
-
-    Raises:
-        ValueError: If table name is invalid.
-    """
-    if not table_name:
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-
-    if len(table_name) > MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
-
-    if not VALID_TABLE_NAME_PATTERN.match(table_name):
-        msg = (
-            f"Invalid table name: {table_name!r}. "
-            "Must start with letter/underscore and contain only alphanumeric characters and underscores"
-        )
-        raise ValueError(msg)
-
-
 class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
     """Base class for sync SQLSpec-backed ADK artifact metadata stores.
 
@@ -236,15 +199,7 @@ class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
         self._config = config
         store_config = _get_adk_artifact_store_config(self._config)
         self._artifact_table: str = store_config["artifact_table"]
-        _validate_table_name(self._artifact_table)
-
-    def _get_adk_config(self) -> "dict[str, Any]":
-        """Extract ADK configuration from extension_config.
-
-        Returns:
-            Dict with ADK configuration values.
-        """
-        return _get_adk_config_from_extension(self._config)
+        validate_table_name(self._artifact_table)
 
     @property
     def config(self) -> ConfigT:

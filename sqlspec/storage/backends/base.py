@@ -12,7 +12,6 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import Self
 
 from sqlspec.typing import ArrowRecordBatch, ArrowTable
-from sqlspec.utils.sync_tools import CapacityLimiter
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -29,7 +28,6 @@ __all__ = (
 
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
 _StopAsync = type("_StopAsync", (_StopAsyncBase,), {})
-storage_limiter = CapacityLimiter(100)
 
 
 class _ExhaustedSentinel:

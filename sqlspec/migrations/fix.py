@@ -6,11 +6,10 @@ uses timestamps and production uses sequential numbers.
 """
 
 import re
-import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlspec.migrations._backup import create_migration_backup, remove_migration_backup, restore_migration_backup
 from sqlspec.utils.logging import get_logger
 
 __all__ = ("MigrationFixer", "MigrationRename")
@@ -105,22 +104,11 @@ class MigrationFixer:
     def create_backup(self) -> Path:
         """Create timestamped backup directory with all migration files.
 
-        Keep in sync with MigrationSquasher._create_backup.
-
         Returns:
             Path to created backup directory.
         """
-        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
-        backup_dir = self.migrations_path / f".backup_{timestamp}"
-
-        backup_dir.mkdir(parents=True, exist_ok=False)
-
-        for file_path in self.migrations_path.iterdir():
-            if file_path.is_file() and not file_path.name.startswith("."):
-                shutil.copy2(file_path, backup_dir / file_path.name)
-
-        self.backup_path = backup_dir
-        return backup_dir
+        self.backup_path = create_migration_backup(self.migrations_path)
+        return self.backup_path
 
     def apply_renames(self, renames: "list[MigrationRename]", dry_run: bool = False) -> None:
         """Execute planned rename operations.
@@ -177,31 +165,21 @@ class MigrationFixer:
     def rollback(self) -> None:
         """Restore migration files from backup.
 
-        Keep in sync with MigrationSquasher._rollback_backup.
-
         Deletes current migration files and restores from backup directory.
         Only restores if backup exists.
         """
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        for file_path in self.migrations_path.iterdir():
-            if file_path.is_file() and not file_path.name.startswith("."):
-                file_path.unlink()
-
-        for backup_file in self.backup_path.iterdir():
-            if backup_file.is_file():
-                shutil.copy2(backup_file, self.migrations_path / backup_file.name)
+        restore_migration_backup(self.migrations_path, self.backup_path)
 
     def cleanup(self) -> None:
         """Remove backup directory after successful conversion.
-
-        Keep in sync with MigrationSquasher._cleanup_backup.
 
         Only removes backup if it exists. Logs warning if no backup found.
         """
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        shutil.rmtree(self.backup_path)
+        remove_migration_backup(self.backup_path)
         self.backup_path = None

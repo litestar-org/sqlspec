@@ -7,9 +7,23 @@ Tests for:
 - Squashed file generation
 """
 
+import inspect
 from pathlib import Path
 
 import pytest
+
+
+def test_migration_backup_lifecycle_has_private_owner() -> None:
+    from sqlspec.migrations.fix import MigrationFixer
+    from sqlspec.migrations.squash import MigrationSquasher
+
+    assert "create_migration_backup" in inspect.getsource(MigrationFixer.create_backup)
+    assert "restore_migration_backup" in inspect.getsource(MigrationFixer.rollback)
+    assert "remove_migration_backup" in inspect.getsource(MigrationFixer.cleanup)
+    assert "create_migration_backup" in inspect.getsource(MigrationSquasher._create_backup)
+    assert "restore_migration_backup" in inspect.getsource(MigrationSquasher._rollback_backup)
+    assert "Keep in sync" not in inspect.getsource(MigrationFixer)
+    assert "Keep in sync" not in inspect.getsource(MigrationSquasher)
 
 
 def test_squash_plan_squash_plan_instantiation(tmp_path: Path) -> None:
