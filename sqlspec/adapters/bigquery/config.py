@@ -6,7 +6,7 @@ from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
-from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
+from sqlspec.adapters.bigquery.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
@@ -206,17 +206,18 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         self.connection_config = normalize_connection_config(connection_config)
 
-        (driver_features, serializer, user_connection_hook, features_connection_instance) = apply_driver_features(
-            driver_features
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+        user_connection_hook = cast(
+            "Callable[[BigQueryConnection], None] | None", driver_features.pop("on_connection_create", None)
         )
+        features_connection_instance = driver_features.pop("connection_instance", None)
 
         resolved_connection_instance = connection_instance or features_connection_instance
         self._connection_instance = resolved_connection_instance
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
-
-        statement_config = statement_config or build_statement_config(json_serializer=serializer)
 
         # Fired directly in create_connection (the client-construction path) like every other adapter,
         # rather than bridged through the observability lifecycle dispatcher (which only runs under the

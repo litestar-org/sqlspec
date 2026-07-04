@@ -1,8 +1,10 @@
 """Parameterized tests for real adapter implementations."""
 
+import ast
 import inspect
 import operator
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -55,7 +57,7 @@ ADAPTER_CONFIGS = [
     },
 ]
 
-CREATE_MAPPED_EXCEPTION_MODULES = (
+ADAPTER_CORE_MODULES = (
     "sqlspec.adapters.adbc.core",
     "sqlspec.adapters.aiomysql.core",
     "sqlspec.adapters.aiosqlite.core",
@@ -73,6 +75,12 @@ CREATE_MAPPED_EXCEPTION_MODULES = (
     "sqlspec.adapters.pymysql.core",
     "sqlspec.adapters.spanner.core",
     "sqlspec.adapters.sqlite.core",
+)
+CREATE_MAPPED_EXCEPTION_MODULES = ADAPTER_CORE_MODULES
+APPLY_DRIVER_FEATURES_MODULES = ADAPTER_CORE_MODULES
+ADAPTER_DRIVER_MODULES_WITH_FEATURE_HELPERS = (
+    "sqlspec/adapters/cockroach_psycopg/driver.py",
+    "sqlspec/adapters/duckdb/driver.py",
 )
 
 
@@ -133,6 +141,41 @@ def test_arrow_odbc_create_mapped_exception_accepts_standard_shape() -> None:
     mapped = create_mapped_exception(Exception("Native error: 102 Incorrect syntax near 'FROM'"), logger=None)
 
     assert isinstance(mapped, SQLParsingError)
+
+
+@pytest.mark.parametrize("module_name", APPLY_DRIVER_FEATURES_MODULES)
+def test_adapter_apply_driver_features_signature_and_return_shape(module_name: str) -> None:
+    module = pytest.importorskip(module_name)
+    statement_config = StatementConfig()
+
+    signature = inspect.signature(module.apply_driver_features)
+    assert tuple(signature.parameters) == ("statement_config", "driver_features")
+
+    resolved_statement_config, features = module.apply_driver_features(statement_config, {"custom": "value"})
+
+    assert isinstance(resolved_statement_config, StatementConfig)
+    assert isinstance(features, dict)
+    assert features["custom"] == "value"
+
+
+@pytest.mark.parametrize("module_path", ADAPTER_DRIVER_MODULES_WITH_FEATURE_HELPERS)
+def test_adapter_drivers_do_not_apply_driver_features(module_path: str) -> None:
+    tree = ast.parse(Path(module_path).read_text())
+
+    imports_helper = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and node.module.endswith(".core")
+        and any(alias.name == "apply_driver_features" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    calls_helper = any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "apply_driver_features"
+        for node in ast.walk(tree)
+    )
+
+    assert imports_helper is False
+    assert calls_helper is False
 
 
 def test_adapter_parameter_style_handling(

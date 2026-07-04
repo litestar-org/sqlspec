@@ -1006,23 +1006,13 @@ default_statement_config = build_statement_config()
 
 
 def apply_driver_features(
-    driver_features: "Mapping[str, Any] | None",
-) -> "tuple[dict[str, Any], Callable[[Any], str] | None, Callable[[Any], None] | None, Any | None]":
+    statement_config: StatementConfig, driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply BigQuery driver feature defaults and extract core options."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    user_connection_hook = features.pop("on_connection_create", None)
     features.setdefault("enable_uuid_conversion", True)
-    serializer = features.setdefault("json_serializer", to_json)
-    connection_instance = features.get("connection_instance")
-    if connection_instance is not None:
-        features.pop("connection_instance", None)
-
-    return (
-        features,
-        cast("Callable[[Any], str] | None", serializer),
-        cast("Callable[[Any], None] | None", user_connection_hook),
-        connection_instance,
-    )
+    features.setdefault("json_serializer", to_json)
+    return statement_config, features
 
 
 def _create_bigquery_error(

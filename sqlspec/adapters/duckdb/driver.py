@@ -8,7 +8,6 @@ import duckdb
 
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
-    apply_driver_features,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -89,7 +88,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config.replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-            statement_config = apply_driver_features(statement_config, driver_features)
+        driver_features = dict(driver_features) if driver_features else {}
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: DuckDBDataDictionary | None = None

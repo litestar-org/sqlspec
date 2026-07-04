@@ -142,18 +142,23 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     ) -> None:
         """Initialize arrow-odbc configuration."""
         normalized = normalize_connection_config(connection_config)
-        features = apply_driver_features(dict(driver_features or {}))
+        provided_statement_config = statement_config
+        statement_config, features = apply_driver_features(
+            statement_config or default_statement_config, driver_features
+        )
         connection_string = normalized.get("connection_string")
         if connection_string is not None:
             features.setdefault("connection_string", str(connection_string))
         elif normalized.get("driver") is not None:
             features.setdefault("dbms_name", str(normalized["driver"]))
+        if provided_statement_config is None:
+            statement_config = _resolve_statement_config(features)
 
         super().__init__(
             connection_config=normalized,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or _resolve_statement_config(features),
+            statement_config=statement_config,
             driver_features=features,
             bind_key=bind_key,
             extension_config=extension_config,

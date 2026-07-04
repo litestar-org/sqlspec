@@ -170,19 +170,20 @@ driver_profile = build_profile()
 
 def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
-) -> "StatementConfig":
+) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply DuckDB-specific driver features to statement configuration."""
-    if not driver_features:
-        return statement_config
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    if not features:
+        return statement_config, features
 
     param_config = statement_config.parameter_config
-    json_serializer = driver_features.get("json_serializer")
+    json_serializer = features.get("json_serializer")
     if json_serializer:
         param_config = param_config.with_json_serializers(
             cast("Callable[[Any], str]", json_serializer), tuple_strategy="tuple"
         )
 
-    enable_uuid_conversion = driver_features.get("enable_uuid_conversion", True)
+    enable_uuid_conversion = features.get("enable_uuid_conversion", True)
     if not enable_uuid_conversion:
         type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
         type_coercion_map = dict(param_config.type_coercion_map)
@@ -190,8 +191,8 @@ def apply_driver_features(
         param_config = param_config.replace(type_coercion_map=type_coercion_map)
 
     if param_config is statement_config.parameter_config:
-        return statement_config
-    return statement_config.replace(parameter_config=param_config)
+        return statement_config, features
+    return statement_config.replace(parameter_config=param_config), features
 
 
 def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:

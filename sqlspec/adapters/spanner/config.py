@@ -293,9 +293,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self.connection_config.setdefault("size", self.connection_config.pop("max_sessions", 10))
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
-        driver_features = apply_driver_features(raw_driver_features)
-
         statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, raw_driver_features)
 
         super().__init__(
             connection_config=self.connection_config,

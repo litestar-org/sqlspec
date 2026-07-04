@@ -284,7 +284,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         statement_config = statement_config or build_statement_config(
             json_serializer=cast("Callable[[Any], str]", serializer)
         )
-        statement_config = apply_driver_features(statement_config, features)
+        statement_config, features = apply_driver_features(statement_config, features)
 
         super().__init__(
             bind_key=bind_key,

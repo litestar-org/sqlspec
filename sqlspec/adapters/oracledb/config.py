@@ -320,8 +320,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             "Callable[[OracleSyncConnection, str], None] | None", connection_config.pop("session_callback", None)
         )
         statement_config = statement_config or default_statement_config
-
-        driver_features = apply_driver_features(driver_features)
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
@@ -534,7 +533,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             "Callable[[OracleAsyncConnection, str], Any] | None", connection_config.pop("session_callback", None)
         )
 
-        driver_features = apply_driver_features(driver_features)
+        statement_config = statement_config or default_statement_config
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
@@ -546,7 +546,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or default_statement_config,
+            statement_config=statement_config,
             driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,

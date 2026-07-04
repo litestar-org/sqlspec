@@ -15,7 +15,6 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
 )
 from sqlspec.adapters.cockroach_psycopg.core import (
     CockroachPsycopgRetryConfig,
-    apply_driver_features,
     build_statement_config,
     calculate_backoff_seconds,
     driver_profile,
@@ -100,9 +99,8 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             statement_config = build_statement_config().replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-
-        statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
+        driver_features = dict(driver_features) if driver_features else {}
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
@@ -187,9 +185,8 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             statement_config = build_statement_config().replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-
-        statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
+        driver_features = dict(driver_features) if driver_features else {}
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))

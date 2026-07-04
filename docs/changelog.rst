@@ -17,6 +17,8 @@ v0.53.0 - SQL processing correctness fixes
 * Standardized adapter ``create_mapped_exception()`` helper signatures to accept
   ``(error, *, logger=None)`` across backends while preserving existing
   exception mapping behavior.
+* Standardized adapter ``apply_driver_features()`` helpers to return an updated
+  statement config plus normalized driver-feature dictionary across backends.
 
 **Fixed:**
 
