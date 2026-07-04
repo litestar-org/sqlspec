@@ -54,9 +54,9 @@ def test_duckdb_exception_handler_maps_any_present_exception(monkeypatch: pytest
     mapped = RuntimeError("mapped")
     seen: dict[str, object] = {}
 
-    def fake_create_mapped_exception(exc_type: type[BaseException], exc_val: BaseException) -> Exception:
-        seen["exc_type"] = exc_type
+    def fake_create_mapped_exception(exc_val: BaseException, *, logger: object | None = None) -> Exception:
         seen["exc_val"] = exc_val
+        seen["logger"] = logger
         return mapped
 
     monkeypatch.setattr(duckdb_driver, "create_mapped_exception", fake_create_mapped_exception)
@@ -66,7 +66,7 @@ def test_duckdb_exception_handler_maps_any_present_exception(monkeypatch: pytest
 
     assert handler.__exit__(type(error), error, None) is True
     assert handler.pending_exception is mapped
-    assert seen == {"exc_type": ValueError, "exc_val": error}
+    assert seen == {"exc_val": error, "logger": None}
 
 
 def test_mysqlconnector_sync_exception_handler_preserves_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,7 +245,8 @@ def test_duckdb_handler_maps_constraint_exception(monkeypatch: pytest.MonkeyPatc
     from sqlspec.adapters.duckdb.driver import DuckDBExceptionHandler
     from sqlspec.exceptions import UniqueViolationError
 
-    def fake_create_mapped_exception(exc_type: "type[BaseException]", exc_val: "BaseException") -> Exception:
+    def fake_create_mapped_exception(exc_val: "BaseException", *, logger: object | None = None) -> Exception:
+        assert logger is None
         return UniqueViolationError(str(exc_val))
 
     monkeypatch.setattr(duckdb_core, "create_mapped_exception", fake_create_mapped_exception)

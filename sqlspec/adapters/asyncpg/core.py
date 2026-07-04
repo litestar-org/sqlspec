@@ -431,7 +431,7 @@ _EXCEPTION_MAPPING_DISPATCHER.register(
 )
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map asyncpg exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -445,10 +445,12 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
 
     Args:
         error: The asyncpg exception to map
+        logger: Optional logger accepted for adapter signature parity.
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
     if mapped_error is not None:
         error_code, error_class, description = mapped_error

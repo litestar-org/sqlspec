@@ -279,7 +279,7 @@ def _classify_duckdb_constraint(error: "BaseException") -> SQLSpecError:
 _register_duckdb_exception_mappings()
 
 
-def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseException") -> SQLSpecError:
+def create_mapped_exception(error: "BaseException", *, logger: Any | None = None) -> SQLSpecError:
     """Map DuckDB exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -294,12 +294,14 @@ def create_mapped_exception(exc_type: "type[BaseException]", error: "BaseExcepti
         5. Default SQLSpecError fallback
 
     Args:
-        exc_type: The exception type (class)
         error: The DuckDB exception to map
+        logger: Optional logger accepted for adapter signature parity.
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
+    exc_type = type(error)
     if _CONSTRAINT_EXCEPTION_TYPE is not None and isinstance(error, _CONSTRAINT_EXCEPTION_TYPE):
         return _classify_duckdb_constraint(error)
 

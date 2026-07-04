@@ -269,7 +269,7 @@ def _create_aiosqlite_error(
     return exc
 
 
-def create_mapped_exception(error: BaseException) -> SQLSpecError:
+def create_mapped_exception(error: BaseException, *, logger: Any | None = None) -> SQLSpecError:
     """Map aiosqlite exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -278,10 +278,12 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
 
     Args:
         error: The aiosqlite exception to map
+        logger: Optional logger accepted for adapter signature parity.
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     if has_sqlite_error(error):
         error_code = error.sqlite_errorcode
         error_name = error.sqlite_errorname

@@ -551,7 +551,7 @@ def _create_postgres_error(error: Any, error_class: type[SQLSpecError], descript
     return exc
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map psqlpy exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -571,10 +571,12 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
 
     Args:
         error: The psqlpy exception to map
+        logger: Optional logger accepted for adapter signature parity.
 
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     error_msg = str(error).lower()
 
     if "unique" in error_msg or "duplicate key" in error_msg:

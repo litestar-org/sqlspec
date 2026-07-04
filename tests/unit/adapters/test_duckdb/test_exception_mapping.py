@@ -59,8 +59,8 @@ def test_create_mapped_exception_native_dispatch(
     native_name: str, message: str, expected_class: type[SQLSpecError]
 ) -> None:
     """Native DuckDB exception types must map to the expected SQLSpec error class."""
-    exc_type, error = _make_native(native_name, message)
-    mapped = create_mapped_exception(exc_type, error)
+    _, error = _make_native(native_name, message)
+    mapped = create_mapped_exception(error)
     assert isinstance(mapped, expected_class), (
         f"{native_name}({message!r}) should map to {expected_class.__name__}, got {type(mapped).__name__}"
     )
@@ -75,7 +75,7 @@ def test_create_mapped_exception_fallback_unknown_returns_sqlspec_error() -> Non
         pass
 
     error: BaseException = _SomeOtherError("totally unrelated")
-    mapped = create_mapped_exception(_SomeOtherError, error)
+    mapped = create_mapped_exception(error)
     assert type(mapped) is SQLSpecError
     assert mapped.__cause__ is error
 
@@ -87,7 +87,7 @@ def test_create_mapped_exception_substring_fallback_permission_message() -> None
         pass
 
     error: BaseException = _Generic("permission denied for table users")
-    mapped = create_mapped_exception(_Generic, error)
+    mapped = create_mapped_exception(error)
     assert isinstance(mapped, PermissionDeniedError)
 
 
@@ -98,7 +98,7 @@ def test_create_mapped_exception_substring_fallback_interrupt_message() -> None:
         pass
 
     error: BaseException = _Generic("statement was canceled by user")
-    mapped = create_mapped_exception(_Generic, error)
+    mapped = create_mapped_exception(error)
     assert isinstance(mapped, QueryTimeoutError)
 
 
@@ -109,7 +109,7 @@ def test_create_mapped_exception_substring_fallback_type_mismatch_message() -> N
         pass
 
     error: BaseException = _Generic("type mismatch in cast")
-    mapped = create_mapped_exception(_Generic, error)
+    mapped = create_mapped_exception(error)
     assert isinstance(mapped, DataError)
 
 
@@ -123,15 +123,15 @@ def test_create_mapped_exception_subclass_dispatch() -> None:
         pass
 
     err: Any = _CustomCatalogError("derived missing-table error")
-    mapped = create_mapped_exception(_CustomCatalogError, err)
+    mapped = create_mapped_exception(err)
     assert isinstance(mapped, NotFoundError)
 
 
 def test_create_mapped_exception_repeated_calls_consistent() -> None:
     """Repeated calls for the same type return the same mapping class (cache safety)."""
-    exc_type, error = _make_native("CatalogException", "missing table x")
-    first = create_mapped_exception(exc_type, error)
-    second = create_mapped_exception(exc_type, error)
+    _, error = _make_native("CatalogException", "missing table x")
+    first = create_mapped_exception(error)
+    second = create_mapped_exception(error)
     assert type(first) is type(second)
     assert isinstance(first, NotFoundError)
     assert isinstance(second, NotFoundError)
