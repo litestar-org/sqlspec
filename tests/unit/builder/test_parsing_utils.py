@@ -6,6 +6,7 @@ was added to fix QueryBuilder parameter handling issues.
 """
 
 import contextlib
+from typing import Any
 
 import pytest
 from sqlglot import exp
@@ -14,6 +15,7 @@ from sqlglot.errors import ParseError
 import sqlspec.builder._parsing_utils as parsing_utils
 from sqlspec import sql
 from sqlspec.builder import (
+    Select,
     parse_column_expression,
     parse_condition_expression,
     parse_order_expression,
@@ -278,6 +280,21 @@ def test_cached_static_expression_reuses_factory() -> None:
     assert first.parameters == {"p": 1}
     assert second.parameters == {"p": 2}
     assert first.sql == second.sql
+
+
+def test_build_static_expression_explicit_optimize_overrides_disabled_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fake_optimize(expression: exp.Expr, **kwargs: Any) -> exp.Expr:
+        _ = kwargs
+        nonlocal calls
+        calls += 1
+        return expression
+
+    monkeypatch.setattr("sqlspec.builder._base.optimize", fake_optimize)
+    builder = Select(enable_optimization=False, simplify_expressions=True)
+    builder.build_static_expression(expression=exp.select("1"), optimize_expression=True)
+    assert calls == 1
 
 
 def test_cached_static_expression_respects_copy_flag() -> None:

@@ -48,6 +48,12 @@ def test_sql_factory_default_dialect() -> None:
     assert factory_with_dialect.dialect == "postgres"
 
 
+def test_decode_renders_trailing_default_else_clause() -> None:
+    expr = sql.decode("status", "A", 1, "B", 2, 0)
+    rendered = expr.expression.sql()
+    assert "ELSE 0" in rendered.upper()
+
+
 def test_where_eq_uses_placeholder_not_var() -> None:
     """Test that where_eq uses Placeholder instead of var for parameters."""
     query = sql.select("*").from_("users").where_eq("name", "John")
@@ -134,6 +140,13 @@ def test_where_in_uses_placeholders() -> None:
     assert ":status_2" in stmt.sql
 
 
+def test_where_in_binds_plain_string_like_where_not_in() -> None:
+    """Plain string values should bind as scalar values, not parse as SQL."""
+    stmt = sql.select("*").from_("users").where_in("status", "active").build()
+    assert stmt.parameters["status"] == "active"
+    assert ":status" in stmt.sql
+
+
 def test_where_not_in_uses_placeholders() -> None:
     """Test that where_not_in uses proper parameter binding."""
     query = sql.select("*").from_("users").where_not_in("role", ["admin", "superuser"])
@@ -142,6 +155,13 @@ def test_where_not_in_uses_placeholders() -> None:
     assert "role_2" in stmt.parameters
     assert stmt.parameters["role_1"] == "admin"
     assert stmt.parameters["role_2"] == "superuser"
+
+
+def test_where_not_in_binds_plain_string_like_where_in() -> None:
+    """Plain string values should bind consistently across IN helpers."""
+    stmt = sql.select("*").from_("users").where_not_in("status", "active").build()
+    assert stmt.parameters["status"] == "active"
+    assert ":status" in stmt.sql
 
 
 def test_where_any_with_values_uses_placeholders() -> None:

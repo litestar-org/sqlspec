@@ -85,6 +85,29 @@ def test_sync_migration_commands_squash_squash_update_database_false_skips_track
 
 
 @pytest.mark.anyio
+async def test_async_squash_builds_sync_runner_with_migration_context(tmp_path: Path) -> None:
+    """Async squash should mirror the sync path and pass a real migration context."""
+    from sqlspec.migrations.commands import AsyncMigrationCommands
+    from sqlspec.migrations.context import MigrationContext
+
+    (tmp_path / "0001_initial.py").write_text("def up(context): pass\n\ndef down(context): pass\n")
+    config = Mock()
+    config.is_async = True
+    config.migration_tracker_type = Mock(return_value=Mock())
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.get_observability_runtime = Mock(return_value=None)
+    commands = AsyncMigrationCommands(config)
+
+    with patch("sqlspec.migrations.commands.SyncMigrationRunner") as runner_type:
+        runner = runner_type.return_value
+        runner.get_migration_files.return_value = [("0001", tmp_path / "0001_initial.py")]
+        await commands.squash(start_version="0001", end_version="0001", description="release", dry_run=True)
+
+    context = runner_type.call_args.args[2]
+    assert isinstance(context, MigrationContext)
+
+
+@pytest.mark.anyio
 async def test_async_migration_commands_squash_async_squash_valid_range(tmp_path: Path) -> None:
     """Test async squash succeeds with valid version range."""
     from sqlspec.migrations.commands import AsyncMigrationCommands

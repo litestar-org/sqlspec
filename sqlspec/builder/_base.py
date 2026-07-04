@@ -674,16 +674,17 @@ class QueryBuilder(ABC):
 
         return sql
 
-    def _optimize_expression(self, expression: exp.Expr) -> exp.Expr:
+    def _optimize_expression(self, expression: exp.Expr, *, force: bool = False) -> exp.Expr:
         """Apply SQLGlot optimizations to the expression.
 
         Args:
             expression: The expression to optimize
+            force: Optimize even when the builder-level toggle is disabled.
 
         Returns:
             The optimized expression
         """
-        if not self.enable_optimization:
+        if not force and not self.enable_optimization:
             return expression
 
         if not self.optimize_joins and not self.optimize_predicates and not self.simplify_expressions:
@@ -960,7 +961,7 @@ class QueryBuilder(ABC):
                 expr_to_store = expr_candidate.copy() if copy else expr_candidate
                 should_optimize = self.enable_optimization if optimize_expression is None else optimize_expression
                 if should_optimize:
-                    expr_to_store = self._optimize_expression(expr_to_store)
+                    expr_to_store = self._optimize_expression(expr_to_store, force=optimize_expression is True)
                 cache.put_expression(cache_key, expr_to_store)
                 cached_expr = expr_to_store
             expr = cached_expr.copy() if copy else cached_expr
@@ -971,7 +972,7 @@ class QueryBuilder(ABC):
             expr = expression.copy() if copy else expression
             should_optimize = self.enable_optimization if optimize_expression is None else optimize_expression
             if should_optimize:
-                expr = self._optimize_expression(expr)
+                expr = self._optimize_expression(expr, force=optimize_expression is True)
 
         if expr is None:
             self._raise_sql_builder_error("Static expression could not be resolved.")

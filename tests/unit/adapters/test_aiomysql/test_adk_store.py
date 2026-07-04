@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false
-"""Unit tests for asyncmy ADK store extension configuration."""
+"""Unit tests for aiomysql ADK store extension configuration."""
 
 import asyncio
 from typing import Any, cast, get_args, get_origin
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy.adk import AsyncmyADKConfig, AsyncmyADKMemoryStore, AsyncmyADKStore
+from sqlspec.adapters.aiomysql.adk import AiomysqlADKConfig, AiomysqlADKMemoryStore, AiomysqlADKStore
 from sqlspec.config import ADKConfig
 
 
@@ -21,16 +21,10 @@ class _MysqlMissingTableError(Exception):
     errno = 1146
 
 
-def test_asyncmy_table_missing_uses_errno_attribute() -> None:
-    from sqlspec.adapters.asyncmy.adk.store import _is_mysql_table_missing
+def test_aiomysql_adk_config_types_adapter_local_mysql_options() -> None:
+    """aiomysql ADK MySQL options are typed on the adapter-local extension config."""
 
-    assert _is_mysql_table_missing(_MysqlMissingTableError()) is True
-
-
-def test_asyncmy_adk_config_types_adapter_local_mysql_options() -> None:
-    """asyncmy ADK MySQL options are typed on the adapter-local extension config."""
-
-    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", AsyncmyADKConfig).__optional_keys__
+    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", AiomysqlADKConfig).__optional_keys__
 
     expected_types: dict[str, object] = {
         "enable_event_generated_columns": bool,
@@ -42,16 +36,16 @@ def test_asyncmy_adk_config_types_adapter_local_mysql_options() -> None:
         "memory_table_options": str,
     }
     for feature_name, expected_type in expected_types.items():
-        annotation = cast("Any", AsyncmyADKConfig.__annotations__[feature_name])
+        annotation = cast("Any", AiomysqlADKConfig.__annotations__[feature_name])
         assert get_origin(annotation) is NotRequired
         assert get_args(annotation) == (expected_type,)
 
 
-def test_asyncmy_adk_tables_use_plain_mysql_schema_by_default() -> None:
-    """asyncmy ADK profile DDL stays opt-in through extension_config["adk"]."""
+def test_aiomysql_adk_tables_use_plain_mysql_schema_by_default() -> None:
+    """aiomysql ADK profile DDL stays opt-in through extension_config["adk"]."""
 
-    store = AsyncmyADKStore(_mock_config())
-    memory_store = AsyncmyADKMemoryStore(_mock_config())
+    store = AiomysqlADKStore(_mock_config())
+    memory_store = AiomysqlADKMemoryStore(_mock_config())
 
     events_sql = asyncio.run(store._get_create_events_table_sql())
     memory_sql = asyncio.run(memory_store._get_create_memory_table_sql())
@@ -63,10 +57,10 @@ def test_asyncmy_adk_tables_use_plain_mysql_schema_by_default() -> None:
     assert "COMMENT='adk-memory'" not in memory_sql
 
 
-def test_asyncmy_adk_tables_apply_adapter_local_mysql_profile() -> None:
-    """asyncmy ADK MySQL options add generated columns, covering keys, and table options."""
+def test_aiomysql_adk_tables_apply_adapter_local_mysql_profile() -> None:
+    """aiomysql ADK MySQL options add generated columns, covering keys, and table options."""
 
-    store = AsyncmyADKStore(
+    store = AiomysqlADKStore(
         _mock_config({
             "enable_event_generated_columns": True,
             "enable_covering_indexes": True,
@@ -76,7 +70,7 @@ def test_asyncmy_adk_tables_apply_adapter_local_mysql_profile() -> None:
             "user_state_table_options": "COMMENT='adk-user-state'",
         })
     )
-    memory_store = AsyncmyADKMemoryStore(_mock_config({"memory_table_options": "COMMENT='adk-memory'"}))
+    memory_store = AiomysqlADKMemoryStore(_mock_config({"memory_table_options": "COMMENT='adk-memory'"}))
 
     session_sql = asyncio.run(store._get_create_sessions_table_sql())
     events_sql = asyncio.run(store._get_create_events_table_sql())
@@ -101,3 +95,9 @@ def test_asyncmy_adk_tables_apply_adapter_local_mysql_profile() -> None:
     assert "COMMENT='adk-app-state'" in app_state_sql
     assert "COMMENT='adk-user-state'" in user_state_sql
     assert "COMMENT='adk-memory'" in memory_sql
+
+
+def test_aiomysql_table_missing_uses_errno_attribute() -> None:
+    from sqlspec.adapters.aiomysql.adk.store import _is_mysql_table_missing
+
+    assert _is_mysql_table_missing(_MysqlMissingTableError()) is True

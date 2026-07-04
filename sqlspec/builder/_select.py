@@ -889,7 +889,7 @@ class WhereClauseMixin:
     def where_in(self, column: str | exp.Column, values: Any) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        if has_parameter_builder(values) or isinstance(values, (exp.Expr, str)):
+        if has_parameter_builder(values) or isinstance(values, exp.Expr):
             subquery_exp = self._normalize_subquery_expression(values, builder)
             return self.where(exp.In(this=col_expr, expressions=[subquery_exp]))
 

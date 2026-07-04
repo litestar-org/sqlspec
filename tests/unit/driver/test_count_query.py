@@ -173,6 +173,16 @@ def test_count_query_select_columns_no_from(mock_driver: "MockSyncDriver") -> No
         mock_driver._create_count_query(sql)
 
 
+def test_count_query_does_not_infer_nested_table_as_outer_from(mock_driver: "MockSyncDriver") -> None:
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT (SELECT count(*) FROM audit_log) AS total"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+
+    with pytest.raises(ImproperConfigurationError, match="missing FROM clause"):
+        mock_driver._create_count_query(sql)
+
+
 def test_count_query_valid_select_with_from(mock_driver: "MockSyncDriver") -> None:
     """Test COUNT query succeeds with valid SELECT...FROM."""
     sql = mock_driver.prepare_statement(

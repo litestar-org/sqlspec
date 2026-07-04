@@ -26,6 +26,7 @@ from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import IndexMetadata, VersionInfo
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver._common import DataDictionaryDialectMixin, DataDictionaryMixin
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted
@@ -100,6 +101,11 @@ def test_public_data_dictionary_classes_remain_constructible() -> None:
 
     for dictionary_type in data_dictionary_types:
         assert dictionary_type().__class__ is dictionary_type
+
+
+def test_data_dictionary_shadowed_default_features_removed() -> None:
+    assert not hasattr(DataDictionaryMixin, "get_default_features")
+    assert "Overridden by DataDictionaryMixin" not in (DataDictionaryDialectMixin.get_default_features.__doc__ or "")
 
 
 def test_postgres_data_dictionary_normalizes_identifier_binds() -> None:

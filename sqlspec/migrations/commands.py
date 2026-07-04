@@ -1876,10 +1876,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             allow_gaps: Allow gaps in version sequence.
             output_format: Output format ("sql" or "py").
         """
+        context = MigrationContext.from_config(self.config)
+        context.extension_config = self.extension_configs
+
         sync_runner = SyncMigrationRunner(
             self.migrations_path,
             self._discover_extension_migrations(),
-            None,
+            context,
             self.extension_configs,
             runtime=self._runtime,
             description_hints=self._template_settings.description_hints,

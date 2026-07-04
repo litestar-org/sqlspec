@@ -16,6 +16,16 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
     return config
 
 
+class _MysqlMissingTableError(Exception):
+    errno = 1146
+
+
+def test_pymysql_table_missing_uses_errno_attribute() -> None:
+    from sqlspec.adapters.pymysql.adk.store import _is_mysql_table_missing
+
+    assert _is_mysql_table_missing(_MysqlMissingTableError()) is True
+
+
 def test_pymysql_adk_config_types_adapter_local_mysql_options() -> None:
     """PyMySQL ADK MySQL options are typed on the adapter-local extension config."""
 
