@@ -258,9 +258,7 @@ class _DynamicSQLCommenterTransformer:
 
     def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
         merged = _resolve_sqlcommenter_attributes(
-            self._static_attrs,
-            enable_traceparent=self._enable_traceparent,
-            enable_context=self._enable_context,
+            self._static_attrs, enable_traceparent=self._enable_traceparent, enable_context=self._enable_context
         )
         return append_comment(expression, merged), params
 
