@@ -5,14 +5,14 @@ from typing import Any, cast, get_type_hints
 
 import pytest
 
-import sqlspec.adapters.mssql_python.config as _mssql_config
+import sqlspec.adapters.mssql_python.pool as _mssql_pool
 from sqlspec.adapters.mssql_python.config import (
     MssqlPythonAsyncConfig,
     MssqlPythonConfig,
     MssqlPythonConnectionParams,
-    MssqlPythonConnectionPool,
     _normalize_mssql_python_init,
 )
+from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 
 
 class DummyConnection:
@@ -29,7 +29,7 @@ def test_connection_pool_configures_mssql_python_pooling(monkeypatch: pytest.Mon
     """The SQLSpec pool wrapper should configure driver-level pooling before connect."""
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
     connection = DummyConnection()
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
 
     def fake_pooling(*args: Any, **kwargs: Any) -> None:
         calls.append(("pooling", args, kwargs))
@@ -38,8 +38,8 @@ def test_connection_pool_configures_mssql_python_pooling(monkeypatch: pytest.Mon
         calls.append(("connect", (connection_string,), kwargs))
         return connection
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.connect", fake_connect)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", fake_connect)
 
     pool = MssqlPythonConnectionPool(
         connection_string="Server=localhost;", connect_kwargs={"timeout": 5}, max_size=7, idle_timeout=30, enabled=True
@@ -57,12 +57,12 @@ def test_connection_pool_configures_mssql_python_pooling(monkeypatch: pytest.Mon
 def test_config_create_pool_splits_connection_and_pool_options(monkeypatch: pytest.MonkeyPatch) -> None:
     """MssqlPythonConfig should pass connection options and pool options to the right APIs."""
     pooling_calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
 
     def fake_pooling(**kwargs: Any) -> None:
         pooling_calls.append(kwargs)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
 
     config = MssqlPythonConfig(
         connection_config={
@@ -122,12 +122,12 @@ def test_connection_params_include_current_mssql_python_odbc_keywords() -> None:
 def test_config_create_pool_normalizes_current_odbc_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     """Current mssql-python ODBC aliases should become canonical connection fields."""
     pooling_calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
 
     def fake_pooling(**kwargs: Any) -> None:
         pooling_calls.append(kwargs)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
 
     config = MssqlPythonConfig(
         connection_config={
@@ -176,7 +176,7 @@ def test_config_create_pool_normalizes_current_odbc_aliases(monkeypatch: pytest.
 
 def test_config_create_pool_rejects_conflicting_server_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     """Conflicting canonical ODBC aliases should fail instead of silently choosing one."""
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
 
     config = MssqlPythonConfig(connection_config={"server": "srv1", "addr": "srv2"})
 
@@ -188,11 +188,11 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
     """on_connection_create should run for connections acquired by provide_session()."""
     connection = DummyConnection()
     seen: list[DummyConnection] = []
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
     )
 
     config = MssqlPythonConfig(
@@ -207,10 +207,10 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
 
 def test_second_pool_warns_on_different_params(monkeypatch: pytest.MonkeyPatch) -> None:
     """A second pool with different process-wide pooling params emits one warning."""
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
     )
 
     MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
@@ -228,10 +228,10 @@ def test_second_pool_warns_on_different_params(monkeypatch: pytest.MonkeyPatch) 
 
 def test_second_pool_same_params_no_warn(monkeypatch: pytest.MonkeyPatch) -> None:
     """A second pool with identical process-wide pooling params emits no warning."""
-    monkeypatch.setattr(_mssql_config, "_POOLING_PARAMS", None)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
     )
 
     MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)

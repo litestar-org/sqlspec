@@ -1,6 +1,5 @@
 """Parameter extraction utilities."""
 
-import hashlib
 import re
 from collections import OrderedDict
 from typing import Final
@@ -106,7 +105,7 @@ class ParameterValidator:
         if self._cache_max_size <= 0:
             return self._extract_parameters_uncached(sql)
 
-        cache_key = hashlib.blake2b(sql.encode(), digest_size=8).hexdigest()
+        cache_key = sql
         cached_result = self._parameter_cache.get(cache_key)
         if cached_result is not None:
             self._parameter_cache.move_to_end(cache_key)

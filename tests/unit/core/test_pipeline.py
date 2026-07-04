@@ -73,6 +73,16 @@ def test_fingerprint_cache_uses_cached_slot_value() -> None:
     assert second_fingerprint == first_fingerprint
 
 
+def test_pipeline_compile_freezes_config_before_fingerprinting() -> None:
+    registry = StatementPipelineRegistry()
+    config = StatementConfig()
+
+    registry.compile(config, "SELECT 1", {})
+
+    assert config._is_frozen is True
+    assert config._fingerprint_cache is not None
+
+
 def test_fingerprint_cache_does_not_mutate_unfrozen_config() -> None:
     registry = StatementPipelineRegistry()
     config = StatementConfig()

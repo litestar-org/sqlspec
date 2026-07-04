@@ -1,5 +1,7 @@
 """Unit tests for build() and to_sql() dialect override parameter."""
 
+from pathlib import Path
+
 from sqlspec import sql
 from sqlspec.builder import Column
 from sqlspec.core import StatementConfig
@@ -151,6 +153,13 @@ def test_oracle_to_statement_compile_uses_unquoted_identifiers() -> None:
     assert "FROM vector_docs_oracledb_async vector_docs_oracledb_async" in compiled_sql
     assert '"vector_docs_oracledb_async"' not in compiled_sql
     assert "VECTOR_DISTANCE(vector_docs_oracledb_async.embedding" in compiled_sql
+
+
+def test_oracle_lock_target_rendering_does_not_use_builder_string_cleanup() -> None:
+    query = sql.select("id", dialect="oracle").from_("job", alias="j").for_update(of="j")
+
+    assert "FOR UPDATE OF j" in query.build().sql
+    assert "_strip_lock_identifier_quotes" not in Path("sqlspec/builder/_base.py").read_text()
 
 
 def test_to_sql_dialect_override_with_complex_query() -> None:

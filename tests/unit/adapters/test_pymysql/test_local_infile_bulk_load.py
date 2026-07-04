@@ -42,6 +42,7 @@ def test_config_gate_raises_when_local_infile_disabled() -> None:
 
 def test_config_gate_allows_when_local_infile_enabled() -> None:
     config = PyMysqlConfig(
-        connection_config={"local_infile": True}, driver_features={"enable_local_infile_bulk_load": True}
+        connection_config={"allow_local_infile": True, "local_infile": True},
+        driver_features={"enable_local_infile_bulk_load": True},
     )
     assert config.driver_features["enable_local_infile_bulk_load"] is True

@@ -111,7 +111,8 @@ class OracleSyncCursor:
 
     def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
-            self.cursor.close()
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class OracleAsyncCursor:

@@ -9,6 +9,7 @@ import pytest
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlDictCursor, AiomysqlRawCursor
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 from sqlspec.adapters.aiomysql.core import build_statement_config
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -62,6 +63,7 @@ def test_aiomysql_connection_kwargs_normalize_cursor_alias_and_omit_pool_only_ke
             "maxsize": 8,
             "pool_recycle": 30,
             "enable_local_infile": True,
+            "allow_local_infile": True,
         }
     )
 
@@ -74,6 +76,19 @@ def test_aiomysql_connection_kwargs_normalize_cursor_alias_and_omit_pool_only_ke
     assert "pool_recycle" not in connect_kwargs
     assert connect_kwargs["local_infile"] is True
     assert "enable_local_infile" not in connect_kwargs
+    assert "allow_local_infile" not in connect_kwargs
+
+
+def test_aiomysql_local_infile_requires_explicit_security_gate() -> None:
+    """LOAD DATA LOCAL INFILE should require a separate consent gate."""
+    with pytest.raises(ImproperConfigurationError, match="allow_local_infile=True"):
+        AiomysqlConfig(connection_config={"local_infile": True})
+
+    config = AiomysqlConfig(connection_config={"allow_local_infile": True, "local_infile": True})
+    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+
+    assert connect_kwargs["local_infile"] is True
+    assert "allow_local_infile" not in connect_kwargs
 
 
 def test_aiomysql_connection_kwargs_default_local_infile_disabled() -> None:
@@ -154,6 +169,7 @@ async def test_aiomysql_create_pool_forwards_sanitized_pool_kwargs(monkeypatch: 
         connection_config={
             "cursor_class": AiomysqlDictCursor,
             "enable_local_infile": True,
+            "allow_local_infile": True,
             "minsize": 2,
             "maxsize": 8,
             "pool_recycle": 30,

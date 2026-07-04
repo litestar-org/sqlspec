@@ -21,12 +21,38 @@ v0.53.0 - SQL processing correctness fixes
   statement config plus normalized driver-feature dictionary across backends.
 * MySQL-family adapter config, driver, and pool modules now resolve runtime
   vendor symbols through adapter-local typing modules.
+* Driver statement-object caches are now bounded by the configured statement
+  cache size, and cached named-parameter rebinding reuses driver-owned
+  processing state.
+* MySQL local-infile support now requires explicit opt-in consent before
+  enabling client-side file reads.
 
 **Fixed:**
 
 * Dynamic SQLCommenter context and trace attributes are appended after stable
   SQL compilation, so repeated compiles reuse cached uncommented SQL while still
   using the current request context.
+* Statement configs are frozen before pipeline fingerprinting so repeated
+  compiles avoid avoidable cache-key hashing.
+* Repeated statement-cache stores now skip redundant processed-state cloning
+  when the raw SQL is already cached.
+* Parameter extraction, type-dispatch misses, scalar coercion, and execute-many
+  fingerprints now avoid unnecessary hashing and allocation on hot paths.
+* No-op AST transformers no longer force full SQL finalization when they return
+  the original expression and parameter objects.
+* Simple dict and keyword-parameter executions can use the direct statement
+  cache path when the cached query profile can safely rebind them.
+* Oracle lock-target rendering for builder-generated ``FOR UPDATE OF`` clauses
+  is handled by SQLGlot generation rather than post-render SQL rewriting.
+* ``adbc`` and ``arrow-odbc`` configs now honor ``on_connection_create`` driver
+  hooks after creating raw connections.
+* CockroachDB psycopg session contexts now resolve callable statement configs
+  at session entry, matching the rest of the PostgreSQL family.
+* Bridge cursor cleanup now suppresses close failures consistently so cleanup
+  errors do not mask an in-flight database exception.
+* The ``mssql-python`` connection pool implementation now lives in its adapter
+  pool module while preserving the existing public import.
+* Spanner adapter modules no longer expose module-level proxy lookup hooks.
 * Async migration squash now builds its internal migration runner with a real
   migration context, matching the synchronous command path.
 * ObStore Arrow streaming no longer resolves cloud ``base_path`` twice for

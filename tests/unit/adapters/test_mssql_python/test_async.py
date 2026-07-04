@@ -52,9 +52,9 @@ async def test_async_config_provide_session_yields_async_driver(monkeypatch: pyt
     """MssqlPythonAsyncConfig should provide an async driver and release connections."""
     connection = DummyConnection()
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
     )
 
     config = MssqlPythonAsyncConfig(connection_config={"server": "localhost"})
@@ -71,9 +71,9 @@ async def test_async_config_connection_hook_runs_for_session_connections(monkeyp
     connection = DummyConnection()
     seen: list[DummyConnection] = []
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.config.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
     )
 
     config = MssqlPythonAsyncConfig(

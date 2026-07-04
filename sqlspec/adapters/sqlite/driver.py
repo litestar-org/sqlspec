@@ -48,6 +48,8 @@ class SqliteExceptionHandler(BaseSyncExceptionHandler):
     to avoid ABI boundary violations with compiled code.
     """
 
+    __slots__ = ()
+
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
@@ -191,7 +193,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
     def _stmt_cache_execute_direct(
-        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery"
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute cached query through SQLite connection.execute fast path.
 

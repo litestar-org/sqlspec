@@ -154,6 +154,8 @@ class StatementPipelineRegistry:
         expression: "exp.Expr | None" = None,
         param_fingerprint: "Any | None" = None,
     ) -> "CompiledSQL":
+        if not getattr(config, "_is_frozen", False):
+            config.freeze()
         key = self._fingerprint_config(config)
         pipeline = self._pipelines.get(key)
         record_metrics = _RECORD_PIPELINE_METRICS

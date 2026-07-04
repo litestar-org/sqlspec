@@ -108,6 +108,8 @@ class AdbcDriverFeatures(TypedDict):
             Defaults to True when extension_config["events"] is configured.
             Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
             Requires extension_config["events"] for migration setup.
+        on_connection_create: Callback executed when a connection is created.
+            Receives the raw ADBC connection for low-level driver configuration.
         events_backend: Event channel backend selection.
         Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
             ADBC does not have native pub/sub, so table_queue is the only backend.
@@ -123,6 +125,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
     enable_events: NotRequired[bool]
+    on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
     events_backend: NotRequired[str]
 
 
@@ -189,7 +192,13 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     _session_factory_class: "ClassVar[type[_AdbcSessionConnectionHandler]]" = _AdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[AdbcSessionContext]]" = AdbcSessionContext
     _default_statement_config = StatementConfig()
-    __slots__ = ("_default_session_config", "_paradedb_available", "_pgvector_available", "_resolved_dialect")
+    __slots__ = (
+        "_default_session_config",
+        "_paradedb_available",
+        "_pgvector_available",
+        "_resolved_dialect",
+        "_user_connection_hook",
+    )
 
     def __init__(
         self,
@@ -227,6 +236,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config = get_statement_config(self._resolved_dialect)
 
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+        features_dict = dict(driver_features) if driver_features else {}
+        self._user_connection_hook = cast(
+            "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
+        )
         self._default_session_config = get_statement_config(self._resolved_dialect)
 
         super().__init__(
@@ -234,7 +247,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features=driver_features,
+            driver_features=features_dict,
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -262,6 +275,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection = resolve_driver_connect_func(driver_name, uri)(
                 **build_connection_config(self.connection_config)
             )
+            if self._user_connection_hook is not None:
+                self._user_connection_hook(cast("AdbcConnection", connection))
             return cast("AdbcConnection", connection)
         except Exception as e:
             err_driver_name = self.connection_config.get("driver_name", "Unknown")

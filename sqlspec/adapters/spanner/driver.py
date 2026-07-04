@@ -584,11 +584,4 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return resolve_column_names(fields, self._column_name_cache)
 
 
-def __getattr__(name: str) -> Any:
-    if name == "Transaction":
-        return Transaction
-    msg = f"module {__name__} has no attribute {name}"
-    raise AttributeError(msg)
-
-
 register_driver_profile("spanner", driver_profile)

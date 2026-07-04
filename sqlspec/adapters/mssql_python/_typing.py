@@ -1,6 +1,7 @@
 """mssql-python adapter type definitions and mypyc-excluded context managers."""
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 import mssql_python as _mssql_python  # pyright: ignore[reportMissingImports]
@@ -50,7 +51,8 @@ class MssqlPythonCursor:
 
     def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
-            self.cursor.close()
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class MssqlPythonAsyncCursor:
@@ -68,7 +70,8 @@ class MssqlPythonAsyncCursor:
 
     async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
-            await asyncio.to_thread(self.cursor.close)
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(self.cursor.close)
 
 
 class MssqlPythonSessionContext:

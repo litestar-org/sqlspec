@@ -67,6 +67,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
+    on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
 
 
 class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
@@ -126,6 +127,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     _session_factory_class: "ClassVar[type[_ArrowOdbcSessionConnectionHandler]]" = _ArrowOdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[ArrowOdbcSessionContext]]" = ArrowOdbcSessionContext
     _default_statement_config = default_statement_config
+    __slots__ = ("_user_connection_hook",)
 
     def __init__(
         self,
@@ -153,6 +155,9 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             features.setdefault("dbms_name", str(normalized["driver"]))
         if provided_statement_config is None:
             statement_config = _resolve_statement_config(features)
+        self._user_connection_hook = cast(
+            "Callable[[ArrowOdbcConnection], None] | None", features.pop("on_connection_create", None)
+        )
 
         super().__init__(
             connection_config=normalized,
@@ -173,6 +178,8 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         connection_string, connect_kwargs = build_connection_config(self.connection_config)
         try:
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
+            if self._user_connection_hook is not None:
+                self._user_connection_hook(connection)
             return cast("ArrowOdbcConnection", connection)
         except Exception as exc:
             msg = f"Could not configure arrow-odbc connection. Error: {exc}"

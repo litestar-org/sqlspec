@@ -4,6 +4,7 @@ import graphlib
 import hashlib
 import logging
 import re
+from collections import OrderedDict
 from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
@@ -785,6 +786,7 @@ class CommonDriverAttributesMixin:
         "_stmt_cache",
         "_stmt_cache_enabled",
         "_stmt_cache_max_size",
+        "_stmt_cache_rebind_processor",
         "connection",
         "driver_features",
         "statement_config",
@@ -809,12 +811,19 @@ class CommonDriverAttributesMixin:
             observability: Optional runtime handling lifecycle hooks, observers, and spans
         """
         self.connection = connection
+        statement_config.freeze()
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
         self._observability = observability
-        self._statement_cache: dict[str, SQL] = {}
+        self._statement_cache: OrderedDict[str, SQL] = OrderedDict()
         self._stmt_cache_max_size = self._resolve_stmt_cache_max_size()
         self._stmt_cache = QueryCache(self._stmt_cache_max_size)
+        self._stmt_cache_rebind_processor = ParameterProcessor(
+            converter=self.statement_config.parameter_converter,
+            validator=self.statement_config.parameter_validator,
+            cache_max_size=0,
+            validator_cache_max_size=0,
+        )
         self._stmt_cache_enabled = False
         self._statement_pool = get_sql_pool()
         self._processed_state_pool = get_processed_state_pool()
@@ -863,7 +872,9 @@ class CommonDriverAttributesMixin:
             raise StorageCapabilityError(msg, capability="storage_capabilities")
         return cast("StorageCapabilities", dict(capabilities))
 
-    def stmt_cache_rebind(self, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery") -> "ConvertedParameters":
+    def stmt_cache_rebind(
+        self, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "ConvertedParameters":
         """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
         needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
@@ -874,13 +885,7 @@ class CommonDriverAttributesMixin:
             and not needs_style_remap
         ):
             return params
-        processor = ParameterProcessor(
-            converter=self.statement_config.parameter_converter,
-            validator=self.statement_config.parameter_validator,
-            cache_max_size=0,
-            validator_cache_max_size=0,
-        )
-        return processor._transform_cached_parameters(
+        return self._stmt_cache_rebind_processor._transform_cached_parameters(
             params,
             cached.parameter_profile,
             config,
@@ -1062,6 +1067,7 @@ class CommonDriverAttributesMixin:
         if isinstance(statement, str):
             cached_sql = self._statement_cache.get(statement)
             if cached_sql is not None and not kwargs:
+                self._statement_cache.move_to_end(statement)
                 # Check if parameters contain filters
                 has_filters = any(is_statement_filter(p) for p in parameters)
                 if not has_filters:
@@ -1079,7 +1085,9 @@ class CommonDriverAttributesMixin:
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             # Cache the newly created SQL object for future use
-            if not filters and not kwargs and isinstance(statement, str):
+            if not filters and not kwargs and isinstance(statement, str) and self._stmt_cache_max_size > 0:
+                if len(self._statement_cache) >= self._stmt_cache_max_size:
+                    self._statement_cache.popitem(last=False)
                 self._statement_cache[statement] = sql_statement
 
         _validate_declared_parameters(sql_statement)
@@ -1232,7 +1240,7 @@ class CommonDriverAttributesMixin:
     def _stmt_cache_build_direct(
         self,
         sql: str,
-        _params: "tuple[Any, ...] | list[Any]",
+        _params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
         cached: "CachedQuery",
         execution_parameters: "ConvertedParameters",
         *,
@@ -1274,7 +1282,9 @@ class CommonDriverAttributesMixin:
         ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
         return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
-    def _stmt_cache_prepare_direct(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQL | None":
+    def _stmt_cache_prepare_direct(
+        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+    ) -> "SQL | None":
         """Prepare direct execution if cache hit.
 
         Only essential checks in the hot lookup path. All detailed eligibility
@@ -1282,7 +1292,7 @@ class CommonDriverAttributesMixin:
 
         Args:
             statement: Raw SQL string.
-            params: Query parameters (tuple or list).
+            params: Query parameters.
 
         Returns:
             Prepared SQL object with processed state if cache hit, None otherwise.
@@ -1292,8 +1302,10 @@ class CommonDriverAttributesMixin:
         cached = self._stmt_cache.get(statement)
         if cached is None or cached.param_count != len(params):
             return None
+        param_values = _cache_param_values(params)
+
         # AST transformer fallback
-        if self.statement_config.parameter_config.ast_transformer is not None and any(p is None for p in params):
+        if self.statement_config.parameter_config.ast_transformer is not None and any(p is None for p in param_values):
             return None
 
         # Fast-path: skip stmt_cache_rebind entirely when no transformations are needed.
@@ -1301,10 +1313,10 @@ class CommonDriverAttributesMixin:
         needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
         if not needs_rebind and config.type_coercion_map:
             coercion_types = config.type_coercion_map
-            if len(params) == 1:
-                needs_rebind = type(params[0]) in coercion_types
+            if len(param_values) == 1:
+                needs_rebind = type(param_values[0]) in coercion_types
             else:
-                needs_rebind = any(type(p) in coercion_types for p in params)
+                needs_rebind = any(type(p) in coercion_types for p in param_values)
         if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
             needs_rebind = True
         if needs_rebind:
@@ -1325,7 +1337,7 @@ class CommonDriverAttributesMixin:
         )
 
     def _stmt_cache_lookup(
-        self, statement: str, params: "tuple[Any, ...] | list[Any]"
+        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
     ) -> "SQLResult | None | Awaitable[SQLResult | None]":
         """Attempt cached execution for query.
 
@@ -1343,10 +1355,12 @@ class CommonDriverAttributesMixin:
         if cached is None or cached.param_count != len(params):
             return None
 
+        param_values = _cache_param_values(params)
+
         # AST transformer fallback
         config = self.statement_config
         param_config = config.parameter_config
-        if param_config.ast_transformer is not None and any(p is None for p in params):
+        if param_config.ast_transformer is not None and any(p is None for p in param_values):
             return None
 
         # Check if we can use the pre-compiled direct execute path
@@ -1354,10 +1368,10 @@ class CommonDriverAttributesMixin:
         needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
         if not needs_rebind and param_config.type_coercion_map:
             coercion_types = param_config.type_coercion_map
-            if len(params) == 1:
-                needs_rebind = type(params[0]) in coercion_types
+            if len(param_values) == 1:
+                needs_rebind = type(param_values[0]) in coercion_types
             else:
-                needs_rebind = any(type(p) in coercion_types for p in params)
+                needs_rebind = any(type(p) in coercion_types for p in param_values)
 
         if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
             needs_rebind = True
@@ -1388,7 +1402,7 @@ class CommonDriverAttributesMixin:
         raise NotImplementedError
 
     def _stmt_cache_execute_direct(
-        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: "CachedQuery"
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult | Awaitable[SQLResult]":
         """Execute pre-compiled query via ultra-fast path (no rebind needed).
 
@@ -1438,6 +1452,8 @@ class CommonDriverAttributesMixin:
             params = statement.positional_parameters
             if any(p is None for p in params):
                 return
+        if self._stmt_cache.get(statement.raw_sql) is not None:
+            return
 
         processed = cast("ProcessedState", statement.get_processed_state())
         param_profile = processed.parameter_profile
@@ -1707,30 +1723,31 @@ class CommonDriverAttributesMixin:
             return []
 
         type_coercion_map = statement_config.parameter_config.type_coercion_map
-        coerce_value = self._apply_coercion
+        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        coerce_value = self._apply_coercion_with_fallback
 
         if not isinstance(parameters, (dict, list, tuple)):
-            return [coerce_value(parameters, type_coercion_map)]
+            return [coerce_value(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
             if statement_config.parameter_config.supported_execution_parameter_styles and (
                 ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
                 or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map)
+                return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map, fallback_items)
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
-                return [coerce_value(value, type_coercion_map) for _, value in sorted_items]
+                return [coerce_value(value, type_coercion_map, fallback_items) for _, value in sorted_items]
 
-            return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map)
+            return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map, fallback_items)
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
-            coerced_value = coerce_value(value, type_coercion_map)
+            coerced_value = coerce_value(value, type_coercion_map, fallback_items)
             if updated_params is None:
                 if coerced_value is value:
                     continue
@@ -2184,10 +2201,15 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
     return float("inf")
 
 
-def _lazy_copy_coerce_dict(parameters: "dict[str, Any]", coerce_value: Any, type_coercion_map: Any) -> "dict[str, Any]":
+def _lazy_copy_coerce_dict(
+    parameters: "dict[str, Any]",
+    coerce_value: Any,
+    type_coercion_map: Any,
+    fallback_items: "tuple[tuple[type, Any], ...]",
+) -> "dict[str, Any]":
     result: dict[str, Any] | None = None
     for key, value in parameters.items():
-        coerced_value = coerce_value(value, type_coercion_map)
+        coerced_value = coerce_value(value, type_coercion_map, fallback_items)
         if result is None:
             if coerced_value is value:
                 continue
@@ -2196,6 +2218,12 @@ def _lazy_copy_coerce_dict(parameters: "dict[str, Any]", coerce_value: Any, type
     if result is None:
         return parameters
     return result
+
+
+def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") -> "tuple[Any, ...] | list[Any]":
+    if isinstance(params, dict):
+        return tuple(params.values())
+    return params
 
 
 def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":

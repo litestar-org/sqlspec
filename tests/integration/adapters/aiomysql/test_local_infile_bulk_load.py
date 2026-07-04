@@ -21,6 +21,7 @@ async def aiomysql_infile_config(mysql_service: "MySQLService") -> "AsyncGenerat
             "password": mysql_service.password,
             "db": mysql_service.db,
             "autocommit": True,
+            "allow_local_infile": True,
             "enable_local_infile": True,
         },
         driver_features={"enable_local_infile_bulk_load": True},

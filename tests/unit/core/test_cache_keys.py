@@ -61,3 +61,10 @@ def test_structural_fingerprint_list_vs_tuple() -> None:
 
     # They produce same fingerprint for same structure
     assert key_list == key_tuple
+
+
+def test_execute_many_structural_fingerprint_ignores_batch_length() -> None:
+    short_batch = [(1,), (2,)]
+    long_batch = [(1,), (2,), (3,)]
+
+    assert structural_fingerprint(short_batch, is_many=True) == structural_fingerprint(long_batch, is_many=True)

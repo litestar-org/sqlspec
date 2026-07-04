@@ -51,6 +51,8 @@ class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     to avoid ABI boundary violations with compiled code.
     """
 
+    __slots__ = ()
+
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
         if isinstance(exc_val, (aiosqlite.Error, sqlite3.Error)):

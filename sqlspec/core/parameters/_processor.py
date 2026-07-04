@@ -941,10 +941,6 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
 
     Extracted to reduce code duplication and allow inlining of the common single-execution path.
     """
-    param_count = len(parameters)
-    sample_size = (
-        min(_EXECUTE_MANY_SAMPLE_SIZE, param_count) if param_count > _EXECUTE_MANY_SAMPLE_THRESHOLD else param_count
-    )
     first = parameters[0]
     first_type = type(first)
 
@@ -952,31 +948,22 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
     if first_type is dict:
         keys = tuple(first.keys())
         type_sig = tuple(type(v) for v in first.values())
-        return ("many_dict", keys, type_sig, param_count)
+        return ("many_dict", keys, type_sig)
 
     if first_type is list or first_type is tuple:
-        type_sigs: list[tuple[type, ...]] = []
-        for i in range(sample_size):
-            param_item: Any = parameters[i]
-            type_sigs.append(tuple(type(v) for v in param_item))
-        return ("many_seq", tuple(type_sigs), param_count)
+        return ("many_seq", tuple(type(v) for v in first))
 
     # Fallback to ABC checks
     if isinstance(first, Mapping):
         keys = tuple(first.keys())
         type_sig = tuple(type(v) for v in first.values())
-        return ("many_dict", keys, type_sig, param_count)
+        return ("many_dict", keys, type_sig)
 
     if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
-        type_sigs = []
-        for i in range(sample_size):
-            param_item = parameters[i]
-            type_sigs.append(tuple(type(v) for v in param_item))
-        return ("many_seq", tuple(type_sigs), param_count)
+        return ("many_seq", tuple(type(v) for v in first))
 
     # Scalar values in sequence for execute_many
-    type_sig = tuple(type(parameters[i]) for i in range(sample_size))
-    return ("many_scalar", type_sig, param_count)
+    return ("many_scalar", first_type)
 
 
 def _type_coercion_fallbacks(

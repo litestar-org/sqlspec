@@ -419,7 +419,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         raise NotImplementedError(msg)
 
     async def _stmt_cache_execute_direct(
-        self, sql: str, params: "tuple[Any, ...] | list[Any]", cached: CachedQuery
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
     ) -> "SQLResult":
         """Execute pre-compiled query via ultra-fast path (async).
 
@@ -507,7 +507,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
 
-    async def _stmt_cache_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
+    async def _stmt_cache_lookup(
+        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+    ) -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
 
         Args:
@@ -591,15 +593,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         async with exc_handler:
+            fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
+            if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
+                fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
+            elif not parameters and kwargs:
+                fast_params = kwargs
             if (
                 self._stmt_cache_enabled
                 and (statement_config is None or statement_config is self.statement_config)
                 and isinstance(statement, str)
-                and len(parameters) == 1
-                and isinstance(parameters[0], (tuple, list))
-                and not kwargs
+                and fast_params is not None
             ):
-                fast_result = await self._stmt_cache_lookup(statement, parameters[0])
+                fast_result = await self._stmt_cache_lookup(statement, fast_params)
                 if fast_result is not None:
                     result = fast_result
             if result is None:

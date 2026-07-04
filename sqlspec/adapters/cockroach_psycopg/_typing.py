@@ -59,7 +59,7 @@ class CockroachPsycopgSyncSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[CockroachPsycopgSyncDriver], CockroachPsycopgSyncDriver]",
     ) -> None:
@@ -75,8 +75,9 @@ class CockroachPsycopgSyncSessionContext:
         from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
 
         self._connection = self._acquire_connection()
+        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
         self._driver = CockroachPsycopgSyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 
@@ -106,7 +107,7 @@ class CockroachPsycopgAsyncSessionContext:
         self,
         acquire_connection: "Callable[[], Any]",
         release_connection: "Callable[[Any], Any]",
-        statement_config: "StatementConfig",
+        statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[CockroachPsycopgAsyncDriver], CockroachPsycopgAsyncDriver]",
     ) -> None:
@@ -122,8 +123,9 @@ class CockroachPsycopgAsyncSessionContext:
         from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver
 
         self._connection = await self._acquire_connection()
+        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
         self._driver = CockroachPsycopgAsyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
 

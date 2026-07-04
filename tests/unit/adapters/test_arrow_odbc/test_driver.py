@@ -299,6 +299,26 @@ def test_arrow_odbc_config_connects_with_verified_keyword_names(monkeypatch: Any
     assert connection.closed is True
 
 
+def test_arrow_odbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
+    """arrow-odbc should run the connection hook when it creates a physical connection."""
+    connection = FakeConnection()
+    seen: list[Any] = []
+
+    def fake_connect(_connection_string: str, **_kwargs: Any) -> FakeConnection:
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", fake_connect)
+
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": "Driver={ODBC Driver 18 for SQL Server};"},
+        driver_features={"on_connection_create": seen.append},
+    )
+
+    assert config.create_connection() is connection
+    assert seen == [connection]
+    assert "on_connection_create" not in config.driver_features
+
+
 def test_arrow_odbc_connection_params_declares_routed_security_keys() -> None:
     """Connection params should type the ODBC security keys routed by core."""
     expected_keys = {"trusted_connection", "trust_server_certificate", "encrypt"}

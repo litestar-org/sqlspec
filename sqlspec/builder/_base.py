@@ -20,6 +20,7 @@ from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdo
 from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
+from sqlspec.builder._locking import register_lock_generator
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor
 from sqlspec.core import (
     SQL,
@@ -123,7 +124,6 @@ class QueryBuilder(ABC):
 
     __slots__ = (
         "_expression",
-        "_lock_targets_quoted",
         "_merge_target_quoted",
         "_parameter_counter",
         "_parameter_name_counters",
@@ -158,7 +158,6 @@ class QueryBuilder(ABC):
         self._parameters: dict[str, Any] = {}
         self._parameter_counter: int = 0
         self._with_ctes: dict[str, exp.CTE] = {}
-        self._lock_targets_quoted = False
         self._merge_target_quoted = False
 
     @classmethod
@@ -625,8 +624,10 @@ class QueryBuilder(ABC):
                     else final_expression
                 )
                 identify = self._should_identify(target_dialect)
+                if normalized_expression.find(exp.Lock):
+                    register_lock_generator(target_dialect)
                 sql_string = normalized_expression.sql(dialect=target_dialect, pretty=True, identify=identify)
-                sql_string = self._strip_lock_identifier_quotes(sql_string)
+                sql_string = self._strip_merge_target_identifier_quotes(sql_string)
             else:
                 sql_string = str(final_expression)
         except Exception as e:
@@ -886,12 +887,7 @@ class QueryBuilder(ABC):
         # SQLGlot transform(copy=True) deep-copies internally. Copy once here, then mutate that copy.
         return expression.copy().transform(_unquote_identifier, copy=False)
 
-    def _strip_lock_identifier_quotes(self, sql_string: str) -> str:
-        for keyword in ("FOR UPDATE OF ", "FOR SHARE OF "):
-            if keyword in sql_string and not self._lock_targets_quoted:
-                head, tail = sql_string.split(keyword, 1)
-                tail = tail.replace('"', "")
-                return f"{head}{keyword}{tail}"
+    def _strip_merge_target_identifier_quotes(self, sql_string: str) -> str:
         if sql_string.startswith('MERGE INTO "') and not self._merge_target_quoted:
             # Remove quotes around target table only, leave alias/rest intact
             end_quote = sql_string.find('"', len('MERGE INTO "'))

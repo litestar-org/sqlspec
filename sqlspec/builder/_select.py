@@ -1490,9 +1490,6 @@ class Select(
         if of:
             tables = [of] if isinstance(of, str) else of
             lock_args["expressions"] = [exp.to_identifier(str(t), quoted=is_explicitly_quoted(t)) for t in tables]
-            self._lock_targets_quoted = any(is_explicitly_quoted(t) for t in tables)
-        else:
-            self._lock_targets_quoted = False
 
         lock = exp.Lock(**lock_args)
 
