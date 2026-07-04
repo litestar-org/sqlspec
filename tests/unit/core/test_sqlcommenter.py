@@ -11,6 +11,7 @@ from sqlglot import exp
 
 import sqlspec.core.sqlcommenter as sqlcommenter_module
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.core.compiler import SQLProcessor
 from sqlspec.core.sqlcommenter import (
     SQLCommenterContext,
     append_comment,
@@ -30,6 +31,12 @@ def test_generate_comment_basic() -> None:
 def test_generate_comment_empty_attrs() -> None:
     result = generate_comment({})
     assert result == ""
+
+
+def test_append_sqlcommenter_comment_to_sql_preserves_trailing_semicolon() -> None:
+    result = sqlcommenter_module._append_sqlcommenter_comment_to_sql("SELECT 1;", {"route": "/users"})
+
+    assert result == "SELECT 1 /* route='%2Fusers' */;"
 
 
 def test_sqlcommenter_prefix_constant_removed() -> None:
@@ -413,6 +420,25 @@ def test_dynamic_sqlcommenter_context_not_frozen_by_compiled_cache() -> None:
     assert "route='%2Ffirst'" in first_sql
     assert "route='%2Fsecond'" in second_sql
     assert "route='%2Ffirst'" not in second_sql
+
+
+def test_dynamic_sqlcommenter_uses_compiled_cache_without_caching_comment() -> None:
+    config = StatementConfig(enable_sqlcommenter=True, sqlcommenter_enable_context=True)
+    processor = SQLProcessor(config)
+
+    with SQLCommenterContext.scope({"route": "/first"}):
+        first_result = processor.compile("SELECT 1")
+
+    with SQLCommenterContext.scope({"route": "/second"}):
+        second_result = processor.compile("SELECT 1")
+
+    assert "route='%2Ffirst'" in first_result.compiled_sql
+    assert "route='%2Fsecond'" in second_result.compiled_sql
+    assert "route='%2Ffirst'" not in second_result.compiled_sql
+    assert processor.cache_stats["hits"] == 1
+    assert processor.cache_stats["misses"] == 1
+    assert processor._last_result is not None
+    assert "route=" not in processor._last_result.compiled_sql
 
 
 def test_statement_config_enable_sqlcommenter() -> None:

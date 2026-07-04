@@ -25,6 +25,7 @@ from sqlspec.core.parameters import (
     value_fingerprint,
 )
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
+from sqlspec.core.sqlcommenter import _append_sqlcommenter_comment_to_sql, _resolve_sqlcommenter_attributes
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -371,10 +372,9 @@ class SQLProcessor:
             CompiledSQL with execution information
         """
         if not self._cache_enabled:
-            return self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
-
-        if self._has_dynamic_sqlcommenter():
-            return self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=param_fingerprint)
+            return self._apply_dynamic_sqlcommenter(
+                self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
+            )
 
         if param_fingerprint is None:
             param_fingerprint = self._get_param_fingerprint(parameters, is_many)
@@ -383,7 +383,9 @@ class SQLProcessor:
         # MICRO-CACHE: Fast path for repeating statements
         if cache_key == self._last_cache_key and self._last_result is not None:
             self._cache_hits += 1
-            return self._materialize_cached_result(self._last_result, parameters, is_many)
+            return self._apply_dynamic_sqlcommenter(
+                self._materialize_cached_result(self._last_result, parameters, is_many)
+            )
 
         cached_result = self._cache.get(cache_key)
         if cached_result is not None:
@@ -393,7 +395,7 @@ class SQLProcessor:
             # Update micro-cache
             self._last_cache_key = cache_key
             self._last_result = cached_result
-            return self._materialize_cached_result(cached_result, parameters, is_many)
+            return self._apply_dynamic_sqlcommenter(self._materialize_cached_result(cached_result, parameters, is_many))
 
         self._cache_misses += 1
         result = self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=param_fingerprint)
@@ -404,13 +406,41 @@ class SQLProcessor:
         self._cache[cache_key] = result
         self._last_cache_key = cache_key
         self._last_result = result
-        return result
+        return self._apply_dynamic_sqlcommenter(result)
 
     def _has_dynamic_sqlcommenter(self) -> bool:
         """Return whether SQLCommenter resolves per-call context during compilation."""
         return bool(
             self._config.enable_sqlcommenter
             and (self._config.sqlcommenter_enable_context or self._config.sqlcommenter_enable_traceparent)
+        )
+
+    def _apply_dynamic_sqlcommenter(self, result: CompiledSQL) -> CompiledSQL:
+        """Append current dynamic SQLCommenter attributes to a compiled result."""
+        if not self._has_dynamic_sqlcommenter():
+            return result
+
+        attrs = _resolve_sqlcommenter_attributes(
+            self._config.sqlcommenter_attributes or {},
+            enable_traceparent=self._config.sqlcommenter_enable_traceparent,
+            enable_context=self._config.sqlcommenter_enable_context,
+        )
+        compiled_sql = _append_sqlcommenter_comment_to_sql(result.compiled_sql, attrs)
+        if compiled_sql == result.compiled_sql:
+            return result
+
+        return CompiledSQL(
+            compiled_sql=compiled_sql,
+            execution_parameters=result.execution_parameters,
+            operation_type=result.operation_type,
+            expression=result.expression,
+            parameter_style=result.parameter_style,
+            supports_many=result.supports_many,
+            parameter_casts=result.parameter_casts,
+            parameter_profile=result.parameter_profile,
+            operation_profile=result.operation_profile,
+            input_named_parameters=result.input_named_parameters,
+            applied_wrap_types=result.applied_wrap_types,
         )
 
     def _materialize_cached_result(self, cached_result: CompiledSQL, parameters: Any, is_many: bool) -> CompiledSQL:
@@ -632,6 +662,8 @@ class SQLProcessor:
             Updated expression metadata and transformation state.
         """
         statement_transformers = self._config.statement_transformers
+        if statement_transformers and self._has_dynamic_sqlcommenter():
+            statement_transformers = statement_transformers[:-1]
         ast_transformer = self._parameter_config.ast_transformer
         if expression is None or (not statement_transformers and not ast_transformer):
             return expression, parameters, False, operation_type, operation_profile
