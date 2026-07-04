@@ -2,6 +2,7 @@
 
 import logging
 from abc import abstractmethod
+from inspect import isawaitable
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
 
@@ -422,9 +423,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute pre-compiled query via ultra-fast path (async).
 
-        Uses _stmt_cache_build_direct + dispatch_execute since async drivers can't
-        call cursor.execute directly. For DML operations, returns DMLResult
-        to bypass full SQLResult construction.
+        Uses DBAPI-style async cursor methods when available. Async adapters with
+        connection-level execution APIs fall back to dispatch_execute so they can
+        preserve adapter-specific parameter binding semantics. For DML operations,
+        returns DMLResult to bypass full SQLResult construction.
 
         Args:
             sql: Raw SQL string (original, not compiled).
@@ -434,33 +436,76 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult or DMLResult.
         """
-        compiled_sql = cached.compiled_sql
-        direct_statement = self._stmt_cache_build_direct(
-            sql, params, cached, params, params_are_simple=True, compiled_sql=compiled_sql
-        )
-
+        direct_statement: SQL | None = None
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
             async with exc_handler, self.with_cursor(self.connection) as cursor:
-                execution_result = await self.dispatch_execute(cursor, direct_statement)
+                execute = getattr(cursor, "execute", None)
+                fetchall = getattr(cursor, "fetchall", None)
+                can_use_cursor_fast_path = execute is not None and (
+                    (cached.operation_profile.returns_rows and fetchall is not None)
+                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
+                )
+                if can_use_cursor_fast_path:
+                    assert execute is not None
+                    try:
+                        execute_result = execute(cached.compiled_sql, params)
+                        if isawaitable(execute_result):
+                            await execute_result
+                            if cached.operation_profile.returns_rows:
+                                assert fetchall is not None
+                                fetched_data = fetchall()
+                                if isawaitable(fetched_data):
+                                    fetched_data = await fetched_data
+                                data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                                execution_result = self.create_execution_result(
+                                    cursor,
+                                    selected_data=data,
+                                    column_names=column_names,
+                                    data_row_count=row_count,
+                                    is_select_result=True,
+                                    row_format="tuple",
+                                )
+                                direct_statement = self._stmt_cache_build_direct(
+                                    sql,
+                                    params,
+                                    cached,
+                                    params,
+                                    params_are_simple=True,
+                                    compiled_sql=cached.compiled_sql,
+                                )
+                                result = self.build_statement_result(direct_statement, execution_result)
+                            else:
+                                affected_rows = self.resolve_rowcount(cursor)
+                                result = DMLResult(cached.operation_type, affected_rows)
+                    except (AttributeError, NotImplementedError):
+                        pass
 
-                if cached.operation_profile.returns_rows:
-                    result = self.build_statement_result(direct_statement, execution_result)
-                else:
-                    # DML path: use DMLResult to bypass full SQLResult construction
-                    affected_rows = (
-                        execution_result.rowcount_override
-                        if execution_result.rowcount_override is not None and execution_result.rowcount_override >= 0
-                        else 0
+                if result is None:
+                    direct_statement = self._stmt_cache_build_direct(
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
-                    result = DMLResult(cached.operation_type, affected_rows)
+                    execution_result = await self.dispatch_execute(cursor, direct_statement)
+
+                    if cached.operation_profile.returns_rows:
+                        result = self.build_statement_result(direct_statement, execution_result)
+                    else:
+                        # DML path: use DMLResult to bypass full SQLResult construction
+                        affected_rows = (
+                            execution_result.rowcount_override
+                            if execution_result.rowcount_override is not None
+                            and execution_result.rowcount_override >= 0
+                            else 0
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows)
 
             self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
-            self._release_pooled_statement(direct_statement)
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
 
     async def _stmt_cache_lookup(self, statement: str, params: "tuple[Any, ...] | list[Any]") -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).

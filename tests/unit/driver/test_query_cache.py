@@ -271,6 +271,35 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(aiosqlite_
 
 
 @pytest.mark.anyio
+async def test_async_stmt_cache_execute_direct_uses_cursor_fast_path(
+    aiosqlite_async_driver: Any, monkeypatch: Any
+) -> None:
+    """Async direct cache execution should bypass adapter dispatch when cursor.execute is awaitable."""
+    await aiosqlite_async_driver.execute("CREATE TABLE t (id INTEGER)")
+
+    async def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
+        _ = (cursor, statement)
+        pytest.fail("dispatch_execute should not be called on async direct fast path")
+
+    monkeypatch.setattr(aiosqlite_async_driver, "dispatch_execute", _fake_dispatch_execute)
+
+    cached = _make_cached(
+        compiled_sql="INSERT INTO t (id) VALUES (?)",
+        param_count=1,
+        operation_type="INSERT",
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+        processed_state=ProcessedState(
+            compiled_sql="INSERT INTO t (id) VALUES (?)", execution_parameters=[1], operation_type="INSERT"
+        ),
+    )
+
+    result = await aiosqlite_async_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+
+    assert result.operation_type == "INSERT"
+    assert result.rows_affected == 1
+
+
+@pytest.mark.anyio
 async def test_async_stmt_cache_execute_re_raises_mapped_exception(
     aiosqlite_async_driver: Any, monkeypatch: Any
 ) -> None:
@@ -296,11 +325,19 @@ async def test_async_stmt_cache_execute_direct_re_raises_mapped_exception(
 
     await aiosqlite_async_driver.execute("CREATE TABLE t (id INTEGER)")
 
-    async def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
-        _ = (cursor, statement)
-        raise aiosqlite.OperationalError("boom")
+    class FailingCursor:
+        async def execute(self, sql: str, params: tuple[Any, ...]) -> None:
+            _ = (sql, params)
+            raise aiosqlite.OperationalError("boom")
 
-    monkeypatch.setattr(aiosqlite_async_driver, "dispatch_execute", _fake_dispatch_execute)
+    class FailingCursorContext:
+        async def __aenter__(self) -> FailingCursor:
+            return FailingCursor()
+
+        async def __aexit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: Any) -> None:
+            _ = (exc_type, exc, tb)
+
+    monkeypatch.setattr(aiosqlite_async_driver, "with_cursor", lambda _connection: FailingCursorContext())
 
     cached = _make_cached(
         compiled_sql="INSERT INTO t (id) VALUES (?)",

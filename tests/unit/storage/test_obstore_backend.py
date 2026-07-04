@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for ObStoreBackend."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -771,6 +772,26 @@ async def test_write_arrow_async_resolves_cloud_base_path_once(monkeypatch: pyte
     await store.write_arrow_async("key", cast("Any", _FakeArrowTable()))
 
     assert fake_store.put_paths == ["mybase/key"]
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_stream_arrow_async_resolves_cloud_base_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend("memory://", base_path="mybase")
+    seen_patterns: list[str] = []
+
+    def fake_stream_arrow_sync(self: ObStoreBackend, pattern: str, **kwargs: Any) -> Iterator[Any]:
+        _ = self
+        _ = kwargs
+        seen_patterns.append(pattern)
+        return iter(())
+
+    monkeypatch.setattr(ObStoreBackend, "stream_arrow_sync", fake_stream_arrow_sync)
+
+    _ = [batch async for batch in store.stream_arrow_async("*.parquet")]
+
+    assert seen_patterns == ["*.parquet"]
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")

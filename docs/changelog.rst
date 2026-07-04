@@ -9,6 +9,80 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.52.1 - SQL processing correctness fixes
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Dynamic SQLCommenter context and trace attributes are no longer frozen by the
+  compiled statement cache; repeated compiles now use the current request
+  context.
+* Async migration squash now builds its internal migration runner with a real
+  migration context, matching the synchronous command path.
+* ObStore Arrow streaming no longer resolves cloud ``base_path`` twice for
+  async streams.
+* ``sql.decode()`` now renders a trailing default argument as the ``ELSE``
+  clause documented for DECODE-style expressions.
+* Async drivers can use the statement-cache direct execution path when the
+  cursor supports awaitable ``execute()``, activating adapter row and rowcount
+  hooks that were previously bypassed.
+* aiomysql ADK table DDL now honors generated event columns, covering indexes,
+  and adapter-local MySQL table options.
+* MySQL-family ADK stores now recognize missing-table errors reported through
+  an ``errno`` attribute as well as positional error arguments.
+* Count-query generation no longer infers a missing outer ``FROM`` from tables
+  nested inside scalar subqueries.
+* Data dictionary default driver features now come from the dialect-specific
+  mixin instead of being hidden by the generic compatibility mixin.
+* Explicit ``optimize_expression=True`` now overrides a builder created with
+  optimization disabled.
+* ``where_in()`` now binds plain string values as scalar parameters, matching
+  ``where_not_in()`` and the OR helper variants.
+
+v0.52.0 - SQL Server adapters, ADK profiles, and cloud connectors
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added the sync ``pymssql`` SQL Server adapter with config, driver, connection
+  pool, data dictionary, migrations, event-store, Litestar session-store, and
+  ADK store support.
+* Added SQL Server support for ``arrow_odbc`` adapter contracts, ADK
+  session/event storage, event queue storage, and Litestar session storage.
+* Added ADK store and tuning profiles across SQLite, DuckDB, PostgreSQL,
+  CockroachDB, MySQL, BigQuery, Spanner, ``mssql-python``, and ``arrow_odbc``.
+  These profiles expose adapter-local table, index, full-text search, retention,
+  and backend-specific DDL options.
+* Added Google Cloud connector support for sync adapters: Cloud SQL for
+  ``pymysql`` and AlloyDB for sync ``psycopg``.
+* Added native Oracle event backends for Advanced Queuing and Transactional
+  Event Queues.
+* Added row-locking capability introspection across data dictionary dialects.
+* Added docs coverage for the new SQL Server adapters, cloud connector setup,
+  ADK backend matrix entries, and package extras parity.
+
+**Changed:**
+
+* Standardized Oracle native event backend names to ``aq`` and ``txeventq``;
+  ``table_queue`` remains the default backend.
+* Moved ADK optimization and storage tuning options into adapter-local config
+  types instead of the shared global config surface.
+* Tightened adapter typing and core pipeline internals for the compiler,
+  splitter, parameter handling, filters, result handling, cache/runtime helpers,
+  and mypyc-ready adapter boundaries.
+* Updated package extras to include current adapter and framework integrations,
+  including ``arrow-odbc``, ``mssql-python``, ``pymssql``, ``sanic``, and
+  ``starlette``.
+
+**Fixed:**
+
+* Removed the obsolete ``aioodbc`` extra and added docs/package parity checks so
+  the installation guide matches available extras.
+* Corrected ``pymysql`` stack transaction-state detection so nested stack
+  execution reflects the real driver transaction state.
+* Localized ADK optimization config to adapter implementations so backend
+  tuning no longer depends on unused shared config keys.
+
 v0.51.0 - ADK 2.0 clean-break store contract
 ------------------------------------------------------------------------------
 

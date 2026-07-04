@@ -10,7 +10,7 @@ import sqlglot
 from sqlglot import exp
 
 import sqlspec.core.sqlcommenter as sqlcommenter_module
-from sqlspec.core import StatementConfig
+from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.sqlcommenter import (
     SQLCommenterContext,
     append_comment,
@@ -399,6 +399,20 @@ def test_context_scope_restores_previous() -> None:
         assert attrs["route"] == "/outer"
     finally:
         SQLCommenterContext.set(None)
+
+
+def test_dynamic_sqlcommenter_context_not_frozen_by_compiled_cache() -> None:
+    config = StatementConfig(enable_sqlcommenter=True, sqlcommenter_enable_context=True)
+
+    with SQLCommenterContext.scope({"route": "/first"}):
+        first_sql, _ = SQL("SELECT 1", statement_config=config).compile()
+
+    with SQLCommenterContext.scope({"route": "/second"}):
+        second_sql, _ = SQL("SELECT 1", statement_config=config).compile()
+
+    assert "route='%2Ffirst'" in first_sql
+    assert "route='%2Fsecond'" in second_sql
+    assert "route='%2Ffirst'" not in second_sql
 
 
 def test_statement_config_enable_sqlcommenter() -> None:

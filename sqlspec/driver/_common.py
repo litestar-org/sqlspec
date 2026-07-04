@@ -543,7 +543,7 @@ class DataDictionaryDialectMixin:
         return bool(version >= required_version)
 
     def get_default_features(self) -> "list[str]":
-        """Get default feature flags. Overridden by DataDictionaryMixin."""
+        """Get default feature flags for this dialect."""
         return []
 
     def list_available_features(self) -> "list[str]":
@@ -710,14 +710,6 @@ class DataDictionaryMixin:
             "text": "TEXT",
             "blob": "BLOB",
         }
-
-    def get_default_features(self) -> "list[str]":
-        """Get default feature flags supported by most databases.
-
-        Returns:
-            List of commonly supported feature names
-        """
-        return ["supports_transactions", "supports_prepared_statements"]
 
     def sort_tables_topologically(self, tables: "list[str]", foreign_keys: "list[ForeignKeyMetadata]") -> "list[str]":
         """Sort tables topologically based on foreign key dependencies using Python.
@@ -1967,14 +1959,7 @@ class CommonDriverAttributesMixin:
                 expr.set("with_", None)
 
         if isinstance(expr, exp.Select):
-            from_clause = expr.args.get("from")
-            if from_clause is None:
-                from_clause = expr.args.get("froms")
-            if from_clause is None:
-                tables = list(expr.find_all(exp.Table))
-                if tables:
-                    first_table = tables[0]
-                    from_clause = exp.from_(first_table)
+            from_clause = expr.args.get("from_")
             if from_clause is None:
                 msg = (
                     "Cannot create COUNT query: SELECT statement missing FROM clause. "
@@ -1997,8 +1982,8 @@ class CommonDriverAttributesMixin:
                 count_expr = exp.select(exp.Count(this=exp.Star()))
 
                 # Copy FROM clause(s)
-                # handle both 'from' (single) and 'froms' (list) which sqlglot might use
-                from_arg = expr.args.get("from") or expr.args.get("from_")
+                # handle current sqlglot's 'from_' and keep 'from' as defensive compatibility
+                from_arg = expr.args.get("from_") or expr.args.get("from")
                 if from_arg:
                     count_expr.set("from_", from_arg.copy())
                 else:

@@ -1355,14 +1355,14 @@ class SQLFactory:
 
         conditions = []
         default = None
+        paired_args = args
+        if len(args) % 2 == 1:
+            default = to_expression(args[-1])
+            paired_args = args[:-1]
 
-        for i in range(0, len(args) - 1, 2):
-            if i + 1 >= len(args):
-                default = to_expression(args[i])
-                break
-
-            search_val = args[i]
-            result_val = args[i + 1]
+        for i in range(0, len(paired_args), 2):
+            search_val = paired_args[i]
+            result_val = paired_args[i + 1]
 
             search_expr = to_expression(search_val)
             result_expr = to_expression(result_val)

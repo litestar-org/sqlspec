@@ -662,7 +662,12 @@ def _mysql_table_options(adk_config: Mapping[str, Any], key: str) -> str:
 
 def _is_mysql_table_missing(exc: BaseException) -> bool:
     args = getattr(exc, "args", ())
-    return "doesn't exist" in str(exc) or bool(args and args[0] == MYSQL_TABLE_NOT_FOUND_ERROR)
+    errno = getattr(exc, "errno", None)
+    return (
+        errno == MYSQL_TABLE_NOT_FOUND_ERROR
+        or "doesn't exist" in str(exc)
+        or bool(args and args[0] == MYSQL_TABLE_NOT_FOUND_ERROR)
+    )
 
 
 def _json_for_storage(value: Any) -> str:

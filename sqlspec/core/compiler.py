@@ -373,6 +373,9 @@ class SQLProcessor:
         if not self._cache_enabled:
             return self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
 
+        if self._has_dynamic_sqlcommenter():
+            return self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=param_fingerprint)
+
         if param_fingerprint is None:
             param_fingerprint = self._get_param_fingerprint(parameters, is_many)
         cache_key = self._make_cache_key(sql, param_fingerprint, is_many)
@@ -402,6 +405,13 @@ class SQLProcessor:
         self._last_cache_key = cache_key
         self._last_result = result
         return result
+
+    def _has_dynamic_sqlcommenter(self) -> bool:
+        """Return whether SQLCommenter resolves per-call context during compilation."""
+        return bool(
+            self._config.enable_sqlcommenter
+            and (self._config.sqlcommenter_enable_context or self._config.sqlcommenter_enable_traceparent)
+        )
 
     def _materialize_cached_result(self, cached_result: CompiledSQL, parameters: Any, is_many: bool) -> CompiledSQL:
         """Return cached compilation metadata with parameters for the current call."""

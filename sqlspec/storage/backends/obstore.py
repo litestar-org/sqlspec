@@ -850,8 +850,7 @@ class ObStoreBackend:
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
-        return AsyncArrowBatchIterator(self.stream_arrow_sync(resolved_pattern, **kwargs))
+        return AsyncArrowBatchIterator(self.stream_arrow_sync(pattern, **kwargs))
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
