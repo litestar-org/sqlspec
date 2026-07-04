@@ -295,6 +295,7 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
 
     Args:
         error: The DuckDB exception to map
+        logger: Optional logger accepted for adapter signature parity.
 
     Returns:
         A SQLSpec exception that wraps the original error

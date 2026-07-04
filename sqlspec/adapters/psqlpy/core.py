@@ -571,6 +571,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     Args:
         error: The psqlpy exception to map
+        logger: Optional logger accepted for adapter signature parity.
 
     Returns:
         A SQLSpec exception that wraps the original error
