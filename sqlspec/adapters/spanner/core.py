@@ -211,7 +211,7 @@ def _create_spanner_error(error: Any, error_class: type[SQLSpecError], descripti
     return exc
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map Spanner exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -228,6 +228,7 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     # Integrity errors
     if isinstance(error, api_exceptions.AlreadyExists):
         return _create_spanner_error(error, UniqueViolationError, "resource already exists")

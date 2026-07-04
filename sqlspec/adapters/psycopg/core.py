@@ -609,7 +609,7 @@ def _resolve_exception_mapping(error_type: type[Any]) -> "tuple[str, type[SQLSpe
 _register_exception_mappings()
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map psycopg exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -627,6 +627,7 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     error_type = type(error)
     mapped_error = _EXCEPTION_MAPPING.get(error_type)
     if mapped_error is None:

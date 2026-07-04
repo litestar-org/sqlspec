@@ -59,12 +59,13 @@ def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
     return "sqlite"
 
 
-def create_mapped_exception(exc: Exception) -> Exception:
+def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> SQLSpecError:
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
-    message = str(exc)
+    del logger
+    message = str(error)
     if "Native error: 102" in message or "Incorrect syntax near" in message:
-        return SQLParsingError(f"ODBC SQL parsing error. Original error: {exc}")
-    return SQLSpecError(f"ODBC database error. Original error: {exc}")
+        return SQLParsingError(f"ODBC SQL parsing error. Original error: {error}")
+    return SQLSpecError(f"ODBC database error. Original error: {error}")
 
 
 def apply_driver_features(features: "dict[str, Any] | None") -> dict[str, Any]:

@@ -1046,7 +1046,7 @@ def _create_bigquery_error(
     return exc
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map BigQuery exceptions to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -1072,6 +1072,7 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     try:
         status_code = error.code
     except AttributeError:

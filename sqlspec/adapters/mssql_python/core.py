@@ -89,25 +89,25 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 
 
-def create_mapped_exception(exc: Exception, logger: "Logger | None" = None) -> Exception:
+def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a mssql-python exception to SQLSpec's exception hierarchy."""
-    error_number = _extract_error_number(exc)
+    error_number = _extract_error_number(error)
     if error_number is not None:
         mapping = _ERROR_CODE_MAPPING.get(error_number)
         if mapping is not None:
             error_class, description = mapping
-            return error_class(f"SQL Server error {error_number}: {description}. Original error: {exc}")
+            return error_class(f"SQL Server error {error_number}: {description}. Original error: {error}")
         if logger is not None:
             logger.debug("Unmapped SQL Server error number: %s", error_number)
 
-    exc_name = type(exc).__name__
+    exc_name = type(error).__name__
     if exc_name == "IntegrityError":
-        return IntegrityError(f"SQL Server integrity error. Original error: {exc}")
+        return IntegrityError(f"SQL Server integrity error. Original error: {error}")
     if exc_name == "OperationalError":
-        return OperationalError(f"SQL Server operational error. Original error: {exc}")
+        return OperationalError(f"SQL Server operational error. Original error: {error}")
     if exc_name == "DataError":
-        return DataError(f"SQL Server data error. Original error: {exc}")
-    return SQLSpecError(f"SQL Server database error. Original error: {exc}")
+        return DataError(f"SQL Server data error. Original error: {error}")
+    return SQLSpecError(f"SQL Server database error. Original error: {error}")
 
 
 def apply_driver_features(features: "dict[str, Any] | None") -> dict[str, Any]:

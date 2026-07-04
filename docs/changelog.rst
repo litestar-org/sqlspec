@@ -12,6 +12,12 @@ Recent Updates
 v0.53.0 - SQL processing correctness fixes
 ------------------------------------------------------------------------------
 
+**Changed:**
+
+* Standardized adapter ``create_mapped_exception()`` helper signatures to accept
+  ``(error, *, logger=None)`` across backends while preserving existing
+  exception mapping behavior.
+
 **Fixed:**
 
 * Dynamic SQLCommenter context and trace attributes are appended after stable

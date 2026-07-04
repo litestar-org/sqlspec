@@ -1,5 +1,6 @@
 """Parameterized tests for real adapter implementations."""
 
+import inspect
 import operator
 import sqlite3
 from typing import Any
@@ -9,7 +10,7 @@ import pytest
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
 from sqlspec.driver import ExecutionResult
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
 
 __all__ = ()
 
@@ -54,6 +55,26 @@ ADAPTER_CONFIGS = [
     },
 ]
 
+CREATE_MAPPED_EXCEPTION_MODULES = (
+    "sqlspec.adapters.adbc.core",
+    "sqlspec.adapters.aiomysql.core",
+    "sqlspec.adapters.aiosqlite.core",
+    "sqlspec.adapters.arrow_odbc.core",
+    "sqlspec.adapters.asyncmy.core",
+    "sqlspec.adapters.asyncpg.core",
+    "sqlspec.adapters.bigquery.core",
+    "sqlspec.adapters.duckdb.core",
+    "sqlspec.adapters.mssql_python.core",
+    "sqlspec.adapters.mysqlconnector.core",
+    "sqlspec.adapters.oracledb.core",
+    "sqlspec.adapters.psqlpy.core",
+    "sqlspec.adapters.psycopg.core",
+    "sqlspec.adapters.pymssql.core",
+    "sqlspec.adapters.pymysql.core",
+    "sqlspec.adapters.spanner.core",
+    "sqlspec.adapters.sqlite.core",
+)
+
 
 @pytest.fixture(params=ADAPTER_CONFIGS, ids=operator.itemgetter("name"))
 def adapter_config(request: pytest.FixtureRequest) -> "dict[str, Any]":
@@ -81,6 +102,37 @@ def statement_config_for_adapter(adapter_config: "dict[str, Any]") -> StatementC
             supported_execution_parameter_styles={exec_style},
         ),
     )
+
+
+@pytest.mark.parametrize("module_name", CREATE_MAPPED_EXCEPTION_MODULES)
+def test_adapter_create_mapped_exception_signature_is_uniform(module_name: str) -> None:
+    module = pytest.importorskip(module_name)
+
+    signature = inspect.signature(module.create_mapped_exception)
+
+    assert tuple(signature.parameters) == ("error", "logger")
+    assert signature.parameters["error"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert signature.parameters["logger"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["logger"].default is None
+
+
+def test_duckdb_create_mapped_exception_accepts_standard_shape() -> None:
+    from sqlspec.adapters.duckdb.core import create_mapped_exception
+
+    class ParserException(Exception):
+        pass
+
+    mapped = create_mapped_exception(ParserException("syntax error"))
+
+    assert isinstance(mapped, SQLParsingError)
+
+
+def test_arrow_odbc_create_mapped_exception_accepts_standard_shape() -> None:
+    from sqlspec.adapters.arrow_odbc.core import create_mapped_exception
+
+    mapped = create_mapped_exception(Exception("Native error: 102 Incorrect syntax near 'FROM'"), logger=None)
+
+    assert isinstance(mapped, SQLParsingError)
 
 
 def test_adapter_parameter_style_handling(

@@ -503,7 +503,7 @@ def prepare_postgres_parameters(
     )
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map ADBC errors to SQLSpec exceptions.
 
     This is a factory function that returns an exception instance rather than
@@ -521,6 +521,7 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
     Returns:
         A SQLSpec exception that wraps the original error
     """
+    del logger
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     sqlstate = sqlstate_attr if sqlstate_attr is not None else None
 
