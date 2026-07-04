@@ -134,6 +134,47 @@ def append_comment(expression: exp.Expr, attrs: Mapping[str, str | None]) -> exp
     return expression
 
 
+def _append_sqlcommenter_comment_to_sql(sql: str, attrs: Mapping[str, str | None]) -> str:
+    """Append a sqlcommenter block to rendered SQL text."""
+    comment_body = generate_comment(attrs)
+    if not comment_body:
+        return sql
+
+    stripped_sql = sql.rstrip()
+    if not stripped_sql:
+        return sql
+    trailing_whitespace = sql[len(stripped_sql) :]
+    comment = f"/* {comment_body} */"
+
+    if stripped_sql.endswith(";"):
+        before_semicolon = stripped_sql[:-1]
+        statement = before_semicolon.rstrip()
+        semicolon_padding = before_semicolon[len(statement) :]
+        return f"{statement} {comment}{semicolon_padding};{trailing_whitespace}"
+
+    return f"{stripped_sql} {comment}{trailing_whitespace}"
+
+
+def _resolve_sqlcommenter_attributes(
+    static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
+) -> dict[str, str | None]:
+    """Resolve static and dynamic sqlcommenter attributes for the current call."""
+    merged: dict[str, str | None] = {}
+    if enable_context:
+        ctx_attrs = SQLCommenterContext.get()
+        if ctx_attrs:
+            merged.update(ctx_attrs)
+        correlation_id = CorrelationContext.get()
+        if correlation_id and "correlation_id" not in merged:
+            merged["correlation_id"] = correlation_id
+    merged.update(static_attrs)
+    if enable_traceparent:
+        trace_id, span_id = get_trace_context()
+        if trace_id and span_id:
+            merged["traceparent"] = _build_traceparent(trace_id, span_id)
+    return merged
+
+
 def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
     """Extract sqlcommenter attributes from a parsed expression's comments.
 
@@ -216,19 +257,11 @@ class _DynamicSQLCommenterTransformer:
         self._enable_context = enable_context
 
     def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
-        merged: dict[str, str | None] = {}
-        if self._enable_context:
-            ctx_attrs = SQLCommenterContext.get()
-            if ctx_attrs:
-                merged.update(ctx_attrs)
-            correlation_id = CorrelationContext.get()
-            if correlation_id and "correlation_id" not in merged:
-                merged["correlation_id"] = correlation_id
-        merged.update(self._static_attrs)
-        if self._enable_traceparent:
-            trace_id, span_id = get_trace_context()
-            if trace_id and span_id:
-                merged["traceparent"] = _build_traceparent(trace_id, span_id)
+        merged = _resolve_sqlcommenter_attributes(
+            self._static_attrs,
+            enable_traceparent=self._enable_traceparent,
+            enable_context=self._enable_context,
+        )
         return append_comment(expression, merged), params
 
 

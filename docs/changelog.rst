@@ -9,14 +9,14 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.52.1 - SQL processing correctness fixes
+v0.53.0 - SQL processing correctness fixes
 ------------------------------------------------------------------------------
 
 **Fixed:**
 
-* Dynamic SQLCommenter context and trace attributes are no longer frozen by the
-  compiled statement cache; repeated compiles now use the current request
-  context.
+* Dynamic SQLCommenter context and trace attributes are appended after stable
+  SQL compilation, so repeated compiles reuse cached uncommented SQL while still
+  using the current request context.
 * Async migration squash now builds its internal migration runner with a real
   migration context, matching the synchronous command path.
 * ObStore Arrow streaming no longer resolves cloud ``base_path`` twice for
