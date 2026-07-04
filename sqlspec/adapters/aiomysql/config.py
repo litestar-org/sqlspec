@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
-import aiomysql  # pyright: ignore
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
@@ -11,6 +10,7 @@ from sqlspec.adapters.aiomysql._typing import (
     AiomysqlConnection,
     AiomysqlCursor,
     AiomysqlDictCursor,
+    AiomysqlModule,
     AiomysqlPool,
     AiomysqlRawCursor,
     AiomysqlSessionContext,
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlDriverFeatures", "AiomysqlPoolParams")
 
 _POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
+aiomysql: "AiomysqlModule" = cast("AiomysqlModule", AiomysqlModule)
 
 
 class AiomysqlConnectionParams(TypedDict):

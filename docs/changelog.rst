@@ -19,6 +19,8 @@ v0.53.0 - SQL processing correctness fixes
   exception mapping behavior.
 * Standardized adapter ``apply_driver_features()`` helpers to return an updated
   statement config plus normalized driver-feature dictionary across backends.
+* MySQL-family adapter config, driver, and pool modules now resolve runtime
+  vendor symbols through adapter-local typing modules.
 
 **Fixed:**
 

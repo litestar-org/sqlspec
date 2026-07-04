@@ -7,23 +7,48 @@ compilation to avoid ABI boundary issues.
 from typing import TYPE_CHECKING, Any
 
 import pymysql
+from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
+from pymysql.constants import SERVER_STATUS as _PYMYSQL_SERVER_STATUS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
+    from typing import Protocol, TypeAlias
 
     from sqlspec.adapters.pymysql.driver import PyMysqlDriver
     from sqlspec.core import StatementConfig
 
+    class PyMysqlFieldTypeProtocol(Protocol):
+        JSON: int
+
+    class PyMysqlServerStatusProtocol(Protocol):
+        SERVER_STATUS_IN_TRANS: int
+
+    PyMysqlConnect: TypeAlias = type["PyMysqlConnection"]
     PyMysqlConnection: TypeAlias = pymysql.connections.Connection
+    PyMysqlFieldType: TypeAlias = PyMysqlFieldTypeProtocol
+    PyMysqlMySQLError: TypeAlias = pymysql.MySQLError
     PyMysqlRawCursor: TypeAlias = pymysql.cursors.Cursor
+    PyMysqlServerStatus: TypeAlias = PyMysqlServerStatusProtocol
 
 if not TYPE_CHECKING:
+    PyMysqlConnect = pymysql.connect
     PyMysqlConnection = pymysql.connections.Connection
+    PyMysqlFieldType = _PYMYSQL_FIELD_TYPE
+    PyMysqlMySQLError = pymysql.MySQLError
     PyMysqlRawCursor = pymysql.cursors.Cursor
+    PyMysqlServerStatus = _PYMYSQL_SERVER_STATUS
 
-__all__ = ("PyMysqlConnection", "PyMysqlCursor", "PyMysqlRawCursor", "PyMysqlSessionContext")
+__all__ = (
+    "PyMysqlConnect",
+    "PyMysqlConnection",
+    "PyMysqlCursor",
+    "PyMysqlFieldType",
+    "PyMysqlMySQLError",
+    "PyMysqlRawCursor",
+    "PyMysqlServerStatus",
+    "PyMysqlSessionContext",
+)
 
 
 class PyMysqlCursor:
@@ -39,7 +64,7 @@ class PyMysqlCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
             self.cursor.close()
 
@@ -59,8 +84,8 @@ class PyMysqlSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], PyMysqlConnection]",
+        release_connection: "Callable[[PyMysqlConnection], None]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PyMysqlDriver], PyMysqlDriver]",
@@ -70,7 +95,7 @@ class PyMysqlSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: PyMysqlConnection | None = None
         self._driver: PyMysqlDriver | None = None
 
     def __enter__(self) -> "PyMysqlDriver":

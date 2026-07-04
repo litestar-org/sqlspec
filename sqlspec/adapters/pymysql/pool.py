@@ -8,9 +8,7 @@ import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
-import pymysql
-
-from sqlspec.adapters.pymysql._typing import PyMysqlConnection
+from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -21,6 +19,7 @@ __all__ = ("PyMysqlConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "pymysql"
+_pymysql_connect: "PyMysqlConnect" = cast("PyMysqlConnect", PyMysqlConnect)
 
 
 class PyMysqlConnectionPool:
@@ -70,7 +69,7 @@ class PyMysqlConnectionPool:
         if self._connection_factory is not None:
             connection = self._connection_factory()
         else:
-            connection = pymysql.connect(**self._connection_parameters)
+            connection = _pymysql_connect(**self._connection_parameters)
 
         # Call user-provided callback after connection creation
         if self._on_connection_create is not None:

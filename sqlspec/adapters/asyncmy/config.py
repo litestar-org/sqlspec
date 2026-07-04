@@ -4,7 +4,6 @@ import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 from weakref import WeakSet
 
-import asyncmy
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
@@ -12,6 +11,7 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyConnection,
     AsyncmyCursor,
     AsyncmyDictCursor,
+    AsyncmyModule,
     AsyncmyPool,
     AsyncmyRawCursor,
     AsyncmySessionContext,
@@ -39,6 +39,7 @@ __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", 
 _ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
 _ASYNCMY_POOL_KEYS = _ASYNCMY_POOL_ONLY_KEYS | {"echo"}
 _ASYNCMY_LOCAL_INFILE_GATE = "allow_local_infile"
+asyncmy: "AsyncmyModule" = cast("AsyncmyModule", AsyncmyModule)
 
 
 def _get_asyncmy_connect_parameter_names() -> "frozenset[str]":

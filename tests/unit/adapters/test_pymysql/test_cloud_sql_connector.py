@@ -138,7 +138,7 @@ def test_cloud_sql_connection_factory_calls_connector(mock_cloud_sql_module: Mag
         )
         pool = config._create_pool()
 
-    with patch("sqlspec.adapters.pymysql.pool.pymysql.connect") as mock_pymysql_connect:
+    with patch("sqlspec.adapters.pymysql.pool._pymysql_connect") as mock_pymysql_connect:
         connection = pool._create_connection()
 
     assert connection is cloud_connection
@@ -166,7 +166,7 @@ def test_pool_runs_connection_create_callback_after_direct_or_factory_paths() ->
         seen_connections.append(connection)
 
     direct_pool = PyMysqlConnectionPool({"host": "localhost"}, on_connection_create=on_connection_create)
-    with patch("sqlspec.adapters.pymysql.pool.pymysql.connect", return_value=direct_connection):
+    with patch("sqlspec.adapters.pymysql.pool._pymysql_connect", return_value=direct_connection):
         assert direct_pool._create_connection() is direct_connection
 
     factory_pool = PyMysqlConnectionPool(

@@ -7,10 +7,13 @@ type coercion, error handling, and transaction management.
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncmy.errors  # pyright: ignore
-from asyncmy.constants import FIELD_TYPE as ASYNC_MY_FIELD_TYPE  # pyright: ignore
-
-from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmySessionContext
+from sqlspec.adapters.asyncmy._typing import (
+    AsyncmyCursor,
+    AsyncmyError,
+    AsyncmyFieldType,
+    AsyncmyMySQLError,
+    AsyncmySessionContext,
+)
 from sqlspec.adapters.asyncmy.core import (
     AsyncmyStreamSource,
     build_insert_statement,
@@ -48,7 +51,7 @@ __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "Asyncmy
 logger = get_logger(__name__)
 
 json_type_value = (
-    ASYNC_MY_FIELD_TYPE.JSON if ASYNC_MY_FIELD_TYPE is not None and supports_json_type(ASYNC_MY_FIELD_TYPE) else None
+    AsyncmyFieldType.JSON if AsyncmyFieldType is not None and supports_json_type(AsyncmyFieldType) else None
 )
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
@@ -69,7 +72,7 @@ class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, asyncmy.errors.Error):
+        if issubclass(exc_type, cast("type[BaseException]", AsyncmyError)):
             result = create_mapped_exception(exc_val, logger=logger)
             if result is True:
                 return True
@@ -215,7 +218,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         try:
             async with AsyncmyCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
-        except asyncmy.errors.MySQLError as e:
+        except AsyncmyMySQLError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -227,7 +230,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.commit()
-        except asyncmy.errors.MySQLError as e:
+        except AsyncmyMySQLError as e:
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -239,7 +242,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.rollback()
-        except asyncmy.errors.MySQLError as e:
+        except AsyncmyMySQLError as e:
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 

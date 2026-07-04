@@ -82,6 +82,17 @@ ADAPTER_DRIVER_MODULES_WITH_FEATURE_HELPERS = (
     "sqlspec/adapters/cockroach_psycopg/driver.py",
     "sqlspec/adapters/duckdb/driver.py",
 )
+MYSQL_FAMILY_UNCOMPILED_MODULES = (
+    "sqlspec/adapters/aiomysql/config.py",
+    "sqlspec/adapters/aiomysql/driver.py",
+    "sqlspec/adapters/asyncmy/config.py",
+    "sqlspec/adapters/asyncmy/driver.py",
+    "sqlspec/adapters/mysqlconnector/config.py",
+    "sqlspec/adapters/mysqlconnector/driver.py",
+    "sqlspec/adapters/pymysql/driver.py",
+    "sqlspec/adapters/pymysql/pool.py",
+)
+MYSQL_VENDOR_IMPORT_ROOTS = ("aiomysql", "asyncmy", "mysql", "pymysql")
 
 
 @pytest.fixture(params=ADAPTER_CONFIGS, ids=operator.itemgetter("name"))
@@ -176,6 +187,27 @@ def test_adapter_drivers_do_not_apply_driver_features(module_path: str) -> None:
 
     assert imports_helper is False
     assert calls_helper is False
+
+
+@pytest.mark.parametrize("module_path", MYSQL_FAMILY_UNCOMPILED_MODULES)
+def test_mysql_family_uncompiled_modules_use_adapter_typing_boundary(module_path: str) -> None:
+    tree = ast.parse(Path(module_path).read_text())
+    direct_imports: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            direct_imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            direct_imports.append(node.module)
+
+    direct_vendor_imports = [
+        import_name
+        for import_name in direct_imports
+        if import_name in MYSQL_VENDOR_IMPORT_ROOTS
+        or import_name.startswith(tuple(f"{root}." for root in MYSQL_VENDOR_IMPORT_ROOTS))
+    ]
+
+    assert direct_vendor_imports == []
 
 
 def test_adapter_parameter_style_handling(
