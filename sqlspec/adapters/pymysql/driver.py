@@ -5,10 +5,13 @@ from collections.abc import Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql
-from pymysql.constants import FIELD_TYPE, SERVER_STATUS
-
-from sqlspec.adapters.pymysql._typing import PyMysqlCursor, PyMysqlSessionContext
+from sqlspec.adapters.pymysql._typing import (
+    PyMysqlCursor,
+    PyMysqlFieldType,
+    PyMysqlMySQLError,
+    PyMysqlServerStatus,
+    PyMysqlSessionContext,
+)
 from sqlspec.adapters.pymysql.core import (
     PymysqlStreamSource,
     build_insert_statement,
@@ -47,7 +50,7 @@ __all__ = ("PyMysqlCursor", "PyMysqlDriver", "PyMysqlExceptionHandler", "PyMysql
 
 logger = get_logger("sqlspec.adapters.pymysql")
 
-json_type_value = FIELD_TYPE.JSON if supports_json_type(FIELD_TYPE) else None
+json_type_value = PyMysqlFieldType.JSON if supports_json_type(PyMysqlFieldType) else None
 PYMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
@@ -59,7 +62,7 @@ class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, pymysql.MySQLError):
+        if issubclass(exc_type, PyMysqlMySQLError):
             result = create_mapped_exception(exc_val, logger=logger)
             if result is True:
                 return True
@@ -148,21 +151,21 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         try:
             with PyMysqlCursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
-        except pymysql.MySQLError as exc:
+        except PyMysqlMySQLError as exc:
             msg = f"Failed to begin MySQL transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
     def commit(self) -> None:
         try:
             self.connection.commit()
-        except pymysql.MySQLError as exc:
+        except PyMysqlMySQLError as exc:
             msg = f"Failed to commit MySQL transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
-        except pymysql.MySQLError as exc:
+        except PyMysqlMySQLError as exc:
             msg = f"Failed to rollback MySQL transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
@@ -290,7 +293,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         try:
-            return bool(self.connection.server_status & SERVER_STATUS.SERVER_STATUS_IN_TRANS)
+            return bool(self.connection.server_status & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS)
         except Exception:
             return False
 

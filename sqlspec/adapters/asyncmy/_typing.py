@@ -6,13 +6,16 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import asyncmy as _asyncmy  # pyright: ignore
 from asyncmy import Connection  # pyright: ignore
+from asyncmy import errors as _asyncmy_errors  # pyright: ignore
+from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
 from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
 
@@ -22,20 +25,36 @@ if TYPE_CHECKING:
     class AsyncmyConnectionProtocol(Protocol):
         def cursor(self) -> "AsyncmyRawCursor": ...
 
-        async def commit(self) -> Any: ...
+        async def commit(self) -> object: ...
 
-        async def rollback(self) -> Any: ...
+        async def rollback(self) -> object: ...
 
-        async def close(self) -> Any: ...
+        async def close(self) -> object: ...
+
+    class AsyncmyModuleProtocol(Protocol):
+        def connect(self, *args: Any, **kwargs: Any) -> "AsyncmyConnection": ...
+
+        async def create_pool(self, **kwargs: Any) -> "AsyncmyPool": ...
+
+    class AsyncmyFieldTypeProtocol(Protocol):
+        JSON: int
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
     AsyncmyDictCursor: TypeAlias = _AsyncmyDictCursor
+    AsyncmyError: TypeAlias = _asyncmy_errors.Error
+    AsyncmyFieldType: TypeAlias = AsyncmyFieldTypeProtocol
+    AsyncmyMySQLError: TypeAlias = _asyncmy_errors.MySQLError
+    AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
     AsyncmyPool: TypeAlias = _AsyncmyPool
     AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
 
 if not TYPE_CHECKING:
     AsyncmyConnection = Connection
     AsyncmyDictCursor = _AsyncmyDictCursor
+    AsyncmyError = _asyncmy_errors.Error
+    AsyncmyFieldType = _ASYNCMY_FIELD_TYPE
+    AsyncmyMySQLError = _asyncmy_errors.MySQLError
+    AsyncmyModule = _asyncmy
     AsyncmyPool = _AsyncmyPool
     AsyncmyRawCursor = _AsyncmyCursor
 
@@ -43,6 +62,10 @@ __all__ = (
     "AsyncmyConnection",
     "AsyncmyCursor",
     "AsyncmyDictCursor",
+    "AsyncmyError",
+    "AsyncmyFieldType",
+    "AsyncmyModule",
+    "AsyncmyMySQLError",
     "AsyncmyPool",
     "AsyncmyRawCursor",
     "AsyncmySessionContext",
@@ -65,7 +88,7 @@ class AsyncmyCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    async def __aexit__(self, *_: Any) -> None:
+    async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
             await self.cursor.close()
 
@@ -93,8 +116,8 @@ class AsyncmySessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
+        release_connection: "Callable[[AsyncmyConnection], Awaitable[None]]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
@@ -104,7 +127,7 @@ class AsyncmySessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: AsyncmyConnection | None = None
         self._driver: AsyncmyDriver | None = None
 
     async def __aenter__(self) -> "AsyncmyDriver":

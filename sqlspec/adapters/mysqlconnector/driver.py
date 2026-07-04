@@ -9,12 +9,11 @@ from collections.abc import Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import mysql.connector
-from mysql.connector.constants import FieldType
-
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncSessionContext,
+    MysqlConnectorError,
+    MysqlConnectorFieldType,
     MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
 )
@@ -76,7 +75,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.mysqlconnector")
 
-json_type_value = FieldType.JSON if supports_json_type(FieldType) else None
+json_type_value = MysqlConnectorFieldType.JSON if supports_json_type(MysqlConnectorFieldType) else None
 MYSQLCONNECTOR_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
@@ -88,7 +87,7 @@ class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, mysql.connector.Error):
+        if issubclass(exc_type, MysqlConnectorError):
             result = create_mapped_exception(exc_val, logger=logger)
             if result is True:
                 return True
@@ -177,21 +176,21 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         try:
             with MysqlConnectorSyncCursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
-        except mysql.connector.Error as e:
+        except MysqlConnectorError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
         try:
             self.connection.commit()
-        except mysql.connector.Error as e:
+        except MysqlConnectorError as e:
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
-        except mysql.connector.Error as e:
+        except MysqlConnectorError as e:
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -342,7 +341,7 @@ class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, mysql.connector.Error):
+        if issubclass(exc_type, MysqlConnectorError):
             result = create_mapped_exception(exc_val, logger=logger)
             if result is True:
                 return True
@@ -431,21 +430,21 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         try:
             async with MysqlConnectorAsyncCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
-        except mysql.connector.Error as e:
+        except MysqlConnectorError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
         try:
             await self.connection.commit()
-        except mysql.connector.Error as e:
+        except MysqlConnectorError as e:
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
         try:
             await self.connection.rollback()
-        except mysql.connector.Error as e:
+        except MysqlConnectorError as e:
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 

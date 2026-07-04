@@ -6,13 +6,16 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import aiomysql as _aiomysql  # pyright: ignore
 from aiomysql import Connection  # pyright: ignore
 from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
 from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
 from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
+from pymysql import err as _pymysql_err  # pyright: ignore
+from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE  # pyright: ignore
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
 
@@ -20,30 +23,48 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class AiomysqlConnectionProtocol(Protocol):
-        async def cursor(self, cursor: "type[Any] | None" = None) -> "AiomysqlRawCursor": ...
+        async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> "AiomysqlRawCursor": ...
 
-        async def commit(self) -> Any: ...
+        async def commit(self) -> object: ...
 
-        async def rollback(self) -> Any: ...
+        async def rollback(self) -> object: ...
 
-        def close(self) -> Any: ...
+        def close(self) -> object: ...
+
+    class AiomysqlModuleProtocol(Protocol):
+        async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
+
+    class AiomysqlFieldTypeProtocol(Protocol):
+        JSON: int
 
     AiomysqlConnection: TypeAlias = AiomysqlConnectionProtocol
+    AiomysqlModule: TypeAlias = AiomysqlModuleProtocol
     AiomysqlRawCursor: TypeAlias = _AiomysqlCursor
     AiomysqlDictCursor: TypeAlias = _AiomysqlDictCursor
+    AiomysqlFieldType: TypeAlias = AiomysqlFieldTypeProtocol
     AiomysqlPool: TypeAlias = _AiomysqlPool
+    AiomysqlPymysqlError: TypeAlias = _pymysql_err.Error
+    AiomysqlPymysqlMySQLError: TypeAlias = _pymysql_err.MySQLError
 
 if not TYPE_CHECKING:
     AiomysqlConnection = Connection
+    AiomysqlModule = _aiomysql
     AiomysqlRawCursor = _AiomysqlCursor
     AiomysqlDictCursor = _AiomysqlDictCursor
+    AiomysqlFieldType = _PYMYSQL_FIELD_TYPE
     AiomysqlPool = _AiomysqlPool
+    AiomysqlPymysqlError = _pymysql_err.Error
+    AiomysqlPymysqlMySQLError = _pymysql_err.MySQLError
 
 __all__ = (
     "AiomysqlConnection",
     "AiomysqlCursor",
     "AiomysqlDictCursor",
+    "AiomysqlFieldType",
+    "AiomysqlModule",
     "AiomysqlPool",
+    "AiomysqlPymysqlError",
+    "AiomysqlPymysqlMySQLError",
     "AiomysqlRawCursor",
     "AiomysqlSessionContext",
 )
@@ -63,7 +84,7 @@ class AiomysqlCursor:
 
     __slots__ = ("connection", "cursor", "cursor_class")
 
-    def __init__(self, connection: "AiomysqlConnection", cursor_class: "type[Any] | None" = None) -> None:
+    def __init__(self, connection: "AiomysqlConnection", cursor_class: "type[AiomysqlRawCursor] | None" = None) -> None:
         self.connection = connection
         self.cursor_class = cursor_class
         self.cursor: AiomysqlRawCursor | None = None
@@ -75,7 +96,7 @@ class AiomysqlCursor:
             self.cursor = await self.connection.cursor(self.cursor_class)
         return self.cursor
 
-    async def __aexit__(self, *_: Any) -> None:
+    async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
             await self.cursor.close()
 
@@ -103,8 +124,8 @@ class AiomysqlSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], Awaitable[AiomysqlConnection]]",
+        release_connection: "Callable[[AiomysqlConnection], Awaitable[None]]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AiomysqlDriver], AiomysqlDriver]",
@@ -114,7 +135,7 @@ class AiomysqlSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: AiomysqlConnection | None = None
         self._driver: AiomysqlDriver | None = None
 
     async def __aenter__(self) -> "AiomysqlDriver":

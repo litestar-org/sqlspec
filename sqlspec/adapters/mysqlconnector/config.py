@@ -5,14 +5,15 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
 
-import mysql.connector
-from mysql.connector import pooling
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.mysqlconnector._typing import (
+    MysqlConnectorAio,
     MysqlConnectorAsyncConnection,
     MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncSessionContext,
+    MysqlConnectorConnectionPool,
+    MysqlConnectorMysqlModule,
     MysqlConnectorSyncConnection,
     MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
@@ -35,8 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from types import TracebackType
 
-    from mysql.connector.pooling import MySQLConnectionPool
-
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
@@ -51,6 +50,8 @@ __all__ = (
     "MysqlConnectorSyncConfig",
     "MysqlConnectorSyncConnectionParams",
 )
+mysql: "MysqlConnectorMysqlModule" = cast("MysqlConnectorMysqlModule", MysqlConnectorMysqlModule)
+mysqlconnector_aio: "MysqlConnectorAio" = cast("MysqlConnectorAio", MysqlConnectorAio)
 
 
 MysqlConnectorClientFlags = int | list[int] | tuple[int, ...]
@@ -266,7 +267,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
 
 class MysqlConnectorSyncConfig(
-    SyncDatabaseConfig[MysqlConnectorSyncConnection, "MySQLConnectionPool", MysqlConnectorSyncDriver]
+    SyncDatabaseConfig[MysqlConnectorSyncConnection, "MysqlConnectorConnectionPool", MysqlConnectorSyncDriver]
 ):
     """Configuration for mysql-connector synchronous MySQL connections."""
 
@@ -291,7 +292,7 @@ class MysqlConnectorSyncConfig(
         self,
         *,
         connection_config: "MysqlConnectorPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "MySQLConnectionPool | None" = None,
+        connection_instance: "MysqlConnectorConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "MysqlConnectorDriverFeatures | dict[str, Any] | None" = None,
@@ -349,12 +350,12 @@ class MysqlConnectorSyncConfig(
         self._ensure_connection_initialized(connection)
         return connection
 
-    def _create_pool(self) -> "MySQLConnectionPool":
+    def _create_pool(self) -> "MysqlConnectorConnectionPool":
         config = dict(self.connection_config)
         pool_name = config.pop("pool_name", None)
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
-        return pooling.MySQLConnectionPool(
+        return MysqlConnectorConnectionPool(
             pool_name=pool_name, pool_size=pool_size or 5, pool_reset_session=pool_reset, **config
         )
 
@@ -364,7 +365,7 @@ class MysqlConnectorSyncConfig(
             self.connection_instance = None
 
     def create_connection(self) -> MysqlConnectorSyncConnection:
-        connection = cast("MysqlConnectorSyncConnection", mysql.connector.connect(**self.connection_config))
+        connection = mysql.connector.connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
         if autocommit is not None and hasattr(connection, "autocommit"):
             with contextlib.suppress(Exception):
@@ -452,9 +453,7 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         )
 
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
-        from mysql.connector import aio
-
-        connection = await aio.connect(**self.connection_config)
+        connection = await mysqlconnector_aio.connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
         if autocommit is not None and hasattr(connection, "set_autocommit"):
             with contextlib.suppress(Exception):
@@ -462,9 +461,9 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
 
         # Call user-provided callback after connection setup
         if self._user_connection_hook is not None:
-            await self._user_connection_hook(cast("MysqlConnectorAsyncConnection", connection))
+            await self._user_connection_hook(connection)
 
-        return cast("MysqlConnectorAsyncConnection", connection)
+        return connection
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "MysqlConnectorAsyncConnectionContext":
         return MysqlConnectorAsyncConnectionContext(self)

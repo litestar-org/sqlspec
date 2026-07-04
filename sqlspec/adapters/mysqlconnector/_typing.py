@@ -6,19 +6,24 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import mysql as _mysql
+import mysql.connector as _mysql_connector
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
+from mysql.connector import aio as _mysql_connector_aio
+from mysql.connector import pooling as _mysql_connector_pooling
 from mysql.connector.aio import (
     MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
 )
 from mysql.connector.aio.cursor import (
     MySQLCursor as _MysqlConnectorAsyncRawCursor,  # pyright: ignore[reportMissingImports]
 )
+from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
-    from typing import Protocol, TypeAlias
+    from typing import ClassVar, Protocol, TypeAlias
 
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
     from sqlspec.core import StatementConfig
@@ -26,28 +31,57 @@ if TYPE_CHECKING:
     class MysqlConnectorAsyncConnectionProtocol(Protocol):
         def cursor(self, **kwargs: Any) -> "Awaitable[MysqlConnectorAsyncRawCursor]": ...
 
-        async def commit(self) -> Any: ...
+        async def commit(self) -> object: ...
 
-        async def rollback(self) -> Any: ...
+        async def rollback(self) -> object: ...
 
-        async def close(self) -> Any: ...
+        async def close(self) -> object: ...
+
+        async def set_autocommit(self, value: bool) -> object: ...
+
+    class MysqlConnectorAioModuleProtocol(Protocol):
+        def connect(self, *args: Any, **kwargs: Any) -> "Awaitable[MysqlConnectorAsyncConnection]": ...
+
+    class MysqlConnectorFieldTypeProtocol(Protocol):
+        JSON: int
+
+    class MysqlConnectorConnectorModuleProtocol(Protocol):
+        def connect(self, *args: Any, **kwargs: Any) -> "MysqlConnectorSyncConnection": ...
+
+    class MysqlConnectorMysqlModuleProtocol(Protocol):
+        connector: "ClassVar[MysqlConnectorConnectorModuleProtocol]"
 
     MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
+    MysqlConnectorAio: TypeAlias = MysqlConnectorAioModuleProtocol
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
     MysqlConnectorSyncRawCursor: TypeAlias = _MysqlConnectorSyncRawCursor
+    MysqlConnectorConnectionPool: TypeAlias = _mysql_connector_pooling.MySQLConnectionPool
+    MysqlConnectorError: TypeAlias = _mysql_connector.Error
+    MysqlConnectorFieldType: TypeAlias = MysqlConnectorFieldTypeProtocol
+    MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
     MysqlConnectorAsyncRawCursor: TypeAlias = _MysqlConnectorAsyncRawCursor
 
 if not TYPE_CHECKING:
+    MysqlConnectorAio = _mysql_connector_aio
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
+    MysqlConnectorConnectionPool = _mysql_connector_pooling.MySQLConnectionPool
+    MysqlConnectorError = _mysql_connector.Error
+    MysqlConnectorFieldType = _MysqlConnectorFieldType
+    MysqlConnectorMysqlModule = _mysql
     MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
     MysqlConnectorAsyncRawCursor = _MysqlConnectorAsyncRawCursor
 
 __all__ = (
+    "MysqlConnectorAio",
     "MysqlConnectorAsyncConnection",
     "MysqlConnectorAsyncCursor",
     "MysqlConnectorAsyncRawCursor",
     "MysqlConnectorAsyncSessionContext",
+    "MysqlConnectorConnectionPool",
+    "MysqlConnectorError",
+    "MysqlConnectorFieldType",
+    "MysqlConnectorMysqlModule",
     "MysqlConnectorSyncConnection",
     "MysqlConnectorSyncCursor",
     "MysqlConnectorSyncRawCursor",
@@ -71,7 +105,7 @@ class MysqlConnectorSyncCursor:
         self.cursor = self.connection.cursor(**self.cursor_options)
         return self.cursor
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
             self.cursor.close()
 
@@ -92,7 +126,7 @@ class MysqlConnectorAsyncCursor:
         self.cursor = await self.connection.cursor(**self.cursor_options)
         return self.cursor
 
-    async def __aexit__(self, *_: Any) -> None:
+    async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
             await self.cursor.close()
 
@@ -112,8 +146,8 @@ class MysqlConnectorSyncSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], MysqlConnectorSyncConnection]",
+        release_connection: "Callable[[MysqlConnectorSyncConnection], None]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MysqlConnectorSyncDriver], MysqlConnectorSyncDriver]",
@@ -123,7 +157,7 @@ class MysqlConnectorSyncSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: MysqlConnectorSyncConnection | None = None
         self._driver: MysqlConnectorSyncDriver | None = None
 
     def __enter__(self) -> "MysqlConnectorSyncDriver":
@@ -159,8 +193,8 @@ class MysqlConnectorAsyncSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        acquire_connection: "Callable[[], Awaitable[MysqlConnectorAsyncConnection]]",
+        release_connection: "Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MysqlConnectorAsyncDriver], MysqlConnectorAsyncDriver]",
@@ -170,7 +204,7 @@ class MysqlConnectorAsyncSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._connection: Any = None
+        self._connection: MysqlConnectorAsyncConnection | None = None
         self._driver: MysqlConnectorAsyncDriver | None = None
 
     async def __aenter__(self) -> "MysqlConnectorAsyncDriver":
