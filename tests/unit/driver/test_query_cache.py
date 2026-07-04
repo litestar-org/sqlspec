@@ -18,6 +18,7 @@ from sqlspec.core import (
     clear_all_caches,
     get_cache,
 )
+from sqlspec.core.parameters._processor import ParameterProcessor
 from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.exceptions import SQLSpecError
 
@@ -30,6 +31,7 @@ def _make_cached(
     operation_profile: OperationProfile | None = None,
     parameter_profile: ParameterProfile | None = None,
     processed_state: ProcessedState | None = None,
+    input_named_parameters: tuple[str, ...] = (),
 ) -> CachedQuery:
     if operation_profile is None:
         operation_profile = OperationProfile(returns_rows=True, modifies_rows=False)
@@ -40,7 +42,7 @@ def _make_cached(
     return CachedQuery(
         compiled_sql=compiled_sql,
         parameter_profile=parameter_profile or ParameterProfile(),
-        input_named_parameters=(),
+        input_named_parameters=input_named_parameters,
         applied_wrap_types=False,
         parameter_casts={},
         operation_type=operation_type,
@@ -93,6 +95,40 @@ def test_execute_uses_fast_path_when_eligible(sqlite_sync_driver, monkeypatch) -
     assert called["args"] == ("SELECT ?", (1,))
 
 
+def test_execute_uses_fast_path_with_dict_payload(sqlite_sync_driver, monkeypatch) -> None:
+    sentinel = object()
+    called: dict[str, object] = {}
+
+    def _fake_try(statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
+        called["args"] = (statement, params)
+        return sentinel
+
+    monkeypatch.setattr(sqlite_sync_driver, "_stmt_cache_lookup", _fake_try)
+    sqlite_sync_driver._stmt_cache_enabled = True
+
+    result = sqlite_sync_driver.execute("SELECT :id", {"id": 1})
+
+    assert result is sentinel
+    assert called["args"] == ("SELECT :id", {"id": 1})
+
+
+def test_execute_uses_fast_path_with_kwargs_payload(sqlite_sync_driver, monkeypatch) -> None:
+    sentinel = object()
+    called: dict[str, object] = {}
+
+    def _fake_try(statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
+        called["args"] = (statement, params)
+        return sentinel
+
+    monkeypatch.setattr(sqlite_sync_driver, "_stmt_cache_lookup", _fake_try)
+    sqlite_sync_driver._stmt_cache_enabled = True
+
+    result = sqlite_sync_driver.execute("SELECT :id", id=1)
+
+    assert result is sentinel
+    assert called["args"] == ("SELECT :id", {"id": 1})
+
+
 def test_execute_skips_fast_path_with_statement_config_override(sqlite_sync_driver, monkeypatch) -> None:
     called = False
 
@@ -123,6 +159,60 @@ def test_execute_populates_fast_path_cache_on_normal_path(sqlite_sync_driver) ->
     assert cached.param_count == 1
     assert cached.operation_type == "SELECT"
     assert result.operation_type == "SELECT"
+
+
+def test_prepare_statement_sql_object_cache_is_bounded(sqlite_sync_driver: Any) -> None:
+    sqlite_sync_driver._stmt_cache_max_size = 2
+
+    first = sqlite_sync_driver.prepare_statement("SELECT 1")
+    second = sqlite_sync_driver.prepare_statement("SELECT 2")
+    third = sqlite_sync_driver.prepare_statement("SELECT 3")
+
+    assert first.raw_sql == "SELECT 1"
+    assert second.raw_sql == "SELECT 2"
+    assert third.raw_sql == "SELECT 3"
+    assert list(sqlite_sync_driver._statement_cache) == ["SELECT 2", "SELECT 3"]
+
+
+def test_stmt_cache_store_skips_clone_when_raw_sql_already_cached(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+    statement = SQL("SELECT ?", 1, statement_config=sqlite_sync_driver.statement_config)
+    sqlite_sync_driver._get_compiled_statement(statement, sqlite_sync_driver.statement_config)
+
+    assert sqlite_sync_driver._stmt_cache.get("SELECT ?") is not None
+
+    monkeypatch.setattr(
+        "sqlspec.driver._common._clone_processed_state",
+        lambda *_args, **_kwargs: pytest.fail("duplicate store should not clone processed state"),
+    )
+
+    sqlite_sync_driver._stmt_cache_store(statement)
+
+
+def test_stmt_cache_rebind_reuses_driver_owned_processor(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+    parameter_profile = ParameterProfile([
+        ParameterInfo("id", ParameterStyle.NAMED_COLON, position=31, ordinal=0, placeholder_text=":id")
+    ])
+    cached = _make_cached(
+        compiled_sql="SELECT * FROM users WHERE id = ?",
+        param_count=1,
+        parameter_profile=parameter_profile,
+        input_named_parameters=("id",),
+    )
+    processor = sqlite_sync_driver._stmt_cache_rebind_processor
+    calls: list[object] = []
+    original_transform = ParameterProcessor._transform_cached_parameters
+
+    def wrapped_transform(self: ParameterProcessor, *args: Any, **kwargs: Any) -> Any:
+        calls.append(self)
+        return original_transform(self, *args, **kwargs)
+
+    monkeypatch.setattr(ParameterProcessor, "_transform_cached_parameters", wrapped_transform)
+
+    sqlite_sync_driver.stmt_cache_rebind({"id": 1}, cached)
+    sqlite_sync_driver.stmt_cache_rebind({"id": 2}, cached)
+
+    assert calls == [processor, processor]
+    assert sqlite_sync_driver._stmt_cache_rebind_processor is processor
 
 
 def test_compilation_cache_hit_skips_compile_and_stmt_cache_store(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
@@ -232,6 +322,24 @@ async def test_async_execute_uses_fast_path_when_eligible(aiosqlite_async_driver
 
     assert result is sentinel
     assert called["args"] == ("SELECT ?", (1,))
+
+
+@pytest.mark.anyio
+async def test_async_execute_uses_fast_path_with_kwargs_payload(aiosqlite_async_driver: Any, monkeypatch: Any) -> None:
+    sentinel = object()
+    called: dict[str, object] = {}
+
+    async def _fake_try(statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
+        called["args"] = (statement, params)
+        return sentinel
+
+    monkeypatch.setattr(aiosqlite_async_driver, "_stmt_cache_lookup", _fake_try)
+    aiosqlite_async_driver._stmt_cache_enabled = True
+
+    result = await aiosqlite_async_driver.execute("SELECT :id", id=1)
+
+    assert result is sentinel
+    assert called["args"] == ("SELECT :id", {"id": 1})
 
 
 @pytest.mark.anyio

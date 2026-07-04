@@ -181,6 +181,6 @@ def test_dispatch_execute_many_postgres_with_casts_calls_batch_helper_once(monke
 
     assert calls == [prepared_rows]
     cursor.executemany.assert_called_once_with(
-        "INSERT INTO events (id, payload) VALUES ($1, CAST($2 AS JSONB))", [(1, "prepared"), (2, "prepared")]
+        "INSERT INTO events (id, payload) VALUES ($1, $2::jsonb)", [(1, "prepared"), (2, "prepared")]
     )
     assert result.rowcount_override == 2

@@ -905,6 +905,18 @@ def test_extract_parameters_caching(validator: ParameterValidator) -> None:
     assert parameters1 is parameters2
 
 
+def test_extract_parameters_cache_uses_sql_string_without_hashing(validator: ParameterValidator) -> None:
+    """Parameter extraction cache should avoid hashing SQL text on the hot path."""
+    sql = "SELECT * FROM users WHERE id = ? AND name = :name"
+
+    with patch("hashlib.blake2b") as mock_blake2b:
+        validator.extract_parameters(sql)
+        validator.extract_parameters(sql)
+
+    mock_blake2b.assert_not_called()
+    assert sql in validator._parameter_cache
+
+
 def test_extract_parameters_complex_sql(validator: ParameterValidator) -> None:
     """Test parameter extraction from complex SQL with multiple styles."""
     sql = "\n    SELECT u.*, o.*\n    FROM users u\n    JOIN orders o ON u.id = o.user_id\n    WHERE u.name = :name\n      AND u.email = %(email)s\n      AND o.created_at > ?\n      AND o.status = @status\n      AND o.total > $1\n    "

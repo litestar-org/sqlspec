@@ -549,12 +549,3 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         """Return queue defaults for Spanner JSON handling."""
 
         return EventRuntimeHints(json_passthrough=True)
-
-
-def __getattr__(name: str) -> Any:
-    if name == "Client":
-        from google.cloud.spanner_v1 import Client
-
-        return Client
-    msg = f"module {__name__} has no attribute {name}"
-    raise AttributeError(msg)

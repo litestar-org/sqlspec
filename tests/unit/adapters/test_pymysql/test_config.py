@@ -4,9 +4,11 @@ import ssl
 from collections.abc import Mapping
 from typing import get_args, get_origin, get_type_hints
 
+import pytest
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -38,6 +40,7 @@ def test_connection_params_type_current_pymysql_options() -> None:
         "read_timeout",
         "write_timeout",
         "autocommit",
+        "allow_local_infile",
         "local_infile",
         "max_allowed_packet",
         "defer_connect",
@@ -77,12 +80,28 @@ def test_create_pool_defaults_local_infile_off() -> None:
     assert pool._connection_parameters["local_infile"] is False
 
 
-def test_create_pool_preserves_local_infile_opt_in() -> None:
-    """Explicit local infile opt-in should still pass through to PyMySQL."""
-    config = PyMysqlConfig(connection_config={"local_infile": True})
+def test_create_pool_preserves_local_infile_opt_in_with_security_gate() -> None:
+    """Explicit local infile opt-in should still pass through to PyMySQL after consent."""
+    config = PyMysqlConfig(connection_config={"allow_local_infile": True, "local_infile": True})
     pool = config._create_pool()
 
     assert pool._connection_parameters["local_infile"] is True
+    assert "allow_local_infile" not in pool._connection_parameters
+
+
+def test_create_pool_rejects_local_infile_without_security_gate() -> None:
+    """PyMySQL should match asyncmy's separate local-infile consent gate."""
+    with pytest.raises(ImproperConfigurationError, match="allow_local_infile=True"):
+        PyMysqlConfig(connection_config={"local_infile": True})
+
+
+def test_create_pool_does_not_enable_local_infile_for_gate_only() -> None:
+    """The consent gate alone should not enable client-file reads."""
+    config = PyMysqlConfig(connection_config={"allow_local_infile": True})
+    pool = config._create_pool()
+
+    assert pool._connection_parameters["local_infile"] is False
+    assert "allow_local_infile" not in pool._connection_parameters
 
 
 def test_create_pool_preserves_ssl_context_and_flat_tls_options() -> None:

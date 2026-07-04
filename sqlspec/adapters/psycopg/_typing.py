@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
 from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -64,7 +65,8 @@ class PsycopgSyncCursor:
 
     def __exit__(self, *_: Any) -> None:
         if self.cursor is not None:
-            self.cursor.close()
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class PsycopgAsyncCursor:
@@ -85,7 +87,8 @@ class PsycopgAsyncCursor:
     ) -> None:
         _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
-            await self.cursor.close()
+            with contextlib.suppress(Exception):
+                await self.cursor.close()
 
 
 class PsycopgPipelineDriver(Protocol):

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlDriverFeatures", "AiomysqlPoolParams")
 
 _POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
+_AIOMYSQL_LOCAL_INFILE_GATE = "allow_local_infile"
 aiomysql: "AiomysqlModule" = cast("AiomysqlModule", AiomysqlModule)
 
 
@@ -58,6 +59,7 @@ class AiomysqlConnectionParams(TypedDict):
     read_default_file: NotRequired[str]
     read_default_group: NotRequired[str]
     autocommit: NotRequired[bool | None]
+    allow_local_infile: NotRequired[bool]
     echo: NotRequired[bool]
     local_infile: NotRequired[bool]
     enable_local_infile: NotRequired[bool]
@@ -83,9 +85,31 @@ class AiomysqlPoolParams(AiomysqlConnectionParams):
     pool_recycle: NotRequired[int]
 
 
+def _normalize_aiomysql_local_infile_config(
+    connection_config: "Mapping[str, Any]", *, strip_consent_gate: bool
+) -> "dict[str, Any]":
+    """Normalize aiomysql local-infile aliases and SQLSpec's consent gate."""
+    config = dict(connection_config)
+
+    enable_local_infile = bool(config.get("enable_local_infile", False))
+    allow_local_infile = bool(config.get(_AIOMYSQL_LOCAL_INFILE_GATE, False))
+    local_infile = bool(config.get("local_infile", False) or enable_local_infile)
+    if local_infile and not allow_local_infile:
+        msg = (
+            "Aiomysql local_infile=True requires allow_local_infile=True because "
+            "LOAD DATA LOCAL INFILE can read client files."
+        )
+        raise ImproperConfigurationError(msg)
+    config["local_infile"] = bool(local_infile and allow_local_infile)
+    config.pop("enable_local_infile", None)
+    if strip_consent_gate:
+        config.pop(_AIOMYSQL_LOCAL_INFILE_GATE, None)
+    return config
+
+
 def _normalize_aiomysql_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build aiomysql.connect-compatible kwargs from SQLSpec connection config."""
-    config = dict(connection_config)
+    config = _normalize_aiomysql_local_infile_config(connection_config, strip_consent_gate=True)
 
     for key in _POOL_ONLY_CONFIG_KEYS:
         config.pop(key, None)
@@ -101,11 +125,6 @@ def _normalize_aiomysql_connection_kwargs(connection_config: "Mapping[str, Any]"
     if "passwd" in config and "password" not in config:
         config["password"] = config["passwd"]
     config.pop("passwd", None)
-
-    if config.pop("enable_local_infile", False):
-        config["local_infile"] = True
-    else:
-        config.setdefault("local_infile", False)
 
     return config
 
@@ -238,7 +257,9 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = _normalize_aiomysql_local_infile_config(
+            normalize_connection_config(connection_config), strip_consent_gate=False
+        )
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
@@ -254,10 +275,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
-        if features_dict.get("enable_local_infile_bulk_load") and not (
-            connection_config.get("enable_local_infile") or connection_config.get("local_infile")
-        ):
-            msg = "enable_local_infile_bulk_load requires enable_local_infile=True (or local_infile=True) in connection_config."
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
+            msg = (
+                "enable_local_infile_bulk_load requires local_infile=True and "
+                "allow_local_infile=True in connection_config."
+            )
             raise ImproperConfigurationError(msg)
 
         super().__init__(

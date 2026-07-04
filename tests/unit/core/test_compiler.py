@@ -599,6 +599,25 @@ def test_ast_transformer_single_parse(basic_statement_config: "StatementConfig")
     assert mock_parse.call_count == 1
 
 
+def test_noop_ast_transformer_skips_finalization_pass(basic_statement_config: "StatementConfig") -> None:
+    def pass_through(
+        expression: exp.Expr, parameters: Any, _parameter_profile: "ParameterProfile", _is_many: bool = False
+    ) -> "tuple[exp.Expr, Any]":
+        return expression, parameters
+
+    parameter_config = basic_statement_config.parameter_config.replace(ast_transformer=pass_through)
+    config = basic_statement_config.replace(parameter_config=parameter_config)
+    processor = SQLProcessor(config)
+
+    with patch(
+        "sqlspec.core.parameters._processor.ParameterProcessor.process_for_execution"
+    ) as mock_process_for_execution:
+        result = processor.compile("SELECT * FROM users WHERE id = ?", [123])
+
+    mock_process_for_execution.assert_not_called()
+    assert result.operation_type == "SELECT"
+
+
 def test_ast_transformer_receives_parameter_profile(basic_statement_config: "StatementConfig") -> None:
     """AST transformers should receive the detected parameter profile."""
     captured: dict[str, int] = {}

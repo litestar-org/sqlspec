@@ -683,11 +683,17 @@ class SQLProcessor:
         ast_was_transformed = False
         if statement_transformers:
             for transformer in statement_transformers:
+                current_expression = expression
+                current_parameters = parameters
                 expression, parameters = transformer(expression, parameters)
-            ast_was_transformed = True
+                if expression is not current_expression or parameters is not current_parameters:
+                    ast_was_transformed = True
         if ast_transformer:
+            current_expression = expression
+            current_parameters = parameters
             expression, parameters = ast_transformer(expression, parameters, parameter_profile, is_many)
-            ast_was_transformed = True
+            if expression is not current_expression or parameters is not current_parameters:
+                ast_was_transformed = True
         if ast_was_transformed:
             if expression is None:
                 return expression, parameters, ast_was_transformed, operation_type, operation_profile

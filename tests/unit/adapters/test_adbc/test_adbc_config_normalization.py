@@ -1,6 +1,7 @@
 """Unit tests for ADBC config normalization helpers."""
 
 from typing import Any, get_type_hints
+from unittest.mock import MagicMock
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.config import AdbcConnectionParams
@@ -15,6 +16,25 @@ def _resolve_driver_name(config: AdbcConfig) -> str:
 def _get_connection_config_dict(config: AdbcConfig) -> dict[str, Any]:
     """Build the normalized connection configuration."""
     return build_connection_config(config.connection_config)
+
+
+def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
+    """ADBC should run the connection hook when it creates a physical connection."""
+    connection = MagicMock()
+    seen: list[Any] = []
+
+    def fake_connect(**_kwargs: Any) -> Any:
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.adbc.config.resolve_driver_connect_func", lambda *_args: fake_connect)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"}, driver_features={"on_connection_create": seen.append}
+    )
+
+    assert config.create_connection() is connection
+    assert seen == [connection]
+    assert "on_connection_create" not in config.driver_features
 
 
 def test_resolve_driver_name_alias_to_connect_path() -> None:

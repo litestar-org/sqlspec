@@ -23,6 +23,7 @@ from uuid import UUID
 
 from typing_extensions import final
 
+from sqlspec.core import TypedParameter
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
@@ -268,6 +269,8 @@ def coerce_params_for_spanner(
     json_object_type = _get_json_object_type()
     coerced: dict[str, Any] = {}
     for key, value in params.items():
+        if type(value) is TypedParameter:
+            value = value.value
         if isinstance(value, _UUID_TYPES):
             std_uuid = value if isinstance(value, UUID) else UUID(bytes=value.bytes)
             coerced[key] = bytes_to_spanner(uuid_to_spanner(std_uuid))

@@ -48,6 +48,15 @@ def test_dispatcher_no_match() -> None:
     assert dispatcher.get(Unrelated()) is None
 
 
+def test_dispatcher_caches_no_match() -> None:
+    dispatcher = TypeDispatcher[str]()
+    dispatcher.register(Base, "base")
+
+    assert dispatcher.get(Unrelated()) is None
+    assert Unrelated in dispatcher._cache
+    assert dispatcher.get(Unrelated()) is None
+
+
 def test_dispatcher_caching() -> None:
     dispatcher = TypeDispatcher[str]()
     dispatcher.register(Base, "base")

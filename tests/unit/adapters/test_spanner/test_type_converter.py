@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
+from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter, coerce_params_for_spanner
+from sqlspec.core import TypedParameter
 
 
 def test_uuid_conversion() -> None:
@@ -37,3 +39,12 @@ def test_spanner_output_converter_is_final() -> None:
 def test_spanner_output_converter_instantiates() -> None:
     converter = SpannerOutputConverter()
     assert isinstance(converter, SpannerOutputConverter)
+
+
+def test_coerce_params_unwraps_typed_datetime_parameter() -> None:
+    timestamp = datetime(2026, 7, 4, 22, 9, 0, tzinfo=timezone.utc)
+    params = {"available_at": TypedParameter(timestamp, datetime)}
+
+    coerced = coerce_params_for_spanner(params)
+
+    assert coerced == {"available_at": timestamp}

@@ -15,9 +15,11 @@ import pytest
 
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
+    CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgDriverFeatures,
     CockroachPsycopgRetryConfig,
     CockroachPsycopgSyncConfig,
+    CockroachPsycopgSyncSessionContext,
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.exceptions import ImproperConfigurationError
@@ -194,6 +196,32 @@ def test_cockroach_psycopg_sync_config_class_attributes() -> None:
     assert CockroachPsycopgSyncConfig.supports_native_arrow_import is True
 
 
+def test_cockroach_psycopg_sync_session_context_resolves_callable_statement_config() -> None:
+    """Sync session context should match psycopg callable statement_config behavior."""
+    connection = object()
+    statement_config = default_statement_config.replace(dialect="cockroach")
+    calls: list[str] = []
+
+    def statement_config_factory() -> Any:
+        calls.append("factory")
+        return statement_config
+
+    ctx = CockroachPsycopgSyncSessionContext(
+        acquire_connection=lambda: connection,
+        release_connection=lambda _connection: None,
+        statement_config=statement_config_factory,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with patch("sqlspec.adapters.cockroach_psycopg.driver.CockroachPsycopgSyncDriver") as driver_type:
+        with ctx:
+            pass
+
+    assert calls == ["factory"]
+    driver_type.assert_called_once_with(connection=connection, statement_config=statement_config, driver_features={})
+
+
 def test_cockroach_psycopg_async_config_default_initialization() -> None:
     """Config should initialize with sensible defaults."""
     config = CockroachPsycopgAsyncConfig()
@@ -257,6 +285,38 @@ def test_cockroach_psycopg_async_config_bind_key_configuration() -> None:
     """Bind key should be stored for multi-database setups."""
     config = CockroachPsycopgAsyncConfig(bind_key="cockroach_async")
     assert config.bind_key == "cockroach_async"
+
+
+async def test_cockroach_psycopg_async_session_context_resolves_callable_statement_config() -> None:
+    """Async session context should match psycopg callable statement_config behavior."""
+    connection = object()
+    statement_config = default_statement_config.replace(dialect="cockroach")
+    calls: list[str] = []
+
+    def statement_config_factory() -> Any:
+        calls.append("factory")
+        return statement_config
+
+    async def acquire_connection() -> object:
+        return connection
+
+    async def release_connection(_connection: object) -> None:
+        return None
+
+    ctx = CockroachPsycopgAsyncSessionContext(
+        acquire_connection=acquire_connection,
+        release_connection=release_connection,
+        statement_config=statement_config_factory,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with patch("sqlspec.adapters.cockroach_psycopg.driver.CockroachPsycopgAsyncDriver") as driver_type:
+        async with ctx:
+            pass
+
+    assert calls == ["factory"]
+    driver_type.assert_called_once_with(connection=connection, statement_config=statement_config, driver_features={})
 
 
 @pytest.mark.anyio
@@ -337,6 +397,8 @@ def test_cockroach_psycopg_async_config_provide_session_uses_default_statement_c
     config = CockroachPsycopgAsyncConfig()
     config.statement_config = None
     session_config = config.provide_session()._statement_config
+    if callable(session_config):
+        session_config = session_config()
     assert session_config is default_statement_config
 
 

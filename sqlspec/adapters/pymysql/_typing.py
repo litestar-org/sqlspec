@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 import pymysql
@@ -66,7 +67,8 @@ class PyMysqlCursor:
 
     def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
-            self.cursor.close()
+            with contextlib.suppress(Exception):
+                self.cursor.close()
 
 
 class PyMysqlSessionContext:

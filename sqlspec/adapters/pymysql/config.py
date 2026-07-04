@@ -80,6 +80,7 @@ class PyMysqlConnectionParams(TypedDict):
     read_timeout: NotRequired[PyMysqlTimeout]
     write_timeout: NotRequired[PyMysqlTimeout]
     autocommit: NotRequired[bool]
+    allow_local_infile: NotRequired[bool]
     local_infile: NotRequired[bool]
     max_allowed_packet: NotRequired[int]
     defer_connect: NotRequired[bool]
@@ -155,6 +156,21 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
     "unix_socket",
     "user",
 ))
+
+
+def _normalize_pymysql_local_infile_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize PyMySQL local-infile configuration and SQLSpec's consent gate."""
+    config = dict(connection_config)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    local_infile = bool(config.get("local_infile", False))
+    if local_infile and not allow_local_infile:
+        msg = (
+            "PyMySQL local_infile=True requires allow_local_infile=True because "
+            "LOAD DATA LOCAL INFILE can read client files."
+        )
+        raise ImproperConfigurationError(msg)
+    config["local_infile"] = bool(local_infile and allow_local_infile)
+    return config
 
 
 class _PyMysqlCloudSqlConnector:
@@ -236,7 +252,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = _normalize_pymysql_local_infile_config(normalize_connection_config(connection_config))
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
         connection_config.setdefault("local_infile", False)

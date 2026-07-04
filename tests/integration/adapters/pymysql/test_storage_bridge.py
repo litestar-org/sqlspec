@@ -21,6 +21,7 @@ def pymysql_infile_config(mysql_service: "MySQLService") -> "Generator[PyMysqlCo
             "password": mysql_service.password,
             "database": mysql_service.db,
             "autocommit": True,
+            "allow_local_infile": True,
             "local_infile": True,
         },
         driver_features={"enable_local_infile_bulk_load": True},

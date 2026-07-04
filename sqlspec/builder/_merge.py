@@ -684,7 +684,6 @@ class Merge(
     __slots__ = ()
     _expression: exp.Expr | None
     _merge_target_quoted: bool
-    _lock_targets_quoted: bool
 
     def __init__(self, target_table: str | None = None, **kwargs: Any) -> None:
         """Initialize MERGE with optional target table.
@@ -707,7 +706,6 @@ class Merge(
             simplify_expressions=simplify_expressions,
         )
         self._merge_target_quoted = False
-        self._lock_targets_quoted = False
         self._initialize_expression()
 
         if target_table:

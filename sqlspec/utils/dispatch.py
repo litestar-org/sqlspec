@@ -1,4 +1,4 @@
-from typing import Any, Final, Generic, TypeVar
+from typing import Any, Final, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -6,7 +6,8 @@ __all__ = ("TypeDispatcher",)
 
 
 T = TypeVar("T")
-_MISSING: Final[object] = object()
+_CACHE_MISS: Final[object] = object()
+_NO_MATCH: Final[object] = object()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -20,7 +21,7 @@ class TypeDispatcher(Generic[T]):
     __slots__ = ("_cache", "_registry")
 
     def __init__(self) -> None:
-        self._cache: dict[type, T] = {}
+        self._cache: dict[type, T | object] = {}
         self._registry: dict[type, T] = {}
 
     def register(self, type_: type, value: T) -> None:
@@ -54,9 +55,11 @@ class TypeDispatcher(Generic[T]):
 
     def resolve_type(self, obj_type: type) -> T | None:
         """Resolve a value directly from a concrete runtime type."""
-        cached_value = self._cache.get(obj_type, _MISSING)
-        if cached_value is not _MISSING:
-            return cached_value  # type: ignore[return-value]
+        cached_value = self._cache.get(obj_type, _CACHE_MISS)
+        if cached_value is _NO_MATCH:
+            return None
+        if cached_value is not _CACHE_MISS:
+            return cast("T", cached_value)
 
         return self._resolve(obj_type)
 
@@ -70,17 +73,17 @@ class TypeDispatcher(Generic[T]):
             The resolved value or None.
         """
         # Fast path: check registry directly
-        direct_value = self._registry.get(obj_type, _MISSING)
-        if direct_value is not _MISSING:
-            self._cache[obj_type] = direct_value  # type: ignore[assignment]
-            return direct_value  # type: ignore[return-value]
+        direct_value = self._registry.get(obj_type, _CACHE_MISS)
+        if direct_value is not _CACHE_MISS:
+            self._cache[obj_type] = direct_value
+            return cast("T", direct_value)
 
         # Slow path: walk MRO
         for base in obj_type.__mro__[1:]:
-            value = self._registry.get(base, _MISSING)
-            if value is not _MISSING:
-                self._cache[obj_type] = value  # type: ignore[assignment]
-                return value  # type: ignore[return-value]
+            value = self._registry.get(base, _CACHE_MISS)
+            if value is not _CACHE_MISS:
+                self._cache[obj_type] = value
+                return cast("T", value)
 
         # ABC/protocol fallback: issubclass() resolves virtual hierarchies not present in __mro__.
         for registered_type, value in self._registry.items():
@@ -94,6 +97,7 @@ class TypeDispatcher(Generic[T]):
             self._cache[obj_type] = value
             return value
 
+        self._cache[obj_type] = _NO_MATCH
         return None
 
     def clear_cache(self) -> None:
