@@ -30,15 +30,14 @@ def test_build_statement_config_custom_serializer() -> None:
 
 
 def test_bigquery_config_applies_driver_feature_serializer() -> None:
-    """Driver features should mutate the BigQuery statement configuration."""
+    """Driver features should preserve the serializer for BigQuery parameter construction."""
 
     def serializer(_: object) -> str:
         return "feature"
 
     config = BigQueryConfig(driver_features={"json_serializer": serializer})
 
-    parameter_config = config.statement_config.parameter_config
-    assert parameter_config.json_serializer is serializer
+    assert config.driver_features["json_serializer"] is serializer
 
 
 def test_bigquery_config_wires_query_timeout_ms_to_default_job_config() -> None:

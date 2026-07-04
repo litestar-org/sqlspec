@@ -77,13 +77,15 @@ def build_statement_config() -> StatementConfig:
 default_statement_config = build_statement_config()
 
 
-def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
+def apply_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply Spanner driver feature defaults."""
     processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
     processed_features.setdefault("enable_uuid_conversion", True)
     processed_features.setdefault("json_serializer", to_json)
     processed_features.setdefault("json_deserializer", from_json)
-    return processed_features
+    return statement_config, processed_features
 
 
 def supports_write(cursor: Any) -> bool:

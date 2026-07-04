@@ -112,20 +112,25 @@ def test_build_connection_config_preserves_nested_config_and_extra() -> None:
     }
 
 
-def test_driver_init_apply_driver_features_called_once_when_statement_config_is_none() -> None:
+def test_driver_init_does_not_apply_driver_features_when_statement_config_is_none() -> None:
     connection = duckdb.connect(database=":memory:")
     driver_features: dict[str, Any] = {"json_serializer": lambda value: "[]"}
-    with patch("sqlspec.adapters.duckdb.driver.apply_driver_features", wraps=apply_driver_features) as mock_apply:
-        DuckDBDriver(connection=connection, statement_config=None, driver_features=driver_features)
-    assert mock_apply.call_count == 1
+    driver = DuckDBDriver(connection=connection, statement_config=None, driver_features=driver_features)
+
+    assert driver.driver_features is not driver_features
+    assert driver.driver_features == driver_features
 
 
 def test_driver_init_apply_driver_features_not_called_when_statement_config_provided() -> None:
     connection = duckdb.connect(database=":memory:")
     driver_features: dict[str, Any] = {"json_serializer": lambda value: "[]"}
-    with patch("sqlspec.adapters.duckdb.driver.apply_driver_features", wraps=apply_driver_features) as mock_apply:
-        DuckDBDriver(connection=connection, statement_config=default_statement_config, driver_features=driver_features)
-    assert mock_apply.call_count == 0
+    driver = DuckDBDriver(
+        connection=connection, statement_config=default_statement_config, driver_features=driver_features
+    )
+
+    assert driver.statement_config is default_statement_config
+    assert driver.driver_features is not driver_features
+    assert driver.driver_features == driver_features
 
 
 def test_driver_init_custom_json_serializer_identity_preserved_through_session() -> None:
@@ -146,10 +151,10 @@ def test_driver_init_apply_driver_features_not_called_per_session_via_config() -
     def custom_serializer(_: object) -> str:
         return "custom"
 
-    with patch("sqlspec.adapters.duckdb.driver.apply_driver_features", wraps=apply_driver_features) as mock_apply:
+    with patch("sqlspec.adapters.duckdb.config.apply_driver_features", wraps=apply_driver_features) as mock_apply:
         config = DuckDBConfig(
             connection_config={"database": ":memory:"}, driver_features={"json_serializer": custom_serializer}
         )
         with config.provide_session():
             pass
-    assert mock_apply.call_count == 0
+    assert mock_apply.call_count == 1

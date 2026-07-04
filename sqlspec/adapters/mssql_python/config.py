@@ -443,6 +443,6 @@ def _normalize_mssql_python_init(
     driver_features: "MssqlPythonDriverFeatures | dict[str, Any] | None",
 ) -> "tuple[dict[str, Any], dict[str, Any], Callable[[MssqlPythonConnection], None] | None]":
     normalized = normalize_connection_config(connection_config)
-    features_dict = apply_driver_features(dict(driver_features or {}))
+    _, features_dict = apply_driver_features(default_statement_config, driver_features)
     hook = cast("Callable[[MssqlPythonConnection], None] | None", features_dict.pop("on_connection_create", None))
     return normalized, features_dict, hook

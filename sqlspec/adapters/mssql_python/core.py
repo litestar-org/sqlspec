@@ -24,7 +24,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from logging import Logger
 
     from sqlspec.core import StatementConfig
@@ -110,11 +110,13 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
     return SQLSpecError(f"SQL Server database error. Original error: {error}")
 
 
-def apply_driver_features(features: "dict[str, Any] | None") -> dict[str, Any]:
+def apply_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
     """Merge mssql-python driver-feature defaults with caller overrides."""
     defaults: dict[str, Any] = {"use_pool": True, "json_serializer": to_json, "json_deserializer": from_json}
-    defaults.update(features or {})
-    return defaults
+    defaults.update(driver_features or {})
+    return statement_config, defaults
 
 
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:

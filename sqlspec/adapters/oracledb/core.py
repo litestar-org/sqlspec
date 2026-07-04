@@ -534,7 +534,9 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
-def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[str, Any]":
+def apply_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply OracleDB driver feature defaults."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
@@ -549,7 +551,7 @@ def apply_driver_features(driver_features: "Mapping[str, Any] | None") -> "dict[
             features["vector_return_format"] = "array"
     features.setdefault("oracle_varchar2_byte_limit", 4000)
     features.setdefault("oracle_raw_byte_limit", 2000)
-    return features
+    return statement_config, features
 
 
 def _description_requires_lob_coercion(description: "list[Any]") -> bool:

@@ -11,15 +11,21 @@ from sqlspec.adapters.oracledb import config
 from sqlspec.adapters.oracledb._typing import OracleAsyncCursor
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import apply_driver_features
+from sqlspec.core import StatementConfig
 from sqlspec.typing import NUMPY_INSTALLED
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection
 
 
+def _apply_features(features: dict[str, object] | None = None) -> dict[str, object]:
+    _, resolved_features = apply_driver_features(StatementConfig(), features)
+    return resolved_features
+
+
 def test_apply_driver_features_returns_dict_when_input_none() -> None:
     """``apply_driver_features(None)`` returns a populated defaults dict."""
-    features = apply_driver_features(None)
+    features = _apply_features()
     assert isinstance(features, dict)
     assert "enable_numpy_vectors" in features
     assert "enable_lowercase_column_names" in features
@@ -33,26 +39,26 @@ def test_apply_driver_features_sets_vector_return_format_default() -> None:
     Mirrors the policy in chapter-3/spec.md §3 T5: NumPy users keep zero-copy
     ndarray reads as the default; pure-Python users get list[float|int].
     """
-    features = apply_driver_features({})
+    features = _apply_features({})
     expected = "numpy" if NUMPY_INSTALLED else "list"
     assert features["vector_return_format"] == expected
 
 
 def test_apply_driver_features_preserves_user_vector_return_format() -> None:
     """User-supplied ``vector_return_format`` is not overwritten by the default."""
-    features = apply_driver_features({"vector_return_format": "list"})
+    features = _apply_features({"vector_return_format": "list"})
     assert features["vector_return_format"] == "list"
 
 
 def test_apply_driver_features_preserves_user_array_return_format() -> None:
     """User-supplied ``"array"`` return format survives the defaults pass."""
-    features = apply_driver_features({"vector_return_format": "array"})
+    features = _apply_features({"vector_return_format": "array"})
     assert features["vector_return_format"] == "array"
 
 
 def test_apply_driver_features_honors_numpy_vectors_opt_out() -> None:
     """``enable_numpy_vectors=False`` keeps the driver-native VECTOR return type."""
-    features = apply_driver_features({"enable_numpy_vectors": False})
+    features = _apply_features({"enable_numpy_vectors": False})
     assert features["vector_return_format"] == "array"
 
 
@@ -66,13 +72,13 @@ def test_oracle_driver_features_typeddict_advertises_vector_return_format() -> N
 
 def test_apply_driver_features_sets_varchar2_byte_limit_default() -> None:
     """``oracle_varchar2_byte_limit`` defaults to 4000 (Oracle SQL VARCHAR2 limit)."""
-    features = apply_driver_features({})
+    features = _apply_features({})
     assert features["oracle_varchar2_byte_limit"] == 4000
 
 
 def test_apply_driver_features_sets_raw_byte_limit_default() -> None:
     """``oracle_raw_byte_limit`` defaults to 2000 (Oracle SQL RAW limit)."""
-    features = apply_driver_features({})
+    features = _apply_features({})
     assert features["oracle_raw_byte_limit"] == 2000
 
 
@@ -82,19 +88,19 @@ def test_apply_driver_features_preserves_user_varchar2_byte_limit() -> None:
     MAX_STRING_SIZE=EXTENDED databases may set this to 32767 to keep larger
     strings as VARCHAR2 instead of auto-coercing to CLOB.
     """
-    features = apply_driver_features({"oracle_varchar2_byte_limit": 32767})
+    features = _apply_features({"oracle_varchar2_byte_limit": 32767})
     assert features["oracle_varchar2_byte_limit"] == 32767
 
 
 def test_apply_driver_features_preserves_user_raw_byte_limit() -> None:
     """User-supplied ``oracle_raw_byte_limit`` is not overwritten by the default."""
-    features = apply_driver_features({"oracle_raw_byte_limit": 100})
+    features = _apply_features({"oracle_raw_byte_limit": 100})
     assert features["oracle_raw_byte_limit"] == 100
 
 
 def test_apply_driver_features_does_not_default_fetch_tuning_options() -> None:
     """Absent fetch tuning keys should leave python-oracledb defaults untouched."""
-    features = apply_driver_features({})
+    features = _apply_features({})
     assert "arraysize" not in features
     assert "prefetchrows" not in features
     assert "fetch_lobs" not in features
@@ -103,7 +109,7 @@ def test_apply_driver_features_does_not_default_fetch_tuning_options() -> None:
 
 def test_apply_driver_features_preserves_user_fetch_tuning_options() -> None:
     """User-supplied fetch tuning options survive the defaults pass."""
-    features = apply_driver_features({"arraysize": 5000, "fetch_decimals": True})
+    features = _apply_features({"arraysize": 5000, "fetch_decimals": True})
     assert features["arraysize"] == 5000
     assert features["fetch_decimals"] is True
 

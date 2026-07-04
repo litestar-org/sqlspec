@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.core import create_parameters, default_statement_config
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError
@@ -25,6 +26,17 @@ def test_create_parameters_builds_array_query_parameter() -> None:
     assert api_repr["name"] == "values"
     assert api_repr["parameterType"] == {"type": "ARRAY", "arrayType": {"type": "INT64"}}
     assert api_repr["parameterValue"] == {"arrayValues": [{"value": "1"}, {"value": "2"}, {"value": "3"}]}
+
+
+def test_create_parameters_rejects_compiled_empty_array_parameter() -> None:
+    """Compiled empty arrays should fail locally before BigQuery sees a JSON string."""
+    config = BigQueryConfig()
+    _sql, parameters = SQL(
+        "SELECT ARRAY_LENGTH(@values)", {"values": []}, statement_config=config.statement_config
+    ).compile()
+
+    with pytest.raises(SQLSpecError, match="Cannot determine BigQuery ARRAY type"):
+        create_parameters(parameters, json_serializer=str)
 
 
 def test_sql_compile_accepts_native_at_parameter_keys() -> None:
