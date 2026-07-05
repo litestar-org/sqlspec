@@ -1,4 +1,9 @@
-"""Integration tests for Spanner ADK store."""
+"""Spanner ADK store residuals.
+
+The shared ADK contract matrix does not activate Spanner yet because the
+contract package has no Spanner admin-API database/table fixture. These tests
+keep the sync Spanner ADK session/event behavior local until that fixture exists.
+"""
 
 import json
 from datetime import datetime, timezone

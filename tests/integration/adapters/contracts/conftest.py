@@ -1000,6 +1000,34 @@ def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) 
     return make
 
 
+@pytest.fixture
+def events_config_oracle_sync(oracle_23ai_service: OracleService, tmp_path: Path) -> Callable[..., Any]:
+    """Build Oracle sync event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> OracleSyncConfig:
+        return OracleSyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_oracle_async(oracle_23ai_service: OracleService, tmp_path: Path) -> Callable[..., Any]:
+    """Build Oracle async event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> OracleAsyncConfig:
+        return OracleAsyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
 def _resolve_events_case(request: pytest.FixtureRequest, case: EventsCase) -> EventsCaseContext:
     return EventsCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
 

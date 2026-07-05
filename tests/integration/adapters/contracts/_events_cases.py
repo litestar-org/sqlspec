@@ -12,6 +12,7 @@ from tests.integration.adapters.contracts._cases import (
     MSSQL_MARK,
     MSSQL_XDIST_MARK,
     MYSQL_XDIST_MARK,
+    ORACLE_XDIST_MARK,
     POSTGRES_XDIST_MARK,
     SQLITE_XDIST_MARK,
 )
@@ -56,6 +57,14 @@ SYNC_EVENTS_CASES = (
         marks=(POSTGRES_XDIST_MARK,),
         force_table_queue=True,
     ),
+    EventsCase(
+        "oracledb-sync",
+        "events_config_oracle_sync",
+        "oracledb",
+        "sync",
+        marks=(ORACLE_XDIST_MARK,),
+        force_table_queue=True,
+    ),
 )
 
 ASYNC_EVENTS_CASES = (
@@ -89,6 +98,14 @@ ASYNC_EVENTS_CASES = (
         "psycopg",
         "async",
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
+        force_table_queue=True,
+    ),
+    EventsCase(
+        "oracledb-async",
+        "events_config_oracle_async",
+        "oracledb",
+        "async",
+        marks=(ORACLE_XDIST_MARK, pytest.mark.anyio),
         force_table_queue=True,
     ),
 )
