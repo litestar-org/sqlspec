@@ -102,9 +102,13 @@ from tests.integration.adapters.contracts._cases import (
 )
 from tests.integration.adapters.contracts._events_cases import (
     ASYNC_EVENTS_PARAMS,
+    ASYNC_LISTEN_NOTIFY_PARAMS,
     SYNC_EVENTS_PARAMS,
+    SYNC_LISTEN_NOTIFY_PARAMS,
     EventsCase,
     EventsCaseContext,
+    ListenNotifyCase,
+    ListenNotifyCaseContext,
 )
 from tests.integration.adapters.contracts._migration_cases import (
     ASYNC_MIGRATION_PARAMS,
@@ -1028,8 +1032,66 @@ def events_config_oracle_async(oracle_23ai_service: OracleService, tmp_path: Pat
     return make
 
 
+@pytest.fixture
+def listen_notify_config_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build asyncpg native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> AsyncpgConfig:
+        return AsyncpgConfig(
+            connection_config={"dsn": _postgres_conninfo(postgres_service)},
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psqlpy native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> PsqlpyConfig:
+        return PsqlpyConfig(
+            connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(postgres_service)),
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psycopg sync native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> PsycopgSyncConfig:
+        return PsycopgSyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psycopg async native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> PsycopgAsyncConfig:
+        return PsycopgAsyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
 def _resolve_events_case(request: pytest.FixtureRequest, case: EventsCase) -> EventsCaseContext:
     return EventsCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
+
+
+def _resolve_listen_notify_case(
+    request: pytest.FixtureRequest, case: ListenNotifyCase
+) -> ListenNotifyCaseContext:
+    return ListenNotifyCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
 
 
 @pytest.fixture(params=SYNC_EVENTS_PARAMS)
@@ -1042,6 +1104,18 @@ def sync_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
 def async_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
     """Resolve an async event-channel contract case by factory fixture name."""
     return _resolve_events_case(request, request.param)
+
+
+@pytest.fixture(params=SYNC_LISTEN_NOTIFY_PARAMS)
+def sync_listen_notify_case(request: pytest.FixtureRequest) -> ListenNotifyCaseContext:
+    """Resolve a sync native LISTEN/NOTIFY contract case by factory fixture name."""
+    return _resolve_listen_notify_case(request, request.param)
+
+
+@pytest.fixture(params=ASYNC_LISTEN_NOTIFY_PARAMS)
+def async_listen_notify_case(request: pytest.FixtureRequest) -> ListenNotifyCaseContext:
+    """Resolve an async native LISTEN/NOTIFY contract case by factory fixture name."""
+    return _resolve_listen_notify_case(request, request.param)
 
 
 def _lifecycle_connection_config(

@@ -48,7 +48,7 @@ Every contract is the cross product of three things:
 | Module | Responsibility |
 | --- | --- |
 | `_adk_cases.py` / `adk_behaviors.py` | Google ADK session-store contract cases and behaviors. |
-| `_events_cases.py` / `events_behaviors.py` | Event-queue store contract cases and behaviors. |
+| `_events_cases.py` / `events_behaviors.py` | Event-queue store and native PostgreSQL LISTEN/NOTIFY contract cases and behaviors. |
 | `_store_cases.py` / `store_behaviors.py` | Litestar session-store contract cases and behaviors. |
 | `_migration_cases.py` / `migration_behaviors.py` | Migration contract cases and behaviors. |
 
@@ -70,7 +70,7 @@ Every contract is the cross product of three things:
 | `test_exceptions_contract.py` | Exception translation (gated by `supports_exception_translation`). |
 | `test_storage_bridge_contract.py` / `test_storage_bridge_rustfs_contract.py` | Storage bridge round-trips (local and RustFS/S3). |
 | `test_migrations_contract.py` | Migration apply/rollback (gated by `supports_migrations`). |
-| `test_adk_store_contract.py` / `test_events_queue_contract.py` / `test_litestar_store_contract.py` | Extension store contracts (ADK / events / Litestar). |
+| `test_adk_store_contract.py` / `test_events_queue_contract.py` / `test_listen_notify_contract.py` / `test_litestar_store_contract.py` | Extension store contracts (ADK / events queue / native PostgreSQL LISTEN/NOTIFY / Litestar). |
 | `test_extra_assertions_proof_contract.py` | Proves the extra-assertion registry mechanism end-to-end (`driver_basics:noop`). |
 
 ## Capability Flags
@@ -216,7 +216,7 @@ Current residual inventory:
 | Spanner GoogleSQL | `spanner/test_arrow.py`, `test_batch_write_api.py`, `test_bytes_direct.py`, `test_crud_operations.py`, `test_driver.py`, `test_exceptions.py`, `test_execute_many.py`, `test_explain.py`, `test_load_from_arrow_mutations.py`, `test_parameter_variants.py`, `test_session_defaults.py` | Spanner needs admin-API DDL, separate read/write sessions, SDK BYTES encoding, mutation transports, and `query_mode=PLAN`; it remains deferred until the contract table fixture can preserve those semantics safely. |
 | Spangres placeholders | `spanner/test_spangres_driver.py`, `test_spangres_parameter_styles.py` | Runtime Spangres coverage needs PostgreSQL-dialect Spanner fixtures that do not exist yet. The files keep only executable dialect/default-style documentation assertions. |
 | Google Cloud asyncpg connectors | `asyncpg/test_cloud_connectors.py` | Cloud SQL and AlloyDB connector authentication, IAM, private-IP, and instance URI setup require real Google Cloud instances; shared contracts cover PostgreSQL behavior after a pool exists. |
-| PostgreSQL-family driver quirks | `asyncpg/test_driver.py`, `psqlpy/test_driver.py`, `psycopg/test_driver.py`, `psycopg/test_async_copy.py`, `*/extensions/events/test_listen_notify.py` | Driver-specific cursor/prepared statement/COPY/LISTEN-NOTIFY behavior that is not portable across PostgreSQL-family adapters. |
+| PostgreSQL-family driver quirks | `asyncpg/test_driver.py`, `psqlpy/test_driver.py`, `psycopg/test_driver.py`, `psycopg/test_async_copy.py`, `*/extensions/events/test_listen_notify.py` | Driver-specific cursor/prepared statement/COPY behavior plus native LISTEN/NOTIFY concurrency and durable-hybrid regressions. Portable native delivery, metadata, backend selection, and ack behavior is contract-owned. |
 | Adapter extension storage details | `*/extensions/adk/test_owner_id_column.py`, `*/extensions/adk/test_memory_store.py`, `*/extensions/litestar/test_numpy_serialization.py`, `spanner/extensions/adk/test_adk_store.py`, `spanner/extensions/litestar/test_store.py`, `spanner/extensions/events/test_queue_backend.py` | Extension storage/serialization details and Spanner extension stores that need adapter-specific DDL/session fixtures; generic ADK/events/Litestar behavior is handled by the extension contracts for active cases. |
 
 ## Adding A Case

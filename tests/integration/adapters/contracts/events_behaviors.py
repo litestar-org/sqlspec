@@ -1,13 +1,20 @@
 """Behavior helpers for shared event-channel queue-backend contract tests."""
 
 import asyncio
+import contextlib
+import time
 from typing import Any
 
 import pytest
 
 from sqlspec import SQLSpec
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-from tests.integration.adapters.contracts._events_cases import EventsCase
+from tests.integration.adapters.contracts._events_cases import EventsCase, ListenNotifyCase
+
+_LISTEN_NOTIFY_CHANNEL_PREFIX = "contract_listen_notify"
+_LISTEN_NOTIFY_POLL_INTERVAL = 0.05
+_LISTEN_NOTIFY_SUBSCRIBE_WAIT = 0.5
+_LISTEN_NOTIFY_ATTEMPTS = 200
 
 
 async def setup_async_event_channel(config: Any) -> 'tuple["SQLSpec", Any]':
@@ -39,6 +46,24 @@ def _events_extension_config(case: EventsCase, behavior: str) -> "tuple[str, dic
     return queue_table, {"events": events_config}, token
 
 
+def _listen_notify_channel(case: ListenNotifyCase, behavior: str) -> str:
+    return f"{_LISTEN_NOTIFY_CHANNEL_PREFIX}_{case.id}_{behavior}".replace("-", "_")
+
+
+def _wait_for_sync_message(received: "list[Any]") -> None:
+    for _ in range(_LISTEN_NOTIFY_ATTEMPTS):
+        if received:
+            return
+        time.sleep(_LISTEN_NOTIFY_POLL_INTERVAL)
+
+
+async def _wait_for_async_message(received: "list[Any]") -> None:
+    for _ in range(_LISTEN_NOTIFY_ATTEMPTS):
+        if received:
+            return
+        await asyncio.sleep(_LISTEN_NOTIFY_POLL_INTERVAL)
+
+
 def _consume_sync(channel: Any, channel_name: str) -> Any:
     iterator = channel.iter_events(channel_name, poll_interval=0.05)
     try:
@@ -67,6 +92,96 @@ async def _status_row_async(config: Any, queue_table: str, event_id: Any, column
         return await driver.select_one(
             f"SELECT {columns} FROM {queue_table} WHERE event_id = :event_id", {"event_id": event_id}
         )
+
+
+def assert_sync_listen_notify_delivery_contract(make_config: Any, case: ListenNotifyCase) -> None:
+    """Sync native LISTEN/NOTIFY backends select the native backend and deliver payload metadata."""
+    channel_name = _listen_notify_channel(case, "delivery")
+    config = make_config(suffix=f"{case.id}_listen_notify".replace("-", "_"))
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+    listener: Any | None = None
+    try:
+        assert channel._backend_name == "listen_notify"  # pyright: ignore[reportPrivateUsage]
+        received: list[Any] = []
+        listener = channel.listen(channel_name, received.append, poll_interval=_LISTEN_NOTIFY_POLL_INTERVAL)
+        time.sleep(_LISTEN_NOTIFY_SUBSCRIBE_WAIT)
+        event_id = channel.publish(
+            channel_name,
+            {"case": case.id, "mode": case.mode},
+            metadata={"source": "contract", "adapter": case.adapter},
+        )
+        _wait_for_sync_message(received)
+        if not received:
+            event_id = channel.publish(
+                channel_name,
+                {"case": case.id, "mode": case.mode},
+                metadata={"source": "contract", "adapter": case.adapter},
+            )
+            _wait_for_sync_message(received)
+
+        assert received, "listener did not receive native LISTEN/NOTIFY message"
+        message = received[0]
+        assert message.event_id == event_id
+        assert message.channel == channel_name
+        assert message.payload == {"case": case.id, "mode": case.mode}
+        assert message.metadata == {"source": "contract", "adapter": case.adapter}
+        channel.ack(message.event_id)
+    finally:
+        if listener is not None:
+            with contextlib.suppress(Exception):
+                channel.stop_listener(listener.id)
+        with contextlib.suppress(Exception):
+            channel.shutdown()
+        config.close_pool()
+
+
+async def assert_async_listen_notify_delivery_contract(make_config: Any, case: ListenNotifyCase) -> None:
+    """Async native LISTEN/NOTIFY backends select the native backend and deliver payload metadata."""
+    channel_name = _listen_notify_channel(case, "delivery")
+    config = make_config(suffix=f"{case.id}_listen_notify".replace("-", "_"))
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+    listener: Any | None = None
+    try:
+        assert channel._backend_name == "listen_notify"  # pyright: ignore[reportPrivateUsage]
+        received: list[Any] = []
+
+        async def _handler(message: Any) -> None:
+            received.append(message)
+
+        listener = channel.listen(channel_name, _handler, poll_interval=_LISTEN_NOTIFY_POLL_INTERVAL)
+        await asyncio.sleep(_LISTEN_NOTIFY_SUBSCRIBE_WAIT)
+        event_id = await channel.publish(
+            channel_name,
+            {"case": case.id, "mode": case.mode},
+            metadata={"source": "contract", "adapter": case.adapter},
+        )
+        await _wait_for_async_message(received)
+        if not received:
+            event_id = await channel.publish(
+                channel_name,
+                {"case": case.id, "mode": case.mode},
+                metadata={"source": "contract", "adapter": case.adapter},
+            )
+            await _wait_for_async_message(received)
+
+        assert received, "listener did not receive native LISTEN/NOTIFY message"
+        message = received[0]
+        assert message.event_id == event_id
+        assert message.channel == channel_name
+        assert message.payload == {"case": case.id, "mode": case.mode}
+        assert message.metadata == {"source": "contract", "adapter": case.adapter}
+        await channel.ack(message.event_id)
+    finally:
+        if listener is not None:
+            with contextlib.suppress(Exception):
+                await channel.stop_listener(listener.id)
+        with contextlib.suppress(Exception):
+            await channel.shutdown()
+        await config.close_pool()
 
 
 def assert_sync_events_queue_lifecycle_contract(make_config: Any, case: EventsCase) -> None:
