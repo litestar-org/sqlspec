@@ -10,10 +10,10 @@ from sqlglot import parse_one
 
 
 def test_spangres_dialect_sql_generation() -> None:
-    """Spangres dialect preserves ROW DELETION POLICY syntax."""
+    """Spangres dialect normalizes row deletion policies to TTL syntax."""
     sql = "CREATE TABLE test (id VARCHAR PRIMARY KEY, ts TIMESTAMP) ROW DELETION POLICY (OLDER_THAN(ts, INTERVAL '30 days'))"
     parsed = parse_one(sql, dialect="spangres")
     rendered = parsed.sql(dialect="spangres")
 
-    assert "ROW DELETION POLICY" in rendered
-    assert "OLDER_THAN" in rendered
+    assert "ROW DELETION POLICY" not in rendered
+    assert "TTL INTERVAL '30 days' ON ts" in rendered
