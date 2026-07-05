@@ -74,9 +74,7 @@ STORAGE_ARROW_BOUNDARIES: tuple[dict[str, Any], ...] = (
     {
         "from_module": "sqlspec/storage/_arrow_payload.py",
         "to_module": "sqlspec/storage/_utils.py",
-        "sites": [
-            {"line": 5, "symbol": "import_pyarrow/import_pyarrow_csv/import_pyarrow_parquet"},
-        ],
+        "sites": [{"line": 5, "symbol": "import_pyarrow/import_pyarrow_csv/import_pyarrow_parquet"}],
         "classification": "interpreted_to_compiled_optional_dependency_boundary",
         "reason": "Interpreted Arrow payload codecs call compiled optional-dependency import helpers before importing PyArrow.",
     },
@@ -95,10 +93,7 @@ STORAGE_ARROW_BOUNDARIES: tuple[dict[str, Any], ...] = (
     {
         "from_module": "sqlspec/utils/serializers.py",
         "to_module": "sqlspec/utils/serializers/_json.py",
-        "sites": [
-            {"line": 4, "symbol": "decode_json as from_json"},
-            {"line": 5, "symbol": "encode_json as to_json"},
-        ],
+        "sites": [{"line": 4, "symbol": "decode_json as from_json"}, {"line": 5, "symbol": "encode_json as to_json"}],
         "classification": "interpreted_facade_to_compiled_json_boundary",
         "reason": "The interpreted serializers package facade re-exports the compiled JSON engine.",
     },

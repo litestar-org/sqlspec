@@ -16,8 +16,6 @@ from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from fsspec import AbstractFileSystem
-
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("FSSpecBackend",)

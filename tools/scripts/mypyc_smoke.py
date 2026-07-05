@@ -25,12 +25,7 @@ class SmokeImport(NamedTuple):
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("package", "sqlspec"),
     SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
-    SmokeImport(
-        "prometheus_observer",
-        "sqlspec.extensions.prometheus._observer",
-        "PrometheusStatementObserver",
-        True,
-    ),
+    SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
@@ -61,11 +56,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
 
 
 def _new_smoke_result(
-    *,
-    name: str,
-    module: str,
-    attribute: str | None,
-    compiled_required: bool = False,
+    *, name: str, module: str, attribute: str | None, compiled_required: bool = False
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -98,18 +89,14 @@ def _is_missing_optional_dependency(missing_name: str, optional_dependency: str 
 
 def _check_sqlspec_construction() -> dict[str, Any]:
     """Construct SQLSpec surfaces that must work from a compiled wheel."""
-    result = _new_smoke_result(
-        name="sqlspec_construction",
-        module="sqlspec.base",
-        attribute="SQLSpec",
-    )
+    result = _new_smoke_result(name="sqlspec_construction", module="sqlspec.base", attribute="SQLSpec")
     try:
         base_module = importlib.import_module("sqlspec.base")
         loader_module = importlib.import_module("sqlspec.loader")
         sqlite_module = importlib.import_module("sqlspec.adapters.sqlite")
-        SQLSpec = getattr(base_module, "SQLSpec")
-        SQLFileLoader = getattr(loader_module, "SQLFileLoader")
-        SqliteConfig = getattr(sqlite_module, "SqliteConfig")
+        sqlspec_cls = base_module.SQLSpec
+        sql_file_loader_cls = loader_module.SQLFileLoader
+        sqlite_config_cls = sqlite_module.SqliteConfig
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
@@ -117,8 +104,8 @@ def _check_sqlspec_construction() -> dict[str, Any]:
     result["imported"] = True
     result["compiled"] = is_compiled_module(base_module)
     try:
-        manager = SQLSpec(loader=SQLFileLoader())
-        config = manager.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+        manager = sqlspec_cls(loader=sql_file_loader_cls())
+        config = manager.add_config(sqlite_config_cls(connection_config={"database": ":memory:"}))
         manager.event_channel(config)
         manager.telemetry_snapshot()
     except Exception as exc:
