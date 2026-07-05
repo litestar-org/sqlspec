@@ -70,13 +70,14 @@ from sqlspec.adapters.oracledb import (
     OracleSyncDriver,
 )
 from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures
+from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures, PsqlpyPoolParams
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
 from sqlspec.adapters.psycopg import (
     PsycopgAsyncConfig,
     PsycopgAsyncDriver,
     PsycopgDriverFeatures,
+    PsycopgPoolParams,
     PsycopgSyncConfig,
     PsycopgSyncDriver,
 )
@@ -109,6 +110,10 @@ from tests.integration.adapters.contracts._migration_cases import (
     MigrationCase,
     MigrationCaseContext,
 )
+from tests.integration.adapters.contracts._postgres_extension_cases import (
+    PostgresExtensionCase,
+    PostgresExtensionCaseContext,
+)
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
@@ -139,10 +144,35 @@ def _postgres_conninfo(postgres_service: PostgresService) -> str:
     )
 
 
+def _ensure_postgres_extension(postgres_service: PostgresService, extension: str) -> None:
+    import psycopg
+
+    with psycopg.connect(_postgres_conninfo(postgres_service)) as conn:
+        conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        conn.commit()
+
+
 def _psqlpy_dsn(postgres_service: PostgresService) -> str:
     return (
         f"postgres://{postgres_service.user}:{postgres_service.password}"
         f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+
+
+def _adbc_postgres_uri(postgres_service: PostgresService) -> str:
+    return (
+        f"postgresql://{postgres_service.user}:{postgres_service.password}"
+        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+
+
+def _asyncpg_pool_config(postgres_service: PostgresService) -> AsyncpgPoolConfig:
+    return AsyncpgPoolConfig(
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        database=postgres_service.database,
     )
 
 
@@ -151,6 +181,101 @@ def _cockroach_conninfo(cockroachdb_service: CockroachDBService) -> str:
         f"host={cockroachdb_service.host} port={cockroachdb_service.port} "
         f"user=root dbname={cockroachdb_service.database} sslmode=disable"
     )
+
+
+@pytest.fixture
+def pgvector_config_adbc(pgvector_service: PostgresService) -> Generator[AdbcConfig, None, None]:
+    """Provide an ADBC config connected to a pgvector-enabled PostgreSQL service."""
+    from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_connect_func
+
+    connection_config = {"uri": _adbc_postgres_uri(pgvector_service)}
+    conn = resolve_driver_connect_func(None, connection_config["uri"])(**build_connection_config(connection_config))
+    try:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        finally:
+            cursor.close()
+        conn.commit()
+    finally:
+        conn.close()
+
+    config = AdbcConfig(connection_config=connection_config)
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def pgvector_config_asyncpg(pgvector_service: PostgresService) -> AsyncpgConfig:
+    """Provide an asyncpg config connected to a pgvector-enabled PostgreSQL service."""
+    _ensure_postgres_extension(pgvector_service, "vector")
+    return AsyncpgConfig(connection_config=_asyncpg_pool_config(pgvector_service))
+
+
+@pytest.fixture
+def pgvector_config_psqlpy(pgvector_service: PostgresService) -> PsqlpyConfig:
+    """Provide a psqlpy config connected to a pgvector-enabled PostgreSQL service."""
+    _ensure_postgres_extension(pgvector_service, "vector")
+    return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(pgvector_service)))
+
+
+@pytest.fixture
+def pgvector_config_psycopg(pgvector_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
+    """Provide a psycopg config connected to a pgvector-enabled PostgreSQL service."""
+    import psycopg
+
+    connection_config = PsycopgPoolParams(conninfo=_postgres_conninfo(pgvector_service))
+    with psycopg.connect(connection_config["conninfo"]) as conn:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.commit()
+
+    config = PsycopgSyncConfig(connection_config=connection_config, pool_config={"min_size": 1})
+    try:
+        yield config
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            config.close_pool()
+            config.connection_instance = None
+
+
+@pytest.fixture
+def paradedb_config_adbc(paradedb_service: PostgresService) -> Generator[AdbcConfig, None, None]:
+    """Provide an ADBC config connected to a ParadeDB service."""
+    config = AdbcConfig(connection_config={"uri": _adbc_postgres_uri(paradedb_service)})
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def paradedb_config_asyncpg(paradedb_service: PostgresService) -> AsyncpgConfig:
+    """Provide an asyncpg config connected to a ParadeDB service."""
+    return AsyncpgConfig(connection_config=_asyncpg_pool_config(paradedb_service))
+
+
+@pytest.fixture
+def paradedb_config_psqlpy(paradedb_service: PostgresService) -> PsqlpyConfig:
+    """Provide a psqlpy config connected to a ParadeDB service."""
+    return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(paradedb_service)))
+
+
+@pytest.fixture
+def paradedb_config_psycopg(paradedb_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
+    """Provide a psycopg config connected to a ParadeDB service."""
+    config = PsycopgSyncConfig(
+        connection_config=PsycopgPoolParams(conninfo=_postgres_conninfo(paradedb_service)), pool_config={"min_size": 1}
+    )
+    try:
+        yield config
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            config.close_pool()
+            config.connection_instance = None
 
 
 @pytest.fixture
@@ -2098,6 +2223,32 @@ def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> Dr
         case = replace(case, table=request.getfixturevalue(case.table_fixture))
     make_config = request.getfixturevalue(case.config_factory_fixture) if case.config_factory_fixture else None
     return DriverCaseContext(case=case, driver=driver, make_config=make_config)
+
+
+@pytest.fixture
+def sync_postgres_extension_case(request: pytest.FixtureRequest) -> Generator[PostgresExtensionCaseContext, None, None]:
+    """Resolve a sync PostgreSQL extension contract case."""
+    case = request.param
+    assert isinstance(case, PostgresExtensionCase)
+    config = request.getfixturevalue(case.config_fixture_name)
+    with config.provide_session() as driver:
+        yield PostgresExtensionCaseContext(case=case, config=config, driver=driver)
+
+
+@pytest.fixture
+async def async_postgres_extension_case(
+    request: pytest.FixtureRequest,
+) -> AsyncGenerator[PostgresExtensionCaseContext, None]:
+    """Resolve an async PostgreSQL extension contract case."""
+    case = request.param
+    assert isinstance(case, PostgresExtensionCase)
+    config = request.getfixturevalue(case.config_fixture_name)
+    try:
+        async with config.provide_session() as driver:
+            yield PostgresExtensionCaseContext(case=case, config=config, driver=driver)
+    finally:
+        await config.close_pool()
+        config.connection_instance = None
 
 
 @pytest.fixture(params=SYNC_DRIVER_PARAMS)

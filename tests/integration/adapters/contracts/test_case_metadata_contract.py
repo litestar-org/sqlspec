@@ -14,12 +14,16 @@ from tests.integration.adapters.contracts._cases import (
     async_driver_params_with,
     sync_driver_params_with,
 )
-from tests.integration.adapters.contracts._migration_cases import ACTIVE_MIGRATION_CASES
 from tests.integration.adapters.contracts._inputs import (
     PARAMETER_STYLE_EXECUTE_MANY_PARAMS,
     PARAMETER_STYLE_EXECUTE_PARAMS,
     PARAMETER_STYLE_PARAMS,
     ParameterStyleCase,
+)
+from tests.integration.adapters.contracts._migration_cases import ACTIVE_MIGRATION_CASES
+from tests.integration.adapters.contracts._postgres_extension_cases import (
+    ASYNC_POSTGRES_EXTENSION_CASES,
+    SYNC_POSTGRES_EXTENSION_CASES,
 )
 
 MYSQL_ROW_LOCKING_CASE_IDS = {
@@ -68,6 +72,17 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
 }
 MERGE_CASE_IDS = {"asyncpg-async", "oracledb-async", "oracledb-sync", "psqlpy-async", "psycopg-async", "psycopg-sync"}
 MERGE_BULK_CASE_IDS = {"asyncpg-async", "oracledb-async", "psqlpy-async", "psycopg-async", "psycopg-sync"}
+VECTOR_CASE_IDS = {"adbc-duckdb-sync", "duckdb-sync", "oracledb-async", "oracledb-sync"}
+POSTGRES_EXTENSION_CASE_IDS = {
+    "adbc-paradedb-sync",
+    "adbc-pgvector-sync",
+    "asyncpg-paradedb-async",
+    "asyncpg-pgvector-async",
+    "psqlpy-paradedb-async",
+    "psqlpy-pgvector-async",
+    "psycopg-paradedb-sync",
+    "psycopg-pgvector-sync",
+}
 
 
 def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
@@ -113,6 +128,7 @@ def test_capability_params_match_requested_capability() -> None:
         "supports_native_metadata",
         "supports_schema_qualified_data_dictionary",
         "supports_storage_bridge",
+        "supports_vector",
     ):
         sync_cases = _driver_cases(sync_driver_params_with(capability_name))
         async_cases = _driver_cases(async_driver_params_with(capability_name))
@@ -160,6 +176,19 @@ def test_merge_bulk_cases_are_contract_owned() -> None:
     cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in MERGE_BULK_CASE_IDS}
     assert set(cases) == MERGE_BULK_CASE_IDS
     assert all(case.supports_merge_bulk for case in cases.values())
+
+
+def test_plain_vector_cases_are_contract_owned() -> None:
+    """Plain vector-distance execution belongs to the shared driver contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in VECTOR_CASE_IDS}
+    assert set(cases) == VECTOR_CASE_IDS
+    assert all(case.supports_vector for case in cases.values())
+
+
+def test_postgres_extension_cases_are_contract_owned() -> None:
+    """pgvector/ParadeDB extension behavior belongs to the shared extension contract."""
+    case_ids = {case.id for case in (*SYNC_POSTGRES_EXTENSION_CASES, *ASYNC_POSTGRES_EXTENSION_CASES)}
+    assert case_ids == POSTGRES_EXTENSION_CASE_IDS
 
 
 def test_adk_capability_params_match_requested_capability() -> None:

@@ -3,6 +3,7 @@
 import contextlib
 import inspect
 import json
+import math
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -1655,6 +1656,449 @@ async def assert_async_merge_bulk_contract(driver: object, case: DriverCase) -> 
         assert null_row["category"] is None
     finally:
         await _drop_merge_table_async(async_driver, case, table)
+
+
+def _vector_table_sql(case: DriverCase, table: str, dimension: int = 3) -> str:
+    if case.dialect == "oracle":
+        return (
+            f"CREATE TABLE {table} ("
+            "id NUMBER PRIMARY KEY, "
+            "content VARCHAR2(100) NOT NULL, "
+            f"embedding VECTOR({dimension}, FLOAT32)"
+            ")"
+        )
+    return f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, content TEXT NOT NULL, embedding DOUBLE[{dimension}])"
+
+
+def _drop_vector_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+
+
+async def _drop_vector_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        await driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+
+
+def _enable_vector_runtime_sync(driver: "SyncContractDriver", case: DriverCase) -> None:
+    if case.dialect != "duckdb":
+        return
+    try:
+        driver.execute_script("INSTALL vss")
+        driver.execute_script("LOAD vss")
+    except Exception as exc:
+        pytest.skip(f"DuckDB VSS unavailable: {exc}")
+
+
+def _seed_vector_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    rows: tuple[tuple[int, str, object], ...]
+    if case.dialect == "oracle":
+        rows = ((1, "doc1", "[0.1, 0.2, 0.3]"), (2, "doc2", "[0.4, 0.5, 0.6]"), (3, "doc3", "[0.7, 0.8, 0.9]"))
+        for row in rows:
+            driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        rows = ((1, "doc1", [0.1, 0.2, 0.3]), (2, "doc2", [0.4, 0.5, 0.6]), (3, "doc3", [0.7, 0.8, 0.9]))
+        for row in rows:
+            driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+    driver.commit()
+
+
+async def _seed_vector_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        rows: tuple[tuple[int, str, object], ...] = (
+            (1, "doc1", "[0.1, 0.2, 0.3]"),
+            (2, "doc2", "[0.4, 0.5, 0.6]"),
+            (3, "doc3", "[0.7, 0.8, 0.9]"),
+        )
+        for row in rows:
+            await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        rows = ((1, "doc1", [0.1, 0.2, 0.3]), (2, "doc2", [0.4, 0.5, 0.6]), (3, "doc3", [0.7, 0.8, 0.9]))
+        for row in rows:
+            await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+    await driver.commit()
+
+
+def _assert_vector_result_order(rows: list[dict[str, Any]]) -> None:
+    normalized = [_lower_keys(row) for row in rows]
+    assert [row["content"] for row in normalized] == ["doc1", "doc2", "doc3"]
+    assert normalized[0]["distance"] < normalized[1]["distance"]
+    assert normalized[1]["distance"] < normalized[2]["distance"]
+
+
+def _assert_vector_score_range(score: object) -> None:
+    assert isinstance(score, int | float | Decimal)
+    value = float(score)
+    assert (
+        -1 <= value <= 1
+        or math.isclose(value, 1.0, rel_tol=1e-9, abs_tol=1e-9)
+        or math.isclose(value, -1.0, rel_tol=1e-9, abs_tol=1e-9)
+    )
+
+
+def _insert_vector_sync(
+    driver: "SyncContractDriver", case: DriverCase, table: str, row: tuple[int, str, object]
+) -> None:
+    if case.dialect == "oracle":
+        driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+
+
+async def _insert_vector_async(
+    driver: "AsyncContractDriver", case: DriverCase, table: str, row: tuple[int, str, object]
+) -> None:
+    if case.dialect == "oracle":
+        await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+
+
+def _assert_sync_duckdb_vector_residuals(sync_driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    zero_value = [0.0, 0.0, 0.0]
+    _insert_vector_sync(sync_driver, case, table, (5, "zero_vec", zero_value))
+    zero = (
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.0, 0.0, 0.0]).alias("distance"))
+        .from_(table)
+        .where(sql.column("embedding").is_not_null())
+        .order_by("distance")
+    )
+    zero_rows = [_lower_keys(row) for row in sync_driver.execute(zero).get_data()]
+    assert zero_rows[0]["content"] == "zero_vec"
+    assert zero_rows[0]["distance"] == 0
+
+    aggregate_source = sql.select(
+        "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance")
+    ).from_(table)
+    aggregate = sql.select("MIN(distance) AS min_distance", "MAX(distance) AS max_distance").from_(
+        aggregate_source, alias="distances"
+    )
+    aggregate_row = _lower_keys(sync_driver.execute(aggregate).get_data()[0])
+    assert aggregate_row["min_distance"] < aggregate_row["max_distance"]
+
+    large = _pc_table(case, "vector10")
+    _drop_vector_table_sync(sync_driver, case, large)
+    sync_driver.execute_script(_vector_table_sql(case, large, dimension=10))
+    try:
+        _insert_vector_sync(sync_driver, case, large, (1, "large1", [0.1] * 10))
+        _insert_vector_sync(sync_driver, case, large, (2, "large2", [0.5] * 10))
+        large_query = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1] * 10).alias("distance"))
+            .from_(large)
+            .order_by("distance")
+        )
+        large_rows = [_lower_keys(row) for row in sync_driver.execute(large_query).get_data()]
+        assert large_rows[0]["content"] == "large1"
+        assert large_rows[0]["distance"] < large_rows[1]["distance"]
+    finally:
+        _drop_vector_table_sync(sync_driver, case, large)
+
+
+async def _assert_async_duckdb_vector_residuals(
+    async_driver: "AsyncContractDriver", case: DriverCase, table: str
+) -> None:
+    zero_value = [0.0, 0.0, 0.0]
+    await _insert_vector_async(async_driver, case, table, (5, "zero_vec", zero_value))
+    zero = (
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.0, 0.0, 0.0]).alias("distance"))
+        .from_(table)
+        .where(sql.column("embedding").is_not_null())
+        .order_by("distance")
+    )
+    zero_rows = [_lower_keys(row) for row in (await async_driver.execute(zero)).get_data()]
+    assert zero_rows[0]["content"] == "zero_vec"
+    assert zero_rows[0]["distance"] == 0
+
+    aggregate_source = sql.select(
+        "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance")
+    ).from_(table)
+    aggregate = sql.select("MIN(distance) AS min_distance", "MAX(distance) AS max_distance").from_(
+        aggregate_source, alias="distances"
+    )
+    aggregate_row = _lower_keys((await async_driver.execute(aggregate)).get_data()[0])
+    assert aggregate_row["min_distance"] < aggregate_row["max_distance"]
+
+    large = _pc_table(case, "vector10")
+    await _drop_vector_table_async(async_driver, case, large)
+    await async_driver.execute_script(_vector_table_sql(case, large, dimension=10))
+    try:
+        await _insert_vector_async(async_driver, case, large, (1, "large1", [0.1] * 10))
+        await _insert_vector_async(async_driver, case, large, (2, "large2", [0.5] * 10))
+        large_query = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1] * 10).alias("distance"))
+            .from_(large)
+            .order_by("distance")
+        )
+        large_rows = [_lower_keys(row) for row in (await async_driver.execute(large_query)).get_data()]
+        assert large_rows[0]["content"] == "large1"
+        assert large_rows[0]["distance"] < large_rows[1]["distance"]
+    finally:
+        await _drop_vector_table_async(async_driver, case, large)
+
+
+def assert_sync_vector_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync vector distance/similarity builder execution for cases with native vector tables."""
+    if not case.supports_vector:
+        pytest.skip(f"{case.id} does not support vector execution")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "vector")
+    _enable_vector_runtime_sync(sync_driver, case)
+    _drop_vector_table_sync(sync_driver, case, table)
+    sync_driver.execute_script(_vector_table_sql(case, table))
+    try:
+        _seed_vector_table_sync(sync_driver, case, table)
+
+        distance = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .order_by("distance")
+        )
+        _assert_vector_result_order(sync_driver.execute(distance).get_data())
+
+        threshold = (
+            sql.select("content").from_(table).where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
+        )
+        threshold_rows = [_lower_keys(row) for row in sync_driver.execute(threshold).get_data()]
+        assert len(threshold_rows) == 1
+        assert threshold_rows[0]["content"] == "doc1"
+
+        cosine = (
+            sql
+            .select(
+                "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert _lower_keys(sync_driver.execute(cosine).get_data()[0])["content"] == "doc1"
+
+        inner_product = (
+            sql
+            .select(
+                "content",
+                sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert len(sync_driver.execute(inner_product).get_data()) == 3
+
+        if case.dialect == "oracle":
+            euclidean_squared = (
+                sql
+                .select(
+                    "content",
+                    sql
+                    .column("embedding")
+                    .vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared")
+                    .alias("distance"),
+                )
+                .from_(table)
+                .order_by("distance")
+            )
+            assert _lower_keys(sync_driver.execute(euclidean_squared).get_data()[0])["content"] == "doc1"
+
+        similarity = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+        )
+        similarity_rows = [_lower_keys(row) for row in sync_driver.execute(similarity).get_data()]
+        assert similarity_rows[0]["content"] == "doc1"
+        assert similarity_rows[0]["score"] > similarity_rows[1]["score"]
+
+        top_k = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+            .limit(2)
+        )
+        top_k_rows = [_lower_keys(row) for row in sync_driver.execute(top_k).get_data()]
+        assert [row["content"] for row in top_k_rows] == ["doc1", "doc2"]
+        for row in similarity_rows:
+            _assert_vector_score_range(row["score"])
+
+        multi = sql.select(
+            "content",
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean").alias("euclidean_dist"),
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("cosine_dist"),
+        ).from_(table)
+        for row in sync_driver.execute(multi).get_data():
+            normalized = _lower_keys(row)
+            assert normalized["euclidean_dist"] is not None
+            assert normalized["cosine_dist"] is not None
+
+        if case.dialect == "oracle":
+            sync_driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, NULL)", (4, "doc_null"))
+        else:
+            sync_driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", (4, "doc_null", None))
+        not_null = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(sql.column("embedding").is_not_null())
+            .order_by("distance")
+        )
+        assert all(_lower_keys(row)["content"] != "doc_null" for row in sync_driver.execute(not_null).get_data())
+
+        combined = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(
+                (sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
+                & (sql.column("content").in_(["doc1", "doc2"]))
+            )
+            .order_by("distance")
+        )
+        assert len(sync_driver.execute(combined).get_data()) == 2
+
+        if case.dialect == "duckdb":
+            _assert_sync_duckdb_vector_residuals(sync_driver, case, table)
+    finally:
+        _drop_vector_table_sync(sync_driver, case, table)
+
+
+async def assert_async_vector_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of assert_sync_vector_contract."""
+    if not case.supports_vector:
+        pytest.skip(f"{case.id} does not support vector execution")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "vector")
+    await _drop_vector_table_async(async_driver, case, table)
+    await async_driver.execute_script(_vector_table_sql(case, table))
+    try:
+        await _seed_vector_table_async(async_driver, case, table)
+
+        distance = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .order_by("distance")
+        )
+        _assert_vector_result_order((await async_driver.execute(distance)).get_data())
+
+        threshold = (
+            sql.select("content").from_(table).where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
+        )
+        threshold_rows = [_lower_keys(row) for row in (await async_driver.execute(threshold)).get_data()]
+        assert len(threshold_rows) == 1
+        assert threshold_rows[0]["content"] == "doc1"
+
+        cosine = (
+            sql
+            .select(
+                "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert _lower_keys((await async_driver.execute(cosine)).get_data()[0])["content"] == "doc1"
+
+        inner_product = (
+            sql
+            .select(
+                "content",
+                sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert len((await async_driver.execute(inner_product)).get_data()) == 3
+
+        if case.dialect == "oracle":
+            euclidean_squared = (
+                sql
+                .select(
+                    "content",
+                    sql
+                    .column("embedding")
+                    .vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared")
+                    .alias("distance"),
+                )
+                .from_(table)
+                .order_by("distance")
+            )
+            assert _lower_keys((await async_driver.execute(euclidean_squared)).get_data()[0])["content"] == "doc1"
+
+        similarity = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+        )
+        similarity_rows = [_lower_keys(row) for row in (await async_driver.execute(similarity)).get_data()]
+        assert similarity_rows[0]["content"] == "doc1"
+        assert similarity_rows[0]["score"] > similarity_rows[1]["score"]
+
+        top_k = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+            .limit(2)
+        )
+        top_k_rows = [_lower_keys(row) for row in (await async_driver.execute(top_k)).get_data()]
+        assert [row["content"] for row in top_k_rows] == ["doc1", "doc2"]
+        for row in similarity_rows:
+            _assert_vector_score_range(row["score"])
+
+        multi = sql.select(
+            "content",
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean").alias("euclidean_dist"),
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("cosine_dist"),
+        ).from_(table)
+        for row in (await async_driver.execute(multi)).get_data():
+            normalized = _lower_keys(row)
+            assert normalized["euclidean_dist"] is not None
+            assert normalized["cosine_dist"] is not None
+
+        if case.dialect == "oracle":
+            await async_driver.execute(
+                f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, NULL)", (4, "doc_null")
+            )
+        else:
+            await async_driver.execute(
+                f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", (4, "doc_null", None)
+            )
+        not_null = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(sql.column("embedding").is_not_null())
+            .order_by("distance")
+        )
+        assert all(
+            _lower_keys(row)["content"] != "doc_null" for row in (await async_driver.execute(not_null)).get_data()
+        )
+
+        combined = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(
+                (sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
+                & (sql.column("content").in_(["doc1", "doc2"]))
+            )
+            .order_by("distance")
+        )
+        assert len((await async_driver.execute(combined)).get_data()) == 2
+
+        if case.dialect == "duckdb":
+            await _assert_async_duckdb_vector_residuals(async_driver, case, table)
+    finally:
+        await _drop_vector_table_async(async_driver, case, table)
 
 
 async def _asyncpg_param_codecs(driver: object, case: DriverCase) -> None:
