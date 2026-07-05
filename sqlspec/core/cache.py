@@ -16,7 +16,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import TypeVar
 
 from sqlspec.core.pipeline import (
     configure_statement_pipeline_cache,
@@ -57,16 +56,11 @@ __all__ = (
 
 logger = get_logger("sqlspec.cache")
 
-T = TypeVar("T")
-CacheValueT = TypeVar("CacheValueT")
-
-
 DEFAULT_MAX_SIZE: Final = 10000
 DEFAULT_TTL_SECONDS: Final = 3600
-CACHE_STATS_UPDATE_INTERVAL: Final = 100
 
 
-CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp", "access_count")
+CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp")
 LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats", "_namespace")
 CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
 
@@ -190,7 +184,6 @@ class CacheNode:
         self.prev: CacheNode | None = None
         self.next: CacheNode | None = None
         self.timestamp = time.time()
-        self.access_count = 1
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -264,7 +257,6 @@ class LRUCache:
                         log_cache_size = len(self._cache)
                 else:
                     self._move_to_head(node)
-                    node.access_count += 1
                     self._stats.record_hit()
                     if debug_enabled:
                         log_event = "cache.hit"
@@ -299,7 +291,6 @@ class LRUCache:
             if existing_node is not None:
                 existing_node.value = value
                 existing_node.timestamp = time.time()
-                existing_node.access_count += 1
                 self._move_to_head(existing_node)
                 return
 

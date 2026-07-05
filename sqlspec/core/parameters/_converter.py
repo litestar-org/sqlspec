@@ -319,31 +319,6 @@ class ParameterConverter:
 
         return None, False
 
-    def _extract_param_value_single_style(
-        self, param: "ParameterInfo", parameters: "ParameterMapping"
-    ) -> "tuple[object | None, bool]":
-        if param.name and param.name in parameters:
-            return parameters[param.name], True
-        if param.placeholder_text in parameters:
-            return parameters[param.placeholder_text], True
-        if f"param_{param.ordinal}" in parameters:
-            return parameters[f"param_{param.ordinal}"], True
-
-        ordinal_key = str(param.ordinal + 1)
-        if ordinal_key in parameters:
-            return parameters[ordinal_key], True
-
-        try:
-            ordered_keys = list(parameters.keys())
-        except AttributeError:
-            ordered_keys = []
-        if ordered_keys and param.ordinal < len(ordered_keys):
-            key = ordered_keys[param.ordinal]
-            if key in parameters:
-                return parameters[key], True
-
-        return None, False
-
     def _collect_missing_named_parameters(
         self, param_info: "list[ParameterInfo]", parameters: "ParameterMapping"
     ) -> "list[str]":
@@ -447,7 +422,7 @@ class ParameterConverter:
                 for param in param_info:
                     param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
                     if param_key not in unique_params:
-                        value, found = self._extract_param_value_single_style(param, parameters)
+                        value, found = self._extract_param_value_mixed_styles(param, parameters, [])
                         if found:
                             unique_params[param_key] = value
                             param_order.append(param_key)

@@ -107,8 +107,6 @@ COPY_FROM_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY", "COPY_FRO
 
 COPY_TO_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY_TO",)
 
-ParseCacheEntry = tuple[exp.Expr | None, OperationType, tuple[bool, bool]]
-
 
 def is_copy_operation(operation_type: "OperationType") -> bool:
     """Determine if the operation corresponds to any PostgreSQL COPY variant.
@@ -583,7 +581,7 @@ class SQLProcessor:
 
     @staticmethod
     def _unpack_parse_cache_entry(
-        parse_cache_entry: "ParseCacheEntry",
+        parse_cache_entry: "tuple[exp.Expr | None, OperationType, tuple[bool, bool]]",
     ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
         """Expand cached parse results into runtime objects.
 
@@ -602,7 +600,7 @@ class SQLProcessor:
 
     def _resolve_expression(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
-    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None, ParseCacheEntry | None]":
+    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None]":
         """Resolve an SQLGlot expression with caching.
 
         Args:
@@ -630,7 +628,7 @@ class SQLProcessor:
                 self._store_parse_cache(parse_cache_key, expression, operation_type, operation_profile)
         else:
             expression, operation_type, operation_profile = SQLProcessor._unpack_parse_cache_entry(parse_cache_entry)
-        return expression, operation_type, operation_profile, parse_cache_key, parse_cache_entry
+        return expression, operation_type, operation_profile, parse_cache_key
 
     def _apply_ast_transformers(
         self,
@@ -640,7 +638,6 @@ class SQLProcessor:
         operation_type: "OperationType",
         operation_profile: "OperationProfile",
         parse_cache_key: "Any | None",
-        parse_cache_entry: "ParseCacheEntry | None",
         expression_override: "exp.Expr | None",
         is_many: bool = False,
     ) -> "tuple[exp.Expr | None, Any, bool, OperationType, OperationProfile]":
@@ -653,7 +650,6 @@ class SQLProcessor:
             operation_type: Current operation type.
             operation_profile: Current operation profile.
             parse_cache_key: Parse cache key when used.
-            parse_cache_entry: Cached parse entry when available.
             expression_override: Expression override reference.
             is_many: Whether the statement runs as execute_many; forwarded to the
                 parameter AST transformer so it treats batched payloads correctly.
@@ -840,11 +836,10 @@ class SQLProcessor:
             operation_type: OperationType = "COMMAND"
             parameter_casts: dict[int, str] = {}
             parse_cache_key = None
-            parse_cache_entry = None
 
             if self._config.enable_parsing:
-                (expression, operation_type, operation_profile, parse_cache_key, parse_cache_entry) = (
-                    self._resolve_expression(sqlglot_sql, self._dialect_str, expression_override)
+                (expression, operation_type, operation_profile, parse_cache_key) = self._resolve_expression(
+                    sqlglot_sql, self._dialect_str, expression_override
                 )
                 (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
                     self._apply_ast_transformers(
@@ -854,7 +849,6 @@ class SQLProcessor:
                         operation_type,
                         operation_profile,
                         parse_cache_key,
-                        parse_cache_entry,
                         expression_override,
                         is_many=is_many,
                     )

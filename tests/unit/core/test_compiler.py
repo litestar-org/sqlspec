@@ -29,6 +29,7 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
+import sqlspec.core.compiler as compiler_module
 from sqlspec.core import (
     SQL,
     CompiledSQL,
@@ -702,6 +703,13 @@ def test_parse_cache_entry_does_not_store_parameter_casts() -> None:
     cache_entry = next(iter(processor._parse_cache.values()))
 
     assert len(cache_entry) == 3
+
+
+def test_ast_transformer_path_does_not_accept_unused_parse_cache_entry() -> None:
+    source = inspect.getsource(SQLProcessor._apply_ast_transformers)
+
+    assert "parse_cache_entry" not in source
+    assert not hasattr(compiler_module, "ParseCacheEntry")
 
 
 @requires_interpreted

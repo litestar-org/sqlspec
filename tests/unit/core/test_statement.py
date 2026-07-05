@@ -16,6 +16,7 @@ Key Test Coverage:
 
 import copy
 import importlib.util
+import inspect
 import logging
 import pickle
 from pathlib import Path
@@ -27,6 +28,7 @@ from sqlglot import expressions as exp
 from sqlglot.dialects.postgres import Postgres
 
 import sqlspec.core.pipeline as pipeline_module
+import sqlspec.core.statement as statement_module
 import sqlspec.typing as public_typing
 from sqlspec.core import (
     SQL,
@@ -973,6 +975,19 @@ def test_sql_as_script_creates_new_instance() -> None:
     assert script_stmt is not original
     assert script_stmt._is_script is True
     assert original._is_script is False
+
+
+def test_sql_as_script_reuses_clone_base() -> None:
+    source = inspect.getsource(SQL.as_script)
+
+    assert "self._clone_base" in source
+    assert "SQL(" not in source
+
+
+def test_statement_config_public_fields_are_derived_from_slots() -> None:
+    assert statement_module._PUBLIC_CONFIG_FIELDS == frozenset(
+        slot for slot in statement_module.SQL_CONFIG_SLOTS if not slot.startswith("_")
+    )
 
 
 def test_sql_add_named_parameter_creates_new_instance() -> None:

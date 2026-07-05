@@ -4,7 +4,12 @@ import io
 
 import pytest
 
+import sqlspec.storage.backends.base as storage_base_module
 from sqlspec.storage.backends.base import AsyncObStoreStreamIterator, AsyncThreadedBytesIterator
+
+
+def test_storage_backends_base_dead_limiter_stays_removed() -> None:
+    assert not hasattr(storage_base_module, "storage_limiter")
 
 
 class FakeAsyncStream:

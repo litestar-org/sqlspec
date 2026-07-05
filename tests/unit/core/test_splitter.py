@@ -39,6 +39,10 @@ def test_join_string_fragments_helper_removed() -> None:
     assert not hasattr(splitter_module, "_join_string_fragments")
 
 
+def test_splitter_private_cache_stats_helper_removed() -> None:
+    assert not hasattr(splitter_module, "get_splitter_cache_stats")
+
+
 def test_dialect_class_map_contains_expected_aliases() -> None:
     """split_sql_script should instantiate only the selected dialect config."""
 

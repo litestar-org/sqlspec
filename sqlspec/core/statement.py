@@ -137,28 +137,7 @@ SQL_CONFIG_SLOTS: Final = (
     "_is_frozen",
 )
 
-_PUBLIC_CONFIG_FIELDS: Final = frozenset((
-    "dialect",
-    "enable_analysis",
-    "enable_caching",
-    "enable_column_pruning",
-    "enable_expression_simplification",
-    "enable_parameter_type_wrapping",
-    "enable_parsing",
-    "enable_sqlcommenter",
-    "enable_transformations",
-    "enable_validation",
-    "execution_mode",
-    "execution_args",
-    "output_transformer",
-    "sqlcommenter_attributes",
-    "sqlcommenter_enable_context",
-    "sqlcommenter_enable_traceparent",
-    "statement_transformers",
-    "parameter_config",
-    "parameter_converter",
-    "parameter_validator",
-))
+_PUBLIC_CONFIG_FIELDS: Final = frozenset(slot for slot in SQL_CONFIG_SLOTS if not slot.startswith("_"))
 
 PROCESSED_STATE_SLOTS: Final = (
     "compiled_sql",
@@ -543,6 +522,17 @@ class SQL:
     def _extract_filters(parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
         return [p for p in parameters if is_statement_filter(p)]
 
+    def _absorb_single_parameter(self, param: Any) -> None:
+        if isinstance(param, dict):
+            self._named_parameters.update(param)
+        elif isinstance(param, (list, tuple)):
+            if self._is_many:
+                self._positional_parameters = list(param)
+            else:
+                self._positional_parameters.extend(param)
+        else:
+            self._positional_parameters.append(param)
+
     def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
         if not parameters:
             return
@@ -558,15 +548,7 @@ class SQL:
             if is_statement_filter(param):
                 return
 
-            if isinstance(param, dict):
-                self._named_parameters.update(param)
-            elif isinstance(param, (list, tuple)):
-                if self._is_many:
-                    self._positional_parameters = list(param)
-                else:
-                    self._positional_parameters.extend(param)
-            else:
-                self._positional_parameters.append(param)
+            self._absorb_single_parameter(param)
             return
 
         # Multiple parameters: check for filters
@@ -581,16 +563,7 @@ class SQL:
             return
 
         if len(actual_params) == 1:
-            param = actual_params[0]
-            if isinstance(param, dict):
-                self._named_parameters.update(param)
-            elif isinstance(param, (list, tuple)):
-                if self._is_many:
-                    self._positional_parameters = list(param)
-                else:
-                    self._positional_parameters.extend(param)
-            else:
-                self._positional_parameters.append(param)
+            self._absorb_single_parameter(actual_params[0])
         else:
             self._positional_parameters.extend(actual_params)
 
@@ -895,20 +868,7 @@ class SQL:
         Returns:
             New SQL instance configured for script execution
         """
-        original_params = self._original_parameters
-        config = self._statement_config
-        is_many = self._is_many
-        statement_seed = self._raw_expression or self._raw_sql
-        new_sql = SQL(
-            statement_seed,
-            *original_params,
-            statement_config=config,
-            is_many=is_many,
-            declared_parameters=self._declared_parameters,
-        )
-        new_sql._named_parameters.update(self._named_parameters)
-        new_sql._positional_parameters = self._positional_parameters.copy()
-        new_sql._filters = self._filters.copy()
+        new_sql = self._clone_base(self._raw_expression or self._raw_sql)
         new_sql._is_script = True
         return new_sql
 

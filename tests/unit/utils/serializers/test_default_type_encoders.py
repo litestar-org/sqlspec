@@ -19,6 +19,7 @@ import pytest
 
 from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
+from sqlspec.utils.serializers import _json as serializer_json
 from sqlspec.utils.serializers._json import (
     MsgspecSerializer,
     OrjsonSerializer,
@@ -70,11 +71,15 @@ def test_registry_includes_purepath() -> None:
 
 
 def test_decimal_encodes_to_float_not_str() -> None:
-    """sqlspec diverges from AA: Decimal -> float (preserves _normalize_supported_value behaviour)."""
+    """sqlspec diverges from AA: Decimal -> float, preserving historical JSON normalization behavior."""
     encoder = DEFAULT_TYPE_ENCODERS[Decimal]
     result = encoder(Decimal("19.99"))
     assert result == pytest.approx(19.99)
     assert isinstance(result, float)
+
+
+def test_legacy_normalize_supported_value_shim_removed() -> None:
+    assert not hasattr(serializer_json, "_normalize_supported_value")
 
 
 def test_uuid_encodes_to_str() -> None:

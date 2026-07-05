@@ -197,12 +197,6 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
     return identifiers, 1
 
 
-def _normalize_named_identifier_aliases(
-    parameter_profile: "ParameterProfile", identifiers: "set[tuple[str, int | str]]"
-) -> "set[tuple[str, int | str]]":
-    return _apply_named_identifier_aliases(identifiers, _collect_named_identifier_aliases(parameter_profile))
-
-
 def _collect_named_identifier_aliases(parameter_profile: "ParameterProfile") -> "dict[str, str]":
     aliases: dict[str, str] = {}
     for parameter in parameter_profile.parameters:

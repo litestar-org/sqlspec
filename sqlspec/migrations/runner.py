@@ -524,6 +524,43 @@ class SyncMigrationRunner(BaseMigrationRunner):
         metadata.update({"has_upgrade": has_upgrade, "has_downgrade": has_downgrade, "loader": loader})
         return metadata
 
+    def _execute_migration_sql(
+        self,
+        driver: "SyncDriverAdapterBase",
+        sql_list: list[str],
+        *,
+        use_transaction: bool,
+        on_success: "Callable[[int], None] | None",
+        start_time: float,
+    ) -> int:
+        default_schema = self._resolve_default_schema()
+        if use_transaction:
+            driver.begin()
+            if default_schema:
+                driver.set_migration_session_schema(default_schema)
+            for sql_statement in sql_list:
+                if sql_statement.strip():
+                    driver.execute_script(sql_statement)
+            execution_time = int((time.perf_counter() - start_time) * 1000)
+            if on_success:
+                on_success(execution_time)
+            driver.commit()
+            return execution_time
+
+        try:
+            if default_schema:
+                driver.set_migration_non_transactional_schema(default_schema)
+            for sql_statement in sql_list:
+                if sql_statement.strip():
+                    driver.execute_script(sql_statement)
+            execution_time = int((time.perf_counter() - start_time) * 1000)
+            if on_success:
+                on_success(execution_time)
+            return execution_time
+        finally:
+            if default_schema:
+                driver.reset_migration_session_schema()
+
     def execute_upgrade(
         self,
         driver: "SyncDriverAdapterBase",
@@ -558,6 +595,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
+        use_transaction = bool(use_transaction)
 
         runtime = self.runtime
         span = None
@@ -578,31 +616,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
-            default_schema = self._resolve_default_schema()
-            if use_transaction:
-                driver.begin()
-                if default_schema:
-                    driver.set_migration_session_schema(default_schema)
-                for sql_statement in upgrade_sql_list:
-                    if sql_statement.strip():
-                        driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    on_success(execution_time)
-                driver.commit()
-            else:
-                try:
-                    if default_schema:
-                        driver.set_migration_non_transactional_schema(default_schema)
-                    for sql_statement in upgrade_sql_list:
-                        if sql_statement.strip():
-                            driver.execute_script(sql_statement)
-                    execution_time = int((time.perf_counter() - start_time) * 1000)
-                    if on_success:
-                        on_success(execution_time)
-                finally:
-                    if default_schema:
-                        driver.reset_migration_session_schema()
+            execution_time = self._execute_migration_sql(
+                driver, upgrade_sql_list, use_transaction=use_transaction, on_success=on_success, start_time=start_time
+            )
         except Exception as exc:
             if use_transaction:
                 driver.rollback()
@@ -670,6 +686,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
+        use_transaction = bool(use_transaction)
 
         runtime = self.runtime
         span = None
@@ -690,31 +707,13 @@ class SyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
-            default_schema = self._resolve_default_schema()
-            if use_transaction:
-                driver.begin()
-                if default_schema:
-                    driver.set_migration_session_schema(default_schema)
-                for sql_statement in downgrade_sql_list:
-                    if sql_statement.strip():
-                        driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    on_success(execution_time)
-                driver.commit()
-            else:
-                try:
-                    if default_schema:
-                        driver.set_migration_non_transactional_schema(default_schema)
-                    for sql_statement in downgrade_sql_list:
-                        if sql_statement.strip():
-                            driver.execute_script(sql_statement)
-                    execution_time = int((time.perf_counter() - start_time) * 1000)
-                    if on_success:
-                        on_success(execution_time)
-                finally:
-                    if default_schema:
-                        driver.reset_migration_session_schema()
+            execution_time = self._execute_migration_sql(
+                driver,
+                downgrade_sql_list,
+                use_transaction=use_transaction,
+                on_success=on_success,
+                start_time=start_time,
+            )
         except Exception as exc:
             if use_transaction:
                 driver.rollback()
@@ -873,6 +872,43 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         metadata.update({"has_upgrade": has_upgrade, "has_downgrade": has_downgrade, "loader": loader})
         return metadata
 
+    async def _execute_migration_sql(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        sql_list: list[str],
+        *,
+        use_transaction: bool,
+        on_success: "Callable[[int], Awaitable[None]] | None",
+        start_time: float,
+    ) -> int:
+        default_schema = self._resolve_default_schema()
+        if use_transaction:
+            await driver.begin()
+            if default_schema:
+                await driver.set_migration_session_schema(default_schema)
+            for sql_statement in sql_list:
+                if sql_statement.strip():
+                    await driver.execute_script(sql_statement)
+            execution_time = int((time.perf_counter() - start_time) * 1000)
+            if on_success:
+                await on_success(execution_time)
+            await driver.commit()
+            return execution_time
+
+        try:
+            if default_schema:
+                await driver.set_migration_non_transactional_schema(default_schema)
+            for sql_statement in sql_list:
+                if sql_statement.strip():
+                    await driver.execute_script(sql_statement)
+            execution_time = int((time.perf_counter() - start_time) * 1000)
+            if on_success:
+                await on_success(execution_time)
+            return execution_time
+        finally:
+            if default_schema:
+                await driver.reset_migration_session_schema()
+
     async def execute_upgrade(
         self,
         driver: "AsyncDriverAdapterBase",
@@ -907,6 +943,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
+        use_transaction = bool(use_transaction)
 
         runtime = self.runtime
         span = None
@@ -927,31 +964,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
-            default_schema = self._resolve_default_schema()
-            if use_transaction:
-                await driver.begin()
-                if default_schema:
-                    await driver.set_migration_session_schema(default_schema)
-                for sql_statement in upgrade_sql_list:
-                    if sql_statement.strip():
-                        await driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    await on_success(execution_time)
-                await driver.commit()
-            else:
-                try:
-                    if default_schema:
-                        await driver.set_migration_non_transactional_schema(default_schema)
-                    for sql_statement in upgrade_sql_list:
-                        if sql_statement.strip():
-                            await driver.execute_script(sql_statement)
-                    execution_time = int((time.perf_counter() - start_time) * 1000)
-                    if on_success:
-                        await on_success(execution_time)
-                finally:
-                    if default_schema:
-                        await driver.reset_migration_session_schema()
+            execution_time = await self._execute_migration_sql(
+                driver, upgrade_sql_list, use_transaction=use_transaction, on_success=on_success, start_time=start_time
+            )
         except Exception as exc:
             if use_transaction:
                 await driver.rollback()
@@ -1019,6 +1034,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if use_transaction is None:
             config = self.context.config if self.context else None
             use_transaction = self.should_use_transaction(migration, config) if config else False
+        use_transaction = bool(use_transaction)
 
         runtime = self.runtime
         span = None
@@ -1039,31 +1055,13 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         execution_time = 0
 
         try:
-            default_schema = self._resolve_default_schema()
-            if use_transaction:
-                await driver.begin()
-                if default_schema:
-                    await driver.set_migration_session_schema(default_schema)
-                for sql_statement in downgrade_sql_list:
-                    if sql_statement.strip():
-                        await driver.execute_script(sql_statement)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                if on_success:
-                    await on_success(execution_time)
-                await driver.commit()
-            else:
-                try:
-                    if default_schema:
-                        await driver.set_migration_non_transactional_schema(default_schema)
-                    for sql_statement in downgrade_sql_list:
-                        if sql_statement.strip():
-                            await driver.execute_script(sql_statement)
-                    execution_time = int((time.perf_counter() - start_time) * 1000)
-                    if on_success:
-                        await on_success(execution_time)
-                finally:
-                    if default_schema:
-                        await driver.reset_migration_session_schema()
+            execution_time = await self._execute_migration_sql(
+                driver,
+                downgrade_sql_list,
+                use_transaction=use_transaction,
+                on_success=on_success,
+                start_time=start_time,
+            )
         except Exception as exc:
             if use_transaction:
                 await driver.rollback()

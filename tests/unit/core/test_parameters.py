@@ -2570,6 +2570,10 @@ def test_parameter_internal_consolidation_source_shapes() -> None:
 
 def test_private_zero_ref_helpers_are_folded() -> None:
     """API-invisible private helpers with no references should not linger."""
-    assert "def _get_parameter_value(" not in Path("sqlspec/core/parameters/_converter.py").read_text()
+    converter_source = Path("sqlspec/core/parameters/_converter.py").read_text()
+
+    assert "def _extract_param_value_single_style(" not in converter_source
+    assert "def _get_parameter_value(" not in converter_source
+    assert "def _normalize_named_identifier_aliases(" not in Path("sqlspec/core/parameters/_alignment.py").read_text()
     assert "def _hash_filter_value(" not in Path("sqlspec/core/hashing.py").read_text()
     assert "def _reset_noop(" not in Path("sqlspec/core/_pool.py").read_text()

@@ -5,12 +5,11 @@ into a single "release" migration file, following the Django-style squash workfl
 """
 
 import inspect
-import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sqlspec.migrations._backup import create_migration_backup, remove_migration_backup, restore_migration_backup
 from sqlspec.migrations.validation import validate_squash_range
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import await_
@@ -399,58 +398,29 @@ class MigrationSquasher:
     def _create_backup(self) -> Path:
         """Create timestamped backup directory with all migration files.
 
-        Keep in sync with MigrationFixer.create_backup.
-
         Returns:
             Path to created backup directory.
         """
-        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
-        backup_dir = self.migrations_path / f".backup_{timestamp}"
-
-        backup_dir.mkdir(parents=True, exist_ok=False)
-
-        for file_path in self.migrations_path.iterdir():
-            if file_path.is_file() and not file_path.name.startswith("."):
-                shutil.copy2(file_path, backup_dir / file_path.name)
-
-        self.backup_path = backup_dir
-        logger.debug("Created backup at %s", backup_dir)
-        return backup_dir
+        self.backup_path = create_migration_backup(self.migrations_path)
+        logger.debug("Created backup at %s", self.backup_path)
+        return self.backup_path
 
     def _cleanup_backup(self) -> None:
-        """Remove backup directory after successful operation.
-
-        Keep in sync with MigrationFixer.cleanup.
-        """
+        """Remove backup directory after successful operation."""
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        shutil.rmtree(self.backup_path)
+        remove_migration_backup(self.backup_path)
         logger.debug("Cleaned up backup at %s", self.backup_path)
         self.backup_path = None
 
     def _rollback_backup(self) -> None:
-        """Restore migration files from backup on error.
-
-        Keep in sync with MigrationFixer.rollback.
-        """
+        """Restore migration files from backup on error."""
         if not self.backup_path or not self.backup_path.exists():
             return
 
         backup_dir = self.backup_path
-
-        # Delete any partially created files
-        for file_path in self.migrations_path.iterdir():
-            if file_path.is_file() and not file_path.name.startswith("."):
-                file_path.unlink()
-
-        # Restore from backup
-        for backup_file in backup_dir.iterdir():
-            if backup_file.is_file():
-                shutil.copy2(backup_file, self.migrations_path / backup_file.name)
-
-        # Clean up the backup directory itself
-        shutil.rmtree(backup_dir)
+        restore_migration_backup(self.migrations_path, backup_dir, remove_backup=True)
         self.backup_path = None
 
         logger.debug("Rolled back from backup at %s", backup_dir)

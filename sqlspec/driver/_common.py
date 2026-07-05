@@ -3,9 +3,7 @@
 import graphlib
 import hashlib
 import logging
-import re
 from collections import OrderedDict
-from contextlib import suppress
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
@@ -55,7 +53,7 @@ from sqlspec.exceptions import (
     StorageCapabilityError,
 )
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
-from sqlspec.protocols import HasDataProtocol, HasExecuteProtocol, StatementProtocol
+from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
@@ -74,6 +72,7 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
+    import re
     from collections import abc
     from collections.abc import Awaitable, Callable
     from types import TracebackType
@@ -94,9 +93,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "DEFAULT_EXECUTION_RESULT",
-    "EXEC_CURSOR_RESULT",
-    "EXEC_ROWCOUNT_OVERRIDE",
-    "EXEC_SPECIAL_DATA",
     "VERSION_GROUPS_MIN_FOR_MINOR",
     "VERSION_GROUPS_MIN_FOR_PATCH",
     "AsyncExceptionHandler",
@@ -105,7 +101,6 @@ __all__ = (
     "DataDictionaryDialectMixin",
     "DataDictionaryMixin",
     "ExecutionResult",
-    "ScriptExecutionResult",
     "StackExecutionObserver",
     "SyncExceptionHandler",
     "describe_stack_statement",
@@ -121,9 +116,6 @@ logger = get_logger("sqlspec.driver")
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
 
-EXEC_CURSOR_RESULT: Final[int] = 0
-EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
-EXEC_SPECIAL_DATA: Final[int] = 2
 DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
 
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
@@ -174,16 +166,6 @@ class AsyncExceptionHandler(Protocol):
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
     ) -> bool: ...
-
-
-class ScriptExecutionResult(NamedTuple):
-    """Result from script execution with statement count information."""
-
-    cursor_result: Any
-    rowcount_override: int | None
-    special_data: Any
-    statement_count: int
-    successful_statements: int
 
 
 class ExecutionResult(NamedTuple):
@@ -601,49 +583,6 @@ class DataDictionaryMixin:
         if version is not None:
             self._version_cache[driver_id] = version
 
-    def get_cached_version_for_driver(self, driver: Any) -> "VersionCacheResult":
-        """Get cached version info for a driver instance.
-
-        Args:
-            driver: Database driver instance.
-
-        Returns:
-            Tuple of (was_cached, version_info).
-        """
-        return self.get_cached_version(id(driver))
-
-    def cache_version_for_driver(self, driver: Any, version: "VersionInfo | None") -> None:
-        """Cache version info for a driver instance.
-
-        Args:
-            driver: Database driver instance.
-            version: Parsed version info or None.
-        """
-        self.cache_version(id(driver), version)
-
-    def parse_version_string(self, version_str: str) -> "VersionInfo | None":
-        """Parse version string into VersionInfo.
-
-        Args:
-            version_str: Raw version string from database
-
-        Returns:
-            VersionInfo instance or None if parsing fails
-        """
-        patterns = [r"(\d+)\.(\d+)\.(\d+)", r"(\d+)\.(\d+)", r"(\d+)"]
-
-        for pattern in patterns:
-            match = re.search(pattern, version_str)
-            if match:
-                groups = match.groups()
-
-                major = int(groups[0])
-                minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR else 0
-                patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH else 0
-                return VersionInfo(major, minor, patch)
-
-        return None
-
     def parse_version_with_pattern(self, pattern: "re.Pattern[str]", version_str: str) -> "VersionInfo | None":
         """Parse version string using a specific regex pattern.
 
@@ -666,36 +605,6 @@ class DataDictionaryMixin:
         minor = int(groups[1]) if len(groups) > VERSION_GROUPS_MIN_FOR_MINOR and groups[1] else 0
         patch = int(groups[2]) if len(groups) > VERSION_GROUPS_MIN_FOR_PATCH and groups[2] else 0
         return VersionInfo(major, minor, patch)
-
-    def detect_version_with_queries(self, driver: "HasExecuteProtocol", queries: "list[str]") -> "VersionInfo | None":
-        """Try multiple version queries to detect database version.
-
-        Args:
-            driver: Database driver with execute support
-            queries: List of SQL queries to try
-
-        Returns:
-            Version information or None if detection fails
-        """
-        for query in queries:
-            with suppress(Exception):
-                result: HasDataProtocol = driver.execute(query)
-                result_data = result.data
-                if result_data:
-                    first_row = result_data[0]
-                    version_str = str(first_row)
-                    if isinstance(first_row, dict):
-                        version_str = str(next(iter(first_row.values())))
-                    elif isinstance(first_row, (list, tuple)):
-                        version_str = str(first_row[0])
-
-                    parsed_version = self.parse_version_string(version_str)
-                    if parsed_version:
-                        self._log_version_detected(self._resolve_log_adapter(), parsed_version)
-                        return parsed_version
-
-        self._log_version_unavailable(self._resolve_log_adapter(), "queries_exhausted")
-        return None
 
     def get_default_type_mapping(self) -> "dict[str, str]":
         """Get default type mappings for common categories.

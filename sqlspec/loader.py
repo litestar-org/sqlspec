@@ -41,7 +41,6 @@ __all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader")
 logger = get_logger("sqlspec.loader")
 
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
-TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -62,8 +61,6 @@ DIALECT_ALIASES: Final = {
     "oracledb": "oracle",
     "tsql": "mssql",
 }
-
-MIN_QUERY_PARTS: Final = 3
 
 
 def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
