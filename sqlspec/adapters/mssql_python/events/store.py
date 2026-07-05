@@ -42,11 +42,7 @@ class _MssqlPythonEventStoreMixin:
             if match:
                 index_name = match.group(1).strip("[]")
                 table_name = match.group(2)
-                return (
-                    "IF NOT EXISTS (SELECT 1 FROM sys.indexes "
-                    f"WHERE name = N'{index_name}' AND object_id = OBJECT_ID(N'{_object_name(table_name)}')) "
-                    f"BEGIN {statement}; END"
-                )
+                return f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index_name}' AND object_id = OBJECT_ID(N'{_object_name(table_name)}')) BEGIN {statement}; END"
         return statement
 
     def _wrap_drop_statement(self, statement: str) -> str:

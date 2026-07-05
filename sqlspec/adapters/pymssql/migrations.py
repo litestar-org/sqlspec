@@ -48,12 +48,7 @@ class PymssqlMigrationTrackerMixin:
         """Wrap CREATE TABLE in a T-SQL sys.tables existence probe."""
         schema_name, table_name = _split_schema_table(self.version_table)
         create_sql = self._tracking_table_ddl_text().rstrip().rstrip(";")
-        return (
-            "IF NOT EXISTS (SELECT 1 FROM sys.tables "
-            f"WHERE name = '{_escape_sql_literal(table_name)}' "
-            f"AND schema_id = SCHEMA_ID('{_escape_sql_literal(schema_name)}')) "
-            f"BEGIN {create_sql}; END;"
-        )
+        return f"IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '{_escape_sql_literal(table_name)}' AND schema_id = SCHEMA_ID('{_escape_sql_literal(schema_name)}')) BEGIN {create_sql}; END;"
 
     def _tracking_table_ddl_text(self) -> str:
         """Render CREATE TABLE text without routing SQL Server types through sqlglot."""

@@ -64,19 +64,7 @@ def _mysql_index_ddl(store: Any) -> str | None:
 
     index_name: str = store._index_name()
 
-    return (
-        "SET @sqlspec_events_idx_exists := ("
-        "SELECT COUNT(1) FROM information_schema.statistics "
-        f"WHERE table_schema = {schema_selector} "
-        f"AND table_name = '{table}' "
-        f"AND index_name = '{index_name}');"
-        "SET @sqlspec_events_idx_stmt := IF(@sqlspec_events_idx_exists = 0, "
-        f"'ALTER TABLE {table_name} ADD INDEX {index_name} (channel, status, available_at)', "
-        "'SELECT 1');"
-        "PREPARE sqlspec_events_stmt FROM @sqlspec_events_idx_stmt;"
-        "EXECUTE sqlspec_events_stmt;"
-        "DEALLOCATE PREPARE sqlspec_events_stmt;"
-    )
+    return f"SET @sqlspec_events_idx_exists := (SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = {schema_selector} AND table_name = '{table}' AND index_name = '{index_name}');SET @sqlspec_events_idx_stmt := IF(@sqlspec_events_idx_exists = 0, 'ALTER TABLE {table_name} ADD INDEX {index_name} (channel, status, available_at)', 'SELECT 1');PREPARE sqlspec_events_stmt FROM @sqlspec_events_idx_stmt;EXECUTE sqlspec_events_stmt;DEALLOCATE PREPARE sqlspec_events_stmt;"
 
 
 class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsyncConfig]):

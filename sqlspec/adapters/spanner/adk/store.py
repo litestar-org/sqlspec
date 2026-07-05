@@ -398,10 +398,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             f" AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})" if self._shard_count > 1 else ""
         )
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
-        delete_session_sql = (
-            f"DELETE FROM {self._session_table} "
-            f"WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
-        )
+        delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
         params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
         types = {
             "app_name": SPANNER_PARAM_TYPES.STRING,
@@ -742,10 +739,8 @@ VALUES ('schema_version', '1')
     def _expiration_index_ddl(self) -> "list[str]":
         options = f" OPTIONS ({self._expires_index_options})" if self._expires_index_options else ""
         return [
-            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time "
-            f"ON {self._session_table}(update_time){options}",
-            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp "
-            f"ON {self._events_table}(timestamp){options}",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time){options}",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp ON {self._events_table}(timestamp){options}",
         ]
 
     def _drop_app_states_table_sql(self) -> str:
@@ -903,10 +898,7 @@ CREATE TABLE {self._memory_table} (
 ) {pk}{options}{self._memory_row_deletion_policy}
 """
 
-        app_user_idx = (
-            f"CREATE INDEX idx_{self._memory_table}_app_user_time "
-            f"ON {self._memory_table}(app_name, user_id, timestamp DESC)"
-        )
+        app_user_idx = f"CREATE INDEX idx_{self._memory_table}_app_user_time ON {self._memory_table}(app_name, user_id, timestamp DESC)"
         session_idx = f"CREATE INDEX idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
 
         statements = [table_sql, app_user_idx, session_idx]

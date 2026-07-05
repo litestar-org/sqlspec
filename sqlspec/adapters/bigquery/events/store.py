@@ -70,20 +70,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         ts_default = self._timestamp_default()
         table_clause = self._table_clause()
 
-        return (
-            f"CREATE TABLE IF NOT EXISTS {self.table_name} ("
-            f"event_id {string_type} NOT NULL,"
-            f" channel {string_type} NOT NULL,"
-            f" payload_json {payload_type} NOT NULL,"
-            f" metadata_json {metadata_type},"
-            f" status {string_type} NOT NULL DEFAULT 'pending',"
-            f" available_at {timestamp_type} NOT NULL DEFAULT {ts_default},"
-            f" lease_expires_at {timestamp_type},"
-            f" attempts {integer_type} NOT NULL DEFAULT 0,"
-            f" created_at {timestamp_type} NOT NULL DEFAULT {ts_default},"
-            f" acknowledged_at {timestamp_type}"
-            f"){table_clause}"
-        )
+        return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id {string_type} NOT NULL, channel {string_type} NOT NULL, payload_json {payload_type} NOT NULL, metadata_json {metadata_type}, status {string_type} NOT NULL DEFAULT 'pending', available_at {timestamp_type} NOT NULL DEFAULT {ts_default}, lease_expires_at {timestamp_type}, attempts {integer_type} NOT NULL DEFAULT 0, created_at {timestamp_type} NOT NULL DEFAULT {ts_default}, acknowledged_at {timestamp_type}){table_clause}"
 
     def _index_ddl(self) -> str | None:
         """Return None since BigQuery uses CLUSTER BY instead of indexes.

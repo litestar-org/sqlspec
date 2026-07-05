@@ -141,68 +141,16 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         dialect = self.dialect
 
         if dialect == DIALECT_BIGQUERY:
-            return (
-                f"CREATE TABLE IF NOT EXISTS {self.table_name} ("
-                "event_id STRING NOT NULL,"
-                " channel STRING NOT NULL,"
-                " payload_json JSON NOT NULL,"
-                " metadata_json JSON,"
-                " status STRING NOT NULL DEFAULT 'pending',"
-                " available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),"
-                " lease_expires_at TIMESTAMP,"
-                " attempts INT64 NOT NULL DEFAULT 0,"
-                " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),"
-                " acknowledged_at TIMESTAMP"
-                ") CLUSTER BY channel, status, available_at"
-            )
+            return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id STRING NOT NULL, channel STRING NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, status STRING NOT NULL DEFAULT 'pending', available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), lease_expires_at TIMESTAMP, attempts INT64 NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), acknowledged_at TIMESTAMP) CLUSTER BY channel, status, available_at"
 
         if dialect == DIALECT_SNOWFLAKE:
-            return (
-                f"CREATE TABLE IF NOT EXISTS {self.table_name} ("
-                "event_id VARCHAR(64) NOT NULL PRIMARY KEY,"
-                " channel VARCHAR(128) NOT NULL,"
-                " payload_json VARIANT NOT NULL,"
-                " metadata_json VARIANT,"
-                " status VARCHAR(32) NOT NULL DEFAULT 'pending',"
-                " available_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),"
-                " lease_expires_at TIMESTAMP_TZ,"
-                " attempts INTEGER NOT NULL DEFAULT 0,"
-                " created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),"
-                " acknowledged_at TIMESTAMP_TZ"
-                ")"
-            )
+            return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, channel VARCHAR(128) NOT NULL, payload_json VARIANT NOT NULL, metadata_json VARIANT, status VARCHAR(32) NOT NULL DEFAULT 'pending', available_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(), lease_expires_at TIMESTAMP_TZ, attempts INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(), acknowledged_at TIMESTAMP_TZ)"
 
         if dialect == DIALECT_DUCKDB:
-            return (
-                f"CREATE TABLE IF NOT EXISTS {self.table_name} ("
-                "event_id VARCHAR(64) PRIMARY KEY,"
-                " channel VARCHAR(128) NOT NULL,"
-                " payload_json JSON NOT NULL,"
-                " metadata_json JSON,"
-                " status VARCHAR(32) NOT NULL DEFAULT 'pending',"
-                " available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-                " lease_expires_at TIMESTAMP,"
-                " attempts INTEGER NOT NULL DEFAULT 0,"
-                " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-                " acknowledged_at TIMESTAMP"
-                ")"
-            )
+            return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id VARCHAR(64) PRIMARY KEY, channel VARCHAR(128) NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, status VARCHAR(32) NOT NULL DEFAULT 'pending', available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, lease_expires_at TIMESTAMP, attempts INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, acknowledged_at TIMESTAMP)"
 
         if dialect == DIALECT_POSTGRESQL:
-            return (
-                f"CREATE TABLE IF NOT EXISTS {self.table_name} ("
-                "event_id VARCHAR(64) PRIMARY KEY,"
-                " channel VARCHAR(128) NOT NULL,"
-                " payload_json JSONB NOT NULL,"
-                " metadata_json JSONB,"
-                " status VARCHAR(32) NOT NULL DEFAULT 'pending',"
-                " available_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-                " lease_expires_at TIMESTAMPTZ,"
-                " attempts INTEGER NOT NULL DEFAULT 0,"
-                " created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-                " acknowledged_at TIMESTAMPTZ"
-                ")"
-            )
+            return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id VARCHAR(64) PRIMARY KEY, channel VARCHAR(128) NOT NULL, payload_json JSONB NOT NULL, metadata_json JSONB, status VARCHAR(32) NOT NULL DEFAULT 'pending', available_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, lease_expires_at TIMESTAMPTZ, attempts INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, acknowledged_at TIMESTAMPTZ)"
 
         return super()._table_ddl()
 
@@ -216,11 +164,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             return None
 
         if dialect == DIALECT_POSTGRESQL:
-            return (
-                f"CREATE INDEX IF NOT EXISTS {self._index_name()} "
-                f"ON {self.table_name}(channel, status, available_at) "
-                "WHERE status = 'pending'"
-            )
+            return f"CREATE INDEX IF NOT EXISTS {self._index_name()} ON {self.table_name}(channel, status, available_at) WHERE status = 'pending'"
 
         return super()._index_ddl()
 
