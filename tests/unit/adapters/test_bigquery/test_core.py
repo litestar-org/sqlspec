@@ -1,10 +1,12 @@
 """Unit tests for BigQuery core performance helpers."""
 
+import importlib
 from collections.abc import Iterable
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import UUID
+
+import pytest
 
 from google.cloud.bigquery import QueryJobConfig
 
@@ -21,7 +23,6 @@ from sqlspec.adapters.bigquery.core import (
     run_query_job,
 )
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
-from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import ParameterStyle
 from sqlspec.utils.serializers import to_json
 
@@ -376,24 +377,6 @@ def test_stream_source_skips_empty_pages_before_rows() -> None:
     assert source.fetch_chunk() == []
 
 
-def test_type_converter_bigquery_output_converter_is_final() -> None:
-    assert getattr(BigQueryOutputConverter, "__final__", False) is True
-
-
-def test_type_converter_bigquery_output_converter_instantiates() -> None:
-    converter = BigQueryOutputConverter()
-    assert isinstance(converter, BigQueryOutputConverter)
-
-
-def test_type_converter_bigquery_output_converter_converts_uuid_string() -> None:
-    converter = BigQueryOutputConverter(enable_uuid_conversion=True)
-    uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result = converter.convert(uuid_str)
-    assert isinstance(result, UUID)
-    assert str(result) == uuid_str
-
-
-def test_type_converter_bigquery_output_converter_convert_detected_fallback() -> None:
-    converter = BigQueryOutputConverter()
-    result = converter._convert_detected("hello", "unknown_type")
-    assert result == "hello"
+def test_bigquery_type_converter_module_is_gone() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("sqlspec.adapters.bigquery.type_converter")

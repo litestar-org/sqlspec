@@ -10,6 +10,7 @@ import pyarrow as pa
 from sqlspec.adapters.duckdb import default_statement_config
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
+from sqlspec.core import BaseTypeConverter
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
@@ -30,7 +31,7 @@ def test_uuid_conversion_enabled_by_default() -> None:
     """Test that UUID conversion is enabled by default."""
     converter = DuckDBOutputConverter()
     uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result = converter.handle_uuid(uuid_str)
+    result = converter.convert_if_detected(uuid_str)
     assert isinstance(result, uuid.UUID)
     assert str(result) == uuid_str
 
@@ -39,7 +40,7 @@ def test_uuid_conversion_can_be_disabled() -> None:
     """Test that UUID conversion can be disabled."""
     converter = DuckDBOutputConverter(enable_uuid_conversion=False)
     uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result = converter.handle_uuid(uuid_str)
+    result = converter.convert_if_detected(uuid_str)
     assert isinstance(result, str)
     assert result == uuid_str
 
@@ -49,19 +50,31 @@ def test_uuid_objects_pass_through_regardless_of_flag() -> None:
     converter_enabled = DuckDBOutputConverter(enable_uuid_conversion=True)
     converter_disabled = DuckDBOutputConverter(enable_uuid_conversion=False)
     uuid_obj = uuid.UUID("550e8400-e29b-41d4-a716-446655440000")
-    result_enabled = converter_enabled.handle_uuid(uuid_obj)
-    result_disabled = converter_disabled.handle_uuid(uuid_obj)
+    result_enabled = converter_enabled.convert_if_detected(uuid_obj)
+    result_disabled = converter_disabled.convert_if_detected(uuid_obj)
     assert result_enabled is uuid_obj
     assert result_disabled is uuid_obj
 
 
-def test_convert_respects_uuid_flag() -> None:
-    """Test that convert respects UUID conversion flag."""
+def test_duckdb_output_converter_inherits_base_type_converter_directly() -> None:
+    """DuckDB output conversion should use the shared base converter directly."""
+    assert DuckDBOutputConverter.__mro__[1] is BaseTypeConverter
+
+
+def test_legacy_duckdb_output_converter_helpers_are_gone() -> None:
+    """DuckDB output conversion should no longer expose cached-path helpers."""
+    assert not hasattr(DuckDBOutputConverter, "convert")
+    assert not hasattr(DuckDBOutputConverter, "handle_uuid")
+    assert not hasattr(DuckDBOutputConverter, "format_datetime")
+
+
+def test_convert_if_detected_respects_uuid_flag() -> None:
+    """Test that convert_if_detected respects the UUID conversion flag."""
     converter_enabled = DuckDBOutputConverter(enable_uuid_conversion=True)
     converter_disabled = DuckDBOutputConverter(enable_uuid_conversion=False)
     uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result_enabled = converter_enabled.convert(uuid_str)
-    result_disabled = converter_disabled.convert(uuid_str)
+    result_enabled = converter_enabled.convert_if_detected(uuid_str)
+    result_disabled = converter_disabled.convert_if_detected(uuid_str)
     assert isinstance(result_enabled, uuid.UUID)
     assert isinstance(result_disabled, str)
     assert result_disabled == uuid_str
@@ -72,8 +85,8 @@ def test_non_uuid_strings_unaffected_by_flag() -> None:
     converter_enabled = DuckDBOutputConverter(enable_uuid_conversion=True)
     converter_disabled = DuckDBOutputConverter(enable_uuid_conversion=False)
     regular_str = "just a regular string"
-    result_enabled = converter_enabled.convert(regular_str)
-    result_disabled = converter_disabled.convert(regular_str)
+    result_enabled = converter_enabled.convert_if_detected(regular_str)
+    result_disabled = converter_disabled.convert_if_detected(regular_str)
     assert result_enabled == regular_str
     assert result_disabled == regular_str
 
@@ -83,8 +96,8 @@ def test_datetime_conversion_unaffected_by_uuid_flag() -> None:
     converter_enabled = DuckDBOutputConverter(enable_uuid_conversion=True)
     converter_disabled = DuckDBOutputConverter(enable_uuid_conversion=False)
     datetime_str = "2024-01-15T10:30:00"
-    result_enabled = converter_enabled.convert(datetime_str)
-    result_disabled = converter_disabled.convert(datetime_str)
+    result_enabled = converter_enabled.convert_if_detected(datetime_str)
+    result_disabled = converter_disabled.convert_if_detected(datetime_str)
     from datetime import datetime
 
     assert isinstance(result_enabled, datetime)

@@ -26,7 +26,6 @@ from sqlspec.adapters.psqlpy.core import (
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
@@ -44,8 +43,6 @@ if TYPE_CHECKING:
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
 
 logger = get_logger("sqlspec.adapters.psqlpy")
-
-_type_converter = PostgreSQLOutputConverter()
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):

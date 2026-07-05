@@ -218,6 +218,16 @@ def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None
     assert prepared == [5]
 
 
+def test_psqlpy_driver_no_longer_caches_output_converter() -> None:
+    """The driver should no longer construct the dead psqlpy output converter."""
+    import sqlspec.adapters.psqlpy.driver as psqlpy_driver
+    import sqlspec.adapters.psqlpy.type_converter as psqlpy_type_converter
+
+    assert not hasattr(psqlpy_driver, "_type_converter")
+    assert not hasattr(psqlpy_type_converter, "PostgreSQLOutputConverter")
+    assert "PostgreSQLOutputConverter" not in psqlpy_type_converter.__all__
+
+
 def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
     statement_config = build_statement_config()
     statement_config = statement_config.replace(

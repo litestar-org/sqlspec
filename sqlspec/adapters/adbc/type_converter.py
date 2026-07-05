@@ -7,12 +7,10 @@ MySQL, BigQuery, Snowflake).
 
 from typing import Any
 
-from sqlspec.core.type_converter import CachedOutputConverter
+from sqlspec.core.type_converter import BaseTypeConverter
 from sqlspec.utils.serializers import to_json
 
-__all__ = ("ADBC_SPECIAL_CHARS", "ADBCOutputConverter", "get_adbc_type_converter")
-
-ADBC_SPECIAL_CHARS: "frozenset[str]" = frozenset({"{", "[", "-", ":", "T", "."})
+__all__ = ("ADBCOutputConverter", "get_adbc_type_converter")
 
 # Native type support by dialect
 _NATIVE_SUPPORT: "dict[str, list[str]]" = {
@@ -28,41 +26,28 @@ _NATIVE_SUPPORT: "dict[str, list[str]]" = {
 }
 
 
-class ADBCOutputConverter(CachedOutputConverter):
+class ADBCOutputConverter(BaseTypeConverter):
     """ADBC-specific output conversion with dialect awareness.
 
-    Extends CachedOutputConverter with ADBC multi-backend functionality
+    Extends BaseTypeConverter with ADBC multi-backend functionality
     including dialect-specific type handling for different database systems.
     """
 
     __slots__ = ("dialect",)
 
-    def __init__(self, dialect: str, cache_size: int = 5000) -> None:
+    def __init__(self, dialect: str) -> None:
         """Initialize with dialect-specific configuration.
 
         Args:
             dialect: Target database dialect (postgres, sqlite, duckdb, etc.)
-            cache_size: Maximum number of string values to cache (default: 5000)
         """
-        super().__init__(special_chars=ADBC_SPECIAL_CHARS, cache_size=cache_size)
         self.dialect = dialect.lower()
 
-    def _convert_detected(self, value: str, detected_type: str) -> Any:
-        """Convert value with dialect-specific handling.
-
-        Args:
-            value: String value to convert.
-            detected_type: Detected type name.
-
-        Returns:
-            Converted value according to dialect requirements.
-        """
-        try:
-            if self.dialect == "sqlite" and detected_type == "uuid":
-                return str(value)
-            return self.convert_value(value, detected_type)
-        except Exception:
-            return value
+    def convert_if_detected(self, value: Any) -> Any:
+        """Convert string values with dialect-specific handling."""
+        if self.dialect == "sqlite" and isinstance(value, str) and self.detect_type(value) == "uuid":
+            return str(value)
+        return super().convert_if_detected(value)
 
     def convert_dict(self, value: "dict[str, Any]") -> Any:
         """Convert dictionary values with dialect-specific handling.
@@ -105,14 +90,13 @@ class ADBCOutputConverter(CachedOutputConverter):
         return self.convert_value(value, target_type)
 
 
-def get_adbc_type_converter(dialect: str, cache_size: int = 5000) -> ADBCOutputConverter:
+def get_adbc_type_converter(dialect: str) -> ADBCOutputConverter:
     """Factory function to create dialect-specific ADBC type converter.
 
     Args:
         dialect: Database dialect name.
-        cache_size: Maximum number of string values to cache (default: 5000)
 
     Returns:
         Configured ADBCOutputConverter instance.
     """
-    return ADBCOutputConverter(dialect, cache_size)
+    return ADBCOutputConverter(dialect)

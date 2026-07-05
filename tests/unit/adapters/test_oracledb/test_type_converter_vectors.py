@@ -190,3 +190,11 @@ def test_convert_vector_to_numpy_uses_copy_true() -> None:
     oracle_array[0] = 999.0
 
     assert result[0] == 1.0
+
+
+def test_oracle_output_converter_no_longer_exposes_json_storage_regex() -> None:
+    """Oracle type conversion should not publish the retired JSON storage regex."""
+    import sqlspec.adapters.oracledb.type_converter as oracle_type_converter
+
+    assert not hasattr(oracle_type_converter, "ORACLE_JSON_STORAGE_REGEX")
+    assert "ORACLE_JSON_STORAGE_REGEX" not in oracle_type_converter.__all__

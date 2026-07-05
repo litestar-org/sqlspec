@@ -24,7 +24,7 @@ from uuid import UUID
 from typing_extensions import final
 
 from sqlspec.core import TypedParameter
-from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
+from sqlspec.core.type_converter import BaseTypeConverter, convert_uuid
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     from sqlspec.protocols import SpannerParamTypesProtocol
 
 __all__ = (
-    "SPANNER_SPECIAL_CHARS",
     "SpannerOutputConverter",
     "bytes_to_spanner",
     "coerce_params_for_spanner",
@@ -51,7 +50,6 @@ __all__ = (
     "uuid_to_spanner",
 )
 
-SPANNER_SPECIAL_CHARS: "frozenset[str]" = frozenset({"{", "[", "-", ":", "T", "."})
 UUID_BYTE_LENGTH: int = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
 _JSON_OBJECT_TYPE: "type[Any] | None" = None
@@ -76,42 +74,41 @@ def _get_json_object_type() -> "type[Any]":
 
 
 @final
-class SpannerOutputConverter(CachedOutputConverter):
+class SpannerOutputConverter(BaseTypeConverter):
     """Spanner-specific output conversion with UUID and JSON support.
 
-    Extends CachedOutputConverter with Spanner-specific functionality
-    including UUID bytes handling and JSON deserialization.
+    Extends BaseTypeConverter with Spanner-specific UUID bytes handling
+    and JSON deserialization.
     """
 
     __slots__ = ("_enable_uuid_conversion", "_json_deserializer")
 
     def __init__(
         self,
-        cache_size: int = 5000,
         enable_uuid_conversion: bool = True,
         json_deserializer: "Callable[[str], Any] | None" = None,
     ) -> None:
         """Initialize converter with Spanner-specific options.
 
         Args:
-            cache_size: Maximum number of string values to cache (default: 5000)
             enable_uuid_conversion: Enable automatic UUID conversion (default: True)
             json_deserializer: Custom JSON deserializer (default: from_json)
         """
-        super().__init__(special_chars=SPANNER_SPECIAL_CHARS, cache_size=cache_size)
         self._enable_uuid_conversion = enable_uuid_conversion
         self._json_deserializer = json_deserializer if json_deserializer is not None else from_json
 
-    def _convert_detected(self, value: str, detected_type: str) -> Any:
-        """Convert value with Spanner-specific handling.
+    def convert_if_detected(self, value: Any) -> Any:
+        """Convert values with Spanner-specific byte UUID and JSON handling."""
+        if self._enable_uuid_conversion and isinstance(value, bytes) and len(value) == UUID_BYTE_LENGTH:
+            try:
+                return UUID(bytes=value)
+            except ValueError:
+                return value
 
-        Args:
-            value: String value to convert.
-            detected_type: Detected type name.
+        if not isinstance(value, str):
+            return value
 
-        Returns:
-            Converted value according to Spanner requirements.
-        """
+        detected_type = self.detect_type(value)
         if detected_type == "uuid":
             if not self._enable_uuid_conversion:
                 return value
@@ -124,26 +121,7 @@ class SpannerOutputConverter(CachedOutputConverter):
                 return self._json_deserializer(value)
             except (ValueError, TypeError):
                 return value
-        return value
-
-    def convert(self, value: Any) -> Any:
-        """Convert value with Spanner-specific byte UUID handling.
-
-        Args:
-            value: Value to potentially convert.
-
-        Returns:
-            Converted value or original value.
-        """
-        if self._enable_uuid_conversion and isinstance(value, bytes) and len(value) == UUID_BYTE_LENGTH:
-            try:
-                return UUID(bytes=value)
-            except ValueError:
-                return value
-
-        if not isinstance(value, str):
-            return value
-        return self._convert_cache(value)
+        return super().convert_if_detected(value)
 
 
 def _json_param_type() -> Any:
