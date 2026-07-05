@@ -178,11 +178,11 @@ def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
     Handles both single items and lists for consistency with other converters.
     """
     if isinstance(data, list):
-        return [_convert_single_foreign_key_metadata(item, schema_type) for item in data]
-    return _convert_single_foreign_key_metadata(data, schema_type)
+        return [_coerce_foreign_key_item(item, schema_type) for item in data]
+    return _coerce_foreign_key_item(data, schema_type)
 
 
-def _convert_single_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
+def _coerce_foreign_key_item(data: Any, schema_type: Any) -> Any:
     """Convert a single item to ForeignKeyMetadata."""
     if not is_dict(data):
         return data

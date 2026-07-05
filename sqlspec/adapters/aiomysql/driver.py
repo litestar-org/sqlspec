@@ -130,7 +130,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Statement execution results with data or row counts
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -166,7 +166,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Batch execution results
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -186,7 +186,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Script execution results with statement count
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         if prepared_parameters and len(statements) > 1:
@@ -260,7 +260,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """Return a native aiomysql row stream backed by an unbuffered ``SSCursor``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return AsyncRowStream(AiomysqlStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "AiomysqlExceptionHandler":
@@ -292,11 +292,11 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
-        telemetry_payload = await self._write_result_to_storage_async(
+        telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -321,7 +321,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
+            needs_preparation = self._arrow_rows_need_preparation(arrow_table)
             use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
             if use_infile:
                 payload = encode_records_for_local_infile(records)
@@ -350,10 +350,10 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,
@@ -366,7 +366,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into MySQL."""
 
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )

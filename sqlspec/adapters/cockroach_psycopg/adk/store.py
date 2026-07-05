@@ -433,7 +433,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await conn.commit()
 
     async def _get_create_sessions_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -463,7 +463,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         """
 
     async def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
@@ -486,7 +486,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         """
 
     async def _get_create_app_states_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
 
         return f"""
@@ -498,7 +498,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         """
 
     async def _get_create_user_states_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
 
         return f"""
@@ -512,7 +512,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         """
 
     async def _get_create_metadata_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
 
         return f"""
@@ -648,7 +648,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         self._set_metadata(key, value)
 
     def _get_create_sessions_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -678,7 +678,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """
 
     def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
@@ -701,7 +701,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """
 
     def _get_create_app_states_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
 
         return f"""
@@ -713,7 +713,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """
 
     def _get_create_user_states_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
 
         return f"""
@@ -727,7 +727,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """
 
     def _get_create_metadata_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
 
         return f"""
@@ -1247,7 +1247,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
     async def _get_create_memory_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -1326,7 +1326,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         return self._delete_entries_older_than(days)
 
     def _get_create_memory_table_sql(self) -> str:
-        adk_config = _get_cockroach_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -1528,7 +1528,7 @@ def _raise_missing_session(session_id: str) -> NoReturn:
     raise ValueError(msg)
 
 
-def _get_cockroach_psycopg_adk_config(config: Any) -> CockroachPsycopgADKConfig:
+def _adk_config(config: Any) -> CockroachPsycopgADKConfig:
     """Return CockroachDB psycopg ADK extension settings from ``extension_config["adk"]``."""
 
     extension_config = getattr(config, "extension_config", {})

@@ -519,7 +519,7 @@ class LimitOffsetFilter(PaginationFilter):
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
-        current_statement = statement._get_expression_for_filter_modification()
+        current_statement = statement._filter_expression()
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
@@ -571,7 +571,7 @@ class OrderByFilter(StatementFilter):
         col_expr = self._get_column_expression(self.field_name)
         order_expr = col_expr.desc() if self._sort_order == "desc" else col_expr.asc()
 
-        current_statement = statement._get_expression_for_filter_modification()
+        current_statement = statement._filter_expression()
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.order_by(order_expr)

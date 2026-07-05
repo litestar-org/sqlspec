@@ -4,8 +4,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
-from sqlspec.extensions.adk._config_utils import _ADKMemoryStoreConfig, _get_adk_memory_store_config
-from sqlspec.extensions.adk._table_utils import parse_owner_id_column, reset_drop_statements, validate_table_name
+from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
+from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, reset_drop_sql
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -60,16 +60,16 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        store_config = self._get_store_config_from_extension()
+        store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
         self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        validate_table_name(self._memory_table)
+        ensure_table_name(self._memory_table)
 
     @property
     def config(self) -> ConfigT:
@@ -189,13 +189,13 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def _get_store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
+    def _store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
         """Extract ADK memory configuration from config.extension_config.
 
         Returns:
             Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
-        return _get_adk_memory_store_config(self._config)
+        return _adk_memory_store_config(self._config)
 
     @abstractmethod
     async def _get_create_memory_table_sql(self) -> "str | list[str]":
@@ -217,7 +217,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
 
     def _get_reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
-        return reset_drop_statements(
+        return reset_drop_sql(
             list(self._get_drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._get_drop_memory_table_sql_for_table
         )
 
@@ -286,16 +286,16 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        store_config = self._get_store_config_from_extension()
+        store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
         self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        validate_table_name(self._memory_table)
+        ensure_table_name(self._memory_table)
 
     @property
     def config(self) -> ConfigT:
@@ -415,13 +415,13 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def _get_store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
+    def _store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
         """Extract ADK memory configuration from config.extension_config.
 
         Returns:
             Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
-        return _get_adk_memory_store_config(self._config)
+        return _adk_memory_store_config(self._config)
 
     @abstractmethod
     def _get_create_memory_table_sql(self) -> "str | list[str]":
@@ -434,7 +434,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
 
     def _get_reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
-        return reset_drop_statements(
+        return reset_drop_sql(
             list(self._get_drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._get_drop_memory_table_sql_for_table
         )
 

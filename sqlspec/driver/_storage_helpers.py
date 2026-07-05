@@ -8,11 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.storage import StorageBridgeJob, StorageTelemetry, create_storage_bridge_job
-from sqlspec.utils.arrow_helpers import (
-    arrow_table_needs_parameter_preparation as _arrow_table_needs_parameter_preparation,
-)
+from sqlspec.utils.arrow_helpers import arrow_table_needs_parameter_preparation as _arrow_rows_need_preparation
 from sqlspec.utils.arrow_helpers import arrow_table_to_rows as _arrow_table_to_rows_impl
-from sqlspec.utils.arrow_helpers import build_ingest_telemetry as _build_ingest_telemetry_impl
+from sqlspec.utils.arrow_helpers import build_ingest_telemetry as _ingest_telemetry_impl
 from sqlspec.utils.arrow_helpers import coerce_arrow_table as _coerce_arrow_table_impl
 from sqlspec.utils.arrow_helpers import records_to_arrow_table as _records_to_arrow_table_impl
 
@@ -91,7 +89,7 @@ def arrow_table_to_rows(
 def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
     """Return whether Arrow rows may contain nested values needing preparation."""
     # mypyc boundary: compiled _common.py cannot safely call uncompiled arrow_helpers directly; this wrapper is intentional.
-    return _arrow_table_needs_parameter_preparation(table)
+    return _arrow_rows_need_preparation(table)
 
 
 def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
@@ -104,7 +102,7 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
     Returns:
         StorageTelemetry dict with row/byte counts.
     """
-    telemetry = _build_ingest_telemetry_impl(table, format_label=format_label)
+    telemetry = _ingest_telemetry_impl(table, format_label=format_label)
     return cast("StorageTelemetry", telemetry)
 
 

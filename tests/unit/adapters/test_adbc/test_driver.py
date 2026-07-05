@@ -20,7 +20,7 @@ def test_dispatch_execute_many_non_postgres_uses_compiled_parameter_sets(monkeyp
     prepared_parameters = [(1,), (2,), (3,)]
     monkeypatch.setattr(
         AdbcDriver,
-        "_get_compiled_sql",
+        "_compiled_sql",
         lambda self, statement, config: ("INSERT INTO test (id) VALUES (?)", prepared_parameters),
     )
 
@@ -42,7 +42,7 @@ def test_dispatch_execute_postgres_uses_compiled_parameters_directly(monkeypatch
     prepared_parameters = (1, "alice")
     monkeypatch.setattr(
         AdbcDriver,
-        "_get_compiled_sql",
+        "_compiled_sql",
         lambda self, statement, config: ("UPDATE users SET name = $2 WHERE id = $1", prepared_parameters),
     )
 
@@ -102,7 +102,7 @@ def test_dispatch_execute_many_postgres_without_casts_uses_compiled_parameter_se
     prepared_parameters = [(1, "alice"), (2, "bob")]
     monkeypatch.setattr(
         AdbcDriver,
-        "_get_compiled_sql",
+        "_compiled_sql",
         lambda self, statement, config: ("INSERT INTO users (id, name) VALUES ($1, $2)", prepared_parameters),
     )
     monkeypatch.setattr("sqlspec.adapters.adbc.driver.resolve_parameter_casts", lambda statement: {})

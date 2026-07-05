@@ -25,7 +25,7 @@ pytestmark = requires_interpreted
 
 
 class MockSyncDriver(SyncDriverAdapterBase):
-    """Mock driver for testing _create_count_query method."""
+    """Mock driver for testing _count_query method."""
 
     def __init__(self) -> None:
         self.statement_config = StatementConfig()
@@ -85,13 +85,13 @@ def mock_driver() -> "MockSyncDriver":
     return MockSyncDriver()
 
 
-def test_create_count_query_compiles_missing_expression(sqlite_driver: "SqliteDriver") -> None:
+def test_count_query_compiles_missing_expression(sqlite_driver: "SqliteDriver") -> None:
     """Ensure count query generation parses SQL lacking prebuilt expression."""
     sql_statement = SQL("SELECT id FROM users WHERE active = true")
 
     assert sql_statement.expression is None
 
-    count_sql = sqlite_driver._create_count_query(sql_statement)
+    count_sql = sqlite_driver._count_query(sql_statement)
 
     assert sql_statement.expression is not None
 
@@ -101,9 +101,9 @@ def test_create_count_query_compiles_missing_expression(sqlite_driver: "SqliteDr
     assert "count" in compiled_sql.lower()
 
 
-def test_extract_pagination_placeholders_uses_module_sqlglot_import() -> None:
+def test_pagination_names_uses_module_sqlglot_import() -> None:
     """Pagination placeholder extraction should avoid per-call import lookups."""
-    source = inspect.getsource(driver_common._extract_pagination_placeholders)
+    source = inspect.getsource(driver_common._pagination_names)
     tree = ast.parse(source)
     imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
 
@@ -111,7 +111,7 @@ def test_extract_pagination_placeholders_uses_module_sqlglot_import() -> None:
     assert imports == []
 
 
-def test_create_count_query_with_cte_keeps_with_clause(sqlite_driver: "SqliteDriver") -> None:
+def test_count_query_with_cte_keeps_with_clause(sqlite_driver: "SqliteDriver") -> None:
     """Ensure count query preserves CTE at the top level."""
     sql_statement = SQL(
         """
@@ -126,7 +126,7 @@ def test_create_count_query_with_cte_keeps_with_clause(sqlite_driver: "SqliteDri
         """
     )
 
-    count_sql = sqlite_driver._create_count_query(sql_statement)
+    count_sql = sqlite_driver._count_query(sql_statement)
 
     compiled_sql, _ = count_sql.compile()
     normalized = compiled_sql.upper().replace("\n", " ")
@@ -141,7 +141,7 @@ def test_count_query_missing_from_clause_with_order_by(mock_driver: "MockSyncDri
     sql.compile()
 
     with pytest.raises(ImproperConfigurationError, match="missing FROM clause"):
-        mock_driver._create_count_query(sql)
+        mock_driver._count_query(sql)
 
 
 def test_count_query_missing_from_clause_with_where(mock_driver: "MockSyncDriver") -> None:
@@ -152,7 +152,7 @@ def test_count_query_missing_from_clause_with_where(mock_driver: "MockSyncDriver
     sql.compile()
 
     with pytest.raises(ImproperConfigurationError, match="missing FROM clause"):
-        mock_driver._create_count_query(sql)
+        mock_driver._count_query(sql)
 
 
 def test_count_query_select_star_no_from(mock_driver: "MockSyncDriver") -> None:
@@ -161,7 +161,7 @@ def test_count_query_select_star_no_from(mock_driver: "MockSyncDriver") -> None:
     sql.compile()
 
     with pytest.raises(ImproperConfigurationError, match="missing FROM clause"):
-        mock_driver._create_count_query(sql)
+        mock_driver._count_query(sql)
 
 
 def test_count_query_select_columns_no_from(mock_driver: "MockSyncDriver") -> None:
@@ -170,7 +170,7 @@ def test_count_query_select_columns_no_from(mock_driver: "MockSyncDriver") -> No
     sql.compile()
 
     with pytest.raises(ImproperConfigurationError, match="missing FROM clause"):
-        mock_driver._create_count_query(sql)
+        mock_driver._count_query(sql)
 
 
 def test_count_query_does_not_infer_nested_table_as_outer_from(mock_driver: "MockSyncDriver") -> None:
@@ -180,7 +180,7 @@ def test_count_query_does_not_infer_nested_table_as_outer_from(mock_driver: "Moc
     sql.compile()
 
     with pytest.raises(ImproperConfigurationError, match="missing FROM clause"):
-        mock_driver._create_count_query(sql)
+        mock_driver._count_query(sql)
 
 
 def test_count_query_valid_select_with_from(mock_driver: "MockSyncDriver") -> None:
@@ -190,7 +190,7 @@ def test_count_query_valid_select_with_from(mock_driver: "MockSyncDriver") -> No
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -205,7 +205,7 @@ def test_count_query_with_where_and_from(mock_driver: "MockSyncDriver") -> None:
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -222,7 +222,7 @@ def test_count_query_with_group_by(mock_driver: "MockSyncDriver") -> None:
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -236,7 +236,7 @@ def test_count_query_removes_limit_offset(mock_driver: "MockSyncDriver") -> None
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "LIMIT" not in count_str.upper()
@@ -252,7 +252,7 @@ def test_count_query_with_having(mock_driver: "MockSyncDriver") -> None:
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -276,7 +276,7 @@ def test_complex_select_with_join(mock_driver: "MockSyncDriver") -> None:
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -299,7 +299,7 @@ def test_select_with_subquery_in_from(mock_driver: "MockSyncDriver") -> None:
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -314,11 +314,11 @@ def test_error_message_clarity(mock_driver: "MockSyncDriver") -> None:
         ImproperConfigurationError,
         match="COUNT queries require a FROM clause to determine which table to count rows from",
     ):
-        mock_driver._create_count_query(sql)
+        mock_driver._count_query(sql)
 
 
-def test_create_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriver") -> None:
-    """Test regression: Ensure _create_count_query handles missing 'from' key in sqlglot args.
+def test_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriver") -> None:
+    """Test regression: Ensure _count_query handles missing 'from' key in sqlglot args.
 
     Sqlglot 11.5.0+ stores the FROM clause under 'from_' key, but the driver was looking for 'from'.
     This test verifies we check both keys or fallback to table extraction.
@@ -333,7 +333,7 @@ def test_create_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriv
     # Verify pre-check: ensure our test setup actually mimics the condition
     # (This assumes sqlglot usage in the driver which might vary, but the bug was specific)
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
     count_str = str(count_sql)
 
     assert "COUNT(*)" in count_str.upper()
@@ -341,14 +341,14 @@ def test_create_count_query_with_sqlglot_from_key_bug(mock_driver: "MockSyncDriv
     assert "FROM users" in count_str or "FROM USERS" in count_str.upper()
 
 
-def test_create_count_query_with_explicit_columns_no_star(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_with_explicit_columns_no_star(mock_driver: "MockSyncDriver") -> None:
     """Test regression: select(col1, col2) without * shouldn't break count query generation."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id, name FROM users"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
     count_str = str(count_sql)
 
     assert "COUNT(*)" in count_str.upper()
@@ -360,20 +360,20 @@ def test_create_count_query_with_explicit_columns_no_star(mock_driver: "MockSync
 # =============================================================================
 
 
-def test_create_count_query_preserves_named_parameters(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query preserves named parameters from original SQL."""
+def test_count_query_preserves_named_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query preserves named parameters from original SQL."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT * FROM users WHERE status = :status", status="active"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     assert count_sql.named_parameters == {"status": "active"}
 
 
-def test_create_count_query_preserves_multiple_named_parameters(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_preserves_multiple_named_parameters(mock_driver: "MockSyncDriver") -> None:
     """Test that multiple named parameters are preserved in count query."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT * FROM users WHERE status = :status AND role = :role", status="active", role="admin"),
@@ -381,24 +381,24 @@ def test_create_count_query_preserves_multiple_named_parameters(mock_driver: "Mo
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     assert count_sql.named_parameters == {"status": "active", "role": "admin"}
 
 
-def test_create_count_query_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
     """Test that positional parameters are preserved in count query."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT * FROM users WHERE id = ?", 123), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     assert count_sql.positional_parameters == [123]
 
 
-def test_create_count_query_preserves_mixed_parameters(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_preserves_mixed_parameters(mock_driver: "MockSyncDriver") -> None:
     """Test that both positional and named parameters are preserved."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT * FROM users WHERE id = ? AND status = :status", 123, status="active"),
@@ -406,13 +406,13 @@ def test_create_count_query_preserves_mixed_parameters(mock_driver: "MockSyncDri
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     assert count_sql.positional_parameters == [123]
     assert count_sql.named_parameters == {"status": "active"}
 
 
-def test_create_count_query_preserves_named_params_with_group_by(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_preserves_named_params_with_group_by(mock_driver: "MockSyncDriver") -> None:
     """Test named params preserved when GROUP BY triggers subquery wrapping."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT status, COUNT(*) FROM users WHERE role = :role GROUP BY status", role="admin"),
@@ -420,16 +420,16 @@ def test_create_count_query_preserves_named_params_with_group_by(mock_driver: "M
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     assert count_sql.named_parameters == {"role": "admin"}
 
 
-def test_create_count_query_expands_repeated_named_parameters_plain_select(sqlite_driver: "SqliteDriver") -> None:
+def test_count_query_expands_repeated_named_parameters_plain_select(sqlite_driver: "SqliteDriver") -> None:
     """Repeated named params should compile for expression-backed direct count queries."""
     sql = SQL("SELECT id FROM t WHERE a = :wid OR b = :wid", statement_config=sqlite_driver.statement_config, wid="W")
 
-    count_sql = sqlite_driver._create_count_query(sql)
+    count_sql = sqlite_driver._count_query(sql)
     compiled_sql, parameters = count_sql.compile()
 
     assert "COUNT(*)" in compiled_sql.upper()
@@ -437,7 +437,7 @@ def test_create_count_query_expands_repeated_named_parameters_plain_select(sqlit
     assert list(parameters) == ["W", "W"]
 
 
-def test_create_count_query_expands_repeated_named_parameters_join_branch(sqlite_driver: "SqliteDriver") -> None:
+def test_count_query_expands_repeated_named_parameters_join_branch(sqlite_driver: "SqliteDriver") -> None:
     """Repeated named params should compile when joins force count subquery wrapping."""
     sql = SQL(
         "SELECT t.id FROM t JOIN u ON u.t_id = t.id WHERE t.a = :wid OR u.b = :wid",
@@ -445,7 +445,7 @@ def test_create_count_query_expands_repeated_named_parameters_join_branch(sqlite
         wid="W",
     )
 
-    count_sql = sqlite_driver._create_count_query(sql)
+    count_sql = sqlite_driver._count_query(sql)
     compiled_sql, parameters = count_sql.compile()
 
     assert "COUNT(*)" in compiled_sql.upper()
@@ -453,7 +453,7 @@ def test_create_count_query_expands_repeated_named_parameters_join_branch(sqlite
     assert list(parameters) == ["W", "W"]
 
 
-def test_create_count_query_expands_repeated_named_parameters_cte_branch(sqlite_driver: "SqliteDriver") -> None:
+def test_count_query_expands_repeated_named_parameters_cte_branch(sqlite_driver: "SqliteDriver") -> None:
     """Repeated named params should compile when CTEs force count subquery wrapping."""
     sql = SQL(
         "WITH filtered AS (SELECT id FROM t WHERE a = :wid OR b = :wid) SELECT id FROM filtered",
@@ -461,7 +461,7 @@ def test_create_count_query_expands_repeated_named_parameters_cte_branch(sqlite_
         wid="W",
     )
 
-    count_sql = sqlite_driver._create_count_query(sql)
+    count_sql = sqlite_driver._count_query(sql)
     compiled_sql, parameters = count_sql.compile()
 
     assert "WITH" in compiled_sql.upper()
@@ -469,11 +469,11 @@ def test_create_count_query_expands_repeated_named_parameters_cte_branch(sqlite_
     assert list(parameters) == ["W", "W"]
 
 
-def test_create_count_query_single_named_parameter_control(sqlite_driver: "SqliteDriver") -> None:
+def test_count_query_single_named_parameter_control(sqlite_driver: "SqliteDriver") -> None:
     """Single-occurrence named params should keep one execution value."""
     sql = SQL("SELECT id FROM t WHERE a = :wid", statement_config=sqlite_driver.statement_config, wid="W")
 
-    count_sql = sqlite_driver._create_count_query(sql)
+    count_sql = sqlite_driver._count_query(sql)
     compiled_sql, parameters = count_sql.compile()
 
     assert compiled_sql.count("?") == 1
@@ -485,34 +485,34 @@ def test_create_count_query_single_named_parameter_control(sqlite_driver: "Sqlit
 # =============================================================================
 
 
-def test_add_count_over_column_adds_window_function(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column adds COUNT(*) OVER() to SELECT."""
+def test_with_total_count_adds_window_function(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count adds COUNT(*) OVER() to SELECT."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id, name FROM users WHERE active = true"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     count_str = str(modified_sql)
     assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
     assert "_total_count" in count_str.lower()
 
 
-def test_add_count_over_column_preserves_named_parameters(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column preserves named parameters."""
+def test_with_total_count_preserves_named_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count preserves named parameters."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users WHERE status = :status", status="active"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     assert modified_sql.named_parameters == {"status": "active"}
 
 
-def test_add_count_over_column_expands_repeated_named_parameters(sqlite_driver: "SqliteDriver") -> None:
+def test_with_total_count_expands_repeated_named_parameters(sqlite_driver: "SqliteDriver") -> None:
     """Repeated named params should compile for expression-backed window count queries."""
     sql = SQL(
         "SELECT id FROM users WHERE status = :status OR backup_status = :status",
@@ -520,7 +520,7 @@ def test_add_count_over_column_expands_repeated_named_parameters(sqlite_driver: 
         status="active",
     )
 
-    modified_sql = sqlite_driver._add_count_over_column(sql)
+    modified_sql = sqlite_driver._with_total_count(sql)
     compiled_sql, parameters = modified_sql.compile()
 
     assert "COUNT(*) OVER" in compiled_sql.upper()
@@ -528,26 +528,26 @@ def test_add_count_over_column_expands_repeated_named_parameters(sqlite_driver: 
     assert list(parameters) == ["active", "active"]
 
 
-def test_add_count_over_column_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column preserves positional parameters."""
+def test_with_total_count_preserves_positional_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count preserves positional parameters."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users WHERE id = ?", 123), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     assert modified_sql.positional_parameters == [123]
 
 
-def test_add_count_over_column_preserves_limit_offset(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column preserves LIMIT/OFFSET unlike count query."""
+def test_with_total_count_preserves_limit_offset(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count preserves LIMIT/OFFSET unlike count query."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users LIMIT 10 OFFSET 20"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     count_str = str(modified_sql)
     assert "LIMIT" in count_str.upper()
@@ -590,26 +590,26 @@ def test_extract_total_from_rows_handles_asdict_rows(mock_driver: "MockSyncDrive
     assert data == [{"id": 1}, {"id": 2}]
 
 
-def test_add_count_over_column_custom_alias(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column accepts custom alias."""
+def test_with_total_count_custom_alias(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count accepts custom alias."""
     sql = mock_driver.prepare_statement(SQL("SELECT id FROM users"), statement_config=mock_driver.statement_config)
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql, alias="row_total")
+    modified_sql = mock_driver._with_total_count(sql, alias="row_total")
 
     count_str = str(modified_sql)
     assert "row_total" in count_str.lower()
 
 
-def test_add_count_over_column_fails_on_non_select(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column raises error for non-SELECT statements."""
+def test_with_total_count_fails_on_non_select(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count raises error for non-SELECT statements."""
     sql = mock_driver.prepare_statement(
         SQL("INSERT INTO users (name) VALUES ('test')"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
     with pytest.raises(ImproperConfigurationError, match="SELECT"):
-        mock_driver._add_count_over_column(sql)
+        mock_driver._with_total_count(sql)
 
 
 def test_select_with_total_handles_repeated_named_parameters(sqlite_driver: "SqliteDriver") -> None:
@@ -746,8 +746,8 @@ async def test_async_select_with_total_window_count_uses_schema_conversion_for_e
 # =============================================================================
 
 
-def test_create_count_query_excludes_limit_offset_parameters(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query excludes limit/offset params not used in count expression.
+def test_count_query_excludes_limit_offset_parameters(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query excludes limit/offset params not used in count expression.
 
     This is the core bug fix test: when LimitOffsetFilter adds LIMIT :limit OFFSET :offset
     to a SELECT statement, the count query should NOT include these parameters since
@@ -759,7 +759,7 @@ def test_create_count_query_excludes_limit_offset_parameters(mock_driver: "MockS
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     # Count query should NOT contain limit/offset parameters
     assert "limit" not in count_sql.named_parameters
@@ -767,7 +767,7 @@ def test_create_count_query_excludes_limit_offset_parameters(mock_driver: "MockS
     assert count_sql.named_parameters == {}
 
 
-def test_create_count_query_preserves_where_params_with_pagination(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_preserves_where_params_with_pagination(mock_driver: "MockSyncDriver") -> None:
     """Test that WHERE clause params are preserved while pagination params are excluded.
 
     When a query has both WHERE clause parameters and pagination parameters,
@@ -785,7 +785,7 @@ def test_create_count_query_preserves_where_params_with_pagination(mock_driver: 
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     # WHERE clause params should be preserved
     assert count_sql.named_parameters.get("status") == "active"
@@ -796,7 +796,7 @@ def test_create_count_query_preserves_where_params_with_pagination(mock_driver: 
     assert "offset" not in count_sql.named_parameters
 
 
-def test_create_count_query_handles_conflicted_pagination_params(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_handles_conflicted_pagination_params(mock_driver: "MockSyncDriver") -> None:
     """Test that conflict-resolved pagination param names are also excluded.
 
     When parameter names conflict and get suffixes (e.g., limit_abc123),
@@ -816,7 +816,7 @@ def test_create_count_query_handles_conflicted_pagination_params(mock_driver: "M
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     # WHERE clause param should be preserved
     assert count_sql.named_parameters.get("user_limit") == 100
@@ -826,7 +826,7 @@ def test_create_count_query_handles_conflicted_pagination_params(mock_driver: "M
     assert "offset" not in count_sql.named_parameters
 
 
-def test_create_count_query_with_group_by_excludes_pagination_params(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_with_group_by_excludes_pagination_params(mock_driver: "MockSyncDriver") -> None:
     """Test that pagination params are excluded from GROUP BY queries using subquery path.
 
     When GROUP BY triggers subquery wrapping, the count query should still
@@ -843,7 +843,7 @@ def test_create_count_query_with_group_by_excludes_pagination_params(mock_driver
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     # WHERE clause param should be preserved (it's in the subquery)
     assert count_sql.named_parameters.get("role") == "admin"
@@ -867,7 +867,7 @@ def test_create_count_query_with_group_by_excludes_pagination_params(mock_driver
         assert "limit" not in count_sql.named_parameters
 
 
-def test_create_count_query_nested_limit_offset_only_excludes_outer(mock_driver: "MockSyncDriver") -> None:
+def test_count_query_nested_limit_offset_only_excludes_outer(mock_driver: "MockSyncDriver") -> None:
     """Test that only outer LIMIT/OFFSET params are excluded, not nested ones in subqueries.
 
     When a query has a subquery with its own LIMIT/OFFSET, only the outer
@@ -893,7 +893,7 @@ def test_create_count_query_nested_limit_offset_only_excludes_outer(mock_driver:
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     # Inner subquery params should be preserved (they're part of the data logic)
     assert count_sql.named_parameters.get("inner_status") == "active"
@@ -910,14 +910,14 @@ def test_create_count_query_nested_limit_offset_only_excludes_outer(mock_driver:
 # =============================================================================
 
 
-def test_create_count_query_with_union_all(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query wraps UNION ALL in a subquery for counting."""
+def test_count_query_with_union_all(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query wraps UNION ALL in a subquery for counting."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users UNION ALL SELECT id FROM admins"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -925,30 +925,30 @@ def test_create_count_query_with_union_all(mock_driver: "MockSyncDriver") -> Non
     assert "total_query" in count_str.lower()
 
 
-def test_create_count_query_with_union_all_strips_order_by(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query strips ORDER BY from UNION ALL before counting."""
+def test_count_query_with_union_all_strips_order_by(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query strips ORDER BY from UNION ALL before counting."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users UNION ALL SELECT id FROM admins ORDER BY id"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
     assert "ORDER BY" not in count_str.upper()
 
 
-def test_create_count_query_with_union_all_strips_limit_offset(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query strips LIMIT/OFFSET from UNION ALL before counting."""
+def test_count_query_with_union_all_strips_limit_offset(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query strips LIMIT/OFFSET from UNION ALL before counting."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users UNION ALL SELECT id FROM admins LIMIT 10 OFFSET 20"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
@@ -956,37 +956,37 @@ def test_create_count_query_with_union_all_strips_limit_offset(mock_driver: "Moc
     assert "OFFSET" not in count_str.upper()
 
 
-def test_create_count_query_with_except(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query handles EXCEPT set operations."""
+def test_count_query_with_except(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query handles EXCEPT set operations."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users EXCEPT SELECT id FROM banned_users"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
     assert "EXCEPT" in count_str.upper()
 
 
-def test_create_count_query_with_intersect(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query handles INTERSECT set operations."""
+def test_count_query_with_intersect(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query handles INTERSECT set operations."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users INTERSECT SELECT id FROM premium_users"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
     assert "INTERSECT" in count_str.upper()
 
 
-def test_create_count_query_with_union_all_and_cte(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query preserves CTE on UNION ALL count queries."""
+def test_count_query_with_union_all_and_cte(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query preserves CTE on UNION ALL count queries."""
     sql = mock_driver.prepare_statement(
         SQL(
             """
@@ -998,15 +998,15 @@ def test_create_count_query_with_union_all_and_cte(mock_driver: "MockSyncDriver"
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     count_str = str(count_sql)
     assert "COUNT(*)" in count_str.upper()
     assert "WITH" in count_str.upper()
 
 
-def test_create_count_query_with_union_all_preserves_named_params(mock_driver: "MockSyncDriver") -> None:
-    """Test that _create_count_query preserves named parameters on UNION ALL queries."""
+def test_count_query_with_union_all_preserves_named_params(mock_driver: "MockSyncDriver") -> None:
+    """Test that _count_query preserves named parameters on UNION ALL queries."""
     sql = mock_driver.prepare_statement(
         SQL(
             "SELECT id FROM users WHERE status = :status UNION ALL SELECT id FROM admins WHERE role = :role",
@@ -1017,21 +1017,21 @@ def test_create_count_query_with_union_all_preserves_named_params(mock_driver: "
     )
     sql.compile()
 
-    count_sql = mock_driver._create_count_query(sql)
+    count_sql = mock_driver._count_query(sql)
 
     assert count_sql.named_parameters.get("status") == "active"
     assert count_sql.named_parameters.get("role") == "superadmin"
 
 
-def test_add_count_over_column_with_union_all(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column wraps UNION ALL in subquery with COUNT(*) OVER()."""
+def test_with_total_count_with_union_all(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count wraps UNION ALL in subquery with COUNT(*) OVER()."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id, name FROM users UNION ALL SELECT id, name FROM admins"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     count_str = str(modified_sql)
     assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
@@ -1040,50 +1040,50 @@ def test_add_count_over_column_with_union_all(mock_driver: "MockSyncDriver") -> 
     assert "__set_op_subq" in count_str.lower()
 
 
-def test_add_count_over_column_with_except(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column handles EXCEPT set operations."""
+def test_with_total_count_with_except(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count handles EXCEPT set operations."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users EXCEPT SELECT id FROM banned_users"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     count_str = str(modified_sql)
     assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
     assert "_total_count" in count_str.lower()
 
 
-def test_add_count_over_column_with_intersect(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column handles INTERSECT set operations."""
+def test_with_total_count_with_intersect(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count handles INTERSECT set operations."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users INTERSECT SELECT id FROM premium_users"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     count_str = str(modified_sql)
     assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
     assert "_total_count" in count_str.lower()
 
 
-def test_add_count_over_column_with_union_all_preserves_params(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column preserves parameters on UNION ALL queries."""
+def test_with_total_count_with_union_all_preserves_params(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count preserves parameters on UNION ALL queries."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users WHERE status = :status UNION ALL SELECT id FROM admins", status="active"),
         statement_config=mock_driver.statement_config,
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     assert modified_sql.named_parameters.get("status") == "active"
 
 
-def test_add_count_over_column_with_union_all_and_cte(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column preserves CTE on UNION ALL queries."""
+def test_with_total_count_with_union_all_and_cte(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count preserves CTE on UNION ALL queries."""
     sql = mock_driver.prepare_statement(
         SQL(
             """
@@ -1095,7 +1095,7 @@ def test_add_count_over_column_with_union_all_and_cte(mock_driver: "MockSyncDriv
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql)
+    modified_sql = mock_driver._with_total_count(sql)
 
     count_str = str(modified_sql)
     assert "COUNT(*) OVER()" in count_str.upper() or "COUNT(*) OVER ()" in count_str.upper()
@@ -1103,14 +1103,14 @@ def test_add_count_over_column_with_union_all_and_cte(mock_driver: "MockSyncDriv
     assert "_total_count" in count_str.lower()
 
 
-def test_add_count_over_column_with_union_all_custom_alias(mock_driver: "MockSyncDriver") -> None:
-    """Test that _add_count_over_column accepts custom alias for UNION ALL."""
+def test_with_total_count_with_union_all_custom_alias(mock_driver: "MockSyncDriver") -> None:
+    """Test that _with_total_count accepts custom alias for UNION ALL."""
     sql = mock_driver.prepare_statement(
         SQL("SELECT id FROM users UNION ALL SELECT id FROM admins"), statement_config=mock_driver.statement_config
     )
     sql.compile()
 
-    modified_sql = mock_driver._add_count_over_column(sql, alias="row_total")
+    modified_sql = mock_driver._with_total_count(sql, alias="row_total")
 
     count_str = str(modified_sql)
     assert "row_total" in count_str.lower()

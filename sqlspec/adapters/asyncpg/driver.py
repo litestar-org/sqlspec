@@ -124,7 +124,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with statement execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
 
         if statement.returns_rows():
@@ -156,7 +156,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
             parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
@@ -177,7 +177,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
-        sql, _ = self._get_compiled_sql(statement, self.statement_config)
+        sql, _ = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -272,7 +272,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Return a native asyncpg row stream backed by a cursor in a stream-owned transaction."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
         return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size))
 
@@ -335,7 +335,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                         operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
                     )
                     if not sql_statement.is_script and not sql_statement.is_many:
-                        sql_text, prepared_parameters = self._get_compiled_sql(sql_statement, config)
+                        sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
                         prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
                         normalized = NormalizedStackOperation(
                             operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
@@ -400,11 +400,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
-        telemetry_payload = await self._write_result_to_storage_async(
+        telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -427,10 +427,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             await self.connection.copy_records_to_table(table, records=records, columns=columns)
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,
@@ -443,7 +443,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and ingest it via COPY."""
 
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
@@ -508,7 +508,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if statement.is_processed:
             sql_text = statement.get_processed_state().compiled_sql
         else:
-            sql_text, _ = self._get_compiled_sql(statement, statement.statement_config)
+            sql_text, _ = self._compiled_sql(statement, statement.statement_config)
         copy_data = metadata.get("postgres_copy_data")
 
         if copy_data is not None and is_copy_from_operation(statement.operation_type):

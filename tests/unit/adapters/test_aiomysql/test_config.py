@@ -67,7 +67,7 @@ def test_aiomysql_connection_kwargs_normalize_cursor_alias_and_omit_pool_only_ke
         }
     )
 
-    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
     assert connect_kwargs["cursorclass"] is AiomysqlDictCursor
     assert "cursor_class" not in connect_kwargs
@@ -85,7 +85,7 @@ def test_aiomysql_local_infile_requires_explicit_security_gate() -> None:
         AiomysqlConfig(connection_config={"local_infile": True})
 
     config = AiomysqlConfig(connection_config={"allow_local_infile": True, "local_infile": True})
-    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
     assert connect_kwargs["local_infile"] is True
     assert "allow_local_infile" not in connect_kwargs
@@ -95,7 +95,7 @@ def test_aiomysql_connection_kwargs_default_local_infile_disabled() -> None:
     """LOAD DATA LOCAL INFILE should stay disabled unless explicitly enabled."""
     config = AiomysqlConfig()
 
-    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
     assert connect_kwargs["local_infile"] is False
 
@@ -104,7 +104,7 @@ def test_aiomysql_connection_kwargs_prefers_canonical_cursorclass() -> None:
     """The upstream cursorclass key should win over the compatibility alias."""
     config = AiomysqlConfig(connection_config={"cursorclass": AiomysqlRawCursor, "cursor_class": AiomysqlDictCursor})
 
-    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
     assert connect_kwargs["cursorclass"] is AiomysqlRawCursor
     assert "cursor_class" not in connect_kwargs
@@ -114,7 +114,7 @@ def test_aiomysql_connection_kwargs_maps_safe_pymysql_aliases() -> None:
     """PyMySQL-compatible database and password aliases should map to aiomysql names."""
     config = AiomysqlConfig(connection_config={"database": "app", "passwd": "secret"})
 
-    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
     assert connect_kwargs["db"] == "app"
     assert connect_kwargs["password"] == "secret"
@@ -141,7 +141,7 @@ def test_aiomysql_connection_kwargs_forwards_supported_current_options() -> None
         }
     )
 
-    connect_kwargs = config._get_connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
     assert connect_kwargs["charset"] == "utf8mb4"
     assert connect_kwargs["use_unicode"] is False

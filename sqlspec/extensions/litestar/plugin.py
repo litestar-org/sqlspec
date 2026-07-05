@@ -198,8 +198,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
                 cfg,
             )
-            settings = self._extract_litestar_settings(config_union)
-            state = self._create_config_state(config_union, settings)
+            settings = self._extract_extension_settings(config_union)
+            state = self._config_state(config_union, settings)
             self._plugin_configs.append(state)
 
         correlation_headers: list[str] = []
@@ -224,7 +224,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             correlation_headers=len(self._correlation_headers),
         )
 
-    def _extract_litestar_settings(
+    def _extract_extension_settings(
         self,
         config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
     ) -> "dict[str, Any]":
@@ -259,7 +259,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
         }
 
-    def _create_config_state(
+    def _config_state(
         self,
         config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
         settings: "dict[str, Any]",
@@ -341,7 +341,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             The updated application configuration instance.
         """
-        self._validate_dependency_keys()
+        self._ensure_dependency_keys()
 
         def store_sqlspec_in_state() -> None:
             app_config.state.sqlspec = self
@@ -839,7 +839,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             keys.extend([state.connection_key, state.pool_key, state.session_key])
         return keys
 
-    def _validate_dependency_keys(self) -> None:
+    def _ensure_dependency_keys(self) -> None:
         """Validate that connection and pool keys are unique across configurations."""
         connection_keys = [state.connection_key for state in self._plugin_configs]
         pool_keys = [state.pool_key for state in self._plugin_configs]

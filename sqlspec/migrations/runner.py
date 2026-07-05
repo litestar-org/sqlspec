@@ -312,7 +312,7 @@ class BaseMigrationRunner(ABC):
     def get_migration_files(self) -> "list[tuple[str, Path]] | Awaitable[list[tuple[str, Path]]]":
         """Get all migration files sorted by version."""
 
-    def _load_migration_metadata_common(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
+    def _load_metadata(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
         """Load common migration metadata that doesn't require async operations.
 
         Args:
@@ -414,7 +414,7 @@ class BaseMigrationRunner(ABC):
             return stripped
         return ""
 
-    def _get_context_for_migration(self, file_path: Path) -> "MigrationContext | None":
+    def _migration_context(self, file_path: Path) -> "MigrationContext | None":
         """Get the appropriate context for a migration file.
 
         Args:
@@ -503,8 +503,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Dictionary containing migration metadata and queries.
         """
-        metadata = self._load_migration_metadata_common(file_path, version)
-        context_to_use = self._get_context_for_migration(file_path)
+        metadata = self._load_metadata(file_path, version)
+        context_to_use = self._migration_context(file_path)
 
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
         loader.validate_migration_file(file_path)
@@ -849,8 +849,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Dictionary containing migration metadata and queries.
         """
-        metadata = self._load_migration_metadata_common(file_path, version)
-        context_to_use = self._get_context_for_migration(file_path)
+        metadata = self._load_metadata(file_path, version)
+        context_to_use = self._migration_context(file_path)
 
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
         loader.validate_migration_file(file_path)
@@ -864,7 +864,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         else:
             try:
                 has_downgrade = bool(
-                    await self._get_migration_sql_async({"loader": loader, "file_path": file_path}, "down")
+                    await self._migration_sql_async({"loader": loader, "file_path": file_path}, "down")
                 )
             except Exception:
                 has_downgrade = False
@@ -928,7 +928,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        upgrade_sql_list = await self._get_migration_sql_async(migration, "up")
+        upgrade_sql_list = await self._migration_sql_async(migration, "up")
         if upgrade_sql_list is None:
             self._metric("migrations.upgrade.skipped")
             self._log_migration_event(
@@ -1019,7 +1019,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        downgrade_sql_list = await self._get_migration_sql_async(migration, "down")
+        downgrade_sql_list = await self._migration_sql_async(migration, "down")
         if downgrade_sql_list is None:
             self._metric("migrations.downgrade.skipped")
             self._log_migration_event(
@@ -1095,7 +1095,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         return None, execution_time
 
-    async def _get_migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
+    async def _migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (async version).
 
         Args:

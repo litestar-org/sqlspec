@@ -793,9 +793,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         adk_settings = extension_settings.get("adk")
         if adk_settings is not None and "adk" not in exclude_extensions:
-            from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+            from sqlspec.extensions.adk._config_utils import _ensure_adk_store_registration
 
-            _validate_adk_store_registration(self)
+            _ensure_adk_store_registration(self)
             extensions_to_add.append("adk")
 
         events_settings = extension_settings.get("events")
@@ -891,7 +891,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if updated is not self.observability_config:
             self.observability_config = updated
 
-    def _promote_driver_feature_hooks(self) -> None:
+    def _attach_lifecycle_hooks(self) -> None:
         lifecycle_hooks: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
 
         for hook_name, context_key in DRIVER_FEATURE_LIFECYCLE_HOOKS.items():
@@ -899,7 +899,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             if callback is None:
                 continue
             callbacks = callback if isinstance(callback, (list, tuple)) else (callback,)  # pyright: ignore
-            wrapped_callbacks = [self._wrap_driver_feature_hook(cb, context_key) for cb in callbacks]  # pyright: ignore
+            wrapped_callbacks = [self._adapt_lifecycle_hook(cb, context_key) for cb in callbacks]  # pyright: ignore
             lifecycle_hooks.setdefault(hook_name, []).extend(wrapped_callbacks)
 
         if not lifecycle_hooks:
@@ -913,7 +913,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             self.observability_config = ObservabilityConfig.merge(self.observability_config, override)
 
     @staticmethod
-    def _wrap_driver_feature_hook(
+    def _adapt_lifecycle_hook(
         callback: Callable[..., Any], context_key: str | None
     ) -> Callable[[dict[str, Any]], None]:
         try:
@@ -1344,7 +1344,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         self.statement_config = statement_config or build_default_statement_config("sqlite")
 
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._promote_driver_feature_hooks()
+        self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
 
     def create_connection(self) -> ConnectionT:
@@ -1403,7 +1403,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
 
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._promote_driver_feature_hooks()
+        self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
 
     async def create_connection(self) -> ConnectionT:
@@ -1467,7 +1467,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
 
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._promote_driver_feature_hooks()
+        self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
         self._pool_lock = threading.Lock()
 
@@ -1574,7 +1574,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
 
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._promote_driver_feature_hooks()
+        self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
         self._pool_lock = asyncio.Lock()
 

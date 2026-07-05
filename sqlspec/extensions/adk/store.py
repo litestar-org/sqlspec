@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
-from sqlspec.extensions.adk._config_utils import _get_adk_session_store_config
-from sqlspec.extensions.adk._table_utils import deduplicate_statements, parse_owner_id_column, validate_table_name
+from sqlspec.extensions.adk._config_utils import _adk_session_store_config
+from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -85,7 +85,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config
-        store_config = self._get_store_config_from_extension()
+        store_config = self._store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
         self._app_state_table: str = str(store_config["app_state_table"])
@@ -93,13 +93,13 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         self._metadata_table: str = str(store_config["metadata_table"])
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        validate_table_name(self._session_table)
-        validate_table_name(self._events_table)
-        validate_table_name(self._app_state_table)
-        validate_table_name(self._user_state_table)
-        validate_table_name(self._metadata_table)
+        ensure_table_name(self._session_table)
+        ensure_table_name(self._events_table)
+        ensure_table_name(self._app_state_table)
+        ensure_table_name(self._user_state_table)
+        ensure_table_name(self._metadata_table)
 
     async def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
@@ -408,15 +408,15 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         statements = list(self._get_drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
             statements.extend(self._get_drop_tables_sql_for_table_profile(table_profile))
-        return deduplicate_statements(statements)
+        return unique_statements(statements)
 
-    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+    def _store_config_from_extension(self) -> "dict[str, Any]":
         """Extract ADK store configuration from config.extension_config.
 
         Returns:
             Dict with ADK table names and optionally owner_id_column.
         """
-        return dict(_get_adk_session_store_config(self._config))
+        return dict(_adk_session_store_config(self._config))
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
         """Calculate expiration timestamp from expires_in.
@@ -639,7 +639,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        store_config = self._get_store_config_from_extension()
+        store_config = self._store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
         self._app_state_table: str = str(store_config["app_state_table"])
@@ -647,13 +647,13 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         self._metadata_table: str = str(store_config["metadata_table"])
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
-            parse_owner_id_column(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        validate_table_name(self._session_table)
-        validate_table_name(self._events_table)
-        validate_table_name(self._app_state_table)
-        validate_table_name(self._user_state_table)
-        validate_table_name(self._metadata_table)
+        ensure_table_name(self._session_table)
+        ensure_table_name(self._events_table)
+        ensure_table_name(self._app_state_table)
+        ensure_table_name(self._user_state_table)
+        ensure_table_name(self._metadata_table)
 
     @abstractmethod
     def create_tables(self) -> None:
@@ -818,9 +818,9 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         self.ensure_tables()
         self._log_tables_recreated()
 
-    def _get_store_config_from_extension(self) -> "dict[str, Any]":
+    def _store_config_from_extension(self) -> "dict[str, Any]":
         """Extract ADK store configuration from config.extension_config."""
-        return dict(_get_adk_session_store_config(self._config))
+        return dict(_adk_session_store_config(self._config))
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
         """Calculate expiration timestamp from expires_in."""
@@ -898,7 +898,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         statements = list(self._get_drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
             statements.extend(self._get_drop_tables_sql_for_table_profile(table_profile))
-        return deduplicate_statements(statements)
+        return unique_statements(statements)
 
     def _get_drop_tables_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile

@@ -215,7 +215,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config)
 
-    def _get_adk_configs(
+    def _adk_configs(
         ctx: "click.Context", bind_key: str | None
     ) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]":
         if bind_key is not None:
@@ -1003,7 +1003,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def cleanup_memory(bind_key: str | None, days: int) -> None:  # pyright: ignore[reportUnusedFunction]
         """Cleanup memory entries older than N days."""
         ctx = _ensure_click_context()
-        configs = _get_adk_configs(ctx, bind_key)
+        configs = _adk_configs(ctx, bind_key)
 
         if not configs:
             console.print("[yellow]No ADK configurations found.[/]")
@@ -1034,7 +1034,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def verify_memory(bind_key: str | None) -> None:  # pyright: ignore[reportUnusedFunction]
         """Verify memory tables are reachable for configured adapters."""
         ctx = _ensure_click_context()
-        configs = _get_adk_configs(ctx, bind_key)
+        configs = _adk_configs(ctx, bind_key)
 
         if not configs:
             console.print("[yellow]No ADK configurations found.[/]")

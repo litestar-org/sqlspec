@@ -4,7 +4,7 @@ import pytest
 
 from sqlspec.exceptions import FileNotFoundInStorageError, StorageOperationFailedError
 from sqlspec.storage.errors import (
-    _normalize_storage_error,  # pyright: ignore
+    _storage_error,  # pyright: ignore
     execute_sync_storage_operation,
     raise_storage_error,
 )
@@ -21,8 +21,8 @@ def test_raise_normalized_storage_error_for_missing_file() -> None:
     assert "local read_bytes failed" in str(excinfo.value)
 
 
-def test_normalize_storage_error_marks_retryable() -> None:
-    normalized = _normalize_storage_error(
+def test_storage_error_marks_retryable() -> None:
+    normalized = _storage_error(
         TimeoutError("timed out"), backend="fsspec", operation="write_bytes", path="s3://bucket/key"
     )
     assert normalized.retryable is True

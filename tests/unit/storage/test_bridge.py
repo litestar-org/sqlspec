@@ -206,8 +206,8 @@ def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:
     registry = _CountingStorageRegistry()
     pipeline = SyncStoragePipeline(registry=cast(Any, registry))
 
-    first_backend, first_path, first_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", None)
-    second_backend, second_path, second_backend_name = pipeline._resolve_backend("file://tmp/payload.jsonl", {})
+    first_backend, first_path, first_backend_name = pipeline._backend("file://tmp/payload.jsonl", None)
+    second_backend, second_path, second_backend_name = pipeline._backend("file://tmp/payload.jsonl", {})
 
     assert first_backend is second_backend
     assert first_backend is cast("Any", registry.backend)
@@ -216,7 +216,7 @@ def test_sync_pipeline_caches_empty_option_backend_resolution() -> None:
     assert registry.calls == [("file://tmp/payload.jsonl", {})]
 
     pipeline.clear_cache()
-    pipeline._resolve_backend("file://tmp/payload.jsonl", None)
+    pipeline._backend("file://tmp/payload.jsonl", None)
     assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
 
 
@@ -224,8 +224,8 @@ def test_sync_pipeline_bypasses_resolution_cache_for_storage_options() -> None:
     registry = _CountingStorageRegistry()
     pipeline = SyncStoragePipeline(registry=cast(Any, registry))
 
-    pipeline._resolve_backend("file://tmp/payload.jsonl", {"backend": "local"})
-    pipeline._resolve_backend("file://tmp/payload.jsonl", {"backend": "local"})
+    pipeline._backend("file://tmp/payload.jsonl", {"backend": "local"})
+    pipeline._backend("file://tmp/payload.jsonl", {"backend": "local"})
 
     assert registry.calls == [
         ("file://tmp/payload.jsonl", {"backend": "local"}),
@@ -276,7 +276,7 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
         statement_config=aiosqlite_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
-    monkeypatch.setattr(AsyncpgDriver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(AsyncpgDriver, "_read_storage_arrow", _fake_read)
 
     job = await driver.load_from_storage("public.ingest_target", "file://tmp/part-0.parquet", file_format="parquet")
 
@@ -301,7 +301,7 @@ def test_duckdb_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
         driver_features={"storage_capabilities": CAPABILITIES},
     )
 
-    monkeypatch.setattr(DuckDBDriver, "_read_arrow_from_storage_sync", _fake_read)
+    monkeypatch.setattr(DuckDBDriver, "_read_storage_arrow", _fake_read)
 
     job = driver.load_from_storage("ingest_target", "file://tmp/part-1.parquet", file_format="parquet", overwrite=True)
 
@@ -364,7 +364,7 @@ async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.Mon
     async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
         return arrow_table, {"destination": "s3://bucket/part-2.parquet", "bytes_processed": 512}
 
-    monkeypatch.setattr(PsqlpyDriver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(PsqlpyDriver, "_read_storage_arrow", _fake_read)
 
     job = await driver.load_from_storage("public.delta_load", "s3://bucket/part-2.parquet", file_format="parquet")
 
@@ -440,7 +440,7 @@ async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.M
         async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
             return arrow_table, {"destination": "file:///tmp/chunk.parquet", "bytes_processed": 64}
 
-        monkeypatch.setattr(AiosqliteDriver, "_read_arrow_from_storage_async", _fake_read)
+        monkeypatch.setattr(AiosqliteDriver, "_read_storage_arrow", _fake_read)
 
         job = await driver.load_from_storage("raw_data", "file:///tmp/chunk.parquet", file_format="parquet")
 
@@ -513,7 +513,7 @@ def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch)
         def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
             return arrow_table, {"destination": "s3://bucket/segment.parquet", "bytes_processed": 32}
 
-        monkeypatch.setattr(SqliteDriver, "_read_arrow_from_storage_sync", _fake_read)
+        monkeypatch.setattr(SqliteDriver, "_read_storage_arrow", _fake_read)
 
         job = driver.load_from_storage("metrics", "s3://bucket/segment.parquet", file_format="parquet")
 
@@ -574,16 +574,16 @@ async def test_asyncmy_load_from_arrow_skips_preparation_for_scalar_columns() ->
 
 
 def test_arrow_parameter_preparation_decision_is_cached_by_schema(monkeypatch: pytest.MonkeyPatch) -> None:
-    arrow_helpers._arrow_schema_needs_parameter_preparation.cache_clear()
+    arrow_helpers._arrow_schema_needs_preparation.cache_clear()
     calls = 0
-    original = arrow_helpers._arrow_type_needs_parameter_preparation
+    original = arrow_helpers._arrow_type_needs_preparation
 
     def _spy(data_type: Any) -> bool:
         nonlocal calls
         calls += 1
         return original(data_type)
 
-    monkeypatch.setattr(arrow_helpers, "_arrow_type_needs_parameter_preparation", _spy)
+    monkeypatch.setattr(arrow_helpers, "_arrow_type_needs_preparation", _spy)
     schema = pa.schema([("id", pa.int64()), ("payload", pa.struct([("name", pa.string())]))])
     first_table = pa.Table.from_pylist([{"id": 1, "payload": {"name": "alpha"}}], schema=schema)
     second_table = pa.Table.from_pylist([{"id": 2, "payload": {"name": "beta"}}], schema=schema)
@@ -592,9 +592,9 @@ def test_arrow_parameter_preparation_decision_is_cached_by_schema(monkeypatch: p
         assert arrow_helpers.arrow_table_needs_parameter_preparation(first_table) is True
         assert arrow_helpers.arrow_table_needs_parameter_preparation(second_table) is True
         assert calls == 2
-        assert arrow_helpers._arrow_schema_needs_parameter_preparation.cache_info().hits == 1
+        assert arrow_helpers._arrow_schema_needs_preparation.cache_info().hits == 1
     finally:
-        arrow_helpers._arrow_schema_needs_parameter_preparation.cache_clear()
+        arrow_helpers._arrow_schema_needs_preparation.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -651,7 +651,7 @@ async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.Monke
     async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
         return arrow_table, {"destination": "s3://bucket/segment.parquet", "bytes_processed": 48, "backend": "fsspec"}
 
-    monkeypatch.setattr(AsyncmyDriver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(AsyncmyDriver, "_read_storage_arrow", _fake_read)
 
     job = await driver.load_from_storage("analytics.scores", "s3://bucket/segment.parquet", file_format="parquet")
 
@@ -677,7 +677,7 @@ def test_sync_pipeline_write_rows_includes_backend(monkeypatch: pytest.MonkeyPat
     ) -> tuple[_Backend, str, str]:
         return backend, "objects/data.jsonl", backend.backend_type
 
-    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
 
     telemetry = pipeline.write_rows([{"id": 1}], "alias://data")
     assert telemetry["backend"] == "test-backend"
@@ -728,7 +728,7 @@ def test_write_arrow_csv_default_options(monkeypatch: pytest.MonkeyPatch) -> Non
     ) -> "tuple[_CsvTestBackend, str, str]":
         return backend, "data/output.csv", backend.backend_type
 
-    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
 
     table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
     telemetry = pipeline.write_arrow(table, "data/output.csv", format_hint="csv")
@@ -752,7 +752,7 @@ def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> No
     ) -> "tuple[_CsvTestBackend, str, str]":
         return backend, "data/output.csv", backend.backend_type
 
-    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
 
     table = pa.table({"x": [10], "y": [20]})
     pipeline.write_arrow(
@@ -774,7 +774,7 @@ def test_write_arrow_csv_uses_pipeline_storage_options(monkeypatch: pytest.Monke
     ) -> "tuple[_CsvTestBackend, str, str]":
         return backend, "data/output.csv", backend.backend_type
 
-    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
 
     table = pa.table({"x": [10], "y": [20]})
     pipeline.write_arrow(table, "data/output.csv", format_hint="csv")
@@ -794,7 +794,7 @@ def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> "tuple[_CsvTestBackend, str, str]":
         return backend, "data/output.csv", backend.backend_type
 
-    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
 
     table = pa.table({"val": [42, 99]})
     pipeline.write_arrow(
@@ -836,7 +836,7 @@ def test_read_arrow_csv(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> "tuple[_CsvTestBackend, str, str]":
         return backend, "data/input.csv", backend.backend_type
 
-    monkeypatch.setattr(SyncStoragePipeline, "_resolve_backend", _fake_resolve)
+    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
 
     table, telemetry = pipeline.read_arrow("data/input.csv", file_format="csv")
     assert table.num_rows == 2

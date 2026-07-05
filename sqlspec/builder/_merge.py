@@ -695,7 +695,7 @@ class Merge(
         if "enable_optimization" not in kwargs:
             kwargs["enable_optimization"] = False
         (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_query_builder_kwargs(kwargs)
+            self._parse_init_options(kwargs)
         )
         super().__init__(
             dialect=dialect,
@@ -776,10 +776,10 @@ class Merge(
             dialect_name = None
         if dialect_name:
             dialect_name = dialect_name.lower()
-        self._normalize_merge_conditions_for_dialect(dialect_name)
+        self._move_oracle_when_conditions(dialect_name)
         return super().build(dialect=dialect)
 
-    def _normalize_merge_conditions_for_dialect(self, dialect_name: str | None) -> None:
+    def _move_oracle_when_conditions(self, dialect_name: str | None) -> None:
         """Normalize WHEN clause conditions for dialect quirks.
 
         Oracle requires conditional logic on UPDATE/DELETE branches to live in the

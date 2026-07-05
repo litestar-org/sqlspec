@@ -164,7 +164,7 @@ def test_mysql_execute_script_sync_mysql_execute_script_multi_statement_with_par
 ) -> None:
     driver = driver_factory(connection=MagicMock())
     statement = _make_statement(driver)
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, (42,))):
+    with patch.object(driver_factory, "_compiled_sql", return_value=(_MULTI_STMT_SQL, (42,))):
         with pytest.raises(SQLSpecError, match=_ERROR_MESSAGE):
             driver.dispatch_execute_script(_make_sync_cursor(), statement)
 
@@ -176,7 +176,7 @@ def test_mysql_execute_script_sync_mysql_execute_script_single_statement_with_pa
     driver = driver_factory(connection=MagicMock())
     statement = _make_statement(driver)
     cursor = _make_sync_cursor()
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=("SELECT 1", (42,))):
+    with patch.object(driver_factory, "_compiled_sql", return_value=("SELECT 1", (42,))):
         result = driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 1
     cursor.execute.assert_called_once()
@@ -190,7 +190,7 @@ def test_mysql_execute_script_sync_mysql_execute_script_multi_statement_without_
     driver = driver_factory(connection=MagicMock())
     statement = _make_statement(driver)
     cursor = _make_sync_cursor()
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, prepared_parameters)):
+    with patch.object(driver_factory, "_compiled_sql", return_value=(_MULTI_STMT_SQL, prepared_parameters)):
         result = driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2
@@ -202,7 +202,7 @@ async def test_mysql_execute_script_async_mysql_execute_script_multi_statement_w
 ) -> None:
     driver = driver_factory(connection=AsyncMock())
     statement = _make_statement(driver)
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, (42,))):
+    with patch.object(driver_factory, "_compiled_sql", return_value=(_MULTI_STMT_SQL, (42,))):
         with pytest.raises(SQLSpecError, match=_ERROR_MESSAGE):
             await driver.dispatch_execute_script(_make_async_cursor(), statement)
 
@@ -214,7 +214,7 @@ async def test_mysql_execute_script_async_mysql_execute_script_single_statement_
     driver = driver_factory(connection=AsyncMock())
     statement = _make_statement(driver)
     cursor = _make_async_cursor()
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=("SELECT 1", (42,))):
+    with patch.object(driver_factory, "_compiled_sql", return_value=("SELECT 1", (42,))):
         result = await driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 1
     cursor.execute.assert_awaited_once()
@@ -228,7 +228,7 @@ async def test_mysql_execute_script_async_mysql_execute_script_multi_statement_w
     driver = driver_factory(connection=AsyncMock())
     statement = _make_statement(driver)
     cursor = _make_async_cursor()
-    with patch.object(driver_factory, "_get_compiled_sql", return_value=(_MULTI_STMT_SQL, prepared_parameters)):
+    with patch.object(driver_factory, "_compiled_sql", return_value=(_MULTI_STMT_SQL, prepared_parameters)):
         result = await driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2

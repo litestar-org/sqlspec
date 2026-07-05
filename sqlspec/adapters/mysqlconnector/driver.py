@@ -117,7 +117,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         self._data_dictionary: MysqlConnectorSyncDataDictionary | None = None
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows() or getattr(cursor, "with_rows", False):
@@ -144,7 +144,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -154,7 +154,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         if prepared_parameters and len(statements) > 1:
@@ -202,7 +202,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         """Return a native mysql-connector row stream backed by an unbuffered cursor."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(MysqlConnectorSyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "MysqlConnectorSyncExceptionHandler":
@@ -223,11 +223,11 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
+        telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -250,7 +250,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
+            needs_preparation = self._arrow_rows_need_preparation(arrow_table)
             use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
             if use_infile:
                 payload = encode_records_for_local_infile(records)
@@ -279,10 +279,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -293,7 +293,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     @property
@@ -371,7 +371,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         self._data_dictionary: MysqlConnectorAsyncDataDictionary | None = None
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows() or getattr(cursor, "with_rows", False):
@@ -398,7 +398,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -408,7 +408,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         if prepared_parameters and len(statements) > 1:
@@ -456,7 +456,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         """Return a native mysql-connector row stream backed by an unbuffered cursor."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return AsyncRowStream(MysqlConnectorAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "MysqlConnectorAsyncExceptionHandler":
@@ -477,11 +477,11 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
-        telemetry_payload = await self._write_result_to_storage_async(
+        telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -504,7 +504,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
+            needs_preparation = self._arrow_rows_need_preparation(arrow_table)
             use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
             if use_infile:
                 payload = encode_records_for_local_infile(records)
@@ -533,10 +533,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,
@@ -547,7 +547,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )

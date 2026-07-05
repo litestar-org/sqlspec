@@ -42,14 +42,14 @@ _ASYNCMY_LOCAL_INFILE_GATE = "allow_local_infile"
 asyncmy: "AsyncmyModule" = cast("AsyncmyModule", AsyncmyModule)
 
 
-def _get_asyncmy_connect_parameter_names() -> "frozenset[str]":
+def _connect_parameter_names() -> "frozenset[str]":
     try:
         return frozenset(inspect.signature(asyncmy.connect).parameters)
     except (TypeError, ValueError):
         return frozenset()
 
 
-_ASYNCMY_CONNECT_PARAMETER_NAMES = _get_asyncmy_connect_parameter_names()
+_ASYNCMY_CONNECT_PARAMETER_NAMES = _connect_parameter_names()
 
 
 class AsyncmySSLParams(TypedDict):
@@ -108,7 +108,7 @@ class AsyncmyPoolParams(AsyncmyConnectionParams):
     pool_recycle: NotRequired[int]
 
 
-def _normalize_asyncmy_connection_config(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
+def _normalize_connection_config(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Normalize SQLSpec asyncmy config keys before storing them."""
     config = normalize_connection_config(connection_config)
 
@@ -130,7 +130,7 @@ def _normalize_asyncmy_connection_config(connection_config: "Mapping[str, Any] |
     return config
 
 
-def _split_asyncmy_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[str, Any], dict[str, Any]]":
+def _split_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[str, Any], dict[str, Any]]":
     """Split pool constructor settings from connection settings."""
     pool_kwargs: dict[str, Any] = {}
     connection_kwargs: dict[str, Any] = {}
@@ -148,8 +148,8 @@ def _split_asyncmy_pool_config(connection_config: "Mapping[str, Any]") -> "tuple
     return pool_kwargs, connection_kwargs
 
 
-def _build_asyncmy_pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    pool_kwargs, connection_kwargs = _split_asyncmy_pool_config(connection_config)
+def _pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    pool_kwargs, connection_kwargs = _split_pool_config(connection_config)
     return {**connection_kwargs, **pool_kwargs}
 
 
@@ -200,7 +200,7 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
@@ -226,7 +226,7 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def __aexit__(
@@ -280,7 +280,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = _normalize_asyncmy_connection_config(connection_config)
+        connection_config = _normalize_connection_config(connection_config)
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
@@ -325,9 +325,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         Future driver_features can be added here if needed.
         """
-        return cast("AsyncmyPool", await asyncmy.create_pool(**_build_asyncmy_pool_config(self.connection_config)))
+        return cast("AsyncmyPool", await asyncmy.create_pool(**_pool_config(self.connection_config)))
 
-    async def _ensure_connection_initialized(self, connection: "AsyncmyConnection") -> None:
+    async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
 
         Uses WeakSet tracking to ensure the callback runs once per physical connection.
@@ -356,7 +356,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             pool = await self.create_pool()
             self.connection_instance = pool
         connection = cast("AsyncmyConnection", await pool.acquire())
-        await self._ensure_connection_initialized(connection)
+        await self._ensure_connection(connection)
         return connection
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncmyPool":

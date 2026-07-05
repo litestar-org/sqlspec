@@ -27,7 +27,7 @@ from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 from sqlspec.extensions.litestar.providers import (
     FieldNameType,
     FilterConfig,
-    _create_filter_aggregate_function,
+    _configured_filter_aggregator,
     _create_statement_filters,
     dep_cache,
 )
@@ -165,7 +165,7 @@ def test_not_null_fields_list_creates_litestar_providers() -> None:
 def test_aggregate_function_includes_in_filter() -> None:
     """Aggregate function includes InCollectionFilter in results."""
     config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
-    agg_fn = _create_filter_aggregate_function(config)
+    agg_fn = _configured_filter_aggregator(config)
     in_filter = InCollectionFilter(field_name="status", values=["active", "pending"])
     result = agg_fn(status_in_filter=in_filter)
     assert len(result) == 1
@@ -176,7 +176,7 @@ def test_aggregate_function_includes_in_filter() -> None:
 def test_aggregate_function_excludes_none_in_filter() -> None:
     """Aggregate function excludes None in_filter values."""
     config = FilterConfig(in_fields={FieldNameType(name="status", type_hint=str)})
-    agg_fn = _create_filter_aggregate_function(config)
+    agg_fn = _configured_filter_aggregator(config)
     result = agg_fn(status_in_filter=None)
     assert result == []
 
@@ -186,7 +186,7 @@ def test_aggregate_function_multiple_in_fields() -> None:
     config = FilterConfig(
         in_fields={FieldNameType(name="status", type_hint=str), FieldNameType(name="role", type_hint=str)}
     )
-    agg_fn = _create_filter_aggregate_function(config)
+    agg_fn = _configured_filter_aggregator(config)
     status_filter = InCollectionFilter(field_name="status", values=["active"])
     role_filter = InCollectionFilter(field_name="role", values=["admin", "user"])
     result = agg_fn(status_in_filter=status_filter, role_in_filter=role_filter)
@@ -340,7 +340,7 @@ def test_choice_fields_creates_provider_and_aggregate_param() -> None:
 def test_aggregate_function_uses_new_style_parameter_annotations() -> None:
     """Aggregate function uses NamedDependency and SkipValidation annotations for Litestar 3.0."""
     config = FilterConfig(created_at=True)
-    aggregate_fn = _create_filter_aggregate_function(config)
+    aggregate_fn = _configured_filter_aggregator(config)
     sig = inspect.signature(aggregate_fn)
     param = sig.parameters["created_filter"]
     annotation = param.annotation

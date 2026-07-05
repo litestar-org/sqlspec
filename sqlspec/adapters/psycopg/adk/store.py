@@ -482,7 +482,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
             adk_config, self._events_table
         )
@@ -682,7 +682,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         """
 
     def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_psycopg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
             adk_config, self._events_table
         )
@@ -1595,7 +1595,7 @@ def _rows_to_records(rows: "list[Any]") -> "list[MemoryRecord]":
     ]
 
 
-def _get_psycopg_adk_config(config: Any) -> PsycopgADKConfig:
+def _adk_config(config: Any) -> PsycopgADKConfig:
     """Return psycopg ADK extension settings from ``extension_config["adk"]``."""
 
     extension_config = getattr(config, "extension_config", {})

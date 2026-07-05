@@ -103,7 +103,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def dispatch_execute(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
         parameters = _odbc_parameters(prepared_parameters)
@@ -130,7 +130,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         raise NotImplementedError(msg)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             cursor.execute(query=sql, parameters=_odbc_parameters(prepared_parameters))
             return self.create_execution_result(
@@ -219,7 +219,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
-        sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
         resolved_batch_size = batch_size or self._chunk_size()
         table: Any | None = None
 
@@ -287,10 +287,10 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         if overwrite:
             self.execute(f"DELETE FROM {_quote_odbc_table(table)}")
         self.bulk_insert_arrow(table, arrow_table)
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -302,7 +302,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into a table via arrow-odbc bulk insert."""
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     def _read_arrow_batches(self, sql: str, parameters: "list[str | None] | None", batch_size: int) -> Any:

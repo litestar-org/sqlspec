@@ -78,7 +78,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
 
     def dispatch_execute(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -97,7 +97,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -107,7 +107,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         if prepared_parameters and len(statements) > 1:
             msg = "execute_script with parameters is not supported for multi-statement scripts; use execute or execute_many for parameterized statements"

@@ -19,7 +19,7 @@ def _oracle_identifier(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}".upper()
 
 
-def _write_oracle_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+def _write_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
     migration_content = f'''"""Create an unqualified Oracle table."""
 
 
@@ -191,7 +191,7 @@ def test_oracledb_sync_migration_default_schema_applies_to_ddl(
         _create_oracle_schema(oracle_23ai_service, schema)
 
         commands.init(str(migration_dir), package=True)
-        _write_oracle_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
         commands.upgrade()
 
         with config.provide_session() as driver:
@@ -234,7 +234,7 @@ async def test_oracledb_async_migration_default_schema_applies_to_ddl(
         await _async_create_oracle_schema(oracle_23ai_service, schema)
 
         await commands.init(str(migration_dir), package=True)
-        _write_oracle_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
         await commands.upgrade()
 
         async with config.provide_session() as driver:
@@ -278,7 +278,7 @@ def test_oracledb_migration_separable_tracker_and_default_schema(
         _create_oracle_schema(oracle_23ai_service, tracker_schema)
 
         commands.init(str(migration_dir), package=True)
-        _write_oracle_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
         commands.upgrade()
 
         with config.provide_session() as driver:
@@ -317,7 +317,7 @@ def test_oracledb_migration_missing_schema_fails_fast(tmp_path: Path, oracle_23a
 
     try:
         commands.init(str(migration_dir), package=True)
-        _write_oracle_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
 
         with pytest.raises(MigrationError, match=f"Configured schema '{schema}' does not exist"):
             commands.upgrade()

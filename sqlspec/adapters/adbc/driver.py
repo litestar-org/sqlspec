@@ -138,7 +138,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Execution result with data or row count
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         try:
             execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
@@ -179,7 +179,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Execution result with row counts
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         try:
             if not prepared_parameters:
@@ -234,7 +234,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         if statement.is_script:
             sql = statement.raw_sql
         else:
-            sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+            sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
@@ -395,7 +395,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             with exc_handler:
                 cursor = cursor_manager.__enter__()
                 try:
-                    sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+                    sql, driver_params = self._compiled_sql(prepared_statement, config)
                     cursor.execute(sql, driver_params or ())
                     fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
                     if fetch_record_batch is None:
@@ -438,7 +438,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 raise DatabaseConnectionError(msg)
 
             # Get compiled SQL and parameters
-            sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+            sql, driver_params = self._compiled_sql(prepared_statement, config)
 
             # Execute query
             cursor.execute(sql, driver_params or ())
@@ -485,11 +485,11 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
+        telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -526,7 +526,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 "destination": table,
             }
             self._attach_partition_telemetry(telemetry_payload, partitioner)
-            return self._create_storage_job(telemetry_payload, telemetry)
+            return self._storage_job(telemetry_payload, telemetry)
 
         arrow_table = self._coerce_arrow_table(source_data)
         exc_handler = self.handle_database_exceptions()
@@ -535,10 +535,10 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if exc_handler.pending_exception is not None:
             raise exc_handler.pending_exception from None
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -551,7 +551,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and ingest it via ADBC."""
 
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     # ─────────────────────────────────────────────────────────────────────────────

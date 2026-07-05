@@ -68,7 +68,7 @@ def down():
     )
 
 
-def write_non_transactional_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+def _write_unqualified_sql_migration(migration_dir: Path, table_name: str) -> None:
     """Write a SQL migration that creates an unqualified table without a transaction."""
     (migration_dir / "0001_create_unqualified_table.sql").write_text(
         f"""-- transactional: false
@@ -440,7 +440,7 @@ async def test_asyncpg_non_transactional_migration_default_schema_applies_to_ddl
             await driver.execute_script(create_schema_sql(schema))
 
         await commands.init(str(migration_dir), package=True)
-        write_non_transactional_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_sql_migration(migration_dir, table_name)
         await commands.upgrade()
 
         async with config.provide_session() as driver:

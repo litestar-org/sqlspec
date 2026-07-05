@@ -114,7 +114,7 @@ async def test_psqlpy_enable_pgvector_detects_extension_and_promotes_dialect() -
     config = PsqlpyConfig(driver_features={"enable_pgvector": True, "enable_paradedb": False})
     connection = _ExtensionConnection({"vector"})
 
-    await config._ensure_connection_initialized(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
+    await config._ensure_connection(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
 
     assert connection.queries[0][1] == [["vector"]]
     assert config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]

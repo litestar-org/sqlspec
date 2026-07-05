@@ -277,8 +277,8 @@ def test_sql_where_preserves_generated_parameter_counters() -> None:
 
 def test_statement_where_helpers_are_consolidated() -> None:
     source = Path("sqlspec/core/statement.py").read_text()
-    clone_section = source.split("def _create_modified_copy_with_expression", 1)[1].split("def where(", 1)[0]
-    assert "def _clone_base(" in clone_section
+    clone_section = source.split("def _copy_with_expression", 1)[1].split("def where(", 1)[0]
+    assert "def _copy_base(" in clone_section
     assert clone_section.count("statement_config=self._statement_config") == 1
     assert "def _where_condition(" in source
     assert "def _where_comparison(" in source
@@ -977,10 +977,10 @@ def test_sql_as_script_creates_new_instance() -> None:
     assert original._is_script is False
 
 
-def test_sql_as_script_reuses_clone_base() -> None:
+def test_sql_as_script_reuses_copy_base() -> None:
     source = inspect.getsource(SQL.as_script)
 
-    assert "self._clone_base" in source
+    assert "self._copy_base" in source
     assert "SQL(" not in source
 
 

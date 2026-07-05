@@ -327,7 +327,7 @@ class ParameterProcessor:
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
-        needs_execution_conversion = self._needs_execution_placeholder_conversion(param_info, config)
+        needs_execution_conversion = self._needs_placeholder_conversion(param_info, config)
 
         input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
 
@@ -390,7 +390,7 @@ class ParameterProcessor:
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
 
-        processed_sql, processed_parameters, converted_param_info = self._convert_placeholders_for_execution(
+        processed_sql, processed_parameters, converted_param_info = self._execution_placeholders(
             processed_sql,
             processed_parameters,
             config,
@@ -829,9 +829,7 @@ class ParameterProcessor:
             sql, param_fingerprint, input_style, exec_style, dialect_marker, is_many, wrap_types, normalize_for_parsing
         )
 
-    def _needs_execution_placeholder_conversion(
-        self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig"
-    ) -> bool:
+    def _needs_placeholder_conversion(self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig") -> bool:
         """Determine whether execution placeholder conversion is required."""
         if config.needs_static_script_compilation:
             return True
@@ -878,7 +876,7 @@ class ParameterProcessor:
         supported = config.supported_parameter_styles
         return any(p.style not in supported for p in param_info)
 
-    def _convert_placeholders_for_execution(
+    def _execution_placeholders(
         self,
         sql: str,
         parameters: "ParameterPayload",
@@ -972,7 +970,7 @@ def _type_coercion_fallbacks(
     return tuple(type_coercion_map.items())
 
 
-def _get_type_coercion_dispatcher(
+def _type_coercion_dispatcher(
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "TypeDispatcher[Callable[[Any], Any]]":
     dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
@@ -985,7 +983,7 @@ def _get_type_coercion_dispatcher(
     return dispatcher
 
 
-def _resolve_type_coercion(
+def _type_coercion(
     value: object,
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
@@ -994,7 +992,7 @@ def _resolve_type_coercion(
     exact_converter = type_coercion_map.get(value_type)
     if exact_converter is not None:
         return exact_converter(value)
-    fallback_converter = _get_type_coercion_dispatcher(fallback_items).get(value)
+    fallback_converter = _type_coercion_dispatcher(fallback_items).get(value)
     if fallback_converter is not None:
         return fallback_converter(value)
     return value
@@ -1031,18 +1029,18 @@ def _coerce_parameter_value(
         wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
-        coerced = _resolve_type_coercion(wrapped_value, type_coercion_map, fallback_items)
+        coerced = _type_coercion(wrapped_value, type_coercion_map, fallback_items)
         if coerced is wrapped_value:
             return wrapped_value
         return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
 
-    coerced = _resolve_type_coercion(value, type_coercion_map, fallback_items)
+    coerced = _type_coercion(value, type_coercion_map, fallback_items)
     if coerced is value:
         return value
     return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
 
 
-def _coerce_sequence_preserving_identity(
+def _coerce_sequence_if_needed(
     seq_value: "Sequence[Any]",
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
@@ -1060,7 +1058,7 @@ def _coerce_sequence_preserving_identity(
     return updated_seq
 
 
-def _coerce_mapping_preserving_identity(
+def _coerce_mapping_if_needed(
     mapping: "Mapping[Any, Any]",
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
@@ -1086,24 +1084,24 @@ def _coerce_parameter_set(
     # Fast type dispatch for common types
     param_type = type(param_set)
     if param_type is list:
-        return _coerce_sequence_preserving_identity(cast("list[Any]", param_set), type_coercion_map, fallback_items)
+        return _coerce_sequence_if_needed(cast("list[Any]", param_set), type_coercion_map, fallback_items)
     if param_type is tuple:
         seq_value = cast("tuple[Any, ...]", param_set)
-        coerced_seq = _coerce_sequence_preserving_identity(seq_value, type_coercion_map, fallback_items)
+        coerced_seq = _coerce_sequence_if_needed(seq_value, type_coercion_map, fallback_items)
         if coerced_seq is seq_value:
             return seq_value
         return tuple(cast("list[Any]", coerced_seq))
     if param_type is dict:
-        return _coerce_mapping_preserving_identity(cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items)
+        return _coerce_mapping_if_needed(cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items)
     # Fallback to ABC checks for custom types
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
         seq_fallback = param_set
-        coerced_seq = _coerce_sequence_preserving_identity(seq_fallback, type_coercion_map, fallback_items)
+        coerced_seq = _coerce_sequence_if_needed(seq_fallback, type_coercion_map, fallback_items)
         if coerced_seq is seq_fallback:
             return param_set
         return coerced_seq
     if isinstance(param_set, Mapping):
-        coerced_mapping = _coerce_mapping_preserving_identity(param_set, type_coercion_map, fallback_items)
+        coerced_mapping = _coerce_mapping_if_needed(param_set, type_coercion_map, fallback_items)
         if coerced_mapping is param_set:
             return param_set
         return coerced_mapping
@@ -1132,24 +1130,24 @@ def _coerce_parameters_payload(
             if updated_many is None:
                 return seq_params
             return updated_many
-        return _coerce_sequence_preserving_identity(seq_params, type_coercion_map, fallback_items)
+        return _coerce_sequence_if_needed(seq_params, type_coercion_map, fallback_items)
     if param_type is tuple:
         tuple_params = cast("tuple[Any, ...]", parameters)
         if is_many:
             return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in tuple_params]
-        coerced_tuple = _coerce_sequence_preserving_identity(tuple_params, type_coercion_map, fallback_items)
+        coerced_tuple = _coerce_sequence_if_needed(tuple_params, type_coercion_map, fallback_items)
         return list(coerced_tuple)
     if param_type is dict:
         dict_params = cast("dict[Any, Any]", parameters)
-        return _coerce_mapping_preserving_identity(dict_params, type_coercion_map, fallback_items)
+        return _coerce_mapping_if_needed(dict_params, type_coercion_map, fallback_items)
     # Fallback to ABC checks for custom types
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in parameters]
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        coerced_sequence = _coerce_sequence_preserving_identity(parameters, type_coercion_map, fallback_items)
+        coerced_sequence = _coerce_sequence_if_needed(parameters, type_coercion_map, fallback_items)
         return list(coerced_sequence)
     if isinstance(parameters, Mapping):
-        coerced_mapping = _coerce_mapping_preserving_identity(parameters, type_coercion_map, fallback_items)
+        coerced_mapping = _coerce_mapping_if_needed(parameters, type_coercion_map, fallback_items)
         return dict(coerced_mapping)
     return _coerce_parameter_value(parameters, type_coercion_map, fallback_items)
 

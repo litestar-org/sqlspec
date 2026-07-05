@@ -237,12 +237,12 @@ def provide_filters(
     if cached_dep is not None:
         return cached_dep
 
-    dep = _create_filter_aggregate_function(config, dep_defaults)
+    dep = _configured_filter_aggregator(config, dep_defaults)
     dep_cache.add_dependencies(cache_key, dep)
     return dep
 
 
-def _create_filter_aggregate_function(
+def _configured_filter_aggregator(
     config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS
 ) -> "Callable[..., list[FilterTypes]]":
     """Create a FastAPI dependency function that aggregates multiple filter dependencies.

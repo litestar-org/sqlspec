@@ -67,7 +67,7 @@ class StorageRegistry:
             base_path: Base path to prepend to all operations
             **kwargs: Backend-specific configuration options
         """
-        backend_cls = self._get_backend_class(backend) if backend else self._determine_backend_class(uri)
+        backend_cls = self._backend_class(backend) if backend else self._determine_backend_class(uri)
 
         backend_config = dict(kwargs)
         if base_path:
@@ -107,7 +107,7 @@ class StorageRegistry:
             cache_params["__backend__"] = backend
 
         path_str = str(uri_or_alias)
-        scheme = self._get_scheme(path_str)
+        scheme = self._scheme(path_str)
 
         # 1. Resolve to a base URI
         base_uri = path_str
@@ -143,19 +143,19 @@ class StorageRegistry:
 
         # 3. Create new instance if not cached
         if not is_alias:
-            instance = self._resolve_from_uri(base_uri, backend_override=backend, **kwargs)
+            instance = self._backend_from_uri(base_uri, backend_override=backend, **kwargs)
         else:
             # It must be an alias (already validated above)
             backend_cls, stored_uri, config = self._alias_configs[base_uri]
             if backend:
-                backend_cls = self._get_backend_class(backend)
+                backend_cls = self._backend_class(backend)
             instance = backend_cls(stored_uri, **{**config, **kwargs})
 
         self._instances[cache_key] = instance
         log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=False)
         return instance
 
-    def _resolve_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
+    def _backend_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Resolve backend from URI with optional backend override.
 
         Backend selection priority for local files (file:// or bare paths):
@@ -177,34 +177,34 @@ class StorageRegistry:
             MissingDependencyError: No backend available for URI scheme.
         """
         if backend_override:
-            return self._create_backend(backend_override, uri, **kwargs)
+            return self._backend(backend_override, uri, **kwargs)
 
-        scheme = self._get_scheme(uri)
+        scheme = self._scheme(uri)
 
         if scheme in {None, "file"}:
             if OBSTORE_INSTALLED:
                 try:
-                    return self._create_backend("obstore", uri, **kwargs)
+                    return self._backend("obstore", uri, **kwargs)
                 except (ValueError, ImportError, NotImplementedError):
                     pass
 
             if FSSPEC_INSTALLED:
                 try:
-                    return self._create_backend("fsspec", uri, **kwargs)
+                    return self._backend("fsspec", uri, **kwargs)
                 except (ValueError, ImportError, NotImplementedError):
                     pass
 
-            return self._create_backend("local", uri, **kwargs)
+            return self._backend("local", uri, **kwargs)
 
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
             try:
-                return self._create_backend("obstore", uri, **kwargs)
+                return self._backend("obstore", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
 
         if FSSPEC_INSTALLED:
             try:
-                return self._create_backend("fsspec", uri, **kwargs)
+                return self._backend("fsspec", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
 
@@ -223,31 +223,31 @@ class StorageRegistry:
         Raises:
             MissingDependencyError: No backend available for URI scheme.
         """
-        scheme = self._get_scheme(uri)
+        scheme = self._scheme(uri)
 
         if scheme in {None, "file"}:
             if OBSTORE_INSTALLED:
-                return self._get_backend_class("obstore")
+                return self._backend_class("obstore")
             if FSSPEC_INSTALLED:
-                return self._get_backend_class("fsspec")
-            return self._get_backend_class("local")
+                return self._backend_class("fsspec")
+            return self._backend_class("local")
 
         if scheme in FSSPEC_ONLY_SCHEMES:
             if not FSSPEC_INSTALLED:
                 msg = f"Scheme '{scheme}' requires fsspec. Install with: pip install fsspec"
                 raise MissingDependencyError(msg)
-            return self._get_backend_class("fsspec")
+            return self._backend_class("fsspec")
 
         if OBSTORE_INSTALLED:
-            return self._get_backend_class("obstore")
+            return self._backend_class("obstore")
 
         if FSSPEC_INSTALLED:
-            return self._get_backend_class("fsspec")
+            return self._backend_class("fsspec")
 
         msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec for cloud storage support."
         raise MissingDependencyError(msg)
 
-    def _get_backend_class(self, backend_type: str) -> type[ObjectStoreProtocol]:
+    def _backend_class(self, backend_type: str) -> type[ObjectStoreProtocol]:
         """Get backend class by type name."""
         if backend_type == "local":
             from sqlspec.storage.backends.local import LocalStore
@@ -264,11 +264,11 @@ class StorageRegistry:
         msg = f"Unknown backend type: {backend_type}. Supported types: 'local', 'obstore', 'fsspec'"
         raise ValueError(msg)
 
-    def _create_backend(self, backend_type: str, uri: str, **kwargs: Any) -> ObjectStoreProtocol:
+    def _backend(self, backend_type: str, uri: str, **kwargs: Any) -> ObjectStoreProtocol:
         """Create backend instance for URI."""
-        return self._get_backend_class(backend_type)(uri, **kwargs)
+        return self._backend_class(backend_type)(uri, **kwargs)
 
-    def _get_scheme(self, uri: str) -> str | None:
+    def _scheme(self, uri: str) -> str | None:
         """Extract the scheme from a URI using regex."""
         if not uri:
             return None

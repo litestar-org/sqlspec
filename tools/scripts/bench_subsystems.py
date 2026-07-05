@@ -52,7 +52,7 @@ def _setup_test_table(db_path: Path) -> None:
     conn.close()
 
 
-def _get_librt_string_writer() -> "type[Any] | None":
+def _librt_string_writer_type() -> "type[Any] | None":
     """Return librt's StringWriter when the mypy 2 runtime helper is installed."""
     try:
         from librt.strings import StringWriter
@@ -83,7 +83,7 @@ class SubsystemBenchmark:
 
 def _build_librt_candidate_benchmarks(iterations: int) -> list[SubsystemBenchmark]:
     """Build optional benchmarks for candidate librt.strings replacements."""
-    string_writer_type = _get_librt_string_writer()
+    string_writer_type = _librt_string_writer_type()
     if string_writer_type is None:
         return []
 
@@ -374,11 +374,11 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
 
     # Now benchmark the direct prepare path
     def bench_cache_prepare_hit() -> None:
-        session._stmt_cache_prepare_direct("INSERT INTO test (value) VALUES (?)", ("bench_val",))
+        session._prepare_cached_statement("INSERT INTO test (value) VALUES (?)", ("bench_val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _stmt_cache_prepare_direct() - cache hit",
+            name="QC _prepare_cached_statement() - cache hit",
             bench_fn=bench_cache_prepare_hit,
             iterations=iterations,
             description="Direct prepare with cache hit",
@@ -386,11 +386,11 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     )
 
     def bench_cache_prepare_miss() -> None:
-        session._stmt_cache_prepare_direct("INSERT INTO unique_table (col) VALUES (?)", ("val",))
+        session._prepare_cached_statement("INSERT INTO unique_table (col) VALUES (?)", ("val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _stmt_cache_prepare_direct() - cache miss",
+            name="QC _prepare_cached_statement() - cache miss",
             bench_fn=bench_cache_prepare_miss,
             iterations=iterations,
             description="Direct prepare with cache miss",
@@ -398,13 +398,13 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     )
 
     # Full statement cache lookup cycle
-    def bench_stmt_cache_lookup() -> None:
-        session._stmt_cache_lookup("INSERT INTO test (value) VALUES (?)", ("bench_val",))
+    def bench_cached_execution() -> None:
+        session._cached_execution("INSERT INTO test (value) VALUES (?)", ("bench_val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _stmt_cache_lookup() - full cycle",
-            bench_fn=bench_stmt_cache_lookup,
+            name="QC _cached_execution() - full cycle",
+            bench_fn=bench_cached_execution,
             iterations=iterations,
             description="Full stmt_cache lookup -> prepare -> execute cycle",
         )
@@ -436,13 +436,13 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    def bench_format_parameter_set() -> None:
-        session._format_parameter_set(("value_1", "value_2", "value_3"), session.statement_config)
+    def bench_driver_parameters() -> None:
+        session._driver_parameters(("value_1", "value_2", "value_3"), session.statement_config)
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="_format_parameter_set (3 params)",
-            bench_fn=bench_format_parameter_set,
+            name="_driver_parameters (3 params)",
+            bench_fn=bench_driver_parameters,
             iterations=iterations,
             description="Format a 3-element positional parameter set",
         )

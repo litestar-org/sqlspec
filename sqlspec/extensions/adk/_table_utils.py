@@ -4,14 +4,14 @@ import re
 from collections.abc import Callable
 from typing import Final
 
-__all__ = ("deduplicate_statements", "parse_owner_id_column", "reset_drop_statements", "validate_table_name")
+__all__ = ("ensure_table_name", "owner_id_column_name", "reset_drop_sql", "unique_statements")
 
 _VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 _MAX_TABLE_NAME_LENGTH: Final = 63
 
 
-def deduplicate_statements(statements: list[str]) -> list[str]:
+def unique_statements(statements: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for statement in statements:
@@ -22,7 +22,7 @@ def deduplicate_statements(statements: list[str]) -> list[str]:
     return result
 
 
-def parse_owner_id_column(owner_id_column_ddl: str) -> str:
+def owner_id_column_name(owner_id_column_ddl: str) -> str:
     """Extract column name from owner ID column DDL definition."""
     match = _COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
     if not match:
@@ -31,16 +31,16 @@ def parse_owner_id_column(owner_id_column_ddl: str) -> str:
     return match.group(1)
 
 
-def reset_drop_statements(
+def reset_drop_sql(
     current_statements: list[str], table_names: tuple[str, ...], drop_for_table: Callable[[str], list[str]]
 ) -> list[str]:
     statements = list(current_statements)
     for table_name in table_names:
         statements.extend(drop_for_table(table_name))
-    return deduplicate_statements(statements)
+    return unique_statements(statements)
 
 
-def validate_table_name(table_name: str) -> None:
+def ensure_table_name(table_name: str) -> None:
     """Validate table name for SQL safety."""
     if not table_name:
         msg = "Table name cannot be empty"

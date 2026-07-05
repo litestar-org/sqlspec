@@ -175,7 +175,7 @@ class OraclePipelineMixin:
             msg = f"Unsupported stack operation method: {operation.method}"
             raise ValueError(msg)
 
-        compiled_sql, prepared_parameters = driver._get_compiled_sql(  # pyright: ignore[reportPrivateUsage]
+        compiled_sql, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
             sql_statement, config
         )
         summary = describe_stack_statement(operation.statement)
@@ -352,7 +352,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             Execution result containing data for SELECT statements or row count for others
         """
 
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = coerce_large_parameters_sync(
             self.connection,
@@ -401,7 +401,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Returns:
             Execution result with affected row count
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
         execution_args = statement.statement_config.execution_args or {}
@@ -443,7 +443,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         Returns:
             Execution result containing statement count and success information
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -528,7 +528,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Return a native oracledb row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         stream_parameters = cast("list[object] | tuple[object, ...] | dict[object, object] | None", prepared_parameters)
         return SyncRowStream(OracleSyncStreamSource(self, sql, stream_parameters, chunk_size))
 
@@ -580,7 +580,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
 
         try:
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
@@ -666,11 +666,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
+        telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -712,10 +712,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                     cursor.executemany(statement, records)
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -727,7 +727,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts into Oracle."""
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -927,7 +927,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             Execution result containing data for SELECT statements or row count for others
         """
 
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = await coerce_large_parameters_async(
             self.connection,
@@ -976,7 +976,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Returns:
             Execution result with affected row count
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
         execution_args = statement.statement_config.execution_args or {}
@@ -1020,7 +1020,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Returns:
             Execution result containing statement count and success information
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         script_params = cast("dict[str, Any]", prepared_parameters or {})
 
@@ -1108,7 +1108,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Return a native oracledb row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         stream_parameters = cast("list[object] | tuple[object, ...] | dict[object, object] | None", prepared_parameters)
         return AsyncRowStream(OracleAsyncStreamSource(self, sql, stream_parameters, chunk_size))
 
@@ -1160,7 +1160,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
 
         try:
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
@@ -1248,11 +1248,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
-        telemetry_payload = await self._write_result_to_storage_async(
+        telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -1294,10 +1294,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                     await cursor.executemany(statement, records)
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,
@@ -1309,7 +1309,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Asynchronously load staged artifacts into Oracle."""
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )

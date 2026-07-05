@@ -25,7 +25,7 @@ from sqlspec.core.parameters import (
     value_fingerprint,
 )
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.sqlcommenter import _append_sqlcommenter_comment_to_sql, _resolve_sqlcommenter_attributes
+from sqlspec.core.sqlcommenter import _append_comment, _comment_attributes
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -375,7 +375,7 @@ class SQLProcessor:
             )
 
         if param_fingerprint is None:
-            param_fingerprint = self._get_param_fingerprint(parameters, is_many)
+            param_fingerprint = self._parameter_fingerprint(parameters, is_many)
         cache_key = self._make_cache_key(sql, param_fingerprint, is_many)
 
         # MICRO-CACHE: Fast path for repeating statements
@@ -418,12 +418,12 @@ class SQLProcessor:
         if not self._has_dynamic_sqlcommenter():
             return result
 
-        attrs = _resolve_sqlcommenter_attributes(
+        attrs = _comment_attributes(
             self._config.sqlcommenter_attributes or {},
             enable_traceparent=self._config.sqlcommenter_enable_traceparent,
             enable_context=self._config.sqlcommenter_enable_context,
         )
-        compiled_sql = _append_sqlcommenter_comment_to_sql(result.compiled_sql, attrs)
+        compiled_sql = _append_comment(result.compiled_sql, attrs)
         if compiled_sql == result.compiled_sql:
             return result
 
@@ -551,8 +551,8 @@ class SQLProcessor:
         except ParseError:
             return None, "COMMAND", OperationProfile.empty()
         else:
-            operation_type = SQLProcessor._detect_operation_type(expression)
-            operation_profile = SQLProcessor._build_operation_profile(expression, operation_type)
+            operation_type = SQLProcessor._operation_type(expression)
+            operation_profile = SQLProcessor._operation_profile(expression, operation_type)
             return expression, operation_type, operation_profile
 
     def _store_parse_cache(
@@ -693,8 +693,8 @@ class SQLProcessor:
         if ast_was_transformed:
             if expression is None:
                 return expression, parameters, ast_was_transformed, operation_type, operation_profile
-            operation_type = SQLProcessor._detect_operation_type(expression)
-            operation_profile = SQLProcessor._build_operation_profile(expression, operation_type)
+            operation_type = SQLProcessor._operation_type(expression)
+            operation_profile = SQLProcessor._operation_profile(expression, operation_type)
 
         return expression, parameters, ast_was_transformed, operation_type, operation_profile
 
@@ -758,7 +758,7 @@ class SQLProcessor:
                 transformed_result.applied_wrap_types,
             )
 
-        final_sql, final_params = self._apply_final_transformations(expression, processed_sql, parameters, dialect_str)
+        final_sql, final_params = self._apply_transformers(expression, processed_sql, parameters, dialect_str)
         return final_sql, final_params, parameter_profile, (), False
 
     def _should_validate_parameters(self, final_params: Any, raw_parameters: Any, is_many: bool) -> bool:
@@ -773,8 +773,8 @@ class SQLProcessor:
             True when validation should run.
         """
         validation_enabled = self._config.enable_validation
-        has_final_params = not _is_effectively_empty_parameters(final_params)
-        has_raw_params = not _is_effectively_empty_parameters(raw_parameters)
+        has_final_params = not _parameters_empty(final_params)
+        has_raw_params = not _parameters_empty(raw_parameters)
         has_params = has_final_params or has_raw_params
         return (has_params or is_many) and validation_enabled
 
@@ -854,7 +854,7 @@ class SQLProcessor:
                     )
                 )
                 if expression is not None:
-                    parameter_casts = SQLProcessor._detect_parameter_casts(expression)
+                    parameter_casts = SQLProcessor._parameter_casts(expression)
 
             final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
                 processed_sql,
@@ -906,7 +906,7 @@ class SQLProcessor:
             log_with_context(logger, logging.ERROR, "sql.compile", error_type=type(exc).__name__, status="error")
             raise
 
-    def _get_param_fingerprint(self, parameters: Any, is_many: bool) -> Any:
+    def _parameter_fingerprint(self, parameters: Any, is_many: bool) -> Any:
         if self._parameter_config.needs_static_script_compilation:
             return value_fingerprint(parameters)
         return structural_fingerprint(parameters, is_many)
@@ -927,7 +927,7 @@ class SQLProcessor:
         )
 
     @staticmethod
-    def _detect_operation_type(expression: "exp.Expr") -> "OperationType":
+    def _operation_type(expression: "exp.Expr") -> "OperationType":
         """Detect operation type from AST.
 
         Args:
@@ -954,7 +954,7 @@ class SQLProcessor:
         return "COMMAND"
 
     @staticmethod
-    def _detect_parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
+    def _parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
         """Detect explicit type casts on parameters in the AST.
 
         Args:
@@ -973,7 +973,7 @@ class SQLProcessor:
         # Walk all nodes in order to track parameter positions
         for node in expression.walk():
             if isinstance(node, exp.Placeholder):
-                _assign_placeholder_position(node, placeholder_positions, placeholder_counter)
+                _placeholder_position(node, placeholder_positions, placeholder_counter)
             # Check for cast nodes with parameter children
             if isinstance(node, exp.Cast):
                 cast_target = node.this
@@ -985,7 +985,7 @@ class SQLProcessor:
                     if isinstance(param_value, exp.Literal):
                         position = int(param_value.this)
                 elif isinstance(cast_target, exp.Placeholder):
-                    position = _assign_placeholder_position(cast_target, placeholder_positions, placeholder_counter)
+                    position = _placeholder_position(cast_target, placeholder_positions, placeholder_counter)
                 elif isinstance(cast_target, exp.Column):
                     # Handle cases where $1 gets parsed as a column
                     column_name = str(cast_target.this) if cast_target.this else str(cast_target)
@@ -1002,7 +1002,7 @@ class SQLProcessor:
 
         return cast_positions
 
-    def _apply_final_transformations(
+    def _apply_transformers(
         self, expression: "exp.Expr | None", sql: str, parameters: Any, dialect_str: "str | None"
     ) -> "tuple[str, Any]":
         """Apply final transformations.
@@ -1026,7 +1026,7 @@ class SQLProcessor:
         return sql, parameters
 
     @staticmethod
-    def _build_operation_profile(expression: "exp.Expr | None", operation_type: "OperationType") -> "OperationProfile":
+    def _operation_profile(expression: "exp.Expr | None", operation_type: "OperationType") -> "OperationProfile":
         if expression is None:
             return OperationProfile.empty()
 
@@ -1110,7 +1110,7 @@ class SQLProcessor:
         }
 
 
-def _assign_placeholder_position(
+def _placeholder_position(
     placeholder: "exp.Placeholder", placeholder_positions: "dict[str, int]", placeholder_counter: "list[int]"
 ) -> "int | None":
     name_expr = placeholder.name if placeholder.name is not None else None
@@ -1130,7 +1130,7 @@ def _assign_placeholder_position(
     return placeholder_positions[placeholder_key]
 
 
-def _is_effectively_empty_parameters(value: Any) -> bool:
+def _parameters_empty(value: Any) -> bool:
     if value is None:
         return True
     # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)

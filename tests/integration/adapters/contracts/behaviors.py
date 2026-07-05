@@ -226,7 +226,7 @@ async def _execute_async(driver: AsyncContractDriver, statement: object, paramet
     return await driver.execute(statement, parameters)
 
 
-def _should_assert_execute_rows_affected(case: DriverCase) -> bool:
+def _reports_execute_rows_affected(case: DriverCase) -> bool:
     return "execute-rows-affected-unavailable" not in case.deviations
 
 
@@ -290,7 +290,7 @@ def assert_sync_driver_basics_contract(driver: object, case: DriverCase) -> None
     """Assert sync drivers run the CRUD lifecycle and expose result column metadata."""
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    assert_execute_rows = _should_assert_execute_rows_affected(case)
+    assert_execute_rows = _reports_execute_rows_affected(case)
 
     insert_result = sync_driver.execute(table.insert_qmark_sql, ("basics", 1, None))
     if assert_execute_rows:
@@ -322,7 +322,7 @@ async def assert_async_driver_basics_contract(driver: object, case: DriverCase) 
     """Assert async drivers run the CRUD lifecycle and expose result column metadata."""
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
-    assert_execute_rows = _should_assert_execute_rows_affected(case)
+    assert_execute_rows = _reports_execute_rows_affected(case)
 
     insert_result = await async_driver.execute(table.insert_qmark_sql, ("basics", 1, None))
     if assert_execute_rows:
@@ -796,7 +796,7 @@ def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> No
     """Assert sync drivers execute a StatementStack sequentially with per-operation results."""
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
-    assert_execute_rows = _should_assert_execute_rows_affected(case)
+    assert_execute_rows = _reports_execute_rows_affected(case)
 
     sync_driver.execute(table.delete_sql)
     sync_driver.commit()
@@ -825,7 +825,7 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
     """Assert async drivers execute a StatementStack sequentially with per-operation results."""
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
-    assert_execute_rows = _should_assert_execute_rows_affected(case)
+    assert_execute_rows = _reports_execute_rows_affected(case)
 
     await async_driver.execute(table.delete_sql)
     await async_driver.commit()
@@ -3167,7 +3167,7 @@ def assert_sync_parameter_contract(driver: object, case: DriverCase, parameter_c
     _seed_sync(sync_driver, parameter_case.setup_rows, case.table, case)
 
     result = _execute_sync(sync_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters)
-    if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
+    if parameter_case.expected_rows_affected is not None and _reports_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
@@ -3190,7 +3190,7 @@ async def assert_async_parameter_contract(
     result = await _execute_async(
         async_driver, _with_table(parameter_case.statement, case.table), parameter_case.parameters
     )
-    if parameter_case.expected_rows_affected is not None and _should_assert_execute_rows_affected(case):
+    if parameter_case.expected_rows_affected is not None and _reports_execute_rows_affected(case):
         assert_sql_result(result, rows_affected=parameter_case.expected_rows_affected)
     if parameter_case.expected_result_data is not None:
         assert_result_data(result, parameter_case.expected_result_data)
@@ -3219,7 +3219,7 @@ def assert_sync_parameter_style_contract(
         result = _execute_sync(sync_driver, style_statement, parameter_style_case.parameters)
 
     if parameter_style_case.expected_rows_affected is not None and (
-        parameter_style_case.method == "execute_many" or _should_assert_execute_rows_affected(case)
+        parameter_style_case.method == "execute_many" or _reports_execute_rows_affected(case)
     ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
@@ -3252,7 +3252,7 @@ async def assert_async_parameter_style_contract(
         result = await _execute_async(async_driver, style_statement, parameter_style_case.parameters)
 
     if parameter_style_case.expected_rows_affected is not None and (
-        parameter_style_case.method == "execute_many" or _should_assert_execute_rows_affected(case)
+        parameter_style_case.method == "execute_many" or _reports_execute_rows_affected(case)
     ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
@@ -3528,8 +3528,8 @@ def assert_sync_arrow_contract(driver: object, case: DriverCase) -> None:
     empty = sync_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
     assert empty.rows_affected == 0
 
-    _assert_sync_arrow_streaming_contract(sync_driver, case, table)
-    _assert_sync_arrow_native_only_contract(sync_driver, case, table)
+    _assert_sync_arrow_streaming(sync_driver, case, table)
+    _assert_sync_arrow_native_only(sync_driver, case, table)
 
 
 async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
@@ -3558,8 +3558,8 @@ async def assert_async_arrow_contract(driver: object, case: DriverCase) -> None:
     empty = await async_driver.select_to_arrow(table.select_by_name_qmark_sql, ("missing",))
     assert empty.rows_affected == 0
 
-    await _assert_async_arrow_streaming_contract(async_driver, case, table)
-    await _assert_async_arrow_native_only_contract(async_driver, case, table)
+    await _assert_async_arrow_streaming(async_driver, case, table)
+    await _assert_async_arrow_native_only(async_driver, case, table)
 
 
 def _assert_batch_rows(batches: "list[ArrowRecordBatch]", expected_rows: int, *, batch_size: int, exact: bool) -> None:
@@ -3578,7 +3578,7 @@ def _assert_reader_rows_affected(case: DriverCase, rows_affected: int, expected_
     assert rows_affected == -1
 
 
-def _assert_sync_arrow_streaming_contract(driver: SyncContractDriver, case: DriverCase, table: ContractTable) -> None:
+def _assert_sync_arrow_streaming(driver: SyncContractDriver, case: DriverCase, table: ContractTable) -> None:
     """Assert native Arrow streaming formats for adapters that advertise them."""
     if not case.supports_arrow_streaming:
         return
@@ -3595,9 +3595,7 @@ def _assert_sync_arrow_streaming_contract(driver: SyncContractDriver, case: Driv
     _assert_batch_rows(batches_result.data, 3, batch_size=batch_size, exact=case.arrow_reader_honors_batch_size)
 
 
-async def _assert_async_arrow_streaming_contract(
-    driver: AsyncContractDriver, case: DriverCase, table: ContractTable
-) -> None:
+async def _assert_async_arrow_streaming(driver: AsyncContractDriver, case: DriverCase, table: ContractTable) -> None:
     """Assert native Arrow streaming formats for async adapters that advertise them."""
     if not case.supports_arrow_streaming:
         return
@@ -3618,7 +3616,7 @@ async def _assert_async_arrow_streaming_contract(
     _assert_batch_rows(batches_result.data, 3, batch_size=batch_size, exact=case.arrow_reader_honors_batch_size)
 
 
-def _assert_sync_arrow_native_only_contract(driver: SyncContractDriver, case: DriverCase, table: ContractTable) -> None:
+def _assert_sync_arrow_native_only(driver: SyncContractDriver, case: DriverCase, table: ContractTable) -> None:
     """Assert native_only direction for Arrow-capable sync adapters."""
     from sqlspec.exceptions import ImproperConfigurationError
 
@@ -3630,9 +3628,7 @@ def _assert_sync_arrow_native_only_contract(driver: SyncContractDriver, case: Dr
         driver.select_to_arrow(table.select_ordered_sql, native_only=True)
 
 
-async def _assert_async_arrow_native_only_contract(
-    driver: AsyncContractDriver, case: DriverCase, table: ContractTable
-) -> None:
+async def _assert_async_arrow_native_only(driver: AsyncContractDriver, case: DriverCase, table: ContractTable) -> None:
     """Assert native_only direction for Arrow-capable async adapters."""
     from sqlspec.exceptions import ImproperConfigurationError
 

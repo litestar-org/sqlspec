@@ -45,16 +45,16 @@ class AiosqliteADKConfig(ADKConfig):
     """Optional FTS5 detail mode used when ``memory_use_fts`` is enabled."""
 
 
-def _get_adk_config(config: "AiosqliteConfig") -> "dict[str, Any]":
+def _adk_config(config: "AiosqliteConfig") -> "dict[str, Any]":
     """Return the adapter-local ADK extension configuration."""
 
     return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
 
 
-def _get_pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
+def _pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
     """Return validated ADK PRAGMA overrides for aiosqlite stores."""
 
-    adk_config = _get_adk_config(config)
+    adk_config = _adk_config(config)
     pragma_overrides = adk_config.get("pragma_overrides")
     if pragma_overrides is None:
         return []
@@ -68,10 +68,10 @@ def _get_pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
         raise ImproperConfigurationError(msg) from exc
 
 
-def _get_fts_options(config: "AiosqliteConfig") -> "tuple[str, ...]":
+def _fts_options(config: "AiosqliteConfig") -> "tuple[str, ...]":
     """Return validated FTS5 options for aiosqlite memory DDL."""
 
-    adk_config = _get_adk_config(config)
+    adk_config = _adk_config(config)
     options: list[str] = []
 
     fts_tokenize = adk_config.get("fts_tokenize")
@@ -126,7 +126,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             config: AiosqliteConfig instance.
         """
         super().__init__(config)
-        self._pragma_overrides = _get_pragma_overrides(config)
+        self._pragma_overrides = _pragma_overrides(config)
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -792,7 +792,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             config: AiosqliteConfig instance.
         """
         super().__init__(config)
-        self._fts_options = _get_fts_options(config)
+        self._fts_options = _fts_options(config)
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.

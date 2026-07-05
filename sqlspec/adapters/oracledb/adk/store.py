@@ -208,7 +208,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
 
-        adk_config = _get_oracle_adk_config(config)
+        adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
@@ -1275,7 +1275,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
 
-        adk_config = _get_oracle_adk_config(config)
+        adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
@@ -2383,7 +2383,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
-        adk_config = _get_oracle_adk_config(config)
+        adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
@@ -2728,7 +2728,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         super().__init__(config)
         self._json_storage_type: JSONStorageType | None = None
         self._oracle_version_info: OracleVersionInfo | None = None
-        adk_config = _get_oracle_adk_config(config)
+        adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
@@ -3089,7 +3089,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 def _configure_oracle_adk_session_tables(store: Any, config: Any) -> None:
     """Apply Oracle clean-break ADK table names independent of shared-base drift."""
 
-    adk_config = _get_oracle_adk_config(config)
+    adk_config = _adk_config(config)
     table_names = {
         "_session_table": str(adk_config.get("session_table") or ORACLE_DEFAULT_SESSION_TABLE),
         "_events_table": str(adk_config.get("events_table") or ORACLE_DEFAULT_EVENTS_TABLE),
@@ -3190,7 +3190,7 @@ def _json_column_ddl(column_name: str, storage_type: JSONStorageType) -> str:
     return f"{column_name} BLOB NOT NULL"
 
 
-def _get_oracle_adk_config(config: Any) -> OracleADKConfig:
+def _adk_config(config: Any) -> OracleADKConfig:
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):
         return {}
@@ -3282,7 +3282,7 @@ def _oracle_table_options_clause(adk_config: Mapping[str, Any], table_kind: str)
 def _oracle_table_feature_clauses(
     config: Any, table_kind: str, *, in_memory: bool, hash_partition_key: str, range_partition_key: str
 ) -> str:
-    adk_config = _get_oracle_adk_config(config)
+    adk_config = _adk_config(config)
     clauses = [
         clause
         for clause in (

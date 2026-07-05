@@ -200,14 +200,14 @@ def test_arrow_odbc_select_to_arrow_precompiles_prepared_statement(monkeypatch: 
         cast("ArrowOdbcConnection", connection),
         driver_features={"connection_string": "Driver={ODBC Driver 18 for SQL Server};", "chunk_size": 2},
     )
-    original = ArrowOdbcDriver._get_compiled_sql
+    original = ArrowOdbcDriver._compiled_sql
     captured: list[bool] = []
 
     def get_compiled_sql(self: ArrowOdbcDriver, statement: Any, config: Any) -> Any:
         captured.append(statement.is_processed)
         return original(self, statement, config)
 
-    monkeypatch.setattr(ArrowOdbcDriver, "_get_compiled_sql", get_compiled_sql)
+    monkeypatch.setattr(ArrowOdbcDriver, "_compiled_sql", get_compiled_sql)
 
     driver.select_to_arrow("SELECT 1 AS x")
 
@@ -419,7 +419,7 @@ def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     )
 
     prepared = driver.prepare_statement("SELECT :value", (), kwargs={"value": 1})
-    sql, parameters = driver._get_compiled_sql(prepared, driver.statement_config)
+    sql, parameters = driver._compiled_sql(prepared, driver.statement_config)
 
     assert driver.dialect == "tsql"
     assert driver.statement_config.dialect == "tsql"

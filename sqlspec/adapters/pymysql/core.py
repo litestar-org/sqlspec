@@ -406,7 +406,7 @@ def detect_json_columns(
     return detect_json_columns_from_description(description, json_type_codes)
 
 
-def _deserialize_pymysql_json_dict_rows(
+def _deserialize_json_dict_rows(
     column_names: "list[str]",
     rows: "list[dict[str, Any]]",
     json_indexes: "list[int]",
@@ -441,7 +441,7 @@ def _deserialize_pymysql_json_dict_rows(
     return rows
 
 
-def _deserialize_pymysql_json_tuple_rows(
+def _deserialize_json_tuple_rows(
     rows: "list[Any]", json_indexes: "list[int]", deserializer: "Callable[[Any], Any]", *, logger: Any | None = None
 ) -> "list[Any]":
     """Apply JSON deserialization to tuple rows using index-based access."""
@@ -498,13 +498,11 @@ def collect_rows(
             rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
             return rows, resolved_column_names, "dict"
         rows = [dict(row) for row in fetched_data]
-        rows = _deserialize_pymysql_json_dict_rows(
-            resolved_column_names, rows, json_indexes, deserializer, logger=logger
-        )
+        rows = _deserialize_json_dict_rows(resolved_column_names, rows, json_indexes, deserializer, logger=logger)
         return rows, resolved_column_names, "dict"
     rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
     if json_indexes:
-        rows = _deserialize_pymysql_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
+        rows = _deserialize_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
     return rows, resolved_column_names, "tuple"
 
 

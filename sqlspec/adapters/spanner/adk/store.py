@@ -71,7 +71,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        adk_config = _get_spanner_adk_config(config)
+        adk_config = _adk_config(config)
         self._shard_count: int = int(adk_config.get("shard_count", 0)) if adk_config.get("shard_count") else 0
         self._session_table_options: str | None = adk_config.get("session_table_options")
         self._events_table_options: str | None = adk_config.get("events_table_options")
@@ -776,7 +776,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        adk_config = _get_spanner_adk_config(config)
+        adk_config = _adk_config(config)
         shard_count = adk_config.get("shard_count")
         self._shard_count = int(shard_count) if isinstance(shard_count, int) else 0
         self._memory_table_options: str | None = adk_config.get("memory_table_options")
@@ -1095,7 +1095,7 @@ def _spanner_row_deletion_policy(adk_config: Mapping[str, Any], ttl_key: str, co
     return f"\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
 
 
-def _get_spanner_adk_config(config: Any) -> SpannerADKConfig:
+def _adk_config(config: Any) -> SpannerADKConfig:
     """Return Spanner ADK extension settings from ``extension_config["adk"]``."""
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):

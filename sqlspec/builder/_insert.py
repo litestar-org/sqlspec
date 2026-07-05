@@ -48,7 +48,7 @@ class Insert(
             **kwargs: Additional QueryBuilder arguments
         """
         (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_query_builder_kwargs(kwargs)
+            self._parse_init_options(kwargs)
         )
         super().__init__(
             dialect=dialect,
@@ -86,7 +86,7 @@ class Insert(
         """
         return SQLResult
 
-    def _get_insert_expression(self) -> exp.Insert:
+    def _insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.
 
         Returns:
@@ -103,11 +103,11 @@ class Insert(
 
     def get_insert_expression(self) -> exp.Insert:
         """Get the insert expression (public API)."""
-        return self._get_insert_expression()
+        return self._insert_expression()
 
     def _bind_mapping_values(self, data: "Mapping[str, Any]") -> "Self":
         """Bind a single mapping row."""
-        insert_expr = self._get_insert_expression()
+        insert_expr = self._insert_expression()
         if insert_expr.args.get("this") is None:
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
 
@@ -221,7 +221,7 @@ class Insert(
         if not kwargs:
             return self
 
-        insert_expr = self._get_insert_expression()
+        insert_expr = self._insert_expression()
 
         set_expressions = _build_conflict_set_expressions(self, kwargs)
 

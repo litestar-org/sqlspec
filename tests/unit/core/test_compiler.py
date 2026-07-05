@@ -466,7 +466,7 @@ def test_operation_type_detection_via_ast(
 
     try:
         expression = sqlglot.parse_one(sql, dialect=basic_statement_config.dialect)
-        detected_type = processor._detect_operation_type(expression)
+        detected_type = processor._operation_type(expression)
         assert detected_type == expected_operation
     except ParseError:
         detected_type = "COMMAND"
@@ -713,7 +713,7 @@ def test_ast_transformer_path_does_not_accept_unused_parse_cache_entry() -> None
 
 
 @requires_interpreted
-def test_detect_parameter_casts_called_exactly_once_with_transformer() -> None:
+def test_parameter_casts_called_exactly_once_with_transformer() -> None:
     """Transformers should not trigger duplicate parameter-cast AST walks."""
     parameter_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
@@ -734,17 +734,17 @@ def test_detect_parameter_casts_called_exactly_once_with_transformer() -> None:
         statement_transformers=(pass_through,),
     )
 
-    original_detect_parameter_casts = SQLProcessor._detect_parameter_casts
+    original_parameter_casts = SQLProcessor._parameter_casts
     detect_parameter_casts_calls = 0
 
-    def count_detect_parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
+    def count_parameter_casts(expression: "exp.Expr | None") -> "dict[int, str]":
         nonlocal detect_parameter_casts_calls
         detect_parameter_casts_calls += 1
-        return original_detect_parameter_casts(expression)
+        return original_parameter_casts(expression)
 
     processor = SQLProcessor(config)
 
-    with patch.object(SQLProcessor, "_detect_parameter_casts", staticmethod(count_detect_parameter_casts)):
+    with patch.object(SQLProcessor, "_parameter_casts", staticmethod(count_parameter_casts)):
         processor.compile("SELECT $1::text FROM users", [1])
 
     assert detect_parameter_casts_calls == 1
@@ -839,7 +839,7 @@ def test_ast_based_operation_detection(basic_statement_config: "StatementConfig"
             expression = sqlglot.parse_one(sql, dialect=basic_statement_config.dialect)
             assert isinstance(expression, expected_exp_type)
 
-            detected_op = processor._detect_operation_type(expression)
+            detected_op = processor._operation_type(expression)
             assert detected_op == expected_op
         except ParseError:
             pytest.skip(f"SQLGlot cannot parse: {sql}")
@@ -1332,9 +1332,9 @@ def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") 
     for name in (
         "_normalize_expression_override",
         "_unpack_parse_cache_entry",
-        "_detect_operation_type",
-        "_detect_parameter_casts",
-        "_build_operation_profile",
+        "_operation_type",
+        "_parameter_casts",
+        "_operation_profile",
         "_make_parse_cache_key",
     ):
         assert isinstance(SQLProcessor.__dict__.get(name), staticmethod)
@@ -1359,14 +1359,14 @@ def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") 
     assert result1.compiled_sql == result2.compiled_sql
     assert processor._cache_hits >= 1
 
-    assert SQLProcessor._detect_operation_type(sqlglot.parse_one("SELECT 1")) == "SELECT"
+    assert SQLProcessor._operation_type(sqlglot.parse_one("SELECT 1")) == "SELECT"
     assert SQLProcessor._make_parse_cache_key("SELECT 1", None) == ("default", "SELECT 1")
     assert SQLProcessor._make_parse_cache_key("SELECT 1", "postgres") == ("postgres", "SELECT 1")
     assert SQLProcessor._normalize_expression_override(None, "SELECT 1", "SELECT 1") is None
 
-    profile = SQLProcessor._build_operation_profile(sqlglot.parse_one("SELECT 1"), "SELECT")
+    profile = SQLProcessor._operation_profile(sqlglot.parse_one("SELECT 1"), "SELECT")
     assert profile.returns_rows is True
     assert profile.modifies_rows is False
 
-    casts = SQLProcessor._detect_parameter_casts(sqlglot.parse_one("SELECT ?"))
+    casts = SQLProcessor._parameter_casts(sqlglot.parse_one("SELECT ?"))
     assert isinstance(casts, dict)

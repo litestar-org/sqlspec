@@ -152,10 +152,10 @@ class ObStoreBackend:
 
     def _resolve_path(self, path: "str | Path") -> str:
         if self._is_local_store:
-            return self._resolve_path_for_local_store(path)
+            return self._local_store_path(path)
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
-    def _resolve_path_for_local_store(self, path: "str | Path") -> str:
+    def _local_store_path(self, path: "str | Path") -> str:
         """Resolve path for LocalStore which expects relative paths from its root."""
 
         path_obj = Path(str(path))
@@ -631,7 +631,7 @@ class ObStoreBackend:
         without buffering the entire file into memory.
         """
         if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
+            resolved_path = self._local_store_path(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
@@ -680,7 +680,7 @@ class ObStoreBackend:
     async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists in storage asynchronously."""
         if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
+            resolved_path = self._local_store_path(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
@@ -711,7 +711,7 @@ class ObStoreBackend:
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object from storage asynchronously."""
         if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
+            resolved_path = self._local_store_path(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
@@ -728,8 +728,8 @@ class ObStoreBackend:
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object in storage asynchronously."""
         if self._is_local_store:
-            source_path = self._resolve_path_for_local_store(source)
-            dest_path = self._resolve_path_for_local_store(destination)
+            source_path = self._local_store_path(source)
+            dest_path = self._local_store_path(destination)
         else:
             source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
             dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
@@ -748,8 +748,8 @@ class ObStoreBackend:
     async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object in storage asynchronously."""
         if self._is_local_store:
-            source_path = self._resolve_path_for_local_store(source)
-            dest_path = self._resolve_path_for_local_store(destination)
+            source_path = self._local_store_path(source)
+            dest_path = self._local_store_path(destination)
         else:
             source_path = resolve_storage_path(source, self.base_path, self.protocol, strip_file_scheme=True)
             dest_path = resolve_storage_path(destination, self.base_path, self.protocol, strip_file_scheme=True)
@@ -768,7 +768,7 @@ class ObStoreBackend:
     async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":  # pyright: ignore[reportUnusedParameter]
         """Get object metadata from storage asynchronously."""
         if self._is_local_store:
-            resolved_path = self._resolve_path_for_local_store(path)
+            resolved_path = self._local_store_path(path)
         else:
             resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 

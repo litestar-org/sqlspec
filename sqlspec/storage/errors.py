@@ -56,7 +56,7 @@ def _is_retryable(error: Exception) -> bool:
     return bool("Timeout" in name or "Temporary" in name)
 
 
-def _normalize_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> "StorageError":
+def _storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> "StorageError":
     message = f"{backend} {operation} failed"
     if path:
         message = f"{message} for {path}"
@@ -68,7 +68,7 @@ def _normalize_storage_error(error: Exception, *, backend: str, operation: str, 
 
 def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> NoReturn:
     is_missing = _is_missing_error(error)
-    normalized = _normalize_storage_error(error, backend=backend, operation=operation, path=path)
+    normalized = _storage_error(error, backend=backend, operation=operation, path=path)
 
     log_extra: Mapping[str, str | bool | None] = {
         "backend_type": backend,

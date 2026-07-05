@@ -24,7 +24,7 @@ from sqlspec.utils.serializers._json import (
     MsgspecSerializer,
     OrjsonSerializer,
     StandardLibSerializer,
-    _create_enc_hook,
+    _enc_hook,
     encode_json,
 )
 
@@ -141,36 +141,36 @@ def test_numpy_types_registered() -> None:
     assert np.generic in DEFAULT_TYPE_ENCODERS
 
 
-def test_create_enc_hook_walks_mro_for_intenum() -> None:
+def test_enc_hook_walks_mro_for_intenum() -> None:
     """IntEnum has no explicit registration; it must resolve via Enum on the MRO."""
 
     class HttpStatus(enum.IntEnum):
         OK = 200
 
-    enc_hook = _create_enc_hook(DEFAULT_TYPE_ENCODERS)
+    enc_hook = _enc_hook(DEFAULT_TYPE_ENCODERS)
     assert enc_hook(HttpStatus.OK) == 200
 
 
-def test_create_enc_hook_resolves_subclass_of_enum() -> None:
+def test_enc_hook_resolves_subclass_of_enum() -> None:
     """Custom Enum subclasses should resolve via the Enum encoder."""
 
     class Currency(enum.Enum):
         USD = "USD"
 
-    enc_hook = _create_enc_hook(DEFAULT_TYPE_ENCODERS)
+    enc_hook = _enc_hook(DEFAULT_TYPE_ENCODERS)
     assert enc_hook(Currency.USD) == "USD"
 
 
-def test_create_enc_hook_user_override_wins() -> None:
+def test_enc_hook_user_override_wins() -> None:
     """A user-supplied registry entry takes precedence over the default."""
     overrides = {**DEFAULT_TYPE_ENCODERS, datetime.datetime: lambda _: "OVERRIDE"}
-    enc_hook = _create_enc_hook(overrides)
+    enc_hook = _enc_hook(overrides)
     assert enc_hook(datetime.datetime(2026, 1, 1)) == "OVERRIDE"
 
 
-def test_create_enc_hook_raises_on_unknown_type() -> None:
+def test_enc_hook_raises_on_unknown_type() -> None:
     """Strict sqlspec semantics: no MRO match → TypeError mentioning 'unsupported'."""
-    enc_hook = _create_enc_hook(DEFAULT_TYPE_ENCODERS)
+    enc_hook = _enc_hook(DEFAULT_TYPE_ENCODERS)
     with pytest.raises(TypeError, match="unsupported"):
         enc_hook(object())
 
@@ -221,7 +221,7 @@ def test_offset_pagination_round_trip_via_dataclass_branch() -> None:
 
 def test_purepath_subclass_resolves_via_mro() -> None:
     """PurePosixPath instance must resolve via PurePath registration on its MRO."""
-    enc_hook = _create_enc_hook(DEFAULT_TYPE_ENCODERS)
+    enc_hook = _enc_hook(DEFAULT_TYPE_ENCODERS)
     assert enc_hook(PurePosixPath("/etc/hosts")) == "/etc/hosts"
 
 

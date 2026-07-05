@@ -227,7 +227,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with query results and metadata
         """
-        sql, parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, parameters = self._compiled_sql(statement, self.statement_config)
         if self._use_query_and_wait:
             row_iterator = _run_query_and_wait(
                 cursor,
@@ -296,7 +296,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        compiled_statement, prepared_parameters = self._get_compiled_statement(statement, self.statement_config)
+        compiled_statement, prepared_parameters = self._compiled_statement(statement, self.statement_config)
         sql = compiled_statement.compiled_sql
         parsed_expression = compiled_statement.expression
 
@@ -342,7 +342,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -391,7 +391,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Return a native BigQuery row stream backed by page-wise ``RowIterator`` iteration."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(BigQueryStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
@@ -442,7 +442,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if return_format in {"reader", "batches"}:
             config = statement_config or self.statement_config
             prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-            sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+            sql, driver_params = self._compiled_sql(prepared_statement, config)
 
             exc_handler = self.handle_database_exceptions()
             streaming_result: ArrowResult | None = None
@@ -509,7 +509,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
         # Get compiled SQL and parameters
-        sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+        sql, driver_params = self._compiled_sql(prepared_statement, config)
 
         exc_handler = self.handle_database_exceptions()
         arrow_result: ArrowResult | None = None
@@ -572,11 +572,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
+        telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_records(
         self,
@@ -594,7 +594,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
         job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label="jsonl")
-        return self._create_storage_job(telemetry_payload)
+        return self._storage_job(telemetry_payload)
 
     def load_from_arrow(
         self,
@@ -621,7 +621,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     telemetry_payload.setdefault("extra", {})
                     telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
                 self._attach_partition_telemetry(telemetry_payload, partitioner)
-                return self._create_storage_job(telemetry_payload)
+                return self._storage_job(telemetry_payload)
 
         import pyarrow.parquet as pq
 
@@ -638,7 +638,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             telemetry_payload.setdefault("extra", {})
             telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload)
+        return self._storage_job(telemetry_payload)
 
     def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
         """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
@@ -671,7 +671,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             msg = f"Storage Write API commit failed: {commit.stream_errors}"
             raise StorageOperationFailedError(msg)
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table, format_label="arrow-storage-write")
+        telemetry_payload = self._ingest_telemetry(arrow_table, format_label="arrow-storage-write")
         telemetry_payload["destination"] = table
         return telemetry_payload
 
@@ -710,7 +710,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         job.result(timeout=self._job_request_timeout())
         telemetry_payload = build_load_job_telemetry(job, table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, source_telemetry)
+        return self._storage_job(telemetry_payload, source_telemetry)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # UTILITY METHODS

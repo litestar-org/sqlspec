@@ -210,7 +210,7 @@ def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
 driver_profile = build_profile()
 
 
-def _build_psqlpy_parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleConfig":
+def _parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleConfig":
     """Construct parameter configuration for psqlpy.
 
     Args:
@@ -233,7 +233,7 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     serializer = json_serializer or to_json
     profile = driver_profile
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
-    parameter_config = _build_psqlpy_parameter_config(base_config.parameter_config)
+    parameter_config = _parameter_config(base_config.parameter_config)
     return base_config.replace(parameter_config=parameter_config)
 
 
@@ -264,7 +264,7 @@ def apply_driver_features(
     features.setdefault("enable_paradedb", True)
 
     base_config = build_statement_config_from_profile(driver_profile, json_serializer=serializer)
-    parameter_config = _build_psqlpy_parameter_config(base_config.parameter_config)
+    parameter_config = _parameter_config(base_config.parameter_config)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
@@ -493,9 +493,7 @@ def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
     return {}
 
 
-def _get_type_coercion_dispatcher(
-    type_map: "dict[type, Callable[[Any], Any]]",
-) -> "TypeDispatcher[Callable[[Any], Any]]":
+def _type_coercion_dispatcher(type_map: "dict[type, Callable[[Any], Any]]") -> "TypeDispatcher[Callable[[Any], Any]]":
     fallback_items = tuple(type_map.items())
     dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
     if dispatcher is not None:
@@ -515,7 +513,7 @@ def prepare_parameters_with_casts(
         result: list[Any] = []
         serializer = statement_config.parameter_config.json_serializer or to_json
         type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
+        dispatcher = _type_coercion_dispatcher(type_map) if type_map else None
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "")
             prepared_value = param

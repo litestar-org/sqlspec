@@ -316,7 +316,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _get_event_generated_columns_sql(self) -> str:
         """Return DuckDB ADK generated event projection columns."""
-        adk_config = _get_duckdb_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         if not adk_config.get("enable_event_generated_columns", False):
             return ""
 
@@ -326,7 +326,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _get_event_generated_column_indexes_sql(self) -> str:
         """Return optional indexes for generated event projection columns."""
-        adk_config = _get_duckdb_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         if not (
             adk_config.get("enable_event_generated_columns", False)
             and adk_config.get("enable_event_generated_column_indexes", False)
@@ -965,7 +965,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
     def _render_fts_options(self, *, overwrite: bool) -> str:
         """Render DuckDB FTS options from adapter-local ADK config."""
         options: dict[str, object] = dict(DUCKDB_FTS_DEFAULT_OPTIONS)
-        adk_config = _get_duckdb_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         configured_options = adk_config.get("memory_fts_options", {})
         if configured_options:
             _validate_duckdb_fts_options(configured_options)
@@ -1220,7 +1220,7 @@ def _raise_session_not_found(session_id: str) -> None:
     raise ValueError(msg)
 
 
-def _get_duckdb_adk_config(config: Any) -> DuckdbADKConfig:
+def _adk_config(config: Any) -> DuckdbADKConfig:
     """Return DuckDB ADK extension settings from ``extension_config["adk"]``."""
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):

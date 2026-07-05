@@ -315,7 +315,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         from google.cloud.spanner_v1 import Client
 
         if self._client is None:
-            client_kwargs = self._resolve_kwargs(_CLIENT_CONFIG_FIELDS)
+            client_kwargs = self._connection_kwargs_for(_CLIENT_CONFIG_FIELDS)
             self._client = Client(**client_kwargs)
         return self._client
 
@@ -331,11 +331,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
         if self._database is None:
             client = self._get_client()
-            instance_kwargs = self._resolve_kwargs(_INSTANCE_CONFIG_FIELDS)
+            instance_kwargs = self._connection_kwargs_for(_INSTANCE_CONFIG_FIELDS)
             instance_labels = self.connection_config.get("instance_labels")
             if instance_labels is not None:
                 instance_kwargs["labels"] = instance_labels
-            database_kwargs = self._resolve_kwargs(_DATABASE_CONFIG_FIELDS)
+            database_kwargs = self._connection_kwargs_for(_DATABASE_CONFIG_FIELDS)
             database_kwargs["pool"] = self.connection_instance
             self._database = client.instance(instance_id, **instance_kwargs).database(  # type: ignore[no-untyped-call]
                 database_id, **database_kwargs
@@ -357,24 +357,30 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         pool_type = cast("type[AbstractSessionPool]", self.connection_config.get("pool_type", FixedSizePool))
 
         labels = self.connection_config.get("session_labels", self.connection_config.get("labels"))
-        pool_kwargs: dict[str, Any] = self._resolve_pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
+        pool_kwargs: dict[str, Any] = self._pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
         if issubclass(pool_type, PingingPool):
-            pool_kwargs.update(self._resolve_kwargs({"size", "default_timeout", "ping_interval"}))
+            pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "ping_interval"}))
         elif issubclass(pool_type, FixedSizePool):
-            pool_kwargs.update(self._resolve_kwargs({"size", "default_timeout", "max_age_minutes"}))
+            pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "max_age_minutes"}))
         elif issubclass(pool_type, BurstyPool):
             target_size = self.connection_config.get("target_size", self.connection_config.get("size"))
             if target_size is not None:
                 pool_kwargs["target_size"] = target_size
         else:
             pool_kwargs.update(
-                self._resolve_kwargs({"size", "target_size", "default_timeout", "ping_interval", "max_age_minutes"})
+                self._connection_kwargs_for({
+                    "size",
+                    "target_size",
+                    "default_timeout",
+                    "ping_interval",
+                    "max_age_minutes",
+                })
             )
 
         pool_factory = cast("Callable[..., AbstractSessionPool]", pool_type)
         return pool_factory(**pool_kwargs)
 
-    def _resolve_pool_base_kwargs(self, *, labels: "dict[str, str] | None") -> dict[str, Any]:
+    def _pool_base_kwargs(self, *, labels: "dict[str, str] | None") -> dict[str, Any]:
         pool_kwargs: dict[str, Any] = {}
         if labels is not None:
             pool_kwargs["labels"] = labels
@@ -383,7 +389,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             pool_kwargs["database_role"] = database_role
         return pool_kwargs
 
-    def _resolve_kwargs(self, fields: "frozenset[str] | set[str]") -> dict[str, Any]:
+    def _connection_kwargs_for(self, fields: "frozenset[str] | set[str]") -> dict[str, Any]:
         return {
             field: self.connection_config[field] for field in fields if self.connection_config.get(field) is not None
         }

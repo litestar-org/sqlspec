@@ -522,7 +522,7 @@ class SQL:
     def _extract_filters(parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
         return [p for p in parameters if is_statement_filter(p)]
 
-    def _absorb_single_parameter(self, param: Any) -> None:
+    def _add_parameter(self, param: Any) -> None:
         if isinstance(param, dict):
             self._named_parameters.update(param)
         elif isinstance(param, (list, tuple)):
@@ -548,7 +548,7 @@ class SQL:
             if is_statement_filter(param):
                 return
 
-            self._absorb_single_parameter(param)
+            self._add_parameter(param)
             return
 
         # Multiple parameters: check for filters
@@ -563,7 +563,7 @@ class SQL:
             return
 
         if len(actual_params) == 1:
-            self._absorb_single_parameter(actual_params[0])
+            self._add_parameter(actual_params[0])
         else:
             self._positional_parameters.extend(actual_params)
 
@@ -868,7 +868,7 @@ class SQL:
         Returns:
             New SQL instance configured for script execution
         """
-        new_sql = self._clone_base(self._raw_expression or self._raw_sql)
+        new_sql = self._copy_base(self._raw_expression or self._raw_sql)
         new_sql._is_script = True
         return new_sql
 
@@ -987,7 +987,7 @@ class SQL:
     # Parameter Generation Helpers
     # ==========================================================================
 
-    def _generate_sql_param_name(self, base_name: str) -> str:
+    def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name with param_ prefix.
 
         Uses param_ prefix to avoid collision with user-provided parameters.
@@ -1018,7 +1018,7 @@ class SQL:
         self._sql_param_counters[prefixed_base] = next_index
         return candidate
 
-    def _get_or_parse_expression(self) -> exp.Expr:
+    def _current_expression(self) -> exp.Expr:
         """Get the current expression or parse the raw SQL.
 
         Prefers cached parsed expression over re-parsing raw SQL.
@@ -1046,15 +1046,15 @@ class SQL:
         except ParseError:
             return exp.Select().from_(f"({self._raw_sql})")
 
-    def _get_expression_for_filter_modification(self) -> exp.Expr:
+    def _filter_expression(self) -> exp.Expr:
         """Return a mutable expression copy for statement filters.
 
         Filter implementations may modify the returned expression in place. The
         expression is detached from cached processed state and raw expressions.
         """
-        return self._get_or_parse_expression()
+        return self._current_expression()
 
-    def _create_modified_copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
+    def _copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
         """Create a new SQL instance with a modified expression.
 
         Args:
@@ -1063,11 +1063,11 @@ class SQL:
         Returns:
             New SQL instance with the expression and copied state
         """
-        new_sql = self._clone_base(new_expr)
+        new_sql = self._copy_base(new_expr)
         new_sql._sql_param_counters = self._sql_param_counters.copy()
         return new_sql
 
-    def _clone_base(self, statement_seed: "str | exp.Expr") -> "SQL":
+    def _copy_base(self, statement_seed: "str | exp.Expr") -> "SQL":
         new_sql = SQL(
             statement_seed,
             *self._original_parameters,
@@ -1091,7 +1091,7 @@ class SQL:
             New SQL instance with the added parameter
         """
         statement_seed = self._raw_expression or self._raw_sql
-        new_sql = self._clone_base(statement_seed)
+        new_sql = self._copy_base(statement_seed)
         new_sql._named_parameters[name] = value
         return new_sql
 
@@ -1104,7 +1104,7 @@ class SQL:
         Returns:
             New SQL instance with the WHERE condition applied
         """
-        current_expr = self._get_or_parse_expression()
+        current_expr = self._current_expression()
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
@@ -1123,7 +1123,7 @@ class SQL:
         else:
             new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
 
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._copy_with_expression(new_expr)
 
     # ==========================================================================
     # Parameterized WHERE Methods (using shared utilities)
@@ -1285,8 +1285,8 @@ class SQL:
             New SQL instance with WHERE condition applied
         """
         col_name = extract_column_name(column)
-        low_param = self._generate_sql_param_name(f"{col_name}_low")
-        high_param = self._generate_sql_param_name(f"{col_name}_high")
+        low_param = self._next_parameter_name(f"{col_name}_low")
+        high_param = self._next_parameter_name(f"{col_name}_high")
         condition = create_between_condition(column, low_param, high_param)
         new_sql = self._where_condition(condition)
         new_sql._named_parameters[low_param] = low
@@ -1294,9 +1294,9 @@ class SQL:
         return new_sql
 
     def _where_condition(self, condition: exp.Expr) -> "SQL":
-        expression = self._get_or_parse_expression()
+        expression = self._current_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._copy_with_expression(new_expr)
 
     def _where_comparison(
         self,
@@ -1305,7 +1305,7 @@ class SQL:
         condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]",
     ) -> "SQL":
         col_name = extract_column_name(column)
-        param_name = self._generate_sql_param_name(col_name)
+        param_name = self._next_parameter_name(col_name)
         condition = create_condition(column, param_name, condition_factory)
         new_sql = self._where_condition(condition)
         new_sql._named_parameters[param_name] = value
@@ -1330,7 +1330,7 @@ class SQL:
         param_names: list[str] = []
         param_values: dict[str, Any] = {}
         for index, value in enumerate(values):
-            param_name = self._generate_sql_param_name(f"{col_name}_{parameter_suffix}_{index}")
+            param_name = self._next_parameter_name(f"{col_name}_{parameter_suffix}_{index}")
             param_names.append(param_name)
             param_values[param_name] = value
 
@@ -1352,7 +1352,7 @@ class SQL:
         if not items:
             return self
 
-        current_expr = self._get_or_parse_expression()
+        current_expr = self._current_expression()
 
         new_expr: exp.Expr = current_expr
         dialect = self._dialect
@@ -1369,7 +1369,7 @@ class SQL:
             else:
                 new_expr = exp.Select().from_(new_expr).order_by(order_expr)
 
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._copy_with_expression(new_expr)
 
     # ==========================================================================
     # Pagination Methods
@@ -1384,9 +1384,9 @@ class SQL:
         Returns:
             New SQL instance with LIMIT applied
         """
-        expression = self._get_or_parse_expression()
+        expression = self._current_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_limit(e, value))
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._copy_with_expression(new_expr)
 
     def offset(self, value: int) -> "SQL":
         """Add OFFSET clause to the SQL statement.
@@ -1397,9 +1397,9 @@ class SQL:
         Returns:
             New SQL instance with OFFSET applied
         """
-        expression = self._get_or_parse_expression()
+        expression = self._current_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_offset(e, value))
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._copy_with_expression(new_expr)
 
     def paginate(self, page: int, page_size: int) -> "SQL":
         """Add LIMIT and OFFSET for pagination.
@@ -1442,7 +1442,7 @@ class SQL:
         if not columns:
             return self
 
-        expression = self._get_or_parse_expression()
+        expression = self._current_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_select_only(e, columns))
 
         # Determine whether to apply column pruning
@@ -1457,7 +1457,7 @@ class SQL:
                 cache_key = None
             new_expr = apply_column_pruning(new_expr, dialect=self._dialect, cache_key=cache_key)
 
-        return self._create_modified_copy_with_expression(new_expr)
+        return self._copy_with_expression(new_expr)
 
     def explain(self, analyze: bool = False, verbose: bool = False, format: "str | None" = None) -> "SQL":
         """Create an EXPLAIN statement for this SQL.

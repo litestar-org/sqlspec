@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlspec.migrations._backup import create_migration_backup, remove_migration_backup, restore_migration_backup
+from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
 from sqlspec.utils.logging import get_logger
 
 __all__ = ("MigrationFixer", "MigrationRename")
@@ -107,7 +107,7 @@ class MigrationFixer:
         Returns:
             Path to created backup directory.
         """
-        self.backup_path = create_migration_backup(self.migrations_path)
+        self.backup_path = create_backup(self.migrations_path)
         return self.backup_path
 
     def apply_renames(self, renames: "list[MigrationRename]", dry_run: bool = False) -> None:
@@ -171,7 +171,7 @@ class MigrationFixer:
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        restore_migration_backup(self.migrations_path, self.backup_path)
+        restore_backup(self.migrations_path, self.backup_path)
 
     def cleanup(self) -> None:
         """Remove backup directory after successful conversion.
@@ -181,5 +181,5 @@ class MigrationFixer:
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        remove_migration_backup(self.backup_path)
+        remove_backup(self.backup_path)
         self.backup_path = None

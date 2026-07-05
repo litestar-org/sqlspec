@@ -29,7 +29,7 @@ pytestmark = [
 
 
 @patch("sqlspec.loader.get_cache_config")
-@patch("sqlspec.loader.SQLFileLoader._load_file_without_cache")
+@patch("sqlspec.loader.SQLFileLoader._load_uncached_file")
 def test_cache_disabled_loading(mock_load_without_cache: Mock, mock_get_cache_config: Mock) -> None:
     """Test loading when cache is disabled."""
     mock_config = Mock()
@@ -68,12 +68,12 @@ def test_file_cache_key_generation() -> None:
     """Test file cache key generation is consistent."""
     loader = SQLFileLoader()
     path = "/test/path/file.sql"
-    key1 = loader._generate_file_cache_key(path)
-    key2 = loader._generate_file_cache_key(path)
+    key1 = loader._file_cache_key(path)
+    key2 = loader._file_cache_key(path)
     assert key1 == key2
     assert isinstance(key1, str)
     assert key1.startswith("file:")
-    key3 = loader._generate_file_cache_key("/different/path.sql")
+    key3 = loader._file_cache_key("/different/path.sql")
     assert key1 != key3
 
 
@@ -87,7 +87,7 @@ def test_cache_key_uniqueness() -> None:
         "/very/long/path/to/deeply/nested/file.sql",
         "relative/path/file.sql",
     ]
-    keys = [loader._generate_file_cache_key(path) for path in test_paths]
+    keys = [loader._file_cache_key(path) for path in test_paths]
     assert len(set(keys)) == len(keys)
     for key in keys:
         assert key.startswith("file:")
@@ -99,8 +99,8 @@ def test_cache_key_with_path_object() -> None:
     loader = SQLFileLoader()
     path_str = "/test/path/file.sql"
     path_obj = Path(path_str)
-    key_from_str = loader._generate_file_cache_key(path_str)
-    key_from_path = loader._generate_file_cache_key(path_obj)
+    key_from_str = loader._file_cache_key(path_str)
+    key_from_path = loader._file_cache_key(path_obj)
     assert key_from_str == key_from_path
 
 
@@ -134,7 +134,7 @@ def test_cache_hit_scenario(mock_cache_setup: tuple[Mock, Mock, SQLFileLoader]) 
         statements = {"cached_query": NamedStatement("cached_query", "SELECT 'from cache' as source")}
         cached_file = SQLFileCacheEntry(sql_file, statements)
         mock_cache.get_file.return_value = cached_file
-        with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
+        with patch("sqlspec.loader.SQLFileLoader._content_matches_cache", return_value=True):
             loader._load_single_file(tf.name, None)
         mock_cache.get_file.assert_called_once()
         mock_cache.put_file.assert_not_called()
@@ -169,7 +169,7 @@ def test_cache_invalidation_on_file_change(mock_cache_setup: tuple[Mock, Mock, S
         statements = {"changing_query": NamedStatement("changing_query", "SELECT 'original' as version")}
         cached_file = SQLFileCacheEntry(sql_file, statements)
         mock_cache.get_file.return_value = cached_file
-        with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=False):
+        with patch("sqlspec.loader.SQLFileLoader._content_matches_cache", return_value=False):
             loader._load_single_file(tf.name, None)
         mock_cache.get_file.assert_called_once()
         mock_cache.put_file.assert_called_once()
@@ -271,7 +271,7 @@ def test_cache_restoration_with_namespace(tmp_path: Path) -> None:
     with (
         patch("sqlspec.loader.get_cache_config") as mock_config,
         patch("sqlspec.loader.get_cache") as mock_cache_factory,
-        patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True),
+        patch("sqlspec.loader.SQLFileLoader._content_matches_cache", return_value=True),
     ):
         mock_cache_config = Mock()
         mock_cache_config.compiled_cache_enabled = True
@@ -353,7 +353,7 @@ def test_cache_sharing_between_loaders() -> None:
             mock_cache_factory.return_value = shared_cache
             loader1 = SQLFileLoader()
             shared_cache.get_file.return_value = None
-            with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
+            with patch("sqlspec.loader.SQLFileLoader._content_matches_cache", return_value=True):
                 loader1._load_single_file(tf.name, None)
             shared_cache.put_file.assert_called_once()
             loader2 = SQLFileLoader()
@@ -362,7 +362,7 @@ def test_cache_sharing_between_loaders() -> None:
             cached_file = SQLFileCacheEntry(sql_file, statements)
             shared_cache.reset_mock()
             shared_cache.get_file.return_value = cached_file
-            with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
+            with patch("sqlspec.loader.SQLFileLoader._content_matches_cache", return_value=True):
                 loader2._load_single_file(tf.name, None)
             shared_cache.get_file.assert_called_once()
             shared_cache.put_file.assert_not_called()
@@ -393,7 +393,7 @@ def test_cache_key_performance() -> None:
     """Test cache key generation performance."""
     loader = SQLFileLoader()
     paths = [f"/test/path/file_{i:04d}.sql" for i in range(1000)]
-    keys = [loader._generate_file_cache_key(path) for path in paths]
+    keys = [loader._file_cache_key(path) for path in paths]
     assert len(set(keys)) == len(keys)
     for key in keys:
         assert key.startswith("file:")
@@ -446,7 +446,7 @@ def test_cache_hit_performance_benefit() -> None:
             loader2 = SQLFileLoader()
             mock_cache.get_file.return_value = cached_file
             mock_cache.reset_mock()
-            with patch("sqlspec.loader.SQLFileLoader._is_file_content_unchanged", return_value=True):
+            with patch("sqlspec.loader.SQLFileLoader._content_matches_cache", return_value=True):
                 loader2._load_single_file(tf.name, None)
             assert len(loader2._queries) == 100
             mock_cache.get_file.assert_called_once()

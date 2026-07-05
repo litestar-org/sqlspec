@@ -842,7 +842,7 @@ def prepare_parameters_with_casts(
     if isinstance(parameters, (list, tuple)):
         converter = get_adbc_type_converter(dialect)
         type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
+        dispatcher = _type_coercion_dispatcher(type_map) if type_map else None
         return _prepare_parameter_sequence_with_casts(
             parameters, parameter_casts, type_map, dispatcher, converter, json_encoder
         )
@@ -904,9 +904,7 @@ def _apply_adbc_json_serializer(
     return statement_config.replace(parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map))
 
 
-def _get_type_coercion_dispatcher(
-    type_map: "dict[type, Callable[[Any], Any]]",
-) -> "TypeDispatcher[Callable[[Any], Any]]":
+def _type_coercion_dispatcher(type_map: "dict[type, Callable[[Any], Any]]") -> "TypeDispatcher[Callable[[Any], Any]]":
     fallback_items = tuple(type_map.items())
     dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
     if dispatcher is not None:
@@ -968,7 +966,7 @@ def _prepare_batch_with_casts(
     json_encoder = statement_config.parameter_config.json_serializer or json_serializer
     converter = get_adbc_type_converter(dialect)
     type_map = statement_config.parameter_config.type_coercion_map
-    dispatcher = _get_type_coercion_dispatcher(type_map) if type_map else None
+    dispatcher = _type_coercion_dispatcher(type_map) if type_map else None
     return [
         _prepare_parameter_sequence_with_casts(row, parameter_casts, type_map, dispatcher, converter, json_encoder)
         if isinstance(row, (list, tuple))

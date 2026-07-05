@@ -109,7 +109,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with execution metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         driver_parameters = prepared_parameters
         operation_type = statement.operation_type
@@ -145,7 +145,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -170,7 +170,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
@@ -263,7 +263,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Return a native psqlpy row stream backed by a server-side cursor in a transaction."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
         return AsyncRowStream(PsqlpyStreamSource(self, sql, params, chunk_size))
 
@@ -296,11 +296,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
-        telemetry_payload = await self._write_result_to_storage_async(
+        telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -354,10 +354,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,
@@ -370,7 +370,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage using the storage bridge pipeline."""
 
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )

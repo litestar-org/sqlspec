@@ -66,7 +66,7 @@ def register_driver_profile(
     DRIVER_PARAMETER_PROFILES[key] = profile
 
 
-def _build_parameter_style_config_from_profile(
+def _style_config_from_profile(
     profile: "DriverParameterProfile",
     parameter_overrides: "dict[str, Any] | None",
     json_serializer: "Callable[[Any], str] | None",
@@ -190,9 +190,7 @@ def build_statement_config_from_profile(
     Returns:
         New :class:`StatementConfig` instance with merged configuration.
     """
-    parameter_config = _build_parameter_style_config_from_profile(
-        profile, parameter_overrides, json_serializer, json_deserializer
-    )
+    parameter_config = _style_config_from_profile(profile, parameter_overrides, json_serializer, json_deserializer)
 
     from sqlspec.core.statement import StatementConfig as _StatementConfig
 

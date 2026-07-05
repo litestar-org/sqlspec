@@ -110,7 +110,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with execution metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
@@ -146,7 +146,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if prepared_parameters:
             parameter_sets = cast("list[Any]", prepared_parameters)
@@ -171,7 +171,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution metadata
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -287,7 +287,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         arrow_result: ArrowResult | None = None
 
         with self.with_cursor(self.connection) as cursor, exc_handler:
-            sql, driver_params = self._get_compiled_sql(prepared_statement, config)
+            sql, driver_params = self._compiled_sql(prepared_statement, config)
 
             cursor.execute(sql, driver_params or ())
 
@@ -344,11 +344,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
+        telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -395,10 +395,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
             if arrow_table is None:
                 msg = "DuckDB Arrow load did not resolve an Arrow table."
                 raise SQLSpecError(msg)
-            telemetry_payload = self._build_ingest_telemetry(arrow_table)
+            telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -411,7 +411,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and load it into DuckDB."""
 
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     # ─────────────────────────────────────────────────────────────────────────────

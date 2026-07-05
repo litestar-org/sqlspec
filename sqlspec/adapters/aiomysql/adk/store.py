@@ -441,23 +441,23 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
     async def _get_create_sessions_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for sessions."""
-        adk_config = _get_aiomysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "session_table_options")
         return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
     async def _get_create_events_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for events."""
-        return _mysql_events_ddl(self._events_table, self._session_table, _get_aiomysql_adk_config(self._config))
+        return _mysql_events_ddl(self._events_table, self._session_table, _adk_config(self._config))
 
     async def _get_create_app_states_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for app-scoped state."""
-        adk_config = _get_aiomysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "app_state_table_options")
         return _mysql_app_state_ddl(self._app_state_table, table_options)
 
     async def _get_create_user_states_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for user-scoped state."""
-        adk_config = _get_aiomysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "user_state_table_options")
         return _mysql_user_state_ddl(self._user_state_table, table_options)
 
@@ -648,12 +648,12 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
     async def _get_create_memory_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for memory entries."""
-        adk_config = _get_aiomysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "memory_table_options")
         owner_id_line = ""
         fk_constraint = ""
         if self._owner_id_column_ddl:
-            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            col_def, fk_def = _mysql_owner_id_column_parts(self._owner_id_column_ddl)
             owner_id_line = f",\n            {col_def}"
             if fk_def:
                 fk_constraint = f",\n            {fk_def}"
@@ -685,7 +685,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
 
-def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
+def _mysql_owner_id_column_parts(column_ddl: str) -> "tuple[str, str]":
     """Parse owner ID column DDL for MySQL FOREIGN KEY syntax.
 
     Args:
@@ -705,7 +705,7 @@ def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
     return (col_def, fk_constraint)
 
 
-def _get_aiomysql_adk_config(config: "AiomysqlConfig") -> AiomysqlADKConfig:
+def _adk_config(config: "AiomysqlConfig") -> AiomysqlADKConfig:
     adk_config = config.extension_config.get("adk") if config.extension_config else None
     if not isinstance(adk_config, dict):
         return {}
@@ -776,7 +776,7 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
     owner_id_line = ""
     fk_constraint = ""
     if owner_id_column_ddl:
-        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
+        col_def, fk_def = _mysql_owner_id_column_parts(owner_id_column_ddl)
         owner_id_line = f"\n            {col_def},"
         if fk_def:
             fk_constraint = f",\n            {fk_def}"

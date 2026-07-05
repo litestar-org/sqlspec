@@ -172,7 +172,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
 
     def dispatch_execute(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        sql, params = self._compiled_sql(statement, self.statement_config)
         params = cast("dict[str, Any] | None", params)
         coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
@@ -215,7 +215,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
 
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if not prepared_parameters or not isinstance(prepared_parameters, list):
             msg = "execute_many requires at least one parameter set"
@@ -247,7 +247,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
-        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        sql, params = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         is_transaction = supports_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
@@ -427,11 +427,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_result_to_storage_sync(
+        telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -471,10 +471,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 for chunk in chunks:
                     writer.insert_or_update(table, columns, chunk)
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
         """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
@@ -526,7 +526,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into Spanner table."""
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     # ─────────────────────────────────────────────────────────────────────────────

@@ -161,21 +161,21 @@ def test_sync_memory_store_contract_methods_are_sync(class_path: str) -> None:
 def test_adk_store_registration_validator_resolves_sqlite_store_classes() -> None:
     """The migration registration validator resolves both SQLite ADK store classes."""
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+    from sqlspec.extensions.adk._config_utils import _ensure_adk_store_registration
 
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
 
-    _validate_adk_store_registration(config)
+    _ensure_adk_store_registration(config)
 
 
 def test_adk_store_registration_validator_resolves_duckdb_store_classes() -> None:
     """The migration registration validator handles DuckDB store export casing."""
     from sqlspec.adapters.duckdb import DuckDBConfig
-    from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+    from sqlspec.extensions.adk._config_utils import _ensure_adk_store_registration
 
     config = DuckDBConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
 
-    _validate_adk_store_registration(config)
+    _ensure_adk_store_registration(config)
 
 
 def test_adk_store_registration_validator_fails_fast_for_broken_store_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,7 +189,7 @@ def test_adk_store_registration_validator_fails_fast_for_broken_store_mapping(mo
         return importlib.import_module(path.rsplit(".", 1)[0])
 
     monkeypatch.setattr(_config_utils, "import_string", import_missing_store)
-    monkeypatch.setattr(_config_utils, "_get_adk_exported_store_class", lambda _config, _suffix: None)
+    monkeypatch.setattr(_config_utils, "_adk_exported_store_class", lambda _config, _suffix: None)
 
     with pytest.raises(SQLSpecError, match="Failed to import ADK store class"):
         SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})

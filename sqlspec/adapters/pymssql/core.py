@@ -98,7 +98,7 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _build_pymssql_custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
+def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
     """Return custom type coercions for pymssql."""
     coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int}
     coercions.update(build_uuid_coercions())
@@ -119,7 +119,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions=_build_pymssql_custom_type_coercions(),
+        custom_type_coercions=_custom_type_coercions(),
         default_dialect="tsql",
     )
 

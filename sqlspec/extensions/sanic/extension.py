@@ -56,8 +56,8 @@ class SQLSpecPlugin:
         self._request_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
-            settings = self._extract_sanic_settings(cfg)
-            state = self._create_config_state(cfg, settings)
+            settings = self._extract_extension_settings(cfg)
+            state = self._config_state(cfg, settings)
             self._config_states.append(state)
 
         correlation_state = self._first_correlation_state()
@@ -83,7 +83,7 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
-    def _extract_sanic_settings(self, config: Any) -> "dict[str, Any]":
+    def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Sanic settings from config.extension_config.
 
         Args:
@@ -122,7 +122,7 @@ class SQLSpecPlugin:
             "sqlcommenter_framework": sanic_config.get("sqlcommenter_framework", "sanic"),
         }
 
-    def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> SanicConfigState:
+    def _config_state(self, config: Any, settings: "dict[str, Any]") -> SanicConfigState:
         """Create configuration state object.
 
         Args:
@@ -155,7 +155,7 @@ class SQLSpecPlugin:
         Args:
             app: Sanic application instance.
         """
-        self._validate_unique_keys()
+        self._ensure_unique_keys()
         setattr(app.ctx, "sqlspec_plugin", self)
         self._add_lifecycle_listeners(app)
         self._add_request_middleware(app)
@@ -565,7 +565,7 @@ class SQLSpecPlugin:
                 session_key=config_state.session_key,
             )
 
-    def _validate_unique_keys(self) -> None:
+    def _ensure_unique_keys(self) -> None:
         """Validate that all context keys are unique across configs.
 
         Raises:
@@ -593,7 +593,7 @@ class SQLSpecPlugin:
         Returns:
             Database session driver instance.
         """
-        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         return get_or_create_session(request, config_state)
 
     def get_connection(self, request: Any, key: "str | None" = None) -> Any:
@@ -606,10 +606,10 @@ class SQLSpecPlugin:
         Returns:
             Database connection object.
         """
-        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         return get_context_value(request.ctx, config_state.connection_key)
 
-    def _get_config_state_by_key(self, key: str) -> SanicConfigState:
+    def _config_state_by_key(self, key: str) -> SanicConfigState:
         """Get configuration state by session key.
 
         Args:

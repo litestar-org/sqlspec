@@ -363,7 +363,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             )
             return cast("str | None", current)
 
-    def _load_single_migration_checksum(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
+    def _checksum_for_migration(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
         """Load checksum for a single migration.
 
         Args:
@@ -401,7 +401,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         file_checksums = {}
         for version, file_path in all_migrations:
-            result = self._load_single_migration_checksum(version, file_path)
+            result = self._checksum_for_migration(version, file_path)
             if result:
                 file_checksums[result[0]] = result[1]
         return file_checksums
@@ -1245,9 +1245,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             )
             return cast("str | None", current)
 
-    async def _load_single_migration_checksum(
-        self, version: str, file_path: "Path"
-    ) -> "tuple[str, tuple[str, Path]] | None":
+    async def _checksum_for_migration(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
         """Load checksum for a single migration.
 
         Args:
@@ -1287,7 +1285,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         file_checksums = {}
         for version, file_path in all_migrations:
-            result = await self._load_single_migration_checksum(version, file_path)
+            result = await self._checksum_for_migration(version, file_path)
             if result:
                 file_checksums[result[0]] = result[1]
         return file_checksums

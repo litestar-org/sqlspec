@@ -225,7 +225,7 @@ class SQLFileLoader:
         """
         raise SQLStatementNotFoundError(name=name, normalized_name=normalized_name, query_count=len(self._queries))
 
-    def _generate_file_cache_key(self, path: str | Path) -> str:
+    def _file_cache_key(self, path: str | Path) -> str:
         """Generate cache key for a file path.
 
         Args:
@@ -277,7 +277,7 @@ class SQLFileLoader:
         else:
             return current_checksum == cached_file.sql_file.checksum
 
-    def _is_file_content_unchanged(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
+    def _content_matches_cache(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
         """Check if already-read file content matches cached checksum."""
         return self._compute_checksum(content) == cached_file.sql_file.checksum
 
@@ -388,7 +388,7 @@ class SQLFileLoader:
         return dialect, tuple(params), "\n".join(raw_lines[body_start:])
 
     @staticmethod
-    def _validate_declared_parameters(
+    def _check_declared_parameters(
         clean_sql: str, declared: "tuple[ParameterDeclaration, ...]", statement_name: str, file_path: str
     ) -> None:
         """Validate declared parameters against the query's actual placeholders.
@@ -432,7 +432,7 @@ class SQLFileLoader:
             )
 
     @staticmethod
-    def _parse_sql_content(
+    def _parse_statements(
         content: str, file_path: str, strict_parameter_annotations: bool = False
     ) -> "dict[str, NamedStatement]":
         """Parse SQL content and extract named statements with dialect specifications.
@@ -483,7 +483,7 @@ class SQLFileLoader:
                         file_path, file_path, ValueError(f"Duplicate statement name: {raw_statement_name}")
                     )
 
-                SQLFileLoader._validate_declared_parameters(clean_sql, declared_params, raw_statement_name, file_path)
+                SQLFileLoader._check_declared_parameters(clean_sql, declared_params, raw_statement_name, file_path)
 
                 statements[normalized_name] = NamedStatement(
                     name=normalized_name,
@@ -591,12 +591,12 @@ class SQLFileLoader:
 
         cache_config = get_cache_config()
         if not cache_config.compiled_cache_enabled:
-            self._load_file_without_cache(file_path, namespace)
+            self._load_uncached_file(file_path, namespace)
             if runtime is not None:
                 runtime.increment_metric("loader.cache.miss")
             return True
 
-        cache_key_str = self._generate_file_cache_key(file_path)
+        cache_key_str = self._file_cache_key(file_path)
         cache = get_cache()
         cached_file = cache.get_file(cache_key_str)
 
@@ -606,7 +606,7 @@ class SQLFileLoader:
             except Exception:
                 file_content = None
 
-            if file_content is not None and self._is_file_content_unchanged(file_content, cached_file):
+            if file_content is not None and self._content_matches_cache(file_content, cached_file):
                 self._files[path_str] = cached_file.sql_file
                 for name, statement in cached_file.parsed_statements.items():
                     namespaced_name = f"{namespace}.{name}" if namespace else name
@@ -624,9 +624,9 @@ class SQLFileLoader:
                     runtime.increment_metric("loader.cache.hit")
                 return True
 
-            self._load_file_without_cache(file_path, namespace, content=file_content)
+            self._load_uncached_file(file_path, namespace, content=file_content)
         else:
-            self._load_file_without_cache(file_path, namespace)
+            self._load_uncached_file(file_path, namespace)
 
         if path_str in self._files:
             sql_file = self._files[path_str]
@@ -647,9 +647,7 @@ class SQLFileLoader:
 
         return True
 
-    def _load_file_without_cache(
-        self, file_path: str | Path, namespace: "str | None", content: "str | None" = None
-    ) -> None:
+    def _load_uncached_file(self, file_path: str | Path, namespace: "str | None", content: "str | None" = None) -> None:
         """Load a single SQL file without using cache.
 
         Args:
@@ -661,7 +659,7 @@ class SQLFileLoader:
         runtime = self._runtime
         if content is None:
             content = self._read_file_content(file_path)
-        statements = self._parse_sql_content(content, path_str, self.strict_parameter_annotations)
+        statements = self._parse_statements(content, path_str, self.strict_parameter_annotations)
 
         if not statements:
             log_with_context(
@@ -722,7 +720,7 @@ class SQLFileLoader:
 
         declared = tuple(parameters) if parameters else ()
         clean_sql = sql.strip()
-        self._validate_declared_parameters(clean_sql, declared, name, "<directly added>")
+        self._check_declared_parameters(clean_sql, declared, name, "<directly added>")
 
         statement = NamedStatement(
             name=normalized_name, sql=clean_sql, dialect=dialect, start_line=0, parameters=declared

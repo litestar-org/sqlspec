@@ -44,11 +44,11 @@ TypeEncodersMap = Mapping[type, Callable[[Any], Any]]
 StructuralEncoder = Callable[[Any], Any]
 
 
-def _get_uuid_utils_type() -> "type[Any] | None":
+def _uuid_utils_type() -> "type[Any] | None":
     return cast("type[Any] | None", import_optional_attr("uuid_utils", "UUID"))
 
 
-_UUID_UTILS_TYPE: "type[Any] | None" = _get_uuid_utils_type()
+_UUID_UTILS_TYPE: "type[Any] | None" = _uuid_utils_type()
 logger = get_logger(__name__)
 
 
@@ -74,7 +74,7 @@ def _dump_msgspec_struct(value: Any) -> "dict[str, Any]":
     return {field_name: value.__getattribute__(field_name) for field_name in value.__struct_fields__}
 
 
-def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
+def _default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
     """Construct the default type encoder registry.
 
     Mirrors ``advanced_alchemy.utils.serialization.DEFAULT_TYPE_ENCODERS`` in
@@ -127,7 +127,7 @@ def _build_default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
     return encoders
 
 
-DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _build_default_type_encoders()
+DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _default_type_encoders()
 _STRUCTURAL_ENCODER_CACHE: Final["dict[type[Any], StructuralEncoder | None]"] = {}
 
 
@@ -135,7 +135,7 @@ def _dump_attrs_instance(value: Any) -> Any:
     return attrs_asdict(value, recurse=True)
 
 
-def _resolve_structural_encoder(value: Any) -> Any:
+def _structural_encoder(value: Any) -> Any:
     """Probe-based fallback for types that aren't keyed by class.
 
     ``dataclass``/``attrs``/``msgspec.Struct`` rely on ``is_*`` runtime probes
@@ -162,7 +162,7 @@ def _resolve_structural_encoder(value: Any) -> Any:
     return None
 
 
-def _create_enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "Callable[[Any], Any]":
+def _enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "Callable[[Any], Any]":
     """Build an MRO-walking enc_hook bound to the supplied registry.
 
     Walks ``value.__class__.__mro__[:-1]`` (skipping ``object``) and returns
@@ -177,7 +177,7 @@ def _create_enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "C
             encoder = type_encoders.get(base)
             if encoder is not None:
                 return encoder(value)
-        structural = _resolve_structural_encoder(value)
+        structural = _structural_encoder(value)
         if structural is not None:
             return structural
         msg = f"unsupported JSON value: {type(value).__name__}"
@@ -186,14 +186,14 @@ def _create_enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "C
     return enc_hook
 
 
-_DEFAULT_ENC_HOOK: Final["Callable[[Any], Any]"] = _create_enc_hook(DEFAULT_TYPE_ENCODERS)
+_DEFAULT_ENC_HOOK: Final["Callable[[Any], Any]"] = _enc_hook(DEFAULT_TYPE_ENCODERS)
 
 
 def _is_explicit_unsupported_error(exc: Exception) -> bool:
     return "unsupported json value" in str(exc).lower()
 
 
-def _log_msgspec_encode_fallback(exc: Exception) -> None:
+def _log_encode_fallback(exc: Exception) -> None:
     fallback_name = "orjson" if ORJSON_INSTALLED else "standard library json"
     logger.debug(
         "Msgspec JSON encode failed with %s: %s; falling back to %s",
@@ -232,23 +232,23 @@ class BaseJSONSerializer(ABC):
         ...
 
 
-_orjson_fallback: "OrjsonSerializer | None" = None
-_stdlib_fallback: "StandardLibSerializer | None" = None
+_orjson_fallback_serializer: "OrjsonSerializer | None" = None
+_stdlib_fallback_serializer: "StandardLibSerializer | None" = None
 _default_serializer: "JSONSerializer | None" = None
 
 
-def _get_orjson_fallback() -> "OrjsonSerializer":
-    global _orjson_fallback
-    if _orjson_fallback is None:
-        _orjson_fallback = OrjsonSerializer()
-    return _orjson_fallback
+def _orjson_fallback() -> "OrjsonSerializer":
+    global _orjson_fallback_serializer
+    if _orjson_fallback_serializer is None:
+        _orjson_fallback_serializer = OrjsonSerializer()
+    return _orjson_fallback_serializer
 
 
-def _get_stdlib_fallback() -> "StandardLibSerializer":
-    global _stdlib_fallback
-    if _stdlib_fallback is None:
-        _stdlib_fallback = StandardLibSerializer()
-    return _stdlib_fallback
+def _stdlib_fallback() -> "StandardLibSerializer":
+    global _stdlib_fallback_serializer
+    if _stdlib_fallback_serializer is None:
+        _stdlib_fallback_serializer = StandardLibSerializer()
+    return _stdlib_fallback_serializer
 
 
 def _merge_type_encoders(type_encoders: "TypeEncodersMap | None") -> "Callable[[Any], Any]":
@@ -256,7 +256,7 @@ def _merge_type_encoders(type_encoders: "TypeEncodersMap | None") -> "Callable[[
     if not type_encoders:
         return _DEFAULT_ENC_HOOK
     merged: dict[type, Callable[[Any], Any]] = {**DEFAULT_TYPE_ENCODERS, **type_encoders}
-    return _create_enc_hook(merged)
+    return _enc_hook(merged)
 
 
 class MsgspecSerializer(BaseJSONSerializer):
@@ -277,15 +277,15 @@ class MsgspecSerializer(BaseJSONSerializer):
         except TypeError as exc:
             if _is_explicit_unsupported_error(exc):
                 raise
-            _log_msgspec_encode_fallback(exc)
+            _log_encode_fallback(exc)
             if ORJSON_INSTALLED:
-                return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
-            return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)
+                return _orjson_fallback().encode(data, as_bytes=as_bytes)
+            return _stdlib_fallback().encode(data, as_bytes=as_bytes)
         except ValueError as exc:
-            _log_msgspec_encode_fallback(exc)
+            _log_encode_fallback(exc)
             if ORJSON_INSTALLED:
-                return _get_orjson_fallback().encode(data, as_bytes=as_bytes)
-            return _get_stdlib_fallback().encode(data, as_bytes=as_bytes)
+                return _orjson_fallback().encode(data, as_bytes=as_bytes)
+            return _stdlib_fallback().encode(data, as_bytes=as_bytes)
         return encoded if as_bytes else encoded.decode("utf-8")
 
     def decode(self, data: "str | bytes", *, decode_bytes: bool = True) -> Any:
@@ -296,14 +296,14 @@ class MsgspecSerializer(BaseJSONSerializer):
                 return self._decoder.decode(data)
             except (TypeError, ValueError):
                 if ORJSON_INSTALLED:
-                    return _get_orjson_fallback().decode(data, decode_bytes=decode_bytes)
-                return _get_stdlib_fallback().decode(data, decode_bytes=decode_bytes)
+                    return _orjson_fallback().decode(data, decode_bytes=decode_bytes)
+                return _stdlib_fallback().decode(data, decode_bytes=decode_bytes)
         try:
             return self._decoder.decode(data.encode("utf-8"))
         except (TypeError, ValueError):
             if ORJSON_INSTALLED:
-                return _get_orjson_fallback().decode(data, decode_bytes=decode_bytes)
-            return _get_stdlib_fallback().decode(data, decode_bytes=decode_bytes)
+                return _orjson_fallback().decode(data, decode_bytes=decode_bytes)
+            return _stdlib_fallback().decode(data, decode_bytes=decode_bytes)
 
 
 class OrjsonSerializer(BaseJSONSerializer):

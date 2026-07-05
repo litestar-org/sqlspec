@@ -160,7 +160,7 @@ def test_format_table_identifier_preserves_quoted_dots() -> None:
 
 def test_no_lazy_optional_dependency_getter_functions_in_psqlpy_core() -> None:
     assert not hasattr(psqlpy_core, "_get_jsonb_type")
-    assert not hasattr(psqlpy_core, "_get_librt_string_writer")
+    assert not hasattr(psqlpy_core, "_librt_string_writer_type")
 
 
 def test_no_optional_dependency_resolved_sentinel_flags_in_psqlpy_core() -> None:
@@ -248,7 +248,7 @@ class _Driver(PsqlpyDriver):
         self.compiled_sql = compiled_sql
         self.compiled_parameters = parameters
 
-    def _get_compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
+    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
         return (self.compiled_sql, self.compiled_parameters)
 
 
