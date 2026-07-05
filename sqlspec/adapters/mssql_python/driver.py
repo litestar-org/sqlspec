@@ -166,6 +166,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "MssqlPythonRawCursor") -> int:
         return _cursor_rowcount(cursor)
 
+    def _connection_in_transaction(self) -> bool:
+        return False
+
     def begin(self) -> None:
         return None
 
@@ -420,6 +423,9 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
 
     def resolve_rowcount(self, cursor: "MssqlPythonRawCursor") -> int:
         return _cursor_rowcount(cursor)
+
+    def _connection_in_transaction(self) -> bool:
+        return False
 
     async def begin(self) -> None:
         return None
