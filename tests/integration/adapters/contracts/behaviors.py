@@ -13,6 +13,7 @@ import pytest
 from sqlspec import SQL, SQLResult, StatementConfig, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
+from sqlspec.data_dictionary import VersionInfo
 from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
@@ -4382,3 +4383,238 @@ def assert_sync_native_statistics_contract(driver: object, case: DriverCase) -> 
         assert entry["table_name"] == case.table.name
         assert isinstance(entry["statistic_name"], str)
         assert isinstance(entry["is_approximate"], bool)
+
+
+_DATA_DICTIONARY_TYPE_CATEGORIES = ("text", "boolean", "timestamp", "blob", "unknown_type")
+
+
+def _normalized_name(value: object) -> str:
+    return str(value).strip('`"').split(".")[-1].lower()
+
+
+def _assert_data_dictionary_version(version: object) -> None:
+    assert isinstance(version, VersionInfo)
+    assert version.major >= 0
+    assert version.minor >= 0
+    assert version.patch >= 0
+
+
+def _assert_data_dictionary_version_cache(first: object, second: object) -> None:
+    _assert_data_dictionary_version(first)
+    _assert_data_dictionary_version(second)
+    assert cast("VersionInfo", first).version_tuple == cast("VersionInfo", second).version_tuple
+
+
+def _assert_data_dictionary_dialect(driver: object, case: DriverCase) -> None:
+    dialect = getattr(driver, "dialect", None)
+    assert dialect is not None
+    assert _normalized_name(dialect) == _normalized_name(case.dialect)
+
+
+def _data_dictionary_expected_columns(case: DriverCase) -> set[str]:
+    expected = {"name", "value", "note"}
+    if case.table is not DUCKDB_CONTRACT_TABLE:
+        expected.add("id")
+    return expected
+
+
+def _assert_data_dictionary_tables(tables: object, case: DriverCase) -> None:
+    assert isinstance(tables, list)
+    table_names = {_normalized_name(entry.get("table_name")) for entry in tables if isinstance(entry, dict)}
+    assert _normalized_name(case.table.name) in table_names
+
+
+def _assert_data_dictionary_columns(columns: object, case: DriverCase) -> None:
+    assert isinstance(columns, list)
+    column_names = {_normalized_name(entry["column_name"]) for entry in columns if isinstance(entry, dict)}
+    assert _data_dictionary_expected_columns(case) <= column_names
+
+
+def _assert_data_dictionary_feature_list(features: object) -> tuple[str, ...]:
+    assert isinstance(features, list)
+    assert features
+    assert all(isinstance(feature, str) for feature in features)
+    return tuple(features)
+
+
+def _data_dictionary_schema_for_case(case: DriverCase) -> str:
+    if case.dialect == "postgres":
+        return "public"
+    return ""
+
+
+def _data_dictionary_topology_sql(case: DriverCase, users: str, orders: str, items: str, index_name: str) -> str:
+    if case.dialect not in {"postgres", "sqlite"}:
+        msg = f"{case.id} has no topology DDL contract"
+        raise ValueError(msg)
+    return f"""
+        CREATE TABLE {users} (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(50)
+        );
+        CREATE TABLE {orders} (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER REFERENCES {users}(id),
+            amount INTEGER
+        );
+        CREATE TABLE {items} (
+            id INTEGER PRIMARY KEY,
+            order_id INTEGER REFERENCES {orders}(id),
+            name VARCHAR(50)
+        );
+        CREATE INDEX {index_name} ON {users}(name);
+    """
+
+
+def _data_dictionary_topology_drop_sql(users: str, orders: str, items: str) -> str:
+    return f"""
+        DROP TABLE IF EXISTS {items};
+        DROP TABLE IF EXISTS {orders};
+        DROP TABLE IF EXISTS {users};
+    """
+
+
+def _assert_data_dictionary_topology(
+    tables: object, foreign_keys: object, indexes: object, users: str, orders: str, items: str, index_name: str
+) -> None:
+    assert isinstance(tables, list)
+    table_names = [_normalized_name(entry.get("table_name")) for entry in tables if isinstance(entry, dict)]
+    expected = (users, orders, items)
+    test_tables = [name for name in table_names if name in expected]
+    assert test_tables == list(expected)
+
+    assert isinstance(foreign_keys, list)
+    matching_fk = next(
+        (
+            fk
+            for fk in foreign_keys
+            if _normalized_name(fk.referenced_table) == users and _normalized_name(fk.column_name) == "user_id"
+        ),
+        None,
+    )
+    assert matching_fk is not None
+
+    assert isinstance(indexes, list)
+    assert any(_normalized_name(index.get("index_name")) == index_name for index in indexes if isinstance(index, dict))
+
+
+def assert_sync_data_dictionary_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers expose portable data-dictionary version, feature, type, table, and column metadata."""
+    if not case.supports_data_dictionary:
+        pytest.skip(f"{case.adapter} has no verified data-dictionary support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+
+    _assert_data_dictionary_dialect(sync_driver, case)
+    _assert_data_dictionary_version_cache(
+        data_dictionary.get_version(sync_driver), data_dictionary.get_version(sync_driver)
+    )
+    features = _assert_data_dictionary_feature_list(data_dictionary.list_available_features())
+    for feature in features:
+        assert isinstance(data_dictionary.get_feature_flag(sync_driver, feature), bool)
+    for type_category in _DATA_DICTIONARY_TYPE_CATEGORIES:
+        optimal_type = data_dictionary.get_optimal_type(sync_driver, type_category)
+        assert isinstance(optimal_type, str)
+        assert optimal_type
+
+    _assert_data_dictionary_tables(data_dictionary.get_tables(sync_driver), case)
+    _assert_data_dictionary_columns(data_dictionary.get_columns(sync_driver, table=case.table.name), case)
+
+
+async def assert_async_data_dictionary_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers expose portable data-dictionary version, feature, type, table, and column metadata."""
+    if not case.supports_data_dictionary:
+        pytest.skip(f"{case.adapter} has no verified data-dictionary support")
+    async_driver = cast("AsyncContractDriver", driver)
+    data_dictionary = cast("Any", async_driver).data_dictionary
+
+    _assert_data_dictionary_dialect(async_driver, case)
+    _assert_data_dictionary_version_cache(
+        await data_dictionary.get_version(async_driver), await data_dictionary.get_version(async_driver)
+    )
+    features = _assert_data_dictionary_feature_list(data_dictionary.list_available_features())
+    for feature in features:
+        assert isinstance(await data_dictionary.get_feature_flag(async_driver, feature), bool)
+    for type_category in _DATA_DICTIONARY_TYPE_CATEGORIES:
+        optimal_type = await data_dictionary.get_optimal_type(async_driver, type_category)
+        assert isinstance(optimal_type, str)
+        assert optimal_type
+
+    _assert_data_dictionary_tables(await data_dictionary.get_tables(async_driver), case)
+    _assert_data_dictionary_columns(await data_dictionary.get_columns(async_driver, table=case.table.name), case)
+
+
+def assert_sync_data_dictionary_schema_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync data dictionaries honor schema-qualified column discovery."""
+    if not case.supports_schema_qualified_data_dictionary:
+        pytest.skip(f"{case.adapter} has no schema-qualified data-dictionary support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+    schema_name = _data_dictionary_schema_for_case(case)
+    _assert_data_dictionary_columns(
+        data_dictionary.get_columns(sync_driver, table=case.table.name, schema=schema_name), case
+    )
+
+
+async def assert_async_data_dictionary_schema_contract(driver: object, case: DriverCase) -> None:
+    """Assert async data dictionaries honor schema-qualified column discovery."""
+    if not case.supports_schema_qualified_data_dictionary:
+        pytest.skip(f"{case.adapter} has no schema-qualified data-dictionary support")
+    async_driver = cast("AsyncContractDriver", driver)
+    data_dictionary = cast("Any", async_driver).data_dictionary
+    schema_name = _data_dictionary_schema_for_case(case)
+    columns = await data_dictionary.get_columns(async_driver, table=case.table.name, schema=schema_name)
+    _assert_data_dictionary_columns(columns, case)
+
+
+def assert_sync_data_dictionary_topology_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync data dictionaries sort table dependencies and surface FK/index metadata."""
+    if not case.supports_data_dictionary_topology:
+        pytest.skip(f"{case.adapter} has no data-dictionary topology support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+    suffix = uuid4().hex[:8]
+    users = f"dd_users_{suffix}"
+    orders = f"dd_orders_{suffix}"
+    items = f"dd_items_{suffix}"
+    index_name = f"idx_dd_users_{suffix}"
+    sync_driver.execute_script(_data_dictionary_topology_sql(case, users, orders, items, index_name))
+    sync_driver.commit()
+    try:
+        _assert_data_dictionary_topology(
+            data_dictionary.get_tables(sync_driver),
+            data_dictionary.get_foreign_keys(sync_driver, table=orders),
+            data_dictionary.get_indexes(sync_driver, table=users),
+            users,
+            orders,
+            items,
+            index_name,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.execute_script(_data_dictionary_topology_drop_sql(users, orders, items))
+            sync_driver.commit()
+
+
+async def assert_async_data_dictionary_topology_contract(driver: object, case: DriverCase) -> None:
+    """Assert async data dictionaries sort table dependencies and surface FK/index metadata."""
+    if not case.supports_data_dictionary_topology:
+        pytest.skip(f"{case.adapter} has no data-dictionary topology support")
+    async_driver = cast("AsyncContractDriver", driver)
+    data_dictionary = cast("Any", async_driver).data_dictionary
+    suffix = uuid4().hex[:8]
+    users = f"dd_users_{suffix}"
+    orders = f"dd_orders_{suffix}"
+    items = f"dd_items_{suffix}"
+    index_name = f"idx_dd_users_{suffix}"
+    await async_driver.execute_script(_data_dictionary_topology_sql(case, users, orders, items, index_name))
+    await async_driver.commit()
+    try:
+        tables = await data_dictionary.get_tables(async_driver)
+        foreign_keys = await data_dictionary.get_foreign_keys(async_driver, table=orders)
+        indexes = await data_dictionary.get_indexes(async_driver, table=users)
+        _assert_data_dictionary_topology(tables, foreign_keys, indexes, users, orders, items, index_name)
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.execute_script(_data_dictionary_topology_drop_sql(users, orders, items))
+            await async_driver.commit()

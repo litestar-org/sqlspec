@@ -28,6 +28,18 @@ MYSQL_ROW_LOCKING_CASE_IDS = {
     "mysqlconnector-sync",
     "pymysql-sync",
 }
+DATA_DICTIONARY_CASE_IDS = {
+    "adbc-duckdb-sync",
+    "adbc-postgres-sync",
+    "adbc-sqlite-sync",
+    "aiosqlite-async",
+    "asyncpg-async",
+    "duckdb-sync",
+    "psycopg-async",
+    "psycopg-sync",
+    "psqlpy-async",
+    "sqlite-sync",
+}
 
 
 def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
@@ -65,8 +77,11 @@ def test_capability_params_match_requested_capability() -> None:
         "supports_execute_many",
         "supports_for_update",
         "supports_grouped_subquery",
+        "supports_data_dictionary",
+        "supports_data_dictionary_topology",
         "supports_native_bulk_ingest",
         "supports_native_metadata",
+        "supports_schema_qualified_data_dictionary",
         "supports_storage_bridge",
     ):
         sync_cases = _driver_cases(sync_driver_params_with(capability_name))
@@ -81,6 +96,13 @@ def test_mysql_row_locking_cases_are_contract_owned() -> None:
     assert set(cases) == MYSQL_ROW_LOCKING_CASE_IDS
     assert all(case.supports_for_update for case in cases.values())
     assert all(case.supports_for_share for case in cases.values())
+
+
+def test_data_dictionary_cases_are_contract_owned() -> None:
+    """Data-dictionary behavior belongs to the shared metadata contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in DATA_DICTIONARY_CASE_IDS}
+    assert set(cases) == DATA_DICTIONARY_CASE_IDS
+    assert all(case.supports_data_dictionary for case in cases.values())
 
 
 def test_adk_capability_params_match_requested_capability() -> None:
