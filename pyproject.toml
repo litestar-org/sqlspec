@@ -255,6 +255,8 @@ include = [
   "sqlspec/service.py",                            # Service base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
   "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
+  "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider helpers
+  "sqlspec/extensions/litestar/providers.py",      # Litestar filter provider helpers
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_models.py",          # Event message value object
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators

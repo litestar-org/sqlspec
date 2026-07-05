@@ -170,17 +170,15 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
     },
     "sqlspec/extensions/fastapi/providers.py": {
-        "classification": "helper_split_first",
+        "classification": "compile_now",
         "reason": (
-            "Dynamic provider signatures stay interpreted until a pure helper split and compiled-wheel construction "
-            "smoke prove the framework boundary."
+            "FastAPI filter provider construction and dynamic signature assembly are admitted through compiled-wheel smoke."
         ),
     },
     "sqlspec/extensions/litestar/providers.py": {
-        "classification": "helper_split_first",
+        "classification": "compile_now",
         "reason": (
-            "Dynamic provider signatures stay interpreted until a pure helper split and compiled-wheel construction "
-            "smoke prove the framework boundary."
+            "Litestar filter provider construction and dynamic signature assembly are admitted through compiled-wheel smoke."
         ),
     },
     "sqlspec/extensions/prometheus/__init__.py": {

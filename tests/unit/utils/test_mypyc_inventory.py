@@ -125,6 +125,8 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/storage/_utils.py" in payload["compiled_modules"]
     assert "sqlspec/base.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/prometheus/_observer.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/fastapi/providers.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/litestar/providers.py" in payload["compiled_modules"]
     assert "sqlspec/storage/backends/fsspec.py" in payload["compiled_modules"]
     assert "sqlspec/storage/backends/local.py" in payload["compiled_modules"]
     assert "sqlspec/storage/backends/obstore.py" in payload["compiled_modules"]
@@ -163,8 +165,6 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/dialects/spanner/_spangres.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/spanner/_spanner.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/fastapi/providers.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/litestar/providers.py" in payload["interpreted_modules"]
     assert "sqlspec/storage/_arrow_payload.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["preserved_exclusions"]
     assert payload["adapter_pool_runtimes"]["status"] == "compiled"
@@ -185,10 +185,7 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
     payload = json.loads(completed.stdout)
     hot_surfaces = payload["hot_surfaces"]
 
-    expected_candidates = {
-        "sqlspec/extensions/fastapi/providers.py",
-        "sqlspec/extensions/litestar/providers.py",
-    }
+    expected_candidates: set[str] = set()
     expected_hard_blocks = {
         "sqlspec/dialects/postgres/_paradedb.py",
         "sqlspec/dialects/postgres/_pgvector.py",
@@ -215,6 +212,8 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
     assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["status"] == "interpreted"
     assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["reason"]
     for module_path in {
+        "sqlspec/extensions/fastapi/providers.py",
+        "sqlspec/extensions/litestar/providers.py",
         "sqlspec/storage/backends/fsspec.py",
         "sqlspec/storage/backends/local.py",
         "sqlspec/storage/backends/obstore.py",

@@ -47,9 +47,9 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
-    SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", False, "fastapi"),
+    SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", True, "fastapi"),
     SmokeImport(
-        "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", False, "litestar"
+        "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", True, "litestar"
     ),
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
@@ -162,7 +162,7 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     return results
 
 
-def _check_litestar_filter_construction() -> dict[str, Any]:
+def _check_litestar_filter_construction(*, require_compiled: bool = False) -> dict[str, Any]:
     """Construct every paired-annotation Litestar filter provider (issue #475).
 
     This invokes ``create_filter_dependencies`` with a config that drives every
@@ -175,6 +175,7 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
         name="litestar_filter_construction",
         module="sqlspec.extensions.litestar.providers",
         attribute="create_filter_dependencies",
+        compiled_required=require_compiled,
     )
     try:
         providers = importlib.import_module("sqlspec.extensions.litestar.providers")
@@ -191,6 +192,9 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
 
     result["imported"] = True
     result["compiled"] = is_compiled_module(providers)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
     config = providers.FilterConfig(
         created_at=True,
         updated_at=True,
@@ -214,10 +218,13 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
     return result
 
 
-def _check_fastapi_filter_construction() -> dict[str, Any]:
+def _check_fastapi_filter_construction(*, require_compiled: bool = False) -> dict[str, Any]:
     """Construct every generated FastAPI filter provider."""
     result = _new_smoke_result(
-        name="fastapi_filter_construction", module="sqlspec.extensions.fastapi.providers", attribute="provide_filters"
+        name="fastapi_filter_construction",
+        module="sqlspec.extensions.fastapi.providers",
+        attribute="provide_filters",
+        compiled_required=require_compiled,
     )
     try:
         providers = importlib.import_module("sqlspec.extensions.fastapi.providers")
@@ -234,6 +241,9 @@ def _check_fastapi_filter_construction() -> dict[str, Any]:
 
     result["imported"] = True
     result["compiled"] = is_compiled_module(providers)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
     config = providers.FilterConfig(
         id_filter=int,
         created_at=True,
@@ -284,8 +294,11 @@ def _check_fastapi_filter_construction() -> dict[str, Any]:
 
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
-    del require_compiled
-    return [_check_sqlspec_construction(), _check_fastapi_filter_construction(), _check_litestar_filter_construction()]
+    return [
+        _check_sqlspec_construction(),
+        _check_fastapi_filter_construction(require_compiled=require_compiled),
+        _check_litestar_filter_construction(require_compiled=require_compiled),
+    ]
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

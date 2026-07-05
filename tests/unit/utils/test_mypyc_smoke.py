@@ -81,6 +81,8 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "env_utils",
         "event_payload",
         "event_queue",
+        "fastapi_providers",
+        "litestar_providers",
         "migration_runner",
         "prometheus_observer",
         "sqlite_pool",
