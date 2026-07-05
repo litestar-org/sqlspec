@@ -26,7 +26,7 @@ from rich.table import Table
 from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.utils.schema import transform_dict_keys
+from sqlspec.utils.schema import _convert_numpy_recursive, to_schema, transform_dict_keys
 from sqlspec.utils.text import camelize
 
 __all__ = (
@@ -47,6 +47,7 @@ __all__ = (
     "raw_sqlite_read_heavy",
     "raw_sqlite_repeated_queries",
     "raw_sqlite_schema_mapping",
+    "raw_sqlite_schema_type_numpy",
     "raw_sqlite_thin_path_stress",
     "raw_sqlite_write_heavy",
     "run_benchmark",
@@ -79,6 +80,7 @@ __all__ = (
     "sqlspec_sqlite_read_heavy",
     "sqlspec_sqlite_repeated_queries",
     "sqlspec_sqlite_schema_mapping",
+    "sqlspec_sqlite_schema_type_numpy",
     "sqlspec_sqlite_thin_path_stress",
     "sqlspec_sqlite_write_heavy",
 )
@@ -394,7 +396,7 @@ def run_extended_benchmark(
         List of benchmark result dictionaries
     """
     libraries = ["raw", "sqlspec"]
-    scenarios = ["dict_key_transform", "schema_mapping", "complex_parameters", "thin_path_stress"]
+    scenarios = ["dict_key_transform", "schema_mapping", "complex_parameters", "thin_path_stress", "schema_type_numpy"]
     results: list[dict[str, Any]] = []
 
     for scenario in scenarios:
@@ -1562,6 +1564,70 @@ class WideRowDict(TypedDict):
     is_active: str
 
 
+SCHEMA_TYPE_NUMPY_ROW_COUNT = 5_000
+SCHEMA_TYPE_NUMPY_FIRST_FIELD_4 = 4
+_SCHEMA_TYPE_NUMPY_PAYLOAD: list[dict[str, int]] | None = None
+_SCHEMA_TYPE_NUMPY_ROW_TYPE: type[Any] | None = None
+_SCHEMA_TYPE_NUMPY_VECTOR_TYPE: type[Any] | None = None
+
+
+def _schema_type_numpy_payload() -> list[dict[str, int]]:
+    """Return the stable 5000x5 payload used by the schema_type numpy benchmark."""
+    global _SCHEMA_TYPE_NUMPY_PAYLOAD
+    if _SCHEMA_TYPE_NUMPY_PAYLOAD is None:
+        _SCHEMA_TYPE_NUMPY_PAYLOAD = [
+            {
+                "field_0": index,
+                "field_1": index + 1,
+                "field_2": index + 2,
+                "field_3": index + 3,
+                "field_4": index + 4,
+            }
+            for index in range(SCHEMA_TYPE_NUMPY_ROW_COUNT)
+        ]
+    return _SCHEMA_TYPE_NUMPY_PAYLOAD
+
+
+def _schema_type_numpy_row_type() -> type[Any]:
+    """Return the cached msgspec row type used by the schema_type numpy benchmark."""
+    global _SCHEMA_TYPE_NUMPY_ROW_TYPE
+    if _SCHEMA_TYPE_NUMPY_ROW_TYPE is None:
+        import msgspec
+
+        class SchemaTypeNumpyRow(msgspec.Struct):
+            field_0: int
+            field_1: int
+            field_2: int
+            field_3: int
+            field_4: int
+
+        _SCHEMA_TYPE_NUMPY_ROW_TYPE = SchemaTypeNumpyRow
+    return _SCHEMA_TYPE_NUMPY_ROW_TYPE
+
+
+def _schema_type_numpy_vector_type() -> type[Any]:
+    """Return the cached msgspec vector row type used to assert ndarray fallback behavior."""
+    global _SCHEMA_TYPE_NUMPY_VECTOR_TYPE
+    if _SCHEMA_TYPE_NUMPY_VECTOR_TYPE is None:
+        import msgspec
+
+        class SchemaTypeNumpyVectorRow(msgspec.Struct):
+            values: list[float]
+
+        _SCHEMA_TYPE_NUMPY_VECTOR_TYPE = SchemaTypeNumpyVectorRow
+    return _SCHEMA_TYPE_NUMPY_VECTOR_TYPE
+
+
+def assert_schema_type_numpy_vector_fallback() -> None:
+    """Assert ndarray -> list[float] fallback still works for msgspec schema conversion."""
+    import numpy as np
+
+    vector_type = _schema_type_numpy_vector_type()
+    converted = to_schema([{"values": np.array([1.0, 2.0])}], schema_type=vector_type)
+    assert len(converted) == 1
+    assert converted[0].values == [1.0, 2.0]
+
+
 def _generate_wide_row(i: int) -> tuple[str, ...]:
     """Generate a single row tuple for the wide_test table."""
     return (
@@ -1660,6 +1726,25 @@ def sqlspec_sqlite_schema_mapping() -> None:
             # Verify schema mapping worked
             first = rows[0]
             assert "first_name" in first
+
+
+# --- schema_type_numpy scenarios ---
+
+
+def raw_sqlite_schema_type_numpy() -> None:
+    """Legacy baseline: pre-walk a 5000x5 payload before msgspec schema conversion."""
+    row_type = _schema_type_numpy_row_type()
+    rows = to_schema(_convert_numpy_recursive(_schema_type_numpy_payload()), schema_type=row_type)
+    assert len(rows) == SCHEMA_TYPE_NUMPY_ROW_COUNT
+    assert rows[0].field_4 == SCHEMA_TYPE_NUMPY_FIRST_FIELD_4
+
+
+def sqlspec_sqlite_schema_type_numpy() -> None:
+    """Convert a 5000x5 payload through the current msgspec schema_type path."""
+    row_type = _schema_type_numpy_row_type()
+    rows = to_schema(_schema_type_numpy_payload(), schema_type=row_type)
+    assert len(rows) == SCHEMA_TYPE_NUMPY_ROW_COUNT
+    assert rows[0].field_4 == SCHEMA_TYPE_NUMPY_FIRST_FIELD_4
 
 
 # --- complex_parameters scenarios ---
@@ -1787,6 +1872,8 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "sqlite", "dict_key_transform"): sqlspec_sqlite_dict_key_transform,
     ("raw", "sqlite", "schema_mapping"): raw_sqlite_schema_mapping,
     ("sqlspec", "sqlite", "schema_mapping"): sqlspec_sqlite_schema_mapping,
+    ("raw", "sqlite", "schema_type_numpy"): raw_sqlite_schema_type_numpy,
+    ("sqlspec", "sqlite", "schema_type_numpy"): sqlspec_sqlite_schema_type_numpy,
     ("raw", "sqlite", "complex_parameters"): raw_sqlite_complex_parameters,
     ("sqlspec", "sqlite", "complex_parameters"): sqlspec_sqlite_complex_parameters,
     ("raw", "sqlite", "thin_path_stress"): raw_sqlite_thin_path_stress,

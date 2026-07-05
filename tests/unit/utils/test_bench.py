@@ -35,6 +35,19 @@ def test_bench_summary_reports_stddev_iqr_and_noise() -> None:
     assert summary["noisy"] is False
 
 
+def test_schema_type_numpy_benchmark_scenario_is_registered_and_runnable() -> None:
+    module = _load_script_module("bench.py", "bench_for_tests")
+
+    assert module.SCENARIO_REGISTRY[("raw", "sqlite", "schema_type_numpy")] is module.raw_sqlite_schema_type_numpy
+    assert module.SCENARIO_REGISTRY[("sqlspec", "sqlite", "schema_type_numpy")] is (
+        module.sqlspec_sqlite_schema_type_numpy
+    )
+
+    module.raw_sqlite_schema_type_numpy()
+    module.sqlspec_sqlite_schema_type_numpy()
+    module.assert_schema_type_numpy_vector_fallback()
+
+
 def test_async_benchmark_iterations_reuse_one_event_loop() -> None:
     module = _load_script_module("bench.py", "bench_for_tests")
     loop_ids: list[int] = []
