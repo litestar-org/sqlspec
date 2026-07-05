@@ -1,7 +1,7 @@
 """Unit tests for BigQuery core performance helpers."""
 
 import importlib
-from collections.abc import Iterable
+from collections.abc import ItemsView, Iterable, Iterator, Mapping
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
@@ -73,25 +73,25 @@ class _RecordingScriptJob:
         self.result_calls.append(kwargs)
 
 
-class _RecordingRow:
+class _RecordingRow(Mapping[str, object]):
     def __init__(self, values: dict[str, object]) -> None:
         self._values = values
 
-    def items(self) -> Iterable[tuple[str, object]]:
-        return self._values.items()
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
 
-
-class _MappingRow:
-    def __init__(self, values: dict[str, object]) -> None:
-        self._values = values
-
-    def keys(self) -> Iterable[str]:
-        return self._values.keys()
+    def __len__(self) -> int:
+        return len(self._values)
 
     def __getitem__(self, key: str) -> object:
         return self._values[key]
 
-    def items(self) -> Iterable[tuple[str, object]]:
+    def items(self) -> ItemsView[str, object]:
+        return self._values.items()
+
+
+class _MappingRow(_RecordingRow):
+    def items(self) -> ItemsView[str, object]:
         msg = "fetch_chunk should use dict(row), not row.items()"
         raise AssertionError(msg)
 
@@ -101,7 +101,7 @@ def _schema_field(name: str) -> SimpleNamespace:
 
 
 class _RecordingStreamJob:
-    def __init__(self, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
+    def __init__(self, pages: Iterable[Iterable[Mapping[str, object]]] | None = None) -> None:
         self.result_kwargs: dict[str, Any] = {}
         self._pages = iter(pages or ())
 
@@ -111,7 +111,7 @@ class _RecordingStreamJob:
 
 
 class _RecordingStreamDriver:
-    def __init__(self, api_base_url: str, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
+    def __init__(self, api_base_url: str, pages: Iterable[Iterable[Mapping[str, object]]] | None = None) -> None:
         self.connection = SimpleNamespace(_connection=SimpleNamespace(API_BASE_URL=api_base_url))
         self._job_retry: Any = build_retry(2.0)
         self._job_retry_deadline = 2.0

@@ -151,19 +151,16 @@ class AdbcDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            fetched_data = cursor.fetchall()
-            column_names = self._resolve_column_names(cursor.description)
-            data, column_names = collect_rows(
-                cast("list[Any] | None", fetched_data), cursor.description, column_names=column_names
-            )
-            row_format = "dict" if data and isinstance(data[0], dict) else "tuple"
+            arrow_table = cursor.fetch_arrow_table()
+            data = arrow_table.to_pylist()
+            column_names = list(arrow_table.column_names)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
                 data_row_count=len(data),
                 is_select_result=True,
-                row_format=row_format,
+                row_format="dict",
             )
 
         row_count = self._resolve_count_result_rowcount(cursor, fallback=resolve_rowcount(cursor))
