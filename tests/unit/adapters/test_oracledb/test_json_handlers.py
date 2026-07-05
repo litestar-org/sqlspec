@@ -222,7 +222,7 @@ def test_output_handler_claims_blob_is_json() -> None:
     result = json_output_type_handler(cursor, metadata)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=100, outconverter=json_converter_out_blob)
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_LONG_RAW, arraysize=100, outconverter=json_converter_out_blob)
 
 
 def test_output_handler_claims_clob_is_json() -> None:
@@ -238,7 +238,7 @@ def test_output_handler_claims_clob_is_json() -> None:
     result = json_output_type_handler(cursor, metadata)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(oracledb.DB_TYPE_CLOB, arraysize=50, outconverter=json_converter_out_clob)
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_LONG, arraysize=50, outconverter=json_converter_out_clob)
 
 
 def test_output_handler_claims_varchar2_is_json() -> None:
@@ -273,7 +273,9 @@ def test_output_handler_claims_blob_is_oson() -> None:
     result = json_output_type_handler(cursor, metadata)
 
     assert result is cursor_var
-    cursor.var.assert_called_once()
+    cursor.var.assert_called_once_with(
+        oracledb.DB_TYPE_LONG_RAW, arraysize=33, outconverter=cursor.var.call_args.kwargs["outconverter"]
+    )
     outconverter = cursor.var.call_args.kwargs["outconverter"]
     assert len(inspect.signature(outconverter).parameters) == 1
     assert outconverter(b"\x01\x02") == {"decoded": True}

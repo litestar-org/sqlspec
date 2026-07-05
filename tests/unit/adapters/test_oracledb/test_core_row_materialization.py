@@ -49,6 +49,15 @@ def test_collect_sync_rows_coerces_lob_values_when_lob_columns_present() -> None
     assert column_names == ["id", "payload"]
 
 
+def test_collect_sync_rows_leaves_json_text_as_string_without_content_sniffing() -> None:
+    """Readable CLOB values should be read as strings, not auto-parsed as JSON."""
+    rows = [(1, _ReadableValue('{"key": "value"}'))]
+    description = [("ID", _TypeCode("DB_TYPE_NUMBER")), ("PAYLOAD", _TypeCode("DB_TYPE_CLOB"))]
+    (data, _) = collect_sync_rows(rows, description, {"enable_lowercase_column_names": True})
+    assert data == [(1, '{"key": "value"}')]
+    assert isinstance(data[0][1], str)
+
+
 async def test_collect_async_rows_reuses_original_rows_when_no_lob_columns() -> None:
     """collect_async_rows should avoid async coercion for non-LOB result sets."""
     rows = [(1, "alpha"), (2, "beta")]
@@ -65,6 +74,15 @@ async def test_collect_async_rows_coerces_lob_values_when_lob_columns_present() 
     (data, column_names) = await collect_async_rows(rows, description, {"enable_lowercase_column_names": True})
     assert data == [(1, "plain text")]
     assert column_names == ["id", "payload"]
+
+
+async def test_collect_async_rows_leaves_json_text_as_string_without_content_sniffing() -> None:
+    """Readable CLOB values should be read as strings, not auto-parsed as JSON."""
+    rows = [(1, _ReadableValue('{"key": "value"}'))]
+    description = [("ID", _TypeCode("DB_TYPE_NUMBER")), ("PAYLOAD", _TypeCode("DB_TYPE_CLOB"))]
+    (data, _) = await collect_async_rows(rows, description, {"enable_lowercase_column_names": True})
+    assert data == [(1, '{"key": "value"}')]
+    assert isinstance(data[0][1], str)
 
 
 def test_resolve_row_metadata_reuses_cached_description() -> None:

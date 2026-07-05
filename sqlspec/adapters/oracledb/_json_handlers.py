@@ -17,7 +17,8 @@ Routing matrix (input):
 Routing matrix (output):
 
 * ``DB_TYPE_JSON``: passthrough (python-oracledb already returns ``dict``).
-* ``FetchInfo.is_json`` + ``DB_TYPE_BLOB``: parse via ``json_converter_out_blob``.
+* ``FetchInfo.is_json`` + ``DB_TYPE_BLOB``: fetch as bytes and parse via
+ ``json_converter_out_blob``.
 * ``FetchInfo.is_json`` + ``DB_TYPE_CLOB`` or string types: parse via
  ``json_converter_out_clob``.
 * ``FetchInfo.is_oson`` + ``DB_TYPE_BLOB``: parse via ``json_converter_out_oson``.
@@ -33,7 +34,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from oracledb import DB_TYPE_CHAR, DB_TYPE_NCHAR, DB_TYPE_NVARCHAR, DB_TYPE_VARCHAR
 
-from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON
+from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON, DB_TYPE_LONG, DB_TYPE_LONG_RAW
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -139,15 +140,17 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
 
     if getattr(metadata, "is_json", False):
         if type_code is DB_TYPE_BLOB:
-            return cursor.var(DB_TYPE_BLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
+            return cursor.var(DB_TYPE_LONG_RAW, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
         if type_code is DB_TYPE_CLOB:
-            return cursor.var(DB_TYPE_CLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
+            return cursor.var(DB_TYPE_LONG, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
         if type_code in _JSON_STRING_TYPE_CODES:
             return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
 
     if getattr(metadata, "is_oson", False) and type_code is DB_TYPE_BLOB:
         return cursor.var(
-            DB_TYPE_BLOB, arraysize=cursor.arraysize, outconverter=partial(json_converter_out_oson, cursor.connection)
+            DB_TYPE_LONG_RAW,
+            arraysize=cursor.arraysize,
+            outconverter=partial(json_converter_out_oson, cursor.connection),
         )
     return None
 

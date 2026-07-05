@@ -537,11 +537,17 @@ def resolve_rowcount(cursor: Any) -> int:
 def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
-    """Apply OracleDB driver feature defaults."""
+    """Apply OracleDB driver feature defaults.
+
+    Defaults ``fetch_lobs`` to ``False`` so direct LOB reads under the 1 GB
+    fetch ceiling return text/bytes by default. Locators remain available for
+    OUT binds, PL/SQL, and explicit ``fetch_lobs=True``.
+    """
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
     features.setdefault("enable_lowercase_column_names", True)
     features.setdefault("enable_uuid_binary", True)
+    features.setdefault("fetch_lobs", False)
     if "vector_return_format" not in features:
         if not NUMPY_INSTALLED:
             features["vector_return_format"] = "list"
@@ -759,8 +765,9 @@ def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:
 def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
     """Coerce LOB handles to concrete values for synchronous execution.
 
-    Processes each value in the row, reading LOB objects and applying
-    type detection for JSON values stored in CLOBs.
+    Processes each value in the row, reading locator objects returned for
+    OUT binds, PL/SQL, or explicit ``fetch_lobs=True``. Direct-fetched
+    ``str``/``bytes`` values from the default path pass through unchanged.
 
     Args:
         row: Tuple of column values from database fetch.
@@ -783,8 +790,6 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
                 if coerced_values is not None:
                     coerced_values.append(value)
                 continue
-            if isinstance(processed_value, str):
-                processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
 
             if coerced_values is None:
                 if processed_value is value:
@@ -804,8 +809,9 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
 async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
     """Coerce LOB handles to concrete values for asynchronous execution.
 
-    Processes each value in the row, reading LOB objects asynchronously
-    and applying type detection for JSON values stored in CLOBs.
+    Processes each value in the row, reading locator objects returned for
+    OUT binds, PL/SQL, or explicit ``fetch_lobs=True``. Direct-fetched
+    ``str``/``bytes`` values from the default path pass through unchanged.
 
     Args:
         row: Tuple of column values from database fetch.
@@ -828,8 +834,6 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
                 if coerced_values is not None:
                     coerced_values.append(value)
                 continue
-            if isinstance(processed_value, str):
-                processed_value = TYPE_CONVERTER.convert_if_detected(processed_value)
 
             if coerced_values is None:
                 if processed_value is value:
@@ -856,9 +860,11 @@ def collect_sync_rows(
 ) -> "tuple[list[tuple[Any, ...]], list[str]]":
     """Collect OracleDB sync rows as tuples with normalized column names.
 
-    LOB coercion is still applied to each row. The raw coerced tuples are
-    returned instead of dicts so that ``SQLResult`` can handle lazy dict
-    materialization based on ``row_format``.
+    LOB locators are still read for OUT binds, PL/SQL, and explicit
+    ``fetch_lobs=True``. Direct-fetched LOB values under the 1 GB ceiling
+    arrive as plain strings/bytes and pass through unchanged. The raw coerced
+    tuples are returned instead of dicts so that ``SQLResult`` can handle lazy
+    dict materialization based on ``row_format``.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().
@@ -905,9 +911,11 @@ async def collect_async_rows(
 ) -> "tuple[list[tuple[Any, ...]], list[str]]":
     """Collect OracleDB async rows as tuples with normalized column names.
 
-    LOB coercion is still applied to each row. The raw coerced tuples are
-    returned instead of dicts so that ``SQLResult`` can handle lazy dict
-    materialization based on ``row_format``.
+    LOB locators are still read for OUT binds, PL/SQL, and explicit
+    ``fetch_lobs=True``. Direct-fetched LOB values under the 1 GB ceiling
+    arrive as plain strings/bytes and pass through unchanged. The raw coerced
+    tuples are returned instead of dicts so that ``SQLResult`` can handle lazy
+    dict materialization based on ``row_format``.
 
     Args:
         fetched_data: Rows returned from cursor.fetchall().

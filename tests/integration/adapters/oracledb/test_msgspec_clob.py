@@ -45,6 +45,13 @@ class JsonDocumentRecord(msgspec.Struct):
     metadata: dict
 
 
+class ClobTextDocumentRecord(msgspec.Struct):
+    """Document with unconstrained CLOB text."""
+
+    id: int
+    metadata: str
+
+
 class BinaryDocumentRecord(msgspec.Struct):
     """Document with BLOB binary data."""
 
@@ -206,12 +213,8 @@ def test_oracle_sync_mixed_clob_varchar2_msgspec(oracle_sync_session: OracleSync
     )
 
 
-async def test_oracle_async_json_in_clob_detection(oracle_async_session: OracleAsyncDriver) -> None:
-    """Test JSON detection in CLOB with msgspec hydration.
-
-    Verifies that JSON stored in CLOB is automatically detected and parsed,
-    then successfully hydrated into msgspec struct.
-    """
+async def test_oracle_async_json_in_clob_returns_str(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test unconstrained CLOB JSON hydrates as text."""
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
@@ -232,6 +235,40 @@ async def test_oracle_async_json_in_clob_detection(oracle_async_session: OracleA
         "SELECT id, metadata FROM test_json_clob_oracledb_async WHERE id = :1", (1,)
     )
 
+    hydrated = result.get_first(schema_type=ClobTextDocumentRecord)
+    assert hydrated is not None
+    assert isinstance(hydrated, ClobTextDocumentRecord)
+    assert hydrated.id == 1
+    assert isinstance(hydrated.metadata, str)
+    assert hydrated.metadata == json_text
+
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+    )
+
+
+async def test_oracle_async_json_in_is_json_clob_detection(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test IS JSON CLOB hydration keeps Ch2 JSON parsing."""
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_is_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+    await oracle_async_session.execute_script("""
+        CREATE TABLE test_json_is_json_clob_oracledb_async (
+            id NUMBER PRIMARY KEY,
+            metadata CLOB CHECK (metadata IS JSON)
+        )
+    """)
+
+    json_text = json.dumps(LARGE_JSON_CONTENT)
+    await oracle_async_session.execute(
+        "INSERT INTO test_json_is_json_clob_oracledb_async (id, metadata) VALUES (:1, :2)", (1, json_text)
+    )
+
+    result = await oracle_async_session.execute(
+        "SELECT id, metadata FROM test_json_is_json_clob_oracledb_async WHERE id = :1", (1,)
+    )
+
     hydrated = result.get_first(schema_type=JsonDocumentRecord)
     assert hydrated is not None
     assert isinstance(hydrated, JsonDocumentRecord)
@@ -242,16 +279,12 @@ async def test_oracle_async_json_in_clob_detection(oracle_async_session: OracleA
     assert len(hydrated.metadata["nested"]["data"]) == 5000
 
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_is_json_clob_oracledb_async'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
-def test_oracle_sync_json_in_clob_detection(oracle_sync_session: OracleSyncDriver) -> None:
-    """Test JSON detection in CLOB with msgspec hydration (sync).
-
-    Verifies that JSON stored in CLOB is automatically detected and parsed,
-    then successfully hydrated into msgspec struct.
-    """
+def test_oracle_sync_json_in_clob_returns_str(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test unconstrained CLOB JSON hydrates as text (sync)."""
     oracle_sync_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
@@ -268,6 +301,38 @@ def test_oracle_sync_json_in_clob_detection(oracle_sync_session: OracleSyncDrive
 
     result = oracle_sync_session.execute("SELECT id, metadata FROM test_json_clob_sync WHERE id = :1", (1,))
 
+    hydrated = result.get_first(schema_type=ClobTextDocumentRecord)
+    assert hydrated is not None
+    assert isinstance(hydrated, ClobTextDocumentRecord)
+    assert hydrated.id == 1
+    assert isinstance(hydrated.metadata, str)
+    assert hydrated.metadata == json_text
+
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_sync'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+    )
+
+
+def test_oracle_sync_json_in_is_json_clob_detection(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test IS JSON CLOB hydration keeps Ch2 JSON parsing (sync)."""
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_is_json_clob_sync'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_json_is_json_clob_sync (
+            id NUMBER PRIMARY KEY,
+            metadata CLOB CHECK (metadata IS JSON)
+        )
+    """)
+
+    json_text = json.dumps(LARGE_JSON_CONTENT)
+    oracle_sync_session.execute(
+        "INSERT INTO test_json_is_json_clob_sync (id, metadata) VALUES (:1, :2)", (1, json_text)
+    )
+
+    result = oracle_sync_session.execute("SELECT id, metadata FROM test_json_is_json_clob_sync WHERE id = :1", (1,))
+
     hydrated = result.get_first(schema_type=JsonDocumentRecord)
     assert hydrated is not None
     assert isinstance(hydrated, JsonDocumentRecord)
@@ -278,7 +343,7 @@ def test_oracle_sync_json_in_clob_detection(oracle_sync_session: OracleSyncDrive
     assert len(hydrated.metadata["nested"]["data"]) == 5000
 
     oracle_sync_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_clob_sync'; EXCEPTION WHEN OTHERS THEN NULL; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_json_is_json_clob_sync'; EXCEPTION WHEN OTHERS THEN NULL; END;"
     )
 
 
