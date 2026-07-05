@@ -48,8 +48,7 @@ def test_sync_stream_fetch_lobs_true_keeps_locator(oracle_sync_session: "OracleS
     _drop_sync(oracle_sync_session, table_name)
     oracle_sync_session.execute_script(f"CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, content CLOB)")
     oracle_sync_session.execute(
-        f"INSERT INTO {table_name} (id, content) VALUES (:id, :content)",
-        {"id": 1, "content": OracleClob(_CLOB_TEXT)},
+        f"INSERT INTO {table_name} (id, content) VALUES (:id, :content)", {"id": 1, "content": OracleClob(_CLOB_TEXT)}
     )
 
     try:
@@ -78,7 +77,8 @@ async def test_async_stream_returns_concrete_lobs_by_default(oracle_async_sessio
 
     try:
         rows: list[dict[str, object]] = [
-            row async for row in oracle_async_session.select_stream(f"SELECT content, data FROM {table_name}", chunk_size=1)
+            row
+            async for row in oracle_async_session.select_stream(f"SELECT content, data FROM {table_name}", chunk_size=1)
         ]
 
         assert rows == [{"content": _CLOB_TEXT, "data": _BLOB_BYTES}]
@@ -92,8 +92,7 @@ async def test_arrow_export_returns_concrete_clob_values(oracle_async_session: "
     await _drop_async(oracle_async_session, table_name)
     await oracle_async_session.execute_script(f"CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, content CLOB)")
     await oracle_async_session.execute(
-        f"INSERT INTO {table_name} (id, content) VALUES (:id, :content)",
-        {"id": 1, "content": OracleClob(_CLOB_TEXT)},
+        f"INSERT INTO {table_name} (id, content) VALUES (:id, :content)", {"id": 1, "content": OracleClob(_CLOB_TEXT)}
     )
 
     try:

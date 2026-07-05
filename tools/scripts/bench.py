@@ -153,10 +153,7 @@ ORACLE_EXTENDED_SCENARIOS = (
     ("sqlspec_async", "lob_fetch_100k"),
     ("sqlspec_async_fetch_lobs_true", "lob_fetch_100k"),
 )
-EXTENDED_SCENARIOS_BY_DRIVER = {
-    "sqlite": SQLITE_EXTENDED_SCENARIOS,
-    "oracle": ORACLE_EXTENDED_SCENARIOS,
-}
+EXTENDED_SCENARIOS_BY_DRIVER = {"sqlite": SQLITE_EXTENDED_SCENARIOS, "oracle": ORACLE_EXTENDED_SCENARIOS}
 
 
 @click.command()
@@ -333,7 +330,9 @@ def _benchmark_library_label(library: str) -> str:
 
 def _driver_has_core_scenarios(driver: str) -> bool:
     """Return True when a driver has any core benchmark scenario registered."""
-    return any((library, driver, scenario) in SCENARIO_REGISTRY for scenario in CORE_SCENARIOS for library in CORE_LIBRARIES)
+    return any(
+        (library, driver, scenario) in SCENARIO_REGISTRY for scenario in CORE_SCENARIOS for library in CORE_LIBRARIES
+    )
 
 
 def run_benchmark(
@@ -421,15 +420,13 @@ def run_benchmark_profiled(
                     func, is_async=is_async, iterations=iterations, warmup=warmup, profiler=profiler
                 )
                 summary = _summarize_times(times)
-                results.append(
-                    {
-                        "driver": driver,
-                        "library": _benchmark_library_label(lib),
-                        "scenario": scenario,
-                        "times": times,
-                        **summary,
-                    }
-                )
+                results.append({
+                    "driver": driver,
+                    "library": _benchmark_library_label(lib),
+                    "scenario": scenario,
+                    "times": times,
+                    **summary,
+                })
 
                 # Save profile data
                 prof_path = profiles_dir / f"{prof_name}.prof"
@@ -2004,8 +2001,7 @@ def _run_sqlspec_oracle_lob_fetch(size_key: str, *, fetch_lobs: bool) -> None:
     table_name = _oracle_lob_table(size_key)
     spec = SQLSpec()
     config = OracleSyncConfig(
-        connection_config=_oracle_connection_config_from_env(),
-        driver_features={"fetch_lobs": fetch_lobs},
+        connection_config=_oracle_connection_config_from_env(), driver_features={"fetch_lobs": fetch_lobs}
     )
     try:
         with spec.provide_session(config) as session:
@@ -2027,8 +2023,7 @@ async def _run_sqlspec_oracle_lob_fetch_async(size_key: str, *, fetch_lobs: bool
     table_name = _oracle_lob_table(size_key)
     spec = SQLSpec()
     config = OracleAsyncConfig(
-        connection_config=_oracle_connection_config_from_env(),
-        driver_features={"fetch_lobs": fetch_lobs},
+        connection_config=_oracle_connection_config_from_env(), driver_features={"fetch_lobs": fetch_lobs}
     )
     try:
         async with spec.provide_session(config) as session:
@@ -2173,16 +2168,8 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec_fetch_lobs_true", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_fetch_lobs_true_100k,
     ("sqlspec_async", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_async_1k,
     ("sqlspec_async", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_async_100k,
-    (
-        "sqlspec_async_fetch_lobs_true",
-        "oracle",
-        "lob_fetch_1k",
-    ): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k,
-    (
-        "sqlspec_async_fetch_lobs_true",
-        "oracle",
-        "lob_fetch_100k",
-    ): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k,
+    ("sqlspec_async_fetch_lobs_true", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k,
+    ("sqlspec_async_fetch_lobs_true", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k,
 }
 
 

@@ -21,7 +21,9 @@ def test_config_applies_driver_feature_json_serializer_to_statement_config() -> 
     def serializer(value: object) -> str:
         return f"json:{value!r}"
 
-    config = MssqlPythonConfig(connection_config={"server": "localhost"}, driver_features={"json_serializer": serializer})
+    config = MssqlPythonConfig(
+        connection_config={"server": "localhost"}, driver_features={"json_serializer": serializer}
+    )
 
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer

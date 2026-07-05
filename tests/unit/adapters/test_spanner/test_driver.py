@@ -147,11 +147,12 @@ def test_execute_statement_select_uses_metadata_driven_json_conversion(mock_conn
     driver = SpannerSyncDriver(mock_connection, driver_features={"json_deserializer": json_deserializer})
     fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON), _field("note", TypeCode.STRING)]
     mock_connection.execute_sql.return_value = _result_set(
-        fields,
-        [(1, _json_object('{"kind":"payload"}'), '{"kind":"string"}')],
+        fields, [(1, _json_object('{"kind":"payload"}'), '{"kind":"string"}')]
     )
 
-    statement = driver.prepare_statement("SELECT id, payload, note FROM users", statement_config=driver.statement_config)
+    statement = driver.prepare_statement(
+        "SELECT id, payload, note FROM users", statement_config=driver.statement_config
+    )
     result = driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]
 
     assert result.selected_data == [(1, {"decoded": '{"kind":"payload"}'}, '{"kind":"string"}')]
@@ -168,42 +169,24 @@ def test_select_stream_uses_native_plan_and_matches_buffered_rows(mock_connectio
         return {"decoded": value}
 
     driver = SpannerSyncDriver(
-        mock_connection,
-        driver_features={"json_deserializer": json_deserializer, "retry": retry, "timeout": 12.5},
+        mock_connection, driver_features={"json_deserializer": json_deserializer, "retry": retry, "timeout": 12.5}
     )
     fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON), _field("note", TypeCode.STRING)]
     buffered_rows: list[tuple[object, ...]] = [(1, _json_object('{"kind":"payload"}'), '{"kind":"string"}')]
     stream_rows: list[tuple[object, ...]] = [(1, _json_object('{"kind":"payload"}'), '{"kind":"string"}')]
-    mock_connection.execute_sql.side_effect = [
-        _result_set(fields, buffered_rows),
-        _result_set(fields, stream_rows),
-    ]
+    mock_connection.execute_sql.side_effect = [_result_set(fields, buffered_rows), _result_set(fields, stream_rows)]
 
     buffered = driver.execute("SELECT id, payload, note FROM users").get_data()
     with driver.select_stream("SELECT id, payload, note FROM users", chunk_size=1) as stream:
         assert stream._source.__class__.__name__ == "_SpannerSelectStreamSource"  # pyright: ignore[reportPrivateUsage]
         streamed = list(stream)
 
-    assert buffered == [
-        {"id": 1, "payload": {"decoded": '{"kind":"payload"}'}, "note": '{"kind":"string"}'}
-    ]
+    assert buffered == [{"id": 1, "payload": {"decoded": '{"kind":"payload"}'}, "note": '{"kind":"string"}'}]
     assert streamed == buffered
     assert json_calls == ['{"kind":"payload"}', '{"kind":"payload"}']
     assert mock_connection.execute_sql.call_args_list == [
-        call(
-            "SELECT id, payload, note FROM users",
-            params=None,
-            param_types={},
-            retry=retry,
-            timeout=12.5,
-        ),
-        call(
-            "SELECT id, payload, note FROM users",
-            params=None,
-            param_types={},
-            retry=retry,
-            timeout=12.5,
-        ),
+        call("SELECT id, payload, note FROM users", params=None, param_types={}, retry=retry, timeout=12.5),
+        call("SELECT id, payload, note FROM users", params=None, param_types={}, retry=retry, timeout=12.5),
     ]
 
 

@@ -99,12 +99,7 @@ def test_collect_rows_applies_json_plan_to_metadata_only() -> None:
         return {"decoded": value}
 
     column_names, column_plan = resolve_row_plan(fields, {}, json_deserializer=json_deserializer)
-    data, resolved_column_names = collect_rows(
-        rows,
-        fields,
-        column_names=column_names,
-        column_plan=column_plan,
-    )
+    data, resolved_column_names = collect_rows(rows, fields, column_names=column_names, column_plan=column_plan)
 
     assert resolved_column_names == ["id", "payload", "note"]
     assert data == [(1, {"decoded": '{"kind":"payload"}'}, '{"kind":"string"}')]

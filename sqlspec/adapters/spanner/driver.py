@@ -187,10 +187,7 @@ class _SpannerSelectStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             result_set = self._driver.connection.execute_sql(
-                self._sql,
-                params=self._params,
-                param_types=self._param_types,
-                **self._execute_kwargs,
+                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
             )
             self._result_set = result_set
             self._row_iterator = iter(result_set)
@@ -227,10 +224,7 @@ class _SpannerSelectStreamSource:
             self._column_plan = column_plan
 
         converted_rows, resolved_column_names = collect_rows(
-            rows,
-            (),
-            column_names=column_names,
-            column_plan=self._column_plan,
+            rows, (), column_names=column_names, column_plan=self._column_plan
         )
         self._column_names = resolved_column_names
         return rows_to_dicts(converted_rows, resolved_column_names)
@@ -294,9 +288,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 msg = "Result set metadata not available."
                 raise SQLConversionError(msg)
             column_names, column_plan = self._resolve_row_plan(fields)
-            data, column_names = collect_rows(
-                rows, fields, column_names=column_names, column_plan=column_plan
-            )
+            data, column_names = collect_rows(rows, fields, column_names=column_names, column_plan=column_plan)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
@@ -323,12 +315,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         param_types_map = self._infer_param_types(coerced_params)
         return SyncRowStream(
             _SpannerSelectStreamSource(
-                self,
-                sql,
-                coerced_params,
-                param_types_map,
-                chunk_size,
-                self._execute_kwargs(for_read=True),
+                self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
             )
         )
 

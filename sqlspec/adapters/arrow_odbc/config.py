@@ -71,9 +71,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
 
 
-def _apply_json_serializer_override(
-    statement_config: "StatementConfig", features: dict[str, Any]
-) -> "StatementConfig":
+def _apply_json_serializer_override(statement_config: "StatementConfig", features: dict[str, Any]) -> "StatementConfig":
     serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
     deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
     if serializer is to_json and deserializer is from_json:

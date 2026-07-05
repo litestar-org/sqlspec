@@ -872,20 +872,14 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
         try:
             return self.connection.fetch_df_all(
-                statement=sql,
-                parameters=params,
-                arraysize=batch_size or 1000,
-                **fetch_kwargs,
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **fetch_kwargs
             )
         except TypeError as exc:
             retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
             if retry_kwargs is None:
                 raise
             return self.connection.fetch_df_all(
-                statement=sql,
-                parameters=params,
-                arraysize=batch_size or 1000,
-                **retry_kwargs,
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
             )
 
     def _fetch_arrow_record_batches(
@@ -1542,20 +1536,14 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
         try:
             return await self.connection.fetch_df_all(
-                statement=sql,
-                parameters=params,
-                arraysize=batch_size or 1000,
-                **fetch_kwargs,
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **fetch_kwargs
             )
         except TypeError as exc:
             retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
             if retry_kwargs is None:
                 raise
             return await self.connection.fetch_df_all(
-                statement=sql,
-                parameters=params,
-                arraysize=batch_size or 1000,
-                **retry_kwargs,
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
             )
 
     async def _fetch_arrow_record_batches(
