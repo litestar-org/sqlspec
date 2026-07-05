@@ -30,7 +30,7 @@ def test_sanic_commit_modes() -> None:
     @app.post("/users")
     async def create_user(request: Request) -> HTTPResponse:
         db = db_plugin.get_session(request, "db")
-        await db.execute("insert into users (name) values (:name)", {"name": request.json["name"]})
+        await db.execute("insert into users (name) values (:name)", name=request.json["name"])
         return response.json({"created": True}, status=201)
 
     db_plugin.init_app(app)

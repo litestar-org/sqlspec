@@ -69,7 +69,7 @@ Inject drivers into service classes via Dishka:
        async def get_user(self, user_id: str):
            return await self.driver.select_one(
                "SELECT * FROM users WHERE id = :id",
-               {"id": user_id},
+               id=user_id,
            )
 
 .. seealso::

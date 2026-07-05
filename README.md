@@ -7,7 +7,7 @@
 
 SQLSpec is a SQL execution layer for Python. You write the SQL -- as strings, through a builder API, or loaded from files -- and SQLSpec handles connections, parameter binding, SQL injection prevention, dialect translation, and mapping results back to typed Python objects. It uses [sqlglot](https://github.com/tobymao/sqlglot) under the hood to parse, validate, and optimize your queries before they hit the database.
 
-It works with PostgreSQL (asyncpg, psycopg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy, mysql-connector, pymysql), Oracle (oracledb), CockroachDB, BigQuery, Spanner, and anything ADBC-compatible. Sync or async, same API. It also includes a built-in storage layer, native and bridged Arrow support for all drivers, and integrations for Litestar, FastAPI, Flask, Sanic, and Starlette.
+It works with PostgreSQL (asyncpg, psycopg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy, aiomysql, mysql-connector, pymysql), SQL Server (mssql-python, pymssql, arrow-odbc), Oracle (oracledb), CockroachDB, BigQuery, Spanner, and supported ADBC backends including Snowflake, Flight SQL, and GizmoSQL. Sync or async, same API. It also includes a built-in storage layer, Arrow export through native paths or conversion fallbacks, storage-bridge bulk ingest for adapters with native ingest support, and integrations for Litestar, FastAPI, Flask, Sanic, and Starlette.
 
 ## Quick Start
 
@@ -16,11 +16,13 @@ pip install sqlspec
 ```
 
 ```python
-from pydantic import BaseModel
+from dataclasses import dataclass
+
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-class Greeting(BaseModel):
+@dataclass
+class Greeting:
     message: str
 
 spec = SQLSpec()
@@ -46,21 +48,22 @@ users = session.select(
        .where("active = :active")
        .order_by("name")
        .limit(10),
-    {"active": True},
+    active=True,
     schema_type=User,
 )
 ```
 
 ## Features
 
-- **Connection pooling** -- sync and async adapters with a unified API across all supported drivers
+- **Session lifecycle** -- sync and async sessions with pooling where the adapter supports it
 - **Parameter binding and dialect translation** -- powered by sqlglot, with a fluent query builder and `.sql` file loader
 - **Result mapping** -- map rows to Pydantic, msgspec, attrs, or dataclass models, or export to Arrow tables for pandas and Polars
 - **Storage layer** -- read and write Arrow tables to local files, fsspec, or object stores
 - **Framework integrations** -- Litestar plugin with DI, Starlette/FastAPI/Sanic middleware, Flask extension
+- **Google ADK** -- SQLSpec-backed session, event, memory, and artifact services
 - **Observability** -- OpenTelemetry and Prometheus instrumentation, structured logging with correlation IDs
-- **Event channels** -- LISTEN/NOTIFY, Oracle AQ, and a portable polling fallback
-- **Migrations** -- schema versioning CLI built on Alembic
+- **Event channels** -- LISTEN/NOTIFY, Oracle AQ/TxEventQ, and durable table-backed queues with polling fallback
+- **Migrations** -- native schema migration CLI backed by SQLSpec's SQL file loader
 
 ## Documentation
 

@@ -15,8 +15,8 @@ def test_parameter_binding(tmp_path: Path) -> None:
     config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
 
     with spec.provide_session(config) as session:
-        session.execute("select :status as status, :status as status_copy", {"status": "active"})
-        result = session.execute("select ? as value", (42,))
+        session.execute("select :status as status, :status as status_copy", status="active")
+        result = session.execute("select ? as value", 42)
         print(result.one())
     # end-example
 

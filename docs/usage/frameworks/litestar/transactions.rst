@@ -34,10 +34,16 @@ is sent. This keeps your database consistent when handlers fail.
 
    @post("/transfer")
    async def transfer(db: AsyncSession, data: TransferRequest) -> dict:
-       await db.execute("UPDATE accounts SET balance = balance - :amount WHERE id = :from_id",
-                        {"amount": data.amount, "from_id": data.from_account})
-       await db.execute("UPDATE accounts SET balance = balance + :amount WHERE id = :to_id",
-                        {"amount": data.amount, "to_id": data.to_account})
+       await db.execute(
+           "UPDATE accounts SET balance = balance - :amount WHERE id = :from_id",
+           amount=data.amount,
+           from_id=data.from_account,
+       )
+       await db.execute(
+           "UPDATE accounts SET balance = balance + :amount WHERE id = :to_id",
+           amount=data.amount,
+           to_id=data.to_account,
+       )
        await db.commit()  # Both updates succeed or both rollback
        return {"status": "transferred"}
 

@@ -19,7 +19,7 @@ def test_core_api(tmp_path: Path) -> None:
         session.execute("create table if not exists notes (id integer primary key, body text)")
         session.execute("insert into notes (body) values ('Note')")
         query = SQL("select id, body from notes where id = :note_id or id = :note_id").select_only("body")
-        result = session.execute(query, {"note_id": 1})
+        result = session.execute(query, note_id=1)
         print(result.one_or_none())
     # end-example
 
