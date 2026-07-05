@@ -262,16 +262,16 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Storage backend base classes and async iterator adapters are in the compiled include set.",
     },
     "sqlspec/storage/backends/fsspec.py": {
-        "classification": "candidate",
-        "reason": "Backend imports no vendor module at import time, but fsspec client construction and streaming paths need installed-wheel proof.",
+        "classification": "compile_now",
+        "reason": "Backend imports no vendor module at import time and is admitted through installed-wheel import smoke.",
     },
     "sqlspec/storage/backends/local.py": {
-        "classification": "candidate",
-        "reason": "Local backend has no vendor import at import time and is the lowest-risk storage backend promotion candidate.",
+        "classification": "compile_now",
+        "reason": "Local backend has no vendor import at import time and is admitted through storage tests and installed-wheel smoke.",
     },
     "sqlspec/storage/backends/obstore.py": {
-        "classification": "candidate",
-        "reason": "Backend defers obstore imports until construction, but object-store streaming paths need installed-wheel proof.",
+        "classification": "compile_now",
+        "reason": "Backend defers obstore imports until construction and is admitted through installed-wheel import smoke.",
     },
     "sqlspec/utils/arrow_helpers.py": {
         "classification": "hard_block",

@@ -38,8 +38,6 @@ class FSSpecBackend:
     __slots__ = ("_fs_uri", "base_path", "fs", "protocol")
 
     backend_type: ClassVar[str] = "fsspec"
-    if TYPE_CHECKING:
-        fs: AbstractFileSystem
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         """Initialize the fsspec-backed storage backend.

@@ -125,6 +125,9 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/storage/_utils.py" in payload["compiled_modules"]
     assert "sqlspec/base.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/prometheus/_observer.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/backends/fsspec.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/backends/local.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/backends/obstore.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/_loader.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/bigquery.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/cockroachdb.py" in payload["compiled_modules"]
@@ -185,9 +188,6 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
     expected_candidates = {
         "sqlspec/extensions/fastapi/providers.py",
         "sqlspec/extensions/litestar/providers.py",
-        "sqlspec/storage/backends/fsspec.py",
-        "sqlspec/storage/backends/local.py",
-        "sqlspec/storage/backends/obstore.py",
     }
     expected_hard_blocks = {
         "sqlspec/dialects/postgres/_paradedb.py",
@@ -214,6 +214,14 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
     assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["surface"] == "keep_interpreted"
     assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["status"] == "interpreted"
     assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["reason"]
+    for module_path in {
+        "sqlspec/storage/backends/fsspec.py",
+        "sqlspec/storage/backends/local.py",
+        "sqlspec/storage/backends/obstore.py",
+    }:
+        assert hot_surfaces[module_path]["surface"] == "compiled"
+        assert hot_surfaces[module_path]["status"] == "compiled"
+        assert hot_surfaces[module_path]["reason"]
 
     for module_path in expected_hard_blocks:
         details = hot_surfaces[module_path]

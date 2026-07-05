@@ -61,6 +61,9 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "sync_driver",
         "async_driver",
         "storage_registry",
+        "storage_backend_local",
+        "storage_backend_fsspec",
+        "storage_backend_obstore",
         "data_dictionary_registry",
         "sqlite_type_converter",
     }.issubset(smoke_names)
@@ -82,6 +85,9 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "prometheus_observer",
         "sqlite_pool",
         "sqlite_type_converter",
+        "storage_backend_fsspec",
+        "storage_backend_local",
+        "storage_backend_obstore",
         "storage_registry",
         "storage_pipeline",
         "sync_driver",
@@ -117,6 +123,9 @@ def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
     assert any(result["module"] == "sqlspec.driver._sync" for result in results)
     assert any(result["module"] == "sqlspec.adapters.sqlite.type_converter" for result in results)
     assert any(result["module"] == "sqlspec.storage.pipeline" for result in results)
+    assert any(result["module"] == "sqlspec.storage.backends.local" for result in results)
+    assert any(result["module"] == "sqlspec.storage.backends.fsspec" for result in results)
+    assert any(result["module"] == "sqlspec.storage.backends.obstore" for result in results)
     assert any(result["module"] == "sqlspec.migrations.runner" for result in results)
     assert any(result["module"] == "sqlspec.utils.env" for result in results)
     assert any(result["module"] == "sqlspec.utils.sync_tools" for result in results)

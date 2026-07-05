@@ -248,6 +248,9 @@ include = [
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
+  "sqlspec/storage/backends/fsspec.py",            # fsspec backend import surface
+  "sqlspec/storage/backends/local.py",             # Local storage backend
+  "sqlspec/storage/backends/obstore.py",           # obstore backend import surface
   "sqlspec/storage/_utils.py",                      # Storage optional dependency import helpers
   "sqlspec/service.py",                            # Service base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
