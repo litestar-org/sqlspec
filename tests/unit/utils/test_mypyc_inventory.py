@@ -1,10 +1,12 @@
 """Tests for mypyc inventory and smoke-gate tooling."""
 
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import sqlspec.utils.correlation as correlation_module
 import sqlspec.utils.schema as schema_module
@@ -16,6 +18,16 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_mypyc_boundary_map_module() -> ModuleType:
+    module_path = PROJECT_ROOT / "tools" / "scripts" / "mypyc_boundary_map.py"
+    spec = importlib.util.spec_from_file_location("mypyc_boundary_map_for_tests", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_inventory_cli_default_json_summary_names_live_surfaces() -> None:
@@ -31,7 +43,7 @@ def test_inventory_cli_default_json_summary_names_live_surfaces() -> None:
         payload["summary"]["total_modules"]
         == payload["summary"]["compiled_count"] + payload["summary"]["interpreted_count"]
     )
-    assert set(payload["surface_counts"]) == {"candidate", "compiled", "interpreted", "keep_interpreted"}
+    assert set(payload["surface_counts"]) == {"candidate", "compiled", "hard_block", "interpreted", "keep_interpreted"}
     assert "sqlspec/utils/serializers.py" not in payload["hot_surfaces"]
     assert all((PROJECT_ROOT / module_path).is_file() for module_path in payload["hot_surfaces"])
 
@@ -157,6 +169,73 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/adapters/psycopg/driver.py" in payload["adapter_driver_shells"]["modules"]
     assert "sqlspec/adapters/cockroach_asyncpg/driver.py" in payload["adapter_driver_shells"]["modules"]
     assert "sqlspec/adapters/cockroach_psycopg/driver.py" in payload["adapter_driver_shells"]["modules"]
+
+
+def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
+    """Wave 4 planning surfaces should distinguish promotable candidates from hard blocks."""
+    script_path = PROJECT_ROOT / "tools" / "scripts" / "mypyc_inventory.py"
+    completed = subprocess.run(
+        [sys.executable, str(script_path)], check=True, cwd=PROJECT_ROOT, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+    hot_surfaces = payload["hot_surfaces"]
+
+    expected_candidates = {
+        "sqlspec/base.py",
+        "sqlspec/extensions/fastapi/providers.py",
+        "sqlspec/extensions/litestar/providers.py",
+        "sqlspec/extensions/prometheus/__init__.py",
+        "sqlspec/storage/backends/fsspec.py",
+        "sqlspec/storage/backends/local.py",
+        "sqlspec/storage/backends/obstore.py",
+    }
+    expected_hard_blocks = {
+        "sqlspec/dialects/postgres/_paradedb.py",
+        "sqlspec/dialects/postgres/_pgvector.py",
+        "sqlspec/dialects/spanner/_spangres.py",
+        "sqlspec/dialects/spanner/_spanner.py",
+        "sqlspec/extensions/events/_channel.py",
+        "sqlspec/storage/_arrow_payload.py",
+        "sqlspec/utils/arrow_helpers.py",
+    }
+
+    for module_path in expected_candidates:
+        details = hot_surfaces[module_path]
+        assert details["surface"] == "candidate"
+        assert details["status"] == "interpreted"
+        assert details["reason"]
+
+    for module_path in expected_hard_blocks:
+        details = hot_surfaces[module_path]
+        assert details["surface"] == "hard_block"
+        assert details["status"] == "interpreted"
+        assert details["classification"] == "hard_block"
+        assert details["reason"]
+
+    assert "sqlspec/_serialization.py" not in hot_surfaces
+
+
+def test_boundary_map_uses_live_wave4_module_edges() -> None:
+    """Boundary-map output should not preserve stale pre-Wave-4 module edges."""
+    module = _load_mypyc_boundary_map_module()
+
+    boundary_map = module.build_boundary_map(PROJECT_ROOT)
+    serialized = json.dumps(boundary_map, sort_keys=True)
+
+    assert "sqlspec/_serialization.py" not in serialized
+    assert any(
+        boundary["from_module"] == "sqlspec/storage/pipeline.py"
+        and boundary["from_status"] == "compiled"
+        and boundary["to_module"] == "sqlspec/storage/_arrow_payload.py"
+        and boundary["to_status"] == "interpreted"
+        and boundary["classification"] == "compiled_to_interpreted_arrow_boundary"
+        for boundary in boundary_map["storage_arrow_boundaries"]
+    )
+    assert all(
+        details["bucket"] != "hard_block"
+        for module_path, details in boundary_map["exclusion_revalidation_seed"].items()
+        if module_path in {"sqlspec/extensions/events/_models.py", "sqlspec/extensions/events/_queue.py"}
+    )
 
 
 def test_mypy_2_toolchain_policy_is_explicit_and_parallel_gate_is_default() -> None:

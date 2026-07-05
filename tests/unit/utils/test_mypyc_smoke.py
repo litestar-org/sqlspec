@@ -25,18 +25,24 @@ def _load_mypyc_smoke_module() -> ModuleType:
     return module
 
 
-def _load_mypyc_include_paths() -> set[str]:
+def _load_mypyc_paths(config_key: str) -> set[str]:
     pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
-    include_patterns: Sequence[str] = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["hooks"]["mypyc"][
-        "include"
-    ]
+    patterns: Sequence[str] = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["hooks"]["mypyc"][config_key]
     paths: set[str] = set()
-    for pattern in include_patterns:
+    for pattern in patterns:
         if any(marker in pattern for marker in "*?["):
             paths.update(path.relative_to(PROJECT_ROOT).as_posix() for path in PROJECT_ROOT.glob(pattern))
         else:
             paths.add(pattern)
     return paths
+
+
+def _load_mypyc_include_paths() -> set[str]:
+    return _load_mypyc_paths("include")
+
+
+def _load_mypyc_exclude_paths() -> set[str]:
+    return _load_mypyc_paths("exclude")
 
 
 def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
@@ -86,6 +92,16 @@ def test_compiled_smoke_requirements_are_in_mypyc_include_list() -> None:
     missing = [path for path in missing if path not in included_paths]
 
     assert missing == []
+
+
+def test_compiled_smoke_requirements_are_not_in_mypyc_exclude_list() -> None:
+    module = _load_mypyc_smoke_module()
+    excluded_paths = _load_mypyc_exclude_paths()
+
+    excluded = [entry.module.replace(".", "/") + ".py" for entry in module.SMOKE_IMPORTS if entry.require_compiled]
+    excluded = [path for path in excluded if path in excluded_paths]
+
+    assert excluded == []
 
 
 def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:

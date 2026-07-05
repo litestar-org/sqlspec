@@ -25,8 +25,8 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
 
-CANDIDATE_CLASSIFICATIONS = {"compile_now", "helper_split_first", "prove_separately"}
-SURFACE_ORDER = ("compiled", "candidate", "keep_interpreted", "interpreted")
+CANDIDATE_CLASSIFICATIONS = {"candidate", "compile_now", "helper_split_first", "prove_separately"}
+SURFACE_ORDER = ("compiled", "candidate", "hard_block", "keep_interpreted", "interpreted")
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/config.py": {
@@ -37,10 +37,6 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "helper_split_first",
         "reason": "Registry/session wrappers still manage runtime pool and telemetry orchestration.",
     },
-    "sqlspec/_serialization.py": {
-        "classification": "prove_separately",
-        "reason": "Serializer selection remains dynamic and historically broke same-unit coercion paths.",
-    },
     "sqlspec/storage/pipeline.py": {
         "classification": "compile_now",
         "reason": "Storage orchestration compiles after PyArrow payload encode/decode moved to _arrow_payload.py.",
@@ -50,7 +46,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Pure path resolution split away from optional PyArrow import helpers.",
     },
     "sqlspec/storage/_arrow_payload.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "Direct PyArrow encode/decode boundary remains interpreted.",
     },
     "sqlspec/storage/registry.py": {
@@ -110,11 +106,11 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Postgres extension operator registry is pure token/expression dispatch used by compiled custom dialects.",
     },
     "sqlspec/dialects/postgres/_paradedb.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "SQLGlot subclass/registration module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
     },
     "sqlspec/dialects/postgres/_pgvector.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
     },
     "sqlspec/dialects/spanner/_generators.py": {
@@ -122,11 +118,11 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Spanner SQL rendering helpers compile with the custom Spanner dialect surface.",
     },
     "sqlspec/dialects/spanner/_spangres.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "SQLGlot subclass/registration module fails native class import under mypyc; compiled helpers stay in _generators.",
     },
     "sqlspec/dialects/spanner/_spanner.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled render helpers stay in _generators.",
     },
     "sqlspec/extensions/events/_models.py": {
@@ -150,7 +146,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Table-backed queue class flags use ClassVar and concrete queue classes are final.",
     },
     "sqlspec/extensions/events/_channel.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "Owns dynamic native backend imports, listener thread/task lifecycle, and protocol dispatch.",
     },
     "sqlspec/extensions/events/_store.py": {
@@ -174,17 +170,24 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
     },
     "sqlspec/extensions/fastapi/providers.py": {
-        "classification": "keep_interpreted",
+        "classification": "helper_split_first",
         "reason": (
-            "Provider signature construction stays interpreted; direct mypyc compilation has passed historically, "
-            "but the runtime provider boundary has had compiled-wheel issues."
+            "Dynamic provider signatures stay interpreted until a pure helper split and compiled-wheel construction "
+            "smoke prove the framework boundary."
         ),
     },
     "sqlspec/extensions/litestar/providers.py": {
-        "classification": "keep_interpreted",
+        "classification": "helper_split_first",
         "reason": (
-            "Provider signature construction stays interpreted; direct mypyc compilation has passed historically, "
-            "but the runtime provider boundary has had compiled-wheel issues."
+            "Dynamic provider signatures stay interpreted until a pure helper split and compiled-wheel construction "
+            "smoke prove the framework boundary."
+        ),
+    },
+    "sqlspec/extensions/prometheus/__init__.py": {
+        "classification": "helper_split_first",
+        "reason": (
+            "Prometheus observer implementation can move behind a compiled private module while __init__ stays a "
+            "thin optional-dependency re-export."
         ),
     },
     "sqlspec/migrations/commands.py": {
@@ -255,8 +258,20 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Storage backend base classes and async iterator adapters are in the compiled include set.",
     },
+    "sqlspec/storage/backends/fsspec.py": {
+        "classification": "candidate",
+        "reason": "Backend imports no vendor module at import time, but fsspec client construction and streaming paths need installed-wheel proof.",
+    },
+    "sqlspec/storage/backends/local.py": {
+        "classification": "candidate",
+        "reason": "Local backend has no vendor import at import time and is the lowest-risk storage backend promotion candidate.",
+    },
+    "sqlspec/storage/backends/obstore.py": {
+        "classification": "candidate",
+        "reason": "Backend defers obstore imports until construction, but object-store streaming paths need installed-wheel proof.",
+    },
     "sqlspec/utils/arrow_helpers.py": {
-        "classification": "keep_interpreted",
+        "classification": "hard_block",
         "reason": "Direct PyArrow boundary with historical mypyc segfault risk.",
     },
 }
@@ -295,6 +310,8 @@ def classify_surface(status: str, classification: str | None = None) -> str:
     """Return the planning surface for an inventory entry."""
     if status == "compiled":
         return "compiled"
+    if classification == "hard_block":
+        return "hard_block"
     if classification == "keep_interpreted":
         return "keep_interpreted"
     if classification in CANDIDATE_CLASSIFICATIONS:
