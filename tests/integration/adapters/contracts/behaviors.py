@@ -12,7 +12,7 @@ from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 import msgspec
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementConfig, StatementStack, sql
+from sqlspec import SQL, SQLResult, StackExecutionError, StatementConfig, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.data_dictionary import VersionInfo
@@ -809,6 +809,9 @@ async def assert_async_complex_query_contract(driver: object, case: DriverCase) 
     assert [row["name"] for row in top.get_data()] == ["delta", "epsilon"]
 
 
+STATEMENT_STACK_SCOPE = "statement_stack"
+
+
 def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers execute a StatementStack sequentially with per-operation results."""
     sync_driver = cast("SyncContractDriver", driver)
@@ -833,6 +836,7 @@ def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> No
         count_result = results[2].result
         assert isinstance(count_result, SQLResult)
         assert count_result.get_data()[0]["count"] == 2
+        dispatch_sync_extra_assertions(driver, case, STATEMENT_STACK_SCOPE)
     finally:
         sync_driver.execute(table.delete_sql)
         sync_driver.commit()
@@ -862,9 +866,77 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
         count_result = results[2].result
         assert isinstance(count_result, SQLResult)
         assert count_result.get_data()[0]["count"] == 2
+        await dispatch_async_extra_assertions(driver, case, STATEMENT_STACK_SCOPE)
     finally:
         await async_driver.execute(table.delete_sql)
         await async_driver.commit()
+
+
+async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> None:
+    """Fold Oracle async native pipeline and continue-on-error stack proofs."""
+    async_driver = cast("AsyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    if not await driver_any._pipeline_native_supported():
+        pytest.skip("Oracle native pipeline unavailable")
+
+    native_table = _pc_table(case, "stack_native")
+    error_table = _pc_table(case, "stack_errors")
+    await _async_drop_table(async_driver, native_table)
+    await _async_drop_table(async_driver, error_table)
+    await async_driver.execute(f"CREATE TABLE {native_table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    await async_driver.execute(f"CREATE TABLE {error_table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    await async_driver.commit()
+
+    driver_type = type(driver)
+    original_execute_stack_native = getattr(driver_type, "_execute_stack_native")
+    call_counter = {"count": 0}
+
+    async def tracking_execute_stack_native(
+        self: object, stack: StatementStack, *, continue_on_error: bool
+    ) -> tuple[Any, ...]:
+        call_counter["count"] += 1
+        return await original_execute_stack_native(self, stack, continue_on_error=continue_on_error)
+
+    setattr(driver_type, "_execute_stack_native", tracking_execute_stack_native)
+    try:
+        stack = (
+            StatementStack()
+            .push_execute(f"INSERT INTO {native_table} (id, name) VALUES (:id, :name)", {"id": 1, "name": "alpha"})
+            .push_execute(f"INSERT INTO {native_table} (id, name) VALUES (:id, :name)", {"id": 2, "name": "beta"})
+            .push_execute(f"SELECT name FROM {native_table} WHERE id = :id", {"id": 2})
+        )
+        results = await async_driver.execute_stack(stack)
+        assert call_counter["count"] == 1
+        assert len(results) == 3
+        assert results[0].rows_affected == 1
+        assert results[1].rows_affected == 1
+        last_result = results[2].result
+        assert isinstance(last_result, SQLResult)
+        assert last_result.get_data()[0]["name"] == "beta"
+
+        error_stack = (
+            StatementStack()
+            .push_execute(f"INSERT INTO {error_table} (id, name) VALUES (:id, :name)", {"id": 1, "name": "alpha"})
+            .push_execute(f"INSERT INTO {error_table} (id, name) VALUES (:id, :name)", {"id": 1, "name": "duplicate"})
+            .push_execute(f"INSERT INTO {error_table} (id, name) VALUES (:id, :name)", {"id": 2, "name": "beta"})
+        )
+        error_results = await async_driver.execute_stack(error_stack, continue_on_error=True)
+        assert len(error_results) == 3
+        assert error_results[0].rows_affected == 1
+        assert isinstance(error_results[1].error, StackExecutionError)
+        assert error_results[2].rows_affected == 1
+
+        verify_result = await async_driver.execute(
+            f"SELECT COUNT(*) AS total_rows FROM {error_table} WHERE id = :id", {"id": 2}
+        )
+        assert verify_result.get_data()[0]["total_rows"] == 1
+    finally:
+        setattr(driver_type, "_execute_stack_native", original_execute_stack_native)
+        await _async_drop_table(async_driver, native_table)
+        await _async_drop_table(async_driver, error_table)
+
+
+register_async_extra_assertion("statement_stack:oracle_native", STATEMENT_STACK_SCOPE, _oracle_native_statement_stack)
 
 
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:

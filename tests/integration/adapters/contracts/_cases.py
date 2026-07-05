@@ -718,6 +718,7 @@ ASYNC_DRIVER_CASES = (
             "driver_features:oracle_json_native",
             "driver_features:oracle_batch_errors",
             "driver_features:oracle_plsql",
+            "statement_stack:oracle_native",
             "streaming_native:oracledb",
         ),
     ),

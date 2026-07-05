@@ -1,10 +1,16 @@
-"""Integration tests for Oracle UUID binary (RAW16) support with real database."""
+"""Oracle UUID binary residuals not covered by the shared UUID contract.
+
+The contract suite verifies RAW(16) UUID round-trips with the feature enabled
+and disabled. This module keeps Oracle-only negative/coexistence behavior:
+RAW(32) stays bytes, VARCHAR2 UUID text stays text, and UUID handlers compose
+with NumPy vector handlers.
+"""
 
 import uuid
 
 import pytest
 
-from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleAsyncDriver
+from sqlspec.adapters.oracledb import OracleAsyncConfig
 from sqlspec.typing import NUMPY_INSTALLED
 
 pytestmark = [pytest.mark.xdist_group("oracle")]
@@ -16,32 +22,6 @@ def oracle_uuid_async_config(oracle_async_config: OracleAsyncConfig) -> OracleAs
     return OracleAsyncConfig(
         connection_config=oracle_async_config.connection_config, driver_features={"enable_uuid_binary": True}
     )
-
-
-async def test_create_uuid_table(oracle_async_session: OracleAsyncDriver) -> None:
-    """Test creating table with RAW(16) UUID columns."""
-    await oracle_async_session.execute_script("""
-        BEGIN
-            EXECUTE IMMEDIATE 'DROP TABLE test_uuid_binary_oracledb_async';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 THEN RAISE; END IF;
-        END;
-    """)
-
-    await oracle_async_session.execute("""
-        CREATE TABLE test_uuid_binary_oracledb_async (
-            id NUMBER PRIMARY KEY,
-            user_id RAW(16) NOT NULL,
-            session_id RAW(16),
-            description VARCHAR2(1000)
-        )
-    """)
-
-    result = await oracle_async_session.select_value(
-        "SELECT COUNT(*) FROM user_tab_columns WHERE table_name = 'TEST_UUID_BINARY_ORACLEDB_ASYNC'"
-    )
-    assert result == 4
 
 
 @pytest.mark.skipif(not NUMPY_INSTALLED, reason="NumPy not installed")

@@ -75,6 +75,7 @@ MERGE_BULK_CASE_IDS = {"asyncpg-async", "oracledb-async", "psqlpy-async", "psyco
 VECTOR_CASE_IDS = {"adbc-duckdb-sync", "duckdb-sync", "oracledb-async", "oracledb-sync"}
 STORAGE_BRIDGE_DECIMAL_CASE_IDS = {"aiomysql-async", "asyncmy-async"}
 UNSUPPORTED_EXCEPTION_TRANSLATION_CASE_IDS = {"adbc-sqlite-sync", "arrow-odbc-sync", "bigquery-sync"}
+ORACLE_NATIVE_STATEMENT_STACK_CASE_IDS = {"oracledb-async"}
 POSTGRES_EXTENSION_CASE_IDS = {
     "adbc-paradedb-sync",
     "adbc-pgvector-sync",
@@ -198,6 +199,12 @@ def test_exception_translation_gated_cases_are_explicit() -> None:
     """Cases excluded from the exception contract are explicit capability decisions."""
     cases = {case.id: case for case in ACTIVE_DRIVER_CASES if not case.supports_exception_translation}
     assert set(cases) == UNSUPPORTED_EXCEPTION_TRANSLATION_CASE_IDS
+
+
+def test_oracle_native_statement_stack_case_is_contract_owned() -> None:
+    """Oracle native statement-stack behavior belongs to the shared driver contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if "statement_stack:oracle_native" in case.extra_assertions}
+    assert set(cases) == ORACLE_NATIVE_STATEMENT_STACK_CASE_IDS
 
 
 def test_postgres_extension_cases_are_contract_owned() -> None:

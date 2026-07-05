@@ -1,4 +1,10 @@
-"""Integration tests for Oracle NumPy vector support with real database."""
+"""Oracle NumPy VECTOR residuals not covered by the shared vector contract.
+
+The shared vector contract verifies builder/operator execution for Oracle VECTOR
+columns. This module keeps Oracle-specific NumPy type-handler behavior across
+FLOAT32, FLOAT64, BINARY, INT8, large embeddings, NULLs, and sync/async handler
+configuration.
+"""
 
 import numpy as np
 import pytest
