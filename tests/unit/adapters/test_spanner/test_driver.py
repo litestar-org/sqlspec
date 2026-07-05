@@ -1,10 +1,13 @@
 import inspect
-from unittest.mock import MagicMock, Mock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock, call
 
 import pyarrow as pa
 import pytest
 from google.cloud.spanner_v1 import Transaction
+from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.streamed import StreamedResultSet
+from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.exceptions import SQLConversionError
@@ -32,6 +35,17 @@ def mock_transaction() -> MagicMock:
     m.execute_update = MagicMock()
     m.batch_update = MagicMock()
     return m
+
+
+def _field(name: str, code: TypeCode) -> SimpleNamespace:
+    return SimpleNamespace(name=name, type_=SimpleNamespace(code=code))
+
+
+def _result_set(fields: list[SimpleNamespace], rows: list[tuple[object, ...]]) -> MagicMock:
+    result = MagicMock(spec=StreamedResultSet)
+    result.metadata = SimpleNamespace(row_type=SimpleNamespace(fields=fields))
+    result.__iter__.return_value = iter(rows)
+    return result
 
 
 def test_driver_initialization(mock_connection: MagicMock) -> None:
@@ -100,6 +114,76 @@ def test_execute_statement_select_minimal_features_omit_retry_and_timeout(mock_c
     driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]
 
     mock_connection.execute_sql.assert_called_once_with("SELECT id FROM users", params=None, param_types={})
+
+
+def test_execute_statement_select_uses_metadata_driven_json_conversion(mock_connection: MagicMock) -> None:
+    json_calls: list[str] = []
+
+    def json_deserializer(value: str) -> dict[str, str]:
+        json_calls.append(value)
+        return {"decoded": value}
+
+    driver = SpannerSyncDriver(mock_connection, driver_features={"json_deserializer": json_deserializer})
+    fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON), _field("note", TypeCode.STRING)]
+    mock_connection.execute_sql.return_value = _result_set(
+        fields,
+        [(1, JsonObject.from_str('{"kind":"payload"}'), '{"kind":"string"}')],
+    )
+
+    statement = driver.prepare_statement("SELECT id, payload, note FROM users", statement_config=driver.statement_config)
+    result = driver.dispatch_execute(mock_connection, statement)  # type: ignore[protected-access]
+
+    assert result.selected_data == [(1, {"decoded": '{"kind":"payload"}'}, '{"kind":"string"}')]
+    assert result.column_names == ["id", "payload", "note"]
+    assert json_calls == ['{"kind":"payload"}']
+
+
+def test_select_stream_uses_native_plan_and_matches_buffered_rows(mock_connection: MagicMock) -> None:
+    retry = object()
+    json_calls: list[str] = []
+
+    def json_deserializer(value: str) -> dict[str, str]:
+        json_calls.append(value)
+        return {"decoded": value}
+
+    driver = SpannerSyncDriver(
+        mock_connection,
+        driver_features={"json_deserializer": json_deserializer, "retry": retry, "timeout": 12.5},
+    )
+    fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON), _field("note", TypeCode.STRING)]
+    buffered_rows = [(1, JsonObject.from_str('{"kind":"payload"}'), '{"kind":"string"}')]
+    stream_rows = [(1, JsonObject.from_str('{"kind":"payload"}'), '{"kind":"string"}')]
+    mock_connection.execute_sql.side_effect = [
+        _result_set(fields, buffered_rows),
+        _result_set(fields, stream_rows),
+    ]
+
+    buffered = driver.execute("SELECT id, payload, note FROM users").get_data()
+    with driver.select_stream("SELECT id, payload, note FROM users", chunk_size=1) as stream:
+        assert stream._source.__class__.__name__ == "_SpannerSelectStreamSource"  # pyright: ignore[reportPrivateUsage]
+        streamed = list(stream)
+
+    assert buffered == [
+        {"id": 1, "payload": {"decoded": '{"kind":"payload"}'}, "note": '{"kind":"string"}'}
+    ]
+    assert streamed == buffered
+    assert json_calls == ['{"kind":"payload"}', '{"kind":"payload"}']
+    assert mock_connection.execute_sql.call_args_list == [
+        call(
+            "SELECT id, payload, note FROM users",
+            params=None,
+            param_types={},
+            retry=retry,
+            timeout=12.5,
+        ),
+        call(
+            "SELECT id, payload, note FROM users",
+            params=None,
+            param_types={},
+            retry=retry,
+            timeout=12.5,
+        ),
+    ]
 
 
 def test_execute_statement_dml_in_transaction(mock_transaction: MagicMock) -> None:
