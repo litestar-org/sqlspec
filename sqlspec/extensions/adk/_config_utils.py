@@ -12,14 +12,14 @@ __all__ = (
     "_ADKArtifactStoreConfig",
     "_ADKMemoryStoreConfig",
     "_ADKSessionStoreConfig",
-    "_get_adk_adapter_store_class",
-    "_get_adk_artifact_store_config",
-    "_get_adk_config_from_extension",
-    "_get_adk_memory_migration_store_class",
-    "_get_adk_memory_store_config",
-    "_get_adk_session_store_config",
-    "_is_adk_memory_migration_enabled",
-    "_validate_adk_store_registration",
+    "_adk_adapter_store_class",
+    "_adk_artifact_store_config",
+    "_adk_config_from_extension",
+    "_adk_memory_migration_enabled",
+    "_adk_memory_migration_store_class",
+    "_adk_memory_store_config",
+    "_adk_session_store_config",
+    "_ensure_adk_store_registration",
 )
 
 
@@ -59,16 +59,16 @@ class _ADKConfigSource(Protocol):
         ...
 
 
-def _get_adk_config_from_extension(config: _ADKConfigSource) -> dict[str, Any]:
+def _adk_config_from_extension(config: _ADKConfigSource) -> dict[str, Any]:
     """Return a mutable copy of the ADK extension config."""
 
     return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
 
 
-def _get_adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfig:
+def _adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfig:
     """Return normalized session store table settings."""
 
-    adk_config = _get_adk_config_from_extension(config)
+    adk_config = _adk_config_from_extension(config)
     result: _ADKSessionStoreConfig = {
         "session_table": str(adk_config.get("session_table") or "adk_session"),
         "events_table": str(adk_config.get("events_table") or "adk_event"),
@@ -82,10 +82,10 @@ def _get_adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreC
     return result
 
 
-def _get_adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreConfig:
+def _adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreConfig:
     """Return normalized memory store settings."""
 
-    adk_config = _get_adk_config_from_extension(config)
+    adk_config = _adk_config_from_extension(config)
     enable_memory = adk_config.get("enable_memory")
     max_results = adk_config.get("memory_max_results")
     result: _ADKMemoryStoreConfig = {
@@ -100,14 +100,14 @@ def _get_adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreCon
     return result
 
 
-def _get_adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStoreConfig:
+def _adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStoreConfig:
     """Return normalized artifact store settings."""
 
-    adk_config = _get_adk_config_from_extension(config)
+    adk_config = _adk_config_from_extension(config)
     return {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
 
 
-def _resolve_adk_store_path(config: Any, store_suffix: str) -> str:
+def _adk_store_path(config: Any, store_suffix: str) -> str:
     """Return the adapter-specific ADK store import path."""
 
     config_class = type(config)
@@ -122,10 +122,10 @@ def _resolve_adk_store_path(config: Any, store_suffix: str) -> str:
     return f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
 
 
-def _get_adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
+def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
     """Import an adapter-specific ADK store class for a config."""
 
-    store_path = _resolve_adk_store_path(config, store_suffix)
+    store_path = _adk_store_path(config, store_suffix)
     try:
         return import_string(store_path)
     except ImportError as e:
@@ -135,10 +135,10 @@ def _get_adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
         _raise_store_import_failed(store_path, e)
 
 
-def _get_adk_memory_migration_store_class(config: Any) -> Any | None:
+def _adk_memory_migration_store_class(config: Any) -> Any | None:
     """Import the ADK memory store class when the adapter provides one."""
 
-    store_path = _resolve_adk_store_path(config, "ADKMemoryStore")
+    store_path = _adk_store_path(config, "ADKMemoryStore")
     try:
         return import_string(store_path)
     except ImportError:
@@ -171,10 +171,10 @@ def _get_adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
     return getattr(module, store_names[0]) if len(store_names) == 1 else None
 
 
-def _is_adk_memory_migration_enabled(config: Any) -> bool:
+def _adk_memory_migration_enabled(config: Any) -> bool:
     """Return whether ADK memory DDL should be included for this config."""
 
-    adk_config = _get_adk_config_from_extension(cast("_ADKConfigSource", config))
+    adk_config = _adk_config_from_extension(cast("_ADKConfigSource", config))
     include_memory = adk_config.get("include_memory_migration")
     if include_memory is not None:
         return bool(include_memory)
@@ -182,12 +182,12 @@ def _is_adk_memory_migration_enabled(config: Any) -> bool:
     return bool(enable_memory) if enable_memory is not None else True
 
 
-def _validate_adk_store_registration(config: Any) -> None:
+def _ensure_adk_store_registration(config: Any) -> None:
     """Validate ADK store class resolution before extension migrations run."""
 
-    _get_adk_adapter_store_class(config, "ADKStore")
-    if _is_adk_memory_migration_enabled(config):
-        _get_adk_adapter_store_class(config, "ADKMemoryStore")
+    _adk_adapter_store_class(config, "ADKStore")
+    if _adk_memory_migration_enabled(config):
+        _adk_adapter_store_class(config, "ADKMemoryStore")
 
 
 def _raise_unsupported_config(config_type: str) -> NoReturn:

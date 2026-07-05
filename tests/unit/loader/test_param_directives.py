@@ -32,7 +32,7 @@ def test_param_pattern(line: str, name: str, type_str: str, required: bool, desc
 
 def test_parse_optional_declared_param_suffix() -> None:
     content = "-- name: q\n-- param: status_cd str? Optional status filter\nselect :status_cd\n"
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["q"].parameters == (
         ParameterDeclaration("status_cd", "str", required=False, description="Optional status filter"),
     )
@@ -40,7 +40,7 @@ def test_parse_optional_declared_param_suffix() -> None:
 
 def test_parse_optional_declared_param_description_marker() -> None:
     content = "-- name: q\n-- param: status_cd str Status filter (optional)\nselect :status_cd\n"
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["q"].parameters == (
         ParameterDeclaration("status_cd", "str", required=False, description="Status filter"),
     )
@@ -56,7 +56,7 @@ def test_parse_declared_params_interleaved_with_dialect() -> None:
 select offer_id from offers where status_cd = :status_cd and offer_id in (:offer_ids)
 fetch first :limit rows only
 """
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
     stmt = statements["get_offers"]
     assert stmt.dialect == "oracle"
     assert stmt.parameters == (
@@ -70,7 +70,7 @@ fetch first :limit rows only
 
 def test_query_without_params_is_unchanged() -> None:
     content = "-- name: plain\nselect 1\n"
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["plain"].parameters == ()
     assert statements["plain"].sql == "select 1"
 
@@ -78,7 +78,7 @@ def test_query_without_params_is_unchanged() -> None:
 def test_malformed_param_warns_and_skips_by_default(caplog: pytest.LogCaptureFixture) -> None:
     content = "-- name: q\n-- param: oops\nselect 1\n"
     with caplog.at_level(logging.WARNING):
-        statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+        statements = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["q"].parameters == ()
     assert statements["q"].sql == "select 1"
     assert any("malformed" in r.message or "param" in r.message.lower() for r in caplog.records)
@@ -87,7 +87,7 @@ def test_malformed_param_warns_and_skips_by_default(caplog: pytest.LogCaptureFix
 def test_malformed_param_raises_in_strict_mode() -> None:
     content = "-- name: q\n-- param: oops\nselect 1\n"
     with pytest.raises(SQLFileParseError):
-        SQLFileLoader._parse_sql_content(content, "test.sql", strict_parameter_annotations=True)
+        SQLFileLoader._parse_statements(content, "test.sql", strict_parameter_annotations=True)
 
 
 def test_add_named_sql_with_parameters() -> None:

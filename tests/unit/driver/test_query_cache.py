@@ -69,7 +69,13 @@ def test_driver_common_dead_script_and_version_helpers_stay_removed() -> None:
         assert not hasattr(driver_common, name)
 
 
-def test_sync_stmt_cache_execute_direct_uses_fast_path(sqlite_sync_driver, monkeypatch) -> None:
+def test_private_statement_cache_helper_names_are_cleaned_up() -> None:
+    """Statement-cache helpers should use purpose-oriented private names."""
+    assert hasattr(driver_common.CommonDriverAttributesMixin, "_cached_execution")
+    assert not hasattr(driver_common.CommonDriverAttributesMixin, "_stmt_cache_lookup")
+
+
+def test_sync_execute_cache_hit_uses_fast_path(sqlite_sync_driver, monkeypatch) -> None:
     """Test that direct cache execution uses the fast path bypassing dispatch_execute."""
     sqlite_sync_driver.execute("CREATE TABLE t (id INTEGER)")
 
@@ -89,7 +95,7 @@ def test_sync_stmt_cache_execute_direct_uses_fast_path(sqlite_sync_driver, monke
         ),
     )
 
-    result = sqlite_sync_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+    result = sqlite_sync_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 1
 
@@ -102,7 +108,7 @@ def test_execute_uses_fast_path_when_eligible(sqlite_sync_driver, monkeypatch) -
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(sqlite_sync_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     result = sqlite_sync_driver.execute("SELECT ?", (1,))
@@ -119,7 +125,7 @@ def test_execute_uses_fast_path_with_dict_payload(sqlite_sync_driver, monkeypatc
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(sqlite_sync_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     result = sqlite_sync_driver.execute("SELECT :id", {"id": 1})
@@ -136,7 +142,7 @@ def test_execute_uses_fast_path_with_kwargs_payload(sqlite_sync_driver, monkeypa
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(sqlite_sync_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     result = sqlite_sync_driver.execute("SELECT :id", id=1)
@@ -153,7 +159,7 @@ def test_execute_skips_fast_path_with_statement_config_override(sqlite_sync_driv
         called = True
         return object()
 
-    monkeypatch.setattr(sqlite_sync_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     statement_config = sqlite_sync_driver.statement_config.replace()
@@ -190,9 +196,9 @@ def test_prepare_statement_sql_object_cache_is_bounded(sqlite_sync_driver: Any) 
     assert list(sqlite_sync_driver._statement_cache) == ["SELECT 2", "SELECT 3"]
 
 
-def test_stmt_cache_store_skips_clone_when_raw_sql_already_cached(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+def test_cache_statement_skips_clone_when_raw_sql_already_cached(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     statement = SQL("SELECT ?", 1, statement_config=sqlite_sync_driver.statement_config)
-    sqlite_sync_driver._get_compiled_statement(statement, sqlite_sync_driver.statement_config)
+    sqlite_sync_driver._compiled_statement(statement, sqlite_sync_driver.statement_config)
 
     assert sqlite_sync_driver._stmt_cache.get("SELECT ?") is not None
 
@@ -201,7 +207,7 @@ def test_stmt_cache_store_skips_clone_when_raw_sql_already_cached(sqlite_sync_dr
         lambda *_args, **_kwargs: pytest.fail("duplicate store should not clone processed state"),
     )
 
-    sqlite_sync_driver._stmt_cache_store(statement)
+    sqlite_sync_driver._cache_statement(statement)
 
 
 def test_stmt_cache_rebind_reuses_driver_owned_processor(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
@@ -231,22 +237,22 @@ def test_stmt_cache_rebind_reuses_driver_owned_processor(sqlite_sync_driver: Any
     assert sqlite_sync_driver._stmt_cache_rebind_processor is processor
 
 
-def test_compilation_cache_hit_skips_compile_and_stmt_cache_store(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+def test_compilation_cache_hit_skips_compile_and_cache_statement(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     clear_all_caches()
     statement = SQL("SELECT :id", id=2, statement_config=sqlite_sync_driver.statement_config)
     cached_statement = CachedStatement(compiled_sql="SELECT :id", parameters={"id": 1}, expression=statement.expression)
     dialect_key = str(statement.dialect) if statement.dialect else None
     get_cache().put_statement("cache-key", cached_statement, dialect_key)
 
-    monkeypatch.setattr(sqlite_sync_driver, "_generate_compilation_cache_key", lambda *_args, **_kwargs: "cache-key")
+    monkeypatch.setattr(sqlite_sync_driver, "_compile_cache_key", lambda *_args, **_kwargs: "cache-key")
     monkeypatch.setattr(SQL, "compile", lambda *_args, **_kwargs: pytest.fail("cache hit should not compile"))
     monkeypatch.setattr(
         sqlite_sync_driver,
-        "_stmt_cache_store",
+        "_cache_statement",
         lambda *_args, **_kwargs: pytest.fail("cache hit should not rewrite the statement cache"),
     )
 
-    compiled, prepared = sqlite_sync_driver._get_compiled_statement(
+    compiled, prepared = sqlite_sync_driver._compiled_statement(
         statement, sqlite_sync_driver.statement_config, flatten_single_parameters=False
     )
 
@@ -254,7 +260,7 @@ def test_compilation_cache_hit_skips_compile_and_stmt_cache_store(sqlite_sync_dr
     assert prepared == {"id": 2}
 
 
-def test_sync_stmt_cache_execute_re_raises_mapped_exception(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+def test_sync_execute_cached_statement_re_raises_mapped_exception(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     import sqlite3
 
     def _fake_dispatch_execute(cursor: Any, statement: Any) -> Any:
@@ -266,10 +272,10 @@ def test_sync_stmt_cache_execute_re_raises_mapped_exception(sqlite_sync_driver: 
     statement.compile()
 
     with pytest.raises(SQLSpecError, match="SQLite database error: boom"):
-        sqlite_sync_driver._stmt_cache_execute(statement)
+        sqlite_sync_driver._execute_cached_statement(statement)
 
 
-def test_sync_stmt_cache_execute_direct_re_raises_mapped_exception(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+def test_sync_execute_cache_hit_re_raises_mapped_exception(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     import sqlite3
 
     sqlite_sync_driver.execute("CREATE TABLE t (id INTEGER)")
@@ -290,10 +296,10 @@ def test_sync_stmt_cache_execute_direct_re_raises_mapped_exception(sqlite_sync_d
     )
 
     with pytest.raises(SQLSpecError, match="SQLite database error: boom"):
-        sqlite_sync_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+        sqlite_sync_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
-def test_stmt_cache_prepare_direct_named_style_sets_needs_rebind(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+def test_prepare_cached_statement_named_style_sets_needs_rebind(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     profile = ParameterProfile([ParameterInfo("id", ParameterStyle.NAMED_COLON, 0, 0, ":id")])
     cached = _make_cached(
         compiled_sql="SELECT :id",
@@ -316,7 +322,7 @@ def test_stmt_cache_prepare_direct_named_style_sets_needs_rebind(sqlite_sync_dri
 
     monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", _fake_rebind)
 
-    prepared = sqlite_sync_driver._stmt_cache_prepare_direct("SELECT :id", (1,))
+    prepared = sqlite_sync_driver._prepare_cached_statement("SELECT :id", (1,))
 
     assert prepared is not None
     assert called is True
@@ -331,7 +337,7 @@ async def test_async_execute_uses_fast_path_when_eligible(aiosqlite_async_driver
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(aiosqlite_async_driver, "_cached_execution", _fake_try)
     aiosqlite_async_driver._stmt_cache_enabled = True
 
     result = await aiosqlite_async_driver.execute("SELECT ?", (1,))
@@ -349,7 +355,7 @@ async def test_async_execute_uses_fast_path_with_kwargs_payload(aiosqlite_async_
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(aiosqlite_async_driver, "_cached_execution", _fake_try)
     aiosqlite_async_driver._stmt_cache_enabled = True
 
     result = await aiosqlite_async_driver.execute("SELECT :id", id=1)
@@ -369,7 +375,7 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(
         called = True
         return object()
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_stmt_cache_lookup", _fake_try)
+    monkeypatch.setattr(aiosqlite_async_driver, "_cached_execution", _fake_try)
     aiosqlite_async_driver._stmt_cache_enabled = True
 
     statement_config = aiosqlite_async_driver.statement_config.replace()
@@ -395,9 +401,7 @@ async def test_async_execute_populates_fast_path_cache_on_normal_path(aiosqlite_
 
 
 @pytest.mark.anyio
-async def test_async_stmt_cache_execute_direct_uses_cursor_fast_path(
-    aiosqlite_async_driver: Any, monkeypatch: Any
-) -> None:
+async def test_async_execute_cache_hit_uses_cursor_fast_path(aiosqlite_async_driver: Any, monkeypatch: Any) -> None:
     """Async direct cache execution should bypass adapter dispatch when cursor.execute is awaitable."""
     await aiosqlite_async_driver.execute("CREATE TABLE t (id INTEGER)")
 
@@ -417,14 +421,14 @@ async def test_async_stmt_cache_execute_direct_uses_cursor_fast_path(
         ),
     )
 
-    result = await aiosqlite_async_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+    result = await aiosqlite_async_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 1
 
 
 @pytest.mark.anyio
-async def test_async_stmt_cache_execute_re_raises_mapped_exception(
+async def test_async_execute_cached_statement_re_raises_mapped_exception(
     aiosqlite_async_driver: Any, monkeypatch: Any
 ) -> None:
     import aiosqlite
@@ -438,11 +442,11 @@ async def test_async_stmt_cache_execute_re_raises_mapped_exception(
     statement.compile()
 
     with pytest.raises(SQLSpecError, match="AIOSQLite database error: boom"):
-        await aiosqlite_async_driver._stmt_cache_execute(statement)
+        await aiosqlite_async_driver._execute_cached_statement(statement)
 
 
 @pytest.mark.anyio
-async def test_async_stmt_cache_execute_direct_re_raises_mapped_exception(
+async def test_async_execute_cache_hit_re_raises_mapped_exception(
     aiosqlite_async_driver: Any, monkeypatch: Any
 ) -> None:
     import aiosqlite
@@ -474,7 +478,7 @@ async def test_async_stmt_cache_execute_direct_re_raises_mapped_exception(
     )
 
     with pytest.raises(SQLSpecError, match="AIOSQLite database error: boom"):
-        await aiosqlite_async_driver._stmt_cache_execute_direct("INSERT INTO t (id) VALUES (?)", (1,), cached)
+        await aiosqlite_async_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
 def test_cached_query_and_query_cache_are_final() -> None:
@@ -529,14 +533,14 @@ def test_release_pooled_statement_uses_direct_pooled_attribute(sqlite_sync_drive
     assert pooled._pooled is True
 
 
-def test_get_compiled_statement_compiled_from_cache_uses_direct_attribute(sqlite_sync_driver: Any) -> None:
+def test_compiled_statement_compiled_from_cache_uses_direct_attribute(sqlite_sync_driver: Any) -> None:
     """Processed cache-copy statements use direct _compiled_from_cache access."""
     statement = SQL("SELECT ?", (1,), statement_config=sqlite_sync_driver.statement_config)
     statement.compile()
     copied = statement.copy(parameters=(2,))
     assert copied._compiled_from_cache is True
 
-    compiled, prepared = sqlite_sync_driver._get_compiled_statement(
+    compiled, prepared = sqlite_sync_driver._compiled_statement(
         copied, sqlite_sync_driver.statement_config, flatten_single_parameters=False
     )
 
@@ -544,13 +548,13 @@ def test_get_compiled_statement_compiled_from_cache_uses_direct_attribute(sqlite
     assert prepared == [2]
 
 
-def test_get_compiled_statement_cache_direct_uses_direct_attribute(sqlite_sync_driver: Any) -> None:
+def test_compiled_statement_cache_direct_uses_direct_attribute(sqlite_sync_driver: Any) -> None:
     """Cache-direct statements use direct _is_cache_direct access."""
     processed = ProcessedState(compiled_sql="SELECT ?", execution_parameters=(1,), operation_type="SELECT")
     statement = SQL._create_cached_direct("SELECT ?", sqlite_sync_driver.statement_config, processed)
     assert statement._is_cache_direct is True
 
-    compiled, prepared = sqlite_sync_driver._get_compiled_statement(
+    compiled, prepared = sqlite_sync_driver._compiled_statement(
         statement, sqlite_sync_driver.statement_config, flatten_single_parameters=False
     )
 

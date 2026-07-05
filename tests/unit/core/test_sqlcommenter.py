@@ -33,8 +33,8 @@ def test_generate_comment_empty_attrs() -> None:
     assert result == ""
 
 
-def test_append_sqlcommenter_comment_to_sql_preserves_trailing_semicolon() -> None:
-    result = sqlcommenter_module._append_sqlcommenter_comment_to_sql("SELECT 1;", {"route": "/users"})
+def test_append_comment_preserves_trailing_semicolon() -> None:
+    result = sqlcommenter_module._append_comment("SELECT 1;", {"route": "/users"})
 
     assert result == "SELECT 1 /* route='%2Fusers' */;"
 

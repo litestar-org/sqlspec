@@ -126,7 +126,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def dispatch_execute(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         _execute_cursor(cursor, sql, prepared_parameters)
 
         if statement.returns_rows():
@@ -144,12 +144,12 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=_cursor_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.executemany(sql, cast("Any", prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=_cursor_rowcount(cursor), is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         successful_count = 0
         for stmt in statements:
@@ -218,7 +218,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
-        sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
         arrow_kwargs: dict[str, int] = {"batch_size": batch_size} if batch_size is not None else {}
         table: Any | None = None
 
@@ -339,10 +339,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             self._check_pending_exception(exc_handler)
         if records:
             self.bulk_copy(table, records, column_mappings=columns)
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -384,7 +384,7 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
     async def dispatch_execute(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await asyncio.to_thread(_execute_cursor, cursor, sql, prepared_parameters)
 
         if statement.returns_rows():
@@ -402,12 +402,12 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=_cursor_rowcount(cursor))
 
     async def dispatch_execute_many(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await asyncio.to_thread(cursor.executemany, sql, cast("Any", prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=_cursor_rowcount(cursor), is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         successful_count = 0
         for stmt in statements:
@@ -476,7 +476,7 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
-        sql, prepared_parameters = self._get_compiled_sql(prepared_statement, config)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
         arrow_kwargs: dict[str, int] = {"batch_size": batch_size} if batch_size is not None else {}
         table: Any | None = None
 
@@ -601,10 +601,10 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
             self._check_pending_exception(exc_handler)
         if records:
             await self.bulk_copy(table, records, column_mappings=columns)
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,

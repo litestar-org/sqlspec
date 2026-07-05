@@ -46,7 +46,7 @@ class MssqlPythonSyncADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
-        adk_config = _get_mssql_adk_config(config)
+        adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
         self._json_column_type: str | None = None
@@ -396,7 +396,7 @@ class MssqlPythonAsyncADKStore(BaseAsyncADKStore["MssqlPythonAsyncConfig"]):
 
     def __init__(self, config: "MssqlPythonAsyncConfig") -> None:
         super().__init__(config)
-        adk_config = _get_mssql_adk_config(config)
+        adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
         self._json_column_type: str | None = None
@@ -749,7 +749,7 @@ class MssqlPythonAsyncADKStore(BaseAsyncADKStore["MssqlPythonAsyncConfig"]):
             return rowcount
 
 
-def _get_mssql_adk_config(config: Any) -> MssqlPythonADKConfig:
+def _adk_config(config: Any) -> MssqlPythonADKConfig:
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):
         return {}

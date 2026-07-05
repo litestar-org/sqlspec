@@ -344,14 +344,14 @@ def test_adk_base_stores_do_not_keep_dead_private_helpers() -> None:
 def test_adk_table_helpers_have_one_private_owner() -> None:
     for module in (session_store_module, memory_store_module, artifact_store_module):
         source = inspect.getsource(module)
-        assert "def _validate_table_name(" not in source
+        assert "def _ensure_table_name(" not in source
         assert "VALID_TABLE_NAME_PATTERN" not in source
         assert "MAX_TABLE_NAME_LENGTH" not in source
 
-    assert "def _deduplicate_statements(" not in inspect.getsource(session_store_module)
-    assert "def _deduplicate_statements(" not in inspect.getsource(memory_store_module)
-    assert "def _parse_owner_id_column(" not in inspect.getsource(session_store_module)
-    assert "def _parse_owner_id_column(" not in inspect.getsource(memory_store_module)
+    assert "def _unique_statements(" not in inspect.getsource(session_store_module)
+    assert "def _unique_statements(" not in inspect.getsource(memory_store_module)
+    assert "def _owner_id_column_name(" not in inspect.getsource(session_store_module)
+    assert "def _owner_id_column_name(" not in inspect.getsource(memory_store_module)
 
 
 def test_sync_session_store_ensure_tables_runs_sync_create_tables() -> None:

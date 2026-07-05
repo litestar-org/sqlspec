@@ -630,8 +630,8 @@ def test_structural_encoder_resolution_is_cached_by_exact_type(monkeypatch: pyte
         return original_probe(value)
 
     monkeypatch.setattr(json_module, "is_dataclass_instance", count_probe)
-    assert json_module._resolve_structural_encoder(_Payload(id=1)) == {"id": 1}
-    assert json_module._resolve_structural_encoder(_Payload(id=2)) == {"id": 2}
+    assert json_module._structural_encoder(_Payload(id=1)) == {"id": 1}
+    assert json_module._structural_encoder(_Payload(id=2)) == {"id": 2}
     assert call_count == 1
     json_module._STRUCTURAL_ENCODER_CACHE.clear()
 

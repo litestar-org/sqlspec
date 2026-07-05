@@ -142,7 +142,7 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("PsqlpyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
@@ -168,7 +168,7 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
 
         self._ctx = pool.acquire()
         connection = await self._ctx.__aenter__()
-        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
         return connection  # type: ignore[no-any-return]
 
     async def __aexit__(
@@ -249,7 +249,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             **kwargs,
         )
 
-    async def _ensure_connection_initialized(self, connection: "PsqlpyConnection") -> None:
+    async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
 
         Detects PostgreSQL extensions on first connection and updates dialect accordingly.

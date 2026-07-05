@@ -54,10 +54,10 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        self._table_name = self._get_table_name_from_config()
-        self._validate_table_name(self._table_name)
+        self._table_name = self._table_name_from_config()
+        self._ensure_table_name(self._table_name)
 
-    def _get_table_name_from_config(self) -> str:
+    def _table_name_from_config(self) -> str:
         """Extract table name from config.extension_config.
 
         Returns:
@@ -245,7 +245,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         return value
 
     @staticmethod
-    def _validate_table_name(table_name: str) -> None:
+    def _ensure_table_name(table_name: str) -> None:
         """Validate table name for SQL safety.
 
         Args:

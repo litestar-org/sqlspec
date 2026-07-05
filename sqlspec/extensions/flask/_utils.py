@@ -14,7 +14,7 @@ _MISSING = object()
 
 def get_context_value(target: Any, key: str, default: Any = _MISSING) -> Any:
     """Get a value from a Flask context object."""
-    data = _get_context_dict(target)
+    data = _context_dict(target)
     if default is _MISSING:
         return data[key]
     return data.get(key, default)
@@ -22,17 +22,17 @@ def get_context_value(target: Any, key: str, default: Any = _MISSING) -> Any:
 
 def set_context_value(target: Any, key: str, value: Any) -> None:
     """Set a value on a Flask context object."""
-    _get_context_dict(target)[key] = value
+    _context_dict(target)[key] = value
 
 
 def pop_context_value(target: Any, key: str) -> Any | None:
     """Remove a value from a Flask context object."""
-    return _get_context_dict(target).pop(key, None)
+    return _context_dict(target).pop(key, None)
 
 
 def has_context_value(target: Any, key: str) -> bool:
     """Check if a Flask context object has a stored value."""
-    return key in _get_context_dict(target)
+    return key in _context_dict(target)
 
 
 def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
@@ -68,6 +68,6 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
     return session
 
 
-def _get_context_dict(target: Any) -> dict[str, Any]:
+def _context_dict(target: Any) -> dict[str, Any]:
     """Return the underlying context dictionary."""
     return cast("DictProtocol", target).__dict__

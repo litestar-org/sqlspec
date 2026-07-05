@@ -100,14 +100,14 @@ def test_select_to_arrow_returns_arrow_result_from_native_cursor() -> None:
 def test_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = ArrowConnection()
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
-    original = MssqlPythonDriver._get_compiled_sql
+    original = MssqlPythonDriver._compiled_sql
     captured: list[bool] = []
 
     def get_compiled_sql(self: MssqlPythonDriver, statement: Any, config: Any) -> Any:
         captured.append(statement.is_processed)
         return original(self, statement, config)
 
-    monkeypatch.setattr(MssqlPythonDriver, "_get_compiled_sql", get_compiled_sql)
+    monkeypatch.setattr(MssqlPythonDriver, "_compiled_sql", get_compiled_sql)
 
     driver.select_to_arrow("SELECT 1 AS x")
 
@@ -221,14 +221,14 @@ async def test_async_select_to_arrow_offloads_cursor_work(monkeypatch: pytest.Mo
 async def test_async_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = ArrowConnection()
     driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
-    original = MssqlPythonAsyncDriver._get_compiled_sql
+    original = MssqlPythonAsyncDriver._compiled_sql
     captured: list[bool] = []
 
     def get_compiled_sql(self: MssqlPythonAsyncDriver, statement: Any, config: Any) -> Any:
         captured.append(statement.is_processed)
         return original(self, statement, config)
 
-    monkeypatch.setattr(MssqlPythonAsyncDriver, "_get_compiled_sql", get_compiled_sql)
+    monkeypatch.setattr(MssqlPythonAsyncDriver, "_compiled_sql", get_compiled_sql)
 
     await driver.select_to_arrow("SELECT 1 AS x")
 

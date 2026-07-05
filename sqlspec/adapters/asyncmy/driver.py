@@ -123,7 +123,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Statement execution results with data or row counts
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -162,7 +162,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Batch execution results
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -185,7 +185,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Script execution results with statement count
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         if prepared_parameters and len(statements) > 1:
@@ -261,7 +261,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Return a native asyncmy row stream backed by an unbuffered ``SSCursor``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return AsyncRowStream(AsyncmyStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "AsyncmyExceptionHandler":
@@ -297,7 +297,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -322,7 +322,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            needs_preparation = self._arrow_table_needs_parameter_preparation(arrow_table)
+            needs_preparation = self._arrow_rows_need_preparation(arrow_table)
             insert_sql = build_insert_statement(table, columns)
             prepared_records = (
                 self.prepare_driver_parameters(records, self.statement_config, is_many=True)
@@ -335,10 +335,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,

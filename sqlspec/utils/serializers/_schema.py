@@ -126,7 +126,7 @@ def _dump_identity_dict(value: Any) -> "dict[str, Any]":
     return cast("dict[str, Any]", value)
 
 
-def _get_msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
+def _msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
     if not MSGSPEC_INSTALLED:
         msg = "msgspec is required to serialize msgspec.Struct values"
         raise RuntimeError(msg)
@@ -168,17 +168,15 @@ def _dump_mapping(value: Any) -> "dict[str, Any]":
     return dict(value)
 
 
-def _build_msgspec_dump_function(
-    sample: Any, *, exclude_unset: bool, wire_format: bool
-) -> "Callable[[Any], dict[str, Any]]":
-    field_pairs = _get_msgspec_field_pairs(type(sample), wire_format=wire_format)
+def _msgspec_dump_function(sample: Any, *, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
+    field_pairs = _msgspec_field_pairs(type(sample), wire_format=wire_format)
     return cast(
         "Callable[[Any], dict[str, Any]]",
         partial(_dump_msgspec_struct, field_pairs=field_pairs, exclude_unset=exclude_unset),
     )
 
 
-def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
+def _dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
     if sample is None or isinstance(sample, dict):
         return _dump_identity_dict
     if is_dataclass_instance(sample):
@@ -186,7 +184,7 @@ def _build_dump_function(sample: Any, exclude_unset: bool, wire_format: bool) ->
     if is_pydantic_model(sample):
         return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
-        return _build_msgspec_dump_function(sample, exclude_unset=exclude_unset, wire_format=wire_format)
+        return _msgspec_dump_function(sample, exclude_unset=exclude_unset, wire_format=wire_format)
     if is_attrs_instance(sample):
         return _dump_attrs
     if has_dict_attribute(sample):
@@ -216,7 +214,7 @@ def get_collection_serializer(
             _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
             return pipeline
 
-        dump = _build_dump_function(sample, exclude_unset, wire_format)
+        dump = _dump_function(sample, exclude_unset, wire_format)
         pipeline = SchemaSerializer(key, dump)
         _SCHEMA_SERIALIZERS[key] = pipeline
         if len(_SCHEMA_SERIALIZERS) > _SCHEMA_SERIALIZER_CACHE_MAX_SIZE:

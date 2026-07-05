@@ -158,7 +158,7 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
 ))
 
 
-def _normalize_pymysql_local_infile_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize PyMySQL local-infile configuration and SQLSpec's consent gate."""
     config = dict(connection_config)
     allow_local_infile = bool(config.pop("allow_local_infile", False))
@@ -252,7 +252,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = _normalize_pymysql_local_infile_config(normalize_connection_config(connection_config))
+        connection_config = _normalize_local_infile(normalize_connection_config(connection_config))
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
         connection_config.setdefault("local_infile", False)

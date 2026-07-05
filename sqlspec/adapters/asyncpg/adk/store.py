@@ -424,7 +424,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         generated_columns = ""
         generated_indexes = ""
         if adk_config.get("enable_event_generated_columns", False):
@@ -708,7 +708,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             return 0
 
 
-def _get_asyncpg_adk_config(config: Any) -> AsyncpgADKConfig:
+def _adk_config(config: Any) -> AsyncpgADKConfig:
     """Return asyncpg ADK extension settings from ``extension_config["adk"]``."""
 
     extension_config = getattr(config, "extension_config", {})

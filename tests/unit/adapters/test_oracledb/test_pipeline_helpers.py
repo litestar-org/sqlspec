@@ -247,7 +247,7 @@ def test_dispatch_execute_force_select_sync_dispatch_execute_force_select_fallba
     cursor.fetchall.return_value = [(42,)]
     del cursor.statement_type
     with (
-        patch.object(OracleSyncDriver, "_get_compiled_sql", return_value=("SELECT 1 FROM DUAL", {})),
+        patch.object(OracleSyncDriver, "_compiled_sql", return_value=("SELECT 1 FROM DUAL", {})),
         patch("sqlspec.adapters.oracledb.driver.coerce_large_parameters_sync", return_value={}),
         patch.object(OracleSyncDriver, "_resolve_row_metadata", return_value=(["id"], False)),
         patch("sqlspec.adapters.oracledb.driver.collect_sync_rows", return_value=([(42,)], ["id"])),
@@ -271,7 +271,7 @@ def test_dispatch_execute_force_select_sync_dispatch_execute_no_force_select_whe
     cursor.rowcount = 3
     del cursor.statement_type
     with (
-        patch.object(OracleSyncDriver, "_get_compiled_sql", return_value=("DELETE FROM t", {})),
+        patch.object(OracleSyncDriver, "_compiled_sql", return_value=("DELETE FROM t", {})),
         patch("sqlspec.adapters.oracledb.driver.coerce_large_parameters_sync", return_value={}),
         patch("sqlspec.adapters.oracledb.driver.resolve_rowcount", return_value=3),
     ):

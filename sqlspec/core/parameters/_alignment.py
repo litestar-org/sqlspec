@@ -130,12 +130,12 @@ def validate_parameter_alignment(
             raise sqlspec.exceptions.SQLSpecError(msg)
         if len(parameters) == 0:
             return
-        expected_identifiers = _collect_expected_identifiers(profile)
+        expected_identifiers = _expected_identifiers(profile)
         expected_count = len(expected_identifiers)
-        named_identifier_aliases = _collect_named_identifier_aliases(profile)
+        named_identifier_aliases = _named_identifier_aliases(profile)
         for index, param_set in enumerate(parameters):
             actual_identifiers, actual_count = _collect_actual_identifiers(param_set)
-            _validate_parameter_identifiers(
+            _check_parameter_identifiers(
                 expected_identifiers,
                 expected_count,
                 actual_identifiers,
@@ -145,10 +145,10 @@ def validate_parameter_alignment(
             )
         return
 
-    _validate_single_parameter_set(profile, parameters)
+    _check_parameter_set(profile, parameters)
 
 
-def _collect_expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
+def _expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[str, int | str]]":
     identifiers: set[tuple[str, int | str]] = set()
     parameters = parameter_profile.parameters
     if not parameters:
@@ -197,7 +197,7 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
     return identifiers, 1
 
 
-def _collect_named_identifier_aliases(parameter_profile: "ParameterProfile") -> "dict[str, str]":
+def _named_identifier_aliases(parameter_profile: "ParameterProfile") -> "dict[str, str]":
     aliases: dict[str, str] = {}
     for parameter in parameter_profile.parameters:
         if parameter.style not in _NAMED_STYLES or not parameter.name:
@@ -206,7 +206,7 @@ def _collect_named_identifier_aliases(parameter_profile: "ParameterProfile") -> 
     return aliases
 
 
-def _apply_named_identifier_aliases(
+def _apply_identifier_aliases(
     identifiers: "set[tuple[str, int | str]]", aliases: "dict[str, str]"
 ) -> "set[tuple[str, int | str]]":
     if not aliases:
@@ -240,7 +240,7 @@ def _identifier_sort_key(item: "tuple[str, int | str]") -> "tuple[str, str]":
     return item[0], str(item[1])
 
 
-def _normalize_index_identifiers(expected: "set[tuple[str, int | str]]", actual: "set[tuple[str, int | str]]") -> bool:
+def _normalize_indexes(expected: "set[tuple[str, int | str]]", actual: "set[tuple[str, int | str]]") -> bool:
     """Allow positional payloads to satisfy generated param_N identifiers."""
 
     if not expected or not actual:
@@ -271,23 +271,23 @@ def _normalize_index_identifiers(expected: "set[tuple[str, int | str]]", actual:
     return normalized_actual == normalized_expected
 
 
-def _validate_single_parameter_set(
+def _check_parameter_set(
     parameter_profile: "ParameterProfile", parameters: Any, batch_index: "int | None" = None
 ) -> None:
-    expected_identifiers = _collect_expected_identifiers(parameter_profile)
+    expected_identifiers = _expected_identifiers(parameter_profile)
     actual_identifiers, actual_count = _collect_actual_identifiers(parameters)
     expected_count = len(expected_identifiers)
-    _validate_parameter_identifiers(
+    _check_parameter_identifiers(
         expected_identifiers,
         expected_count,
         actual_identifiers,
         actual_count,
-        _collect_named_identifier_aliases(parameter_profile),
+        _named_identifier_aliases(parameter_profile),
         batch_index=batch_index,
     )
 
 
-def _validate_parameter_identifiers(
+def _check_parameter_identifiers(
     expected_identifiers: "set[tuple[str, int | str]]",
     expected_count: int,
     actual_identifiers: "set[tuple[str, int | str]]",
@@ -314,8 +314,8 @@ def _validate_parameter_identifiers(
         msg = f"{prefix}: {actual_count} parameters provided but {expected_count} placeholders detected."
         raise sqlspec.exceptions.SQLSpecError(msg)
 
-    normalized_actual_identifiers = _apply_named_identifier_aliases(actual_identifiers, named_identifier_aliases)
-    identifiers_match = expected_identifiers == normalized_actual_identifiers or _normalize_index_identifiers(
+    normalized_actual_identifiers = _apply_identifier_aliases(actual_identifiers, named_identifier_aliases)
+    identifiers_match = expected_identifiers == normalized_actual_identifiers or _normalize_indexes(
         expected_identifiers, normalized_actual_identifiers
     )
 

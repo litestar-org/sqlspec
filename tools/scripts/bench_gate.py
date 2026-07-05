@@ -71,7 +71,7 @@ BENCHMARK_SCENARIO_MATRIX: dict[str, dict[str, str | tuple[str, ...]]] = {
         "scenarios": (
             "prepare_driver_parameters (tuple)",
             "prepare_driver_parameters (dict)",
-            "_format_parameter_set (3 params)",
+            "_driver_parameters (3 params)",
             "complex_parameters",
         ),
     },

@@ -121,7 +121,7 @@ class _ArrowDriver(DuckDBDriver):
         self.cursor = cursor
         super().__init__(connection=_connection(), statement_config=default_statement_config)
 
-    def _get_compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
+    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
         return ("SELECT 1 AS id", [])
 
     def with_cursor(self, _connection: Any) -> Any:

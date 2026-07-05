@@ -54,7 +54,7 @@ class SQLSpecPlugin:
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_extension_settings(cfg)
-            state = self._create_config_state(cfg, settings)
+            state = self._config_state(cfg, settings)
             self._config_states.append(state)
 
         if app is not None:
@@ -110,7 +110,7 @@ class SQLSpecPlugin:
             "sqlcommenter_framework": starlette_config.get("sqlcommenter_framework", "starlette"),
         }
 
-    def _create_config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
+    def _config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
         """Create configuration state object.
 
         Args:
@@ -145,7 +145,7 @@ class SQLSpecPlugin:
         Args:
             app: Starlette application instance.
         """
-        self._validate_unique_keys()
+        self._ensure_unique_keys()
 
         original_lifespan = app.router.lifespan_context
 
@@ -173,7 +173,7 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
-    def _validate_unique_keys(self) -> None:
+    def _ensure_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.
 
         Raises:
@@ -308,7 +308,7 @@ class SQLSpecPlugin:
         Returns:
             Database session (driver instance).
         """
-        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
 
         return get_or_create_session(request, config_state)
 
@@ -322,11 +322,11 @@ class SQLSpecPlugin:
         Returns:
             Database connection object.
         """
-        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
 
         return get_state_value(request.state, config_state.connection_key)
 
-    def _get_config_state_by_key(self, key: str) -> SQLSpecConfigState:
+    def _config_state_by_key(self, key: str) -> SQLSpecConfigState:
         """Get configuration state by session key.
 
         Args:

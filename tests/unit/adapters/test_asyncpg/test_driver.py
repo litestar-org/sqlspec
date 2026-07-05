@@ -29,7 +29,7 @@ class _CopyCursor:
 
 
 class _CompiledCopyDriver(AsyncpgDriver):
-    def _get_compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
+    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
         return "COPY (SELECT 1) FROM STDIN", None
 
 
@@ -116,7 +116,7 @@ async def test_handle_copy_operation_uses_processed_state_when_available(monkeyp
 
     monkeypatch.setattr(
         AsyncpgDriver,
-        "_get_compiled_sql",
+        "_compiled_sql",
         lambda *_args, **_kwargs: pytest.fail("processed COPY statements should not recompile"),
     )
 
@@ -126,7 +126,7 @@ async def test_handle_copy_operation_uses_processed_state_when_available(monkeyp
 
 
 @pytest.mark.anyio
-async def test_handle_copy_operation_falls_back_to_get_compiled_sql_when_not_processed(
+async def test_handle_copy_operation_falls_back_to_compiled_sql_when_not_processed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = default_statement_config.replace(
@@ -142,7 +142,7 @@ async def test_handle_copy_operation_falls_back_to_get_compiled_sql_when_not_pro
         calls += 1
         return "COPY users FROM STDIN", None
 
-    monkeypatch.setattr(AsyncpgDriver, "_get_compiled_sql", get_compiled_sql)
+    monkeypatch.setattr(AsyncpgDriver, "_compiled_sql", get_compiled_sql)
 
     await driver._handle_copy_operation(cast("Any", cursor), cast("SQL", statement))  # pyright: ignore[reportPrivateUsage]
 

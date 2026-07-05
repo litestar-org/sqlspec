@@ -159,7 +159,7 @@ class SQLSpec:
             async_config = cast(
                 "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]", config
             )
-            return self._create_driver_async(async_config, connection_obj)  # pyright: ignore
+            return self._driver_async(async_config, connection_obj)  # pyright: ignore
 
         driver = config.driver_type(  # pyright: ignore
             connection=connection_obj, statement_config=config.statement_config, driver_features=config.driver_features
@@ -400,7 +400,7 @@ class SQLSpec:
                     config_obj = registered_config
                     break
             if config_obj is None:
-                msg = f"Configuration {self._get_config_name(config)} is not registered"
+                msg = f"Configuration {self._config_name(config)} is not registered"
                 raise ImproperConfigurationError(msg)
             if config_obj.is_async:
                 return AsyncEventChannel(config_obj)  # type: ignore[arg-type]
@@ -618,7 +618,7 @@ class SQLSpec:
             self._loader.set_observability_runtime(self._loader_runtime)
         return self._loader
 
-    async def _create_driver_async(
+    async def _driver_async(
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         connection_obj: "Awaitable[ConnectionT]",
@@ -666,7 +666,7 @@ class SQLSpec:
         return None
 
     @staticmethod
-    def _get_config_name(obj: Any) -> str:
+    def _config_name(obj: Any) -> str:
         """Get display name for configuration object."""
         if isinstance(obj, str):
             return obj

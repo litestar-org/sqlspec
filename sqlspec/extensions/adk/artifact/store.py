@@ -12,8 +12,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from sqlspec.extensions.adk._config_utils import _get_adk_artifact_store_config
-from sqlspec.extensions.adk._table_utils import validate_table_name
+from sqlspec.extensions.adk._config_utils import _adk_artifact_store_config
+from sqlspec.extensions.adk._table_utils import ensure_table_name
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -50,9 +50,9 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        store_config = _get_adk_artifact_store_config(self._config)
+        store_config = _adk_artifact_store_config(self._config)
         self._artifact_table: str = store_config["artifact_table"]
-        validate_table_name(self._artifact_table)
+        ensure_table_name(self._artifact_table)
 
     @property
     def config(self) -> ConfigT:
@@ -197,9 +197,9 @@ class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
-        store_config = _get_adk_artifact_store_config(self._config)
+        store_config = _adk_artifact_store_config(self._config)
         self._artifact_table: str = store_config["artifact_table"]
-        validate_table_name(self._artifact_table)
+        ensure_table_name(self._artifact_table)
 
     @property
     def config(self) -> ConfigT:

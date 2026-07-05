@@ -199,7 +199,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 cfg,
             )
             settings = self._extract_litestar_settings(config_union)
-            state = self._create_config_state(config_union, settings)
+            state = self._config_state(config_union, settings)
             self._plugin_configs.append(state)
 
         correlation_headers: list[str] = []
@@ -259,7 +259,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
         }
 
-    def _create_config_state(
+    def _config_state(
         self,
         config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
         settings: "dict[str, Any]",

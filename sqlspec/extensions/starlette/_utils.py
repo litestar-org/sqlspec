@@ -19,7 +19,7 @@ _MISSING = object()
 
 def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
     """Get a value from a Starlette state object."""
-    data = _get_state_dict(state)
+    data = _state_dict(state)
     if default is _MISSING:
         try:
             return data[key]
@@ -31,17 +31,17 @@ def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
 
 def set_state_value(state: Any, key: str, value: Any) -> None:
     """Set a value on a Starlette state object."""
-    _get_state_dict(state)[key] = value
+    _state_dict(state)[key] = value
 
 
 def pop_state_value(state: Any, key: str) -> Any | None:
     """Remove a value from a Starlette state object."""
-    return _get_state_dict(state).pop(key, None)
+    return _state_dict(state).pop(key, None)
 
 
 def has_state_value(state: Any, key: str) -> bool:
     """Check if a Starlette state object has a stored value."""
-    return key in _get_state_dict(state)
+    return key in _state_dict(state)
 
 
 def get_connection_from_request(request: "Request", config_state: "SQLSpecConfigState") -> Any:
@@ -88,7 +88,7 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     return session
 
 
-def _get_state_dict(state: Any) -> dict[str, Any]:
+def _state_dict(state: Any) -> dict[str, Any]:
     """Return the underlying state dictionary."""
     try:
         return cast("dict[str, Any]", object.__getattribute__(state, "_state"))

@@ -334,16 +334,16 @@ def arrow_table_to_rows(
     return resolved_columns, records
 
 
-def _arrow_type_needs_parameter_preparation(data_type: Any) -> bool:
+def _arrow_type_needs_preparation(data_type: Any) -> bool:
     ensure_pyarrow()
     import pyarrow as pa
 
     if pa.types.is_dictionary(data_type):
-        return _arrow_type_needs_parameter_preparation(data_type.value_type)
+        return _arrow_type_needs_preparation(data_type.value_type)
 
     is_extension = getattr(pa.types, "is_extension", None)
     if is_extension is not None and is_extension(data_type):
-        return _arrow_type_needs_parameter_preparation(data_type.storage_type)
+        return _arrow_type_needs_preparation(data_type.storage_type)
 
     nested_type_checks = (
         "is_struct",
@@ -359,13 +359,13 @@ def _arrow_type_needs_parameter_preparation(data_type: Any) -> bool:
 
 
 @lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
-def _arrow_schema_needs_parameter_preparation(schema: Any) -> bool:
-    return any(_arrow_type_needs_parameter_preparation(field.type) for field in schema)
+def _arrow_schema_needs_preparation(schema: Any) -> bool:
+    return any(_arrow_type_needs_preparation(field.type) for field in schema)
 
 
 def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
     """Return whether Arrow rows may emit nested values needing driver preparation."""
-    return _arrow_schema_needs_parameter_preparation(table.schema)
+    return _arrow_schema_needs_preparation(table.schema)
 
 
 def arrow_table_to_pylist(table: "ArrowTable") -> "list[dict[str, Any]]":

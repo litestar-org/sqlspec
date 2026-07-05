@@ -1158,7 +1158,7 @@ def test_validate_parameter_alignment_reuses_execute_many_expected_identifiers(m
         ParameterInfo("b", ParameterStyle.NAMED_COLON, 4, 1, ":b"),
     ])
     rows = [{"a": index, "b": index + 1} for index in range(8)]
-    original_collect = _alignment_module._collect_expected_identifiers
+    original_collect = _alignment_module._expected_identifiers
     calls = 0
 
     def counting_collect(parameter_profile: ParameterProfile) -> set[tuple[str, int | str]]:
@@ -1166,7 +1166,7 @@ def test_validate_parameter_alignment_reuses_execute_many_expected_identifiers(m
         calls += 1
         return original_collect(parameter_profile)
 
-    monkeypatch.setattr(_alignment_module, "_collect_expected_identifiers", counting_collect)
+    monkeypatch.setattr(_alignment_module, "_expected_identifiers", counting_collect)
 
     _alignment_module.validate_parameter_alignment(profile, rows, is_many=True)
 
@@ -1268,11 +1268,11 @@ def test_replace_null_parameters_with_profile_emits_no_warning() -> None:
     assert not deprecation_warnings
 
 
-def test_resolve_type_coercion_supports_virtual_abc_fallback() -> None:
+def test_type_coercion_supports_virtual_abc_fallback() -> None:
     """ABC-registered coercions should still resolve for builtin sequence payloads."""
     type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}
     fallback_items = _processor_module._type_coercion_fallbacks(type_map)
-    assert _processor_module._resolve_type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
+    assert _processor_module._type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
 
 
 def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(

@@ -109,7 +109,7 @@ class PsycopgPipelineMixin:
             if sql_statement.is_script or sql_statement.is_many:
                 return None
 
-            sql_text, prepared_parameters = driver._get_compiled_sql(  # pyright: ignore[reportPrivateUsage]
+            sql_text, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
                 sql_statement, config
             )
             prepared.append(
@@ -188,7 +188,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         Returns:
             ExecutionResult with statement execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
@@ -219,7 +219,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -240,7 +240,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         if len(statements) > 1 and prepared_parameters:
             msg = (
@@ -273,7 +273,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if not is_copy_operation(statement.operation_type):
             return None
 
-        sql, _ = self._get_compiled_sql(statement, statement.statement_config)
+        sql, _ = self._compiled_sql(statement, statement.statement_config)
         operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
@@ -386,7 +386,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Return a native psycopg row stream backed by a server-side named cursor."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(PsycopgSyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
@@ -511,7 +511,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -545,10 +545,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                     copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,
@@ -680,7 +680,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with statement execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
@@ -711,7 +711,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -732,7 +732,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         if len(statements) > 1 and prepared_parameters:
             msg = (
@@ -765,7 +765,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if not is_copy_operation(statement.operation_type):
             return None
 
-        sql, _ = self._get_compiled_sql(statement, statement.statement_config)
+        sql, _ = self._compiled_sql(statement, statement.statement_config)
         operation_type = statement.operation_type
         copy_data = statement.parameters
         if isinstance(copy_data, list) and len(copy_data) == 1:
@@ -886,7 +886,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Return a native psycopg row stream backed by a server-side named cursor."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return AsyncRowStream(PsycopgAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
@@ -1013,7 +1013,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -1047,10 +1047,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                     await copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,

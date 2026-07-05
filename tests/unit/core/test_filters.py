@@ -302,7 +302,7 @@ def test_filter_expression_modification_helper_returns_copy() -> None:
     assert original_expression is not None
     original_sql = original_expression.sql()
 
-    expression = statement._get_expression_for_filter_modification()
+    expression = statement._filter_expression()
     expression.set("limit", exp.Limit(expression=exp.Literal.number(1)))
 
     current_expression = statement.statement_expression

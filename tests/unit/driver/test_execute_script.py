@@ -45,10 +45,10 @@ def test_dispatch_script_no_double_prepare_dispatch_execute_script_prepares_para
     assert result.is_success() is True
 
 
-def test_dispatch_script_no_double_prepare_build_direct_sub_statement_returns_processed_cache_direct_sql(
+def test_dispatch_script_no_double_prepare_sub_statement_returns_processed_cache_direct_sql(
     sqlite_sync_driver: Any,
 ) -> None:
-    sub_statement = sqlite_sync_driver._build_direct_sub_statement("SELECT ?", (1,))
+    sub_statement = sqlite_sync_driver._sub_statement("SELECT ?", (1,))
     assert isinstance(sub_statement, SQL)
     assert sub_statement.is_processed is True
     assert getattr(sub_statement, "_is_cache_direct") is True

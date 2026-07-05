@@ -239,7 +239,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         owner_id_line = ""
         fk_constraint = ""
         if self._owner_id_column_ddl:
-            col_def, fk_def = _parse_owner_id_column_for_mysql(self._owner_id_column_ddl)
+            col_def, fk_def = _mysql_owner_id_column_parts(self._owner_id_column_ddl)
             owner_id_line = f",\n            {col_def}"
             if fk_def:
                 fk_constraint = f",\n            {fk_def}"
@@ -777,7 +777,7 @@ def _pymysql_execute_commit(store: PyMysqlADKStore, sql: str, params: "tuple[Any
         conn.commit()
 
 
-def _parse_owner_id_column_for_mysql(column_ddl: str) -> "tuple[str, str]":
+def _mysql_owner_id_column_parts(column_ddl: str) -> "tuple[str, str]":
     references_match = re.search(r"\s+REFERENCES\s+(.+)", column_ddl, re.IGNORECASE)
     if not references_match:
         return (column_ddl.strip(), "")
@@ -865,7 +865,7 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
     owner_id_line = ""
     fk_constraint = ""
     if owner_id_column_ddl:
-        col_def, fk_def = _parse_owner_id_column_for_mysql(owner_id_column_ddl)
+        col_def, fk_def = _mysql_owner_id_column_parts(owner_id_column_ddl)
         owner_id_line = f"\n            {col_def},"
         if fk_def:
             fk_constraint = f",\n            {fk_def}"

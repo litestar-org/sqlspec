@@ -333,7 +333,7 @@ class MysqlConnectorSyncConfig(
             **kwargs,
         )
 
-    def _ensure_connection_initialized(self, connection: "MysqlConnectorSyncConnection") -> None:
+    def _ensure_connection(self, connection: "MysqlConnectorSyncConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection."""
         if self._user_connection_hook is None:
             return
@@ -347,7 +347,7 @@ class MysqlConnectorSyncConfig(
             connection = cast("MysqlConnectorSyncConnection", self.connection_instance.get_connection())
         else:
             connection = self.create_connection()
-        self._ensure_connection_initialized(connection)
+        self._ensure_connection(connection)
         return connection
 
     def _create_pool(self) -> "MysqlConnectorConnectionPool":

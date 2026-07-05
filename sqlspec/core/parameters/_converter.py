@@ -99,7 +99,7 @@ def _parameter_lookup_key(param: "ParameterInfo") -> str:
     return param.placeholder_text
 
 
-def _normalized_named_parameter_name(param: "ParameterInfo") -> str:
+def _named_parameter_name(param: "ParameterInfo") -> str:
     param_name = param.name or f"param_{param.ordinal}"
     if param_name.isdigit():
         return f"param_{param.ordinal}"
@@ -209,7 +209,7 @@ class ParameterConverter:
                 param_key = _parameter_lookup_key(param)
                 new_placeholder = generator(unique_params[param_key])
             else:
-                param_name = _normalized_named_parameter_name(param)
+                param_name = _named_parameter_name(param)
                 new_placeholder = generator(param_name)
 
             # Append segment before this placeholder and the new placeholder
@@ -248,7 +248,7 @@ class ParameterConverter:
                 if target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
                     name = str(converted_index + 1)
             else:
-                name = _normalized_named_parameter_name(param)
+                name = _named_parameter_name(param)
                 placeholder_text = generator(name)
 
             converted_position = param.position + delta
@@ -271,7 +271,7 @@ class ParameterConverter:
         param_dict: dict[str, Any] = {}
         for i, param in enumerate(param_info):
             if i < len(parameters):
-                name = _normalized_named_parameter_name(param)
+                name = _named_parameter_name(param)
                 param_dict[name] = parameters[i]
         return param_dict
 
@@ -279,7 +279,7 @@ class ParameterConverter:
         self, parameters: "Mapping[str, Any]", param_info: "list[ParameterInfo]"
     ) -> "NamedParameterOutput":
         """Align a mapping with the placeholder names of a named-style target."""
-        expected_names = {_normalized_named_parameter_name(param) for param in param_info}
+        expected_names = {_named_parameter_name(param) for param in param_info}
         if expected_names.issubset(parameters.keys()):
             return dict(parameters)
         return self._convert_sequence_to_dict(list(parameters.values()), param_info)
@@ -319,7 +319,7 @@ class ParameterConverter:
 
         return None, False
 
-    def _collect_missing_named_parameters(
+    def _missing_named_parameters(
         self, param_info: "list[ParameterInfo]", parameters: "ParameterMapping"
     ) -> "list[str]":
         missing: list[str] = []
@@ -398,7 +398,7 @@ class ParameterConverter:
 
         elif isinstance(parameters, Mapping):
             if strict_named_parameters:
-                missing_names = self._collect_missing_named_parameters(param_info, parameters)
+                missing_names = self._missing_named_parameters(param_info, parameters)
                 if missing_names:
                     msg = f"Missing named parameter(s): {', '.join(missing_names)}"
                     raise SQLSpecError(msg)
@@ -466,7 +466,7 @@ class ParameterConverter:
 
         static_sql = sql
         for param in reversed(param_info):
-            param_value = self._get_parameter_value_with_reuse(parameters, param, unique_params)
+            param_value = self._parameter_value(parameters, param, unique_params)
 
             if param_value is None:
                 literal = "NULL"
@@ -486,7 +486,7 @@ class ParameterConverter:
 
         return static_sql, None
 
-    def _get_parameter_value_with_reuse(
+    def _parameter_value(
         self, parameters: "ParameterPayload", param: "ParameterInfo", unique_params: "dict[str, int]"
     ) -> object | None:
         if param.style in _OCCURRENCE_KEYED_STYLES:

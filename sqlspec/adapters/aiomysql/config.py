@@ -85,9 +85,7 @@ class AiomysqlPoolParams(AiomysqlConnectionParams):
     pool_recycle: NotRequired[int]
 
 
-def _normalize_aiomysql_local_infile_config(
-    connection_config: "Mapping[str, Any]", *, strip_consent_gate: bool
-) -> "dict[str, Any]":
+def _normalize_local_infile(connection_config: "Mapping[str, Any]", *, strip_consent_gate: bool) -> "dict[str, Any]":
     """Normalize aiomysql local-infile aliases and SQLSpec's consent gate."""
     config = dict(connection_config)
 
@@ -107,9 +105,9 @@ def _normalize_aiomysql_local_infile_config(
     return config
 
 
-def _normalize_aiomysql_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build aiomysql.connect-compatible kwargs from SQLSpec connection config."""
-    config = _normalize_aiomysql_local_infile_config(connection_config, strip_consent_gate=True)
+    config = _normalize_local_infile(connection_config, strip_consent_gate=True)
 
     for key in _POOL_ONLY_CONFIG_KEYS:
         config.pop(key, None)
@@ -177,7 +175,7 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AiomysqlConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def release_connection(self, _conn: "AiomysqlConnection", **kwargs: Any) -> None:
@@ -203,7 +201,7 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AiomysqlConnection", await ctx.__aenter__())
-        await self._config._ensure_connection_initialized(connection)  # pyright: ignore[reportPrivateUsage]
+        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
         return connection
 
     async def __aexit__(
@@ -257,7 +255,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = _normalize_aiomysql_local_infile_config(
+        connection_config = _normalize_local_infile(
             normalize_connection_config(connection_config), strip_consent_gate=False
         )
 
@@ -301,21 +299,21 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
         """
-        return cast("AiomysqlPool", await aiomysql.create_pool(**self._get_pool_kwargs()))
+        return cast("AiomysqlPool", await aiomysql.create_pool(**self._pool_kwargs()))
 
-    def _get_connection_kwargs(self) -> "dict[str, Any]":
+    def _connection_kwargs(self) -> "dict[str, Any]":
         """Return aiomysql.connect-compatible kwargs without pool-only settings."""
-        return _normalize_aiomysql_connection_kwargs(self.connection_config)
+        return _normalize_connection_kwargs(self.connection_config)
 
-    def _get_pool_kwargs(self) -> "dict[str, Any]":
+    def _pool_kwargs(self) -> "dict[str, Any]":
         """Return aiomysql.create_pool kwargs with normalized connection settings."""
-        pool_kwargs = self._get_connection_kwargs()
+        pool_kwargs = self._connection_kwargs()
         for key in _POOL_ONLY_CONFIG_KEYS:
             if key in self.connection_config:
                 pool_kwargs[key] = self.connection_config[key]
         return pool_kwargs
 
-    async def _ensure_connection_initialized(self, connection: "AiomysqlConnection") -> None:
+    async def _ensure_connection(self, connection: "AiomysqlConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
 
         Uses WeakSet tracking to ensure the callback runs once per physical connection.
@@ -344,7 +342,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             pool = await self.create_pool()
             self.connection_instance = pool
         connection = cast("AiomysqlConnection", await pool.acquire())
-        await self._ensure_connection_initialized(connection)
+        await self._ensure_connection(connection)
         return connection
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AiomysqlPool":

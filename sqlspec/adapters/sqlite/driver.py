@@ -104,7 +104,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with statement execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -133,7 +133,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -148,7 +148,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -192,7 +192,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def _stmt_cache_execute_direct(
+    def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute cached query through SQLite connection.execute fast path.
@@ -231,7 +231,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 is_select_result=True,
                 row_format="tuple",
             )
-            direct_statement = self._stmt_cache_build_direct(
+            direct_statement = self._cached_statement(
                 sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
             )
             return self.build_statement_result(direct_statement, execution_result)
@@ -405,7 +405,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         """Return a native SQLite row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "SqliteExceptionHandler":
@@ -441,7 +441,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_arrow(
         self,
@@ -459,7 +459,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         prepared_records = (
             self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_table_needs_parameter_preparation(arrow_table)
+            if records and self._arrow_rows_need_preparation(arrow_table)
             else records
         )
         owns_transaction = not self.connection.in_transaction
@@ -481,10 +481,10 @@ class SqliteDriver(SyncDriverAdapterBase):
                 self.connection.rollback()
             raise create_mapped_exception(exc) from exc
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def load_from_storage(
         self,

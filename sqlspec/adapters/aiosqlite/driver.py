@@ -87,7 +87,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -111,7 +111,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def dispatch_execute_many(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
 
@@ -121,7 +121,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def dispatch_execute_script(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script."""
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -183,7 +183,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Return a native aiosqlite row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return AsyncRowStream(AiosqliteStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
@@ -215,7 +215,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_arrow(
         self,
@@ -233,7 +233,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         prepared_records = (
             self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_table_needs_parameter_preparation(arrow_table)
+            if records and self._arrow_rows_need_preparation(arrow_table)
             else records
         )
         owns_transaction = not self.connection.in_transaction
@@ -255,10 +255,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 await self.connection.rollback()
             raise create_mapped_exception(exc) from exc
 
-        telemetry_payload = self._build_ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._create_storage_job(telemetry_payload, telemetry)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def load_from_storage(
         self,

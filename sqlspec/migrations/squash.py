@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlspec.migrations._backup import create_migration_backup, remove_migration_backup, restore_migration_backup
+from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
 from sqlspec.migrations.validation import validate_squash_range
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import await_
@@ -401,7 +401,7 @@ class MigrationSquasher:
         Returns:
             Path to created backup directory.
         """
-        self.backup_path = create_migration_backup(self.migrations_path)
+        self.backup_path = create_backup(self.migrations_path)
         logger.debug("Created backup at %s", self.backup_path)
         return self.backup_path
 
@@ -410,7 +410,7 @@ class MigrationSquasher:
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        remove_migration_backup(self.backup_path)
+        remove_backup(self.backup_path)
         logger.debug("Cleaned up backup at %s", self.backup_path)
         self.backup_path = None
 
@@ -420,7 +420,7 @@ class MigrationSquasher:
             return
 
         backup_dir = self.backup_path
-        restore_migration_backup(self.migrations_path, backup_dir, remove_backup=True)
+        restore_backup(self.migrations_path, backup_dir, delete_backup=True)
         self.backup_path = None
 
         logger.debug("Rolled back from backup at %s", backup_dir)

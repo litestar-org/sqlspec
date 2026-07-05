@@ -793,9 +793,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         adk_settings = extension_settings.get("adk")
         if adk_settings is not None and "adk" not in exclude_extensions:
-            from sqlspec.extensions.adk._config_utils import _validate_adk_store_registration
+            from sqlspec.extensions.adk._config_utils import _ensure_adk_store_registration
 
-            _validate_adk_store_registration(self)
+            _ensure_adk_store_registration(self)
             extensions_to_add.append("adk")
 
         events_settings = extension_settings.get("events")

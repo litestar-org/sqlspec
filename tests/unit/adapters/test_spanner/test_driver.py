@@ -263,7 +263,7 @@ def test_dispatch_execute_script_reuses_coerced_params_and_inferred_types(
     coerce_calls = 0
     infer_calls = 0
 
-    monkeypatch.setattr(SpannerSyncDriver, "_get_compiled_sql", lambda _self, _statement, _config: (script, params))
+    monkeypatch.setattr(SpannerSyncDriver, "_compiled_sql", lambda _self, _statement, _config: (script, params))
 
     def coerce(script_params: dict[str, object] | None) -> dict[str, object] | None:
         nonlocal coerce_calls

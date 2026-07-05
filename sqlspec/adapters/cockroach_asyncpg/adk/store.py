@@ -404,7 +404,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             await conn.execute(sql, key, value)
 
     async def _get_create_sessions_table_sql(self) -> str:
-        adk_config = _get_cockroach_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -434,7 +434,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_cockroach_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
@@ -457,7 +457,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
     async def _get_create_app_states_table_sql(self) -> str:
-        adk_config = _get_cockroach_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
 
         return f"""
@@ -469,7 +469,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
     async def _get_create_user_states_table_sql(self) -> str:
-        adk_config = _get_cockroach_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
 
         return f"""
@@ -483,7 +483,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
     async def _get_create_metadata_table_sql(self) -> str:
-        adk_config = _get_cockroach_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
 
         return f"""
@@ -656,7 +656,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             return int(result.split()[-1]) if result else 0
 
     async def _get_create_memory_table_sql(self) -> str:
-        adk_config = _get_cockroach_asyncpg_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -704,7 +704,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
 
-def _get_cockroach_asyncpg_adk_config(config: Any) -> CockroachAsyncpgADKConfig:
+def _adk_config(config: Any) -> CockroachAsyncpgADKConfig:
     """Return CockroachDB asyncpg ADK extension settings from ``extension_config["adk"]``."""
 
     extension_config = getattr(config, "extension_config", {})

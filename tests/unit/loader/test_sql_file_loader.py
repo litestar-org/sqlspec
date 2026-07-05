@@ -63,16 +63,16 @@ def test_compute_checksum_matches_sqlfile_checksum() -> None:
     assert SQLFileLoader._compute_checksum(content) == SQLFile(content=content, path="test.sql").checksum
 
 
-def test_is_file_content_unchanged_matching() -> None:
-    """_is_file_content_unchanged returns True when content matches cached checksum."""
+def test_content_matches_cache_matching() -> None:
+    """_content_matches_cache returns True when content matches cached checksum."""
     content = "SELECT * FROM users;"
     cached = SQLFileCacheEntry(sql_file=SQLFile(content=content, path="test.sql"), parsed_statements={})
 
-    assert SQLFileLoader()._is_file_content_unchanged(content, cached) is True
+    assert SQLFileLoader()._content_matches_cache(content, cached) is True
 
 
-def test_load_file_without_cache_accepts_pre_read_content(monkeypatch, tmp_path: Path) -> None:
-    """_load_file_without_cache uses pre-read content without reading the file again."""
+def test_load_uncached_file_accepts_pre_read_content(monkeypatch, tmp_path: Path) -> None:
+    """_load_uncached_file uses pre-read content without reading the file again."""
     sql_file = tmp_path / "test.sql"
     sql_file.write_text("-- name: from_disk\nSELECT 0;")
     loader = SQLFileLoader()
@@ -83,7 +83,7 @@ def test_load_file_without_cache_accepts_pre_read_content(monkeypatch, tmp_path:
 
     monkeypatch.setattr(SQLFileLoader, "_read_file_content", fail_read)
 
-    loader._load_file_without_cache(sql_file, None, content="-- name: from_memory\nSELECT 1;")
+    loader._load_uncached_file(sql_file, None, content="-- name: from_memory\nSELECT 1;")
 
     assert loader.has_query("from_memory")
 
@@ -231,7 +231,7 @@ SELECT id, name FROM users WHERE id = :user_id;
 INSERT INTO users (name, email) VALUES (:name, :email);
 """
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
 
     assert len(statements) == 2
     assert "get_user" in statements
@@ -258,7 +258,7 @@ SELECT GROUP_CONCAT(name) FROM users;
 SELECT name FROM users;
 """
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
 
     assert len(statements) == 3
 
@@ -285,7 +285,7 @@ SELECT * FROM users WHERE active = true;
 UPDATE users SET email = ? WHERE id = ?;
 """
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
 
     assert "get_user_by_id" in statements
     assert "list_active_users" in statements
@@ -306,7 +306,7 @@ def test_get_sql_eagerly_compiles_expression() -> None:
 SELECT id, email FROM user_account WHERE active = true;
 """
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
     loader._queries = statements
 
     sql_obj = loader.get_sql("list_users")
@@ -320,7 +320,7 @@ def test_parse_skips_files_without_named_statements() -> None:
     """Test that files without named statements return empty dict."""
     content = "SELECT * FROM users;"
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
 
     assert statements == {}
     assert len(statements) == 0
@@ -337,7 +337,7 @@ SELECT * FROM users WHERE id = 2;
 """
 
     with pytest.raises(SQLFileParseError) as exc_info:
-        SQLFileLoader._parse_sql_content(content, "test.sql")
+        SQLFileLoader._parse_statements(content, "test.sql")
 
     assert "Duplicate statement name: get_user" in str(exc_info.value)
 
@@ -350,7 +350,7 @@ def test_parse_invalid_dialect_storage() -> None:
 SELECT * FROM users;
 """
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
 
     assert len(statements) == 1
     assert statements["test_query"].dialect == "invalid_dialect"
@@ -358,14 +358,14 @@ SELECT * FROM users;
 
 def test_parse_empty_file() -> None:
     """Test parsing empty file returns empty dict."""
-    statements = SQLFileLoader._parse_sql_content("", "empty.sql")
+    statements = SQLFileLoader._parse_statements("", "empty.sql")
     assert statements == {}
 
 
 def test_parse_comments_only_file() -> None:
     """Test parsing file with only comments returns empty dict."""
     content = "-- This is a comment\n-- Another comment"
-    statements = SQLFileLoader._parse_sql_content(content, "comments.sql")
+    statements = SQLFileLoader._parse_statements(content, "comments.sql")
     assert statements == {}
 
 
@@ -452,7 +452,7 @@ def test_strip_leading_comments_all_comments() -> None:
     assert result == ""
 
 
-def test_generate_file_cache_key() -> None:
+def test_file_cache_key() -> None:
     """Test file cache key generation."""
     loader = SQLFileLoader()
 
@@ -460,9 +460,9 @@ def test_generate_file_cache_key() -> None:
     path2 = "/path/to/file.sql"
     path3 = "/different/path.sql"
 
-    key1 = loader._generate_file_cache_key(path1)
-    key2 = loader._generate_file_cache_key(path2)
-    key3 = loader._generate_file_cache_key(path3)
+    key1 = loader._file_cache_key(path1)
+    key2 = loader._file_cache_key(path2)
+    key3 = loader._file_cache_key(path3)
 
     assert key1 == key2
 
@@ -817,7 +817,7 @@ def test_parse_empty_name_marker() -> None:
 SELECT * FROM users;
 """
 
-    statements = SQLFileLoader._parse_sql_content(content, "test.sql")
+    statements = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements == {}
 
 
@@ -895,7 +895,7 @@ def test_parse_postgres_database_details_fixture(fixture_parsing_path: Path) -> 
 
     content = fixture_file.read_text(encoding="utf-8")
 
-    statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+    statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
     expected_queries = [
         "collection_postgres_base_database_details",
@@ -921,7 +921,7 @@ def test_parse_mysql_data_types_fixture(fixture_parsing_path: Path) -> None:
     with open(fixture_file, encoding="utf-8") as f:
         content = f.read()
 
-    statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+    statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
     assert len(statements) == 1
     assert "collection_mysql_data_types" in statements
@@ -939,7 +939,7 @@ def test_parse_init_fixture(fixture_parsing_path: Path) -> None:
     with open(fixture_file, encoding="utf-8") as f:
         content = f.read()
 
-    statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+    statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
     expected_queries = [
         "readiness_check_init_get_db_count",
@@ -964,7 +964,7 @@ def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
         content = f.read()
 
     try:
-        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+        statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
         for stmt_name, stmt in statements.items():
             assert isinstance(stmt, NamedStatement)
@@ -995,7 +995,7 @@ def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
             content = f.read()
 
         start_time = time.time()
-        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+        statements = SQLFileLoader._parse_statements(content, str(fixture_file))
         parse_time = time.time() - start_time
 
         assert parse_time < 0.5, f"Parsing {fixture_path} took too long: {parse_time:.3f}s"
@@ -1019,7 +1019,7 @@ def test_fixture_parameter_style_detection(fixture_parsing_path: Path) -> None:
         with open(fixture_file, encoding="utf-8") as f:
             content = f.read()
 
-        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+        statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
         found_pattern = False
         for stmt in statements.values():
@@ -1038,7 +1038,7 @@ def test_complex_cte_parsing_from_fixtures(fixture_parsing_path: Path) -> None:
     with open(fixture_file, encoding="utf-8") as f:
         content = f.read()
 
-    statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+    statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
     for stmt in statements.values():
         sql = stmt.sql.upper()
@@ -1074,7 +1074,7 @@ def test_multi_dialect_fixture_parsing(fixture_parsing_path: Path) -> None:
             content = f.read()
 
         try:
-            statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+            statements = SQLFileLoader._parse_statements(content, str(fixture_file))
 
             for stmt_name, stmt in statements.items():
                 assert isinstance(stmt, NamedStatement)

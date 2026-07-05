@@ -134,7 +134,7 @@ def append_comment(expression: exp.Expr, attrs: Mapping[str, str | None]) -> exp
     return expression
 
 
-def _append_sqlcommenter_comment_to_sql(sql: str, attrs: Mapping[str, str | None]) -> str:
+def _append_comment(sql: str, attrs: Mapping[str, str | None]) -> str:
     """Append a sqlcommenter block to rendered SQL text."""
     comment_body = generate_comment(attrs)
     if not comment_body:
@@ -155,7 +155,7 @@ def _append_sqlcommenter_comment_to_sql(sql: str, attrs: Mapping[str, str | None
     return f"{stripped_sql} {comment}{trailing_whitespace}"
 
 
-def _resolve_sqlcommenter_attributes(
+def _comment_attributes(
     static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
 ) -> dict[str, str | None]:
     """Resolve static and dynamic sqlcommenter attributes for the current call."""
@@ -171,7 +171,7 @@ def _resolve_sqlcommenter_attributes(
     if enable_traceparent:
         trace_id, span_id = get_trace_context()
         if trace_id and span_id:
-            merged["traceparent"] = _build_traceparent(trace_id, span_id)
+            merged["traceparent"] = _traceparent(trace_id, span_id)
     return merged
 
 
@@ -219,7 +219,7 @@ def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
     return expression, attrs
 
 
-def _build_traceparent(trace_id: str, span_id: str) -> str:
+def _traceparent(trace_id: str, span_id: str) -> str:
     """Build a W3C traceparent header value from trace and span IDs."""
     return f"00-{trace_id}-{span_id}-01"
 
@@ -257,7 +257,7 @@ class _DynamicSQLCommenterTransformer:
         self._enable_context = enable_context
 
     def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
-        merged = _resolve_sqlcommenter_attributes(
+        merged = _comment_attributes(
             self._static_attrs, enable_traceparent=self._enable_traceparent, enable_context=self._enable_context
         )
         return append_comment(expression, merged), params

@@ -349,14 +349,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             ExecutionResult with script execution data including statement counts
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
         statement_count: int = len(statements)
         successful_count: int = 0
 
         for stmt in statements:
-            single_stmt = self._build_direct_sub_statement(stmt, prepared_parameters)
+            single_stmt = self._sub_statement(stmt, prepared_parameters)
             await self.dispatch_execute(cursor, single_stmt)
             successful_count += 1
 
@@ -418,7 +418,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
 
-    async def _stmt_cache_execute_direct(
+    async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
     ) -> "SQLResult":
         """Execute pre-compiled query via ultra-fast path (async).
@@ -467,7 +467,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                                     is_select_result=True,
                                     row_format="tuple",
                                 )
-                                direct_statement = self._stmt_cache_build_direct(
+                                direct_statement = self._cached_statement(
                                     sql,
                                     params,
                                     cached,
@@ -483,7 +483,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         pass
 
                 if result is None:
-                    direct_statement = self._stmt_cache_build_direct(
+                    direct_statement = self._cached_statement(
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = await self.dispatch_execute(cursor, direct_statement)
@@ -507,7 +507,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
 
-    async def _stmt_cache_lookup(
+    async def _cached_execution(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
     ) -> "SQLResult | None":
         """Attempt fast-path execution for cached query (async).
@@ -519,16 +519,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult if cache hit and execution succeeds, None otherwise.
         """
-        result = super()._stmt_cache_lookup(statement, params)
+        result = super()._cached_execution(statement, params)
         if result is None:
             return None
         return await cast("Awaitable[SQLResult | None]", result)
 
-    async def _stmt_cache_execute(self, statement: "SQL") -> "SQLResult":
+    async def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path (async).
 
-        The statement is already compiled by _stmt_cache_prepare_direct, so dispatch_execute
-        will hit the fast path in _get_compiled_statement (is_processed check).
+        The statement is already compiled by _prepare_cached_statement, so dispatch_execute
+        will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
@@ -604,7 +604,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 and isinstance(statement, str)
                 and fast_params is not None
             ):
-                fast_result = await self._stmt_cache_lookup(statement, fast_params)
+                fast_result = await self._cached_execution(statement, fast_params)
                 if fast_result is not None:
                     result = fast_result
             if result is None:
@@ -1198,7 +1198,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
 
         if count_with_window:
-            modified_sql = self._add_count_over_column(sql_statement)
+            modified_sql = self._with_total_count(sql_statement)
             result = await self.dispatch_statement_execution(modified_sql, self.connection)
             rows = result.all()
             data, total = self._extract_total_from_rows(rows)
@@ -1207,7 +1207,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 return (cast("list[SchemaT]", self.to_schema(data, schema_type=schema_type)), total)
             return (data, total)
 
-        count_result = await self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
+        count_result = await self.dispatch_statement_execution(self._count_query(sql_statement), self.connection)
         select_result = await self.dispatch_statement_execution(sql_statement, self.connection)
 
         return (select_result.get_data(schema_type=schema_type), count_result.scalar())

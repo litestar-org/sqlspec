@@ -775,7 +775,7 @@ class SQLBuilderProtocol(Protocol):
         """Add a parameter to the builder."""
         ...
 
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
+    def _next_parameter_name(self, base_name: str) -> str:
         """Generate a unique parameter name."""
         ...
 
@@ -791,7 +791,7 @@ class SQLBuilderProtocol(Protocol):
         """Build and return the final expression."""
         ...
 
-    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+    def _merge_parameters(self, sql_obj: Any) -> None:
         """Merge parameters from SQL objects into the builder."""
         ...
 

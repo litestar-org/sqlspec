@@ -331,7 +331,7 @@ class QueryBuilder(ABC):
                 self._raise_cte_query_error(alias, f"expression must be a Select, got {type(query_expr).__name__}")
             cte_select_expression = query_expr.copy()
             param_mapping = self._merge_cte_parameters(alias, query.parameters)
-            updated_expression = self._update_placeholders_in_expression(cte_select_expression, param_mapping)
+            updated_expression = self._update_placeholders(cte_select_expression, param_mapping)
             if not isinstance(updated_expression, exp.Select):  # pragma: no cover
                 msg = "CTE placeholder update produced non-select expression"
                 raise SQLBuilderError(msg)
@@ -464,7 +464,7 @@ class QueryBuilder(ABC):
         index = int(match.group("index"))
         self._parameter_counter = max(self._parameter_counter, index)
 
-    def _generate_unique_parameter_name(self, base_name: str) -> str:
+    def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
 
         Args:
@@ -502,7 +502,7 @@ class QueryBuilder(ABC):
         Returns:
             Tuple of placeholder expression and the final parameter name.
         """
-        param_name = self._generate_unique_parameter_name(base_name)
+        param_name = self._next_parameter_name(base_name)
         _, param_name = self.add_parameter(value, name=param_name)
         return exp.Placeholder(this=param_name), param_name
 
@@ -518,12 +518,12 @@ class QueryBuilder(ABC):
         """
         param_mapping = {}
         for old_name, value in parameters.items():
-            new_name = self._generate_unique_parameter_name(f"{cte_name}_{old_name}")
+            new_name = self._next_parameter_name(f"{cte_name}_{old_name}")
             param_mapping[old_name] = new_name
             self.add_parameter(value, name=new_name)
         return param_mapping
 
-    def _update_placeholders_in_expression(self, expression: exp.Expr, param_mapping: dict[str, str]) -> exp.Expr:
+    def _update_placeholders(self, expression: exp.Expr, param_mapping: dict[str, str]) -> exp.Expr:
         """Update parameter placeholders in expression to use new names.
 
         Args:
@@ -619,7 +619,7 @@ class QueryBuilder(ABC):
         try:
             if isinstance(final_expression, exp.Expr):
                 normalized_expression = (
-                    self._unquote_identifiers_for_oracle(final_expression)
+                    self._unquote_oracle_identifiers(final_expression)
                     if self._is_oracle_dialect(target_dialect)
                     else final_expression
                 )
@@ -627,7 +627,7 @@ class QueryBuilder(ABC):
                 if normalized_expression.find(exp.Lock):
                     register_lock_generator(target_dialect)
                 sql_string = normalized_expression.sql(dialect=target_dialect, pretty=True, identify=identify)
-                sql_string = self._strip_merge_target_identifier_quotes(sql_string)
+                sql_string = self._strip_merge_target_quotes(sql_string)
             else:
                 sql_string = str(final_expression)
         except Exception as e:
@@ -790,9 +790,9 @@ class QueryBuilder(ABC):
 
         target_dialect = dialect_override or safe_query.dialect
         if self._is_oracle_dialect(target_dialect) and isinstance(statement_expression, exp.Expr):
-            statement_expression = self._unquote_identifiers_for_oracle(statement_expression)
+            statement_expression = self._unquote_oracle_identifiers(statement_expression)
 
-        kwargs, parameters = self._extract_statement_parameters(safe_query.parameters)
+        kwargs, parameters = self._statement_parameters(safe_query.parameters)
 
         if config is None:
             config = StatementConfig(
@@ -808,9 +808,7 @@ class QueryBuilder(ABC):
             return SQL(statement_expression, *parameters, statement_config=config)
         return SQL(statement_expression, statement_config=config)
 
-    def _extract_statement_parameters(
-        self, raw_parameters: Any
-    ) -> "tuple[dict[str, Any] | None, tuple[Any, ...] | None]":
+    def _statement_parameters(self, raw_parameters: Any) -> "tuple[dict[str, Any] | None, tuple[Any, ...] | None]":
         """Extract parameters for SQL statement creation.
 
         Args:
@@ -853,7 +851,7 @@ class QueryBuilder(ABC):
             return self.dialect.__name__.lower()
         return str(self.dialect).lower()
 
-    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+    def _merge_parameters(self, sql_obj: Any) -> None:
         """Merge parameters from a SQL object into the builder.
 
         Args:
@@ -864,7 +862,7 @@ class QueryBuilder(ABC):
 
         sql_parameters = sql_obj.parameters
         for param_name, param_value in sql_parameters.items():
-            unique_name = self._generate_unique_parameter_name(param_name)
+            unique_name = self._next_parameter_name(param_name)
             self.add_parameter(param_value, name=unique_name)
 
     @property
@@ -882,12 +880,12 @@ class QueryBuilder(ABC):
             return False
         return str(dialect).lower() == "oracle"
 
-    def _unquote_identifiers_for_oracle(self, expression: exp.Expr) -> exp.Expr:
+    def _unquote_oracle_identifiers(self, expression: exp.Expr) -> exp.Expr:
         """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
         # SQLGlot transform(copy=True) deep-copies internally. Copy once here, then mutate that copy.
         return expression.copy().transform(_unquote_identifier, copy=False)
 
-    def _strip_merge_target_identifier_quotes(self, sql_string: str) -> str:
+    def _strip_merge_target_quotes(self, sql_string: str) -> str:
         if sql_string.startswith('MERGE INTO "') and not self._merge_target_quoted:
             # Remove quotes around target table only, leave alias/rest intact
             end_quote = sql_string.find('"', len('MERGE INTO "'))
@@ -912,7 +910,7 @@ class QueryBuilder(ABC):
 
     def generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name (public API)."""
-        return self._generate_unique_parameter_name(base_name)
+        return self._next_parameter_name(base_name)
 
     def build_static_expression(
         self,

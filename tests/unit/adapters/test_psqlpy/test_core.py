@@ -248,7 +248,7 @@ class _Driver(PsqlpyDriver):
         self.compiled_sql = compiled_sql
         self.compiled_parameters = parameters
 
-    def _get_compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
+    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
         return (self.compiled_sql, self.compiled_parameters)
 
 

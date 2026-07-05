@@ -57,7 +57,7 @@ class SQLSpecPlugin:
         self._extractor: CorrelationExtractor | None = None
 
         for cfg in self._sqlspec.configs.values():
-            state = self._create_config_state(cfg)
+            state = self._config_state(cfg)
             self._config_states.append(state)
 
             if state.is_async:
@@ -80,7 +80,7 @@ class SQLSpecPlugin:
         if app is not None:
             self.init_app(app)
 
-    def _create_config_state(self, config: Any) -> FlaskConfigState:
+    def _config_state(self, config: Any) -> FlaskConfigState:
         """Create configuration state from database config.
 
         Args:
@@ -140,7 +140,7 @@ class SQLSpecPlugin:
             msg = "SQLSpec extension already registered on this Flask application"
             raise ImproperConfigurationError(msg)
 
-        self._validate_unique_keys()
+        self._ensure_unique_keys()
 
         if self._has_async_configs:
             self._portal = PortalProvider()
@@ -178,7 +178,7 @@ class SQLSpecPlugin:
             async_enabled=self._has_async_configs,
         )
 
-    def _validate_unique_keys(self) -> None:
+    def _ensure_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.
 
         Raises:
@@ -361,7 +361,7 @@ class SQLSpecPlugin:
         Returns:
             Database session (driver instance).
         """
-        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
 
         return get_or_create_session(config_state, self._portal.portal if self._portal else None)
 
@@ -379,11 +379,11 @@ class SQLSpecPlugin:
         """
         from flask import g
 
-        config_state = self._config_states[0] if key is None else self._get_config_state_by_key(key)
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
 
         return get_context_value(g, config_state.connection_key)
 
-    def _get_config_state_by_key(self, key: str) -> FlaskConfigState:
+    def _config_state_by_key(self, key: str) -> FlaskConfigState:
         """Get config state by session key.
 
         Args:

@@ -19,7 +19,7 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk._config_utils import _get_adk_config_from_extension
+from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             config: BigQuery config with ``extension_config["adk"]`` settings.
         """
         super().__init__(config)
-        adk_config = _get_adk_config_from_extension(config)
+        adk_config = _adk_config_from_extension(config)
         retention_config = cast("dict[str, Any]", adk_config.get("retention") or {})
 
         self._lookup_window_days: int = int(adk_config.get("session_lookup_window_days") or _DEFAULT_LOOKUP_WINDOW_DAYS)

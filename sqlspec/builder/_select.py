@@ -337,7 +337,7 @@ class SelectClauseMixin:
             base_builder = cast("QueryBuilder", builder)
             param_mapping = base_builder._merge_cte_parameters(alias or "subquery", table.parameters)
             if param_mapping:
-                subquery_copy = base_builder._update_placeholders_in_expression(subquery_copy, param_mapping)
+                subquery_copy = base_builder._update_placeholders(subquery_copy, param_mapping)
 
             wrapped_subquery = exp.paren(subquery_copy)
             from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
@@ -452,9 +452,9 @@ class ReturningClauseMixin:
 class WhereClauseMixin:
     __slots__ = ()
 
-    def _merge_sql_object_parameters(self, sql_obj: Any) -> None:
+    def _merge_parameters(self, sql_obj: Any) -> None:
         builder = cast("SQLBuilderProtocol", self)
-        builder._merge_sql_object_parameters(sql_obj)
+        builder._merge_parameters(sql_obj)
 
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
@@ -464,7 +464,7 @@ class WhereClauseMixin:
     ) -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
+        param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         placeholder = exp.Placeholder(this=param_name)
@@ -505,12 +505,12 @@ class WhereClauseMixin:
             placeholders = []
             for index, element in enumerate(value):
                 name_seed = column_name if len(value) == 1 else f"{column_name}_{index + 1}"
-                param_name = builder._generate_unique_parameter_name(name_seed)
+                param_name = builder._next_parameter_name(name_seed)
                 _, param_name = builder.add_parameter(element, name=param_name)
                 placeholders.append(exp.Placeholder(this=param_name))
             return exp.In(this=column_exp, expressions=placeholders)
 
-        param_name = builder._generate_unique_parameter_name(column_name)
+        param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         return exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)])
 
@@ -523,12 +523,12 @@ class WhereClauseMixin:
             placeholders = []
             for index, element in enumerate(value):
                 name_seed = column_name if len(value) == 1 else f"{column_name}_{index + 1}"
-                param_name = builder._generate_unique_parameter_name(name_seed)
+                param_name = builder._next_parameter_name(name_seed)
                 _, param_name = builder.add_parameter(element, name=param_name)
                 placeholders.append(exp.Placeholder(this=param_name))
             return exp.Not(this=exp.In(this=column_exp, expressions=placeholders))
 
-        param_name = builder._generate_unique_parameter_name(column_name)
+        param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         return exp.Not(this=exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)]))
 
@@ -544,8 +544,8 @@ class WhereClauseMixin:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
             builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
-            high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
+            low_param = builder._next_parameter_name(f"{column_name}_low")
+            high_param = builder._next_parameter_name(f"{column_name}_high")
             _, low_param = builder.add_parameter(low, name=low_param)
             _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Between(
@@ -558,8 +558,8 @@ class WhereClauseMixin:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
             builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
-            high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
+            low_param = builder._next_parameter_name(f"{column_name}_low")
+            high_param = builder._next_parameter_name(f"{column_name}_high")
             _, low_param = builder.add_parameter(low, name=low_param)
             _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Not(
@@ -590,7 +590,7 @@ class WhereClauseMixin:
             if parsed_expr is not None:
                 return comparison(this=column_expr, expression=exp.Any(this=parsed_expr))
         if has_expression_and_sql(values):
-            self._merge_sql_object_parameters(values)
+            self._merge_parameters(values)
             expression_attr = values.expression
             if isinstance(expression_attr, exp.Expr):
                 return comparison(this=column_expr, expression=exp.Any(this=expression_attr))
@@ -611,9 +611,9 @@ class WhereClauseMixin:
         values_list = list(values)
         for index, element in enumerate(values_list):
             if len(values_list) == 1:
-                param_name = builder._generate_unique_parameter_name(column_name)
+                param_name = builder._next_parameter_name(column_name)
             else:
-                param_name = builder._generate_unique_parameter_name(f"{column_name}_{parameter_suffix}_{index + 1}")
+                param_name = builder._next_parameter_name(f"{column_name}_{parameter_suffix}_{index + 1}")
             _, param_name = builder.add_parameter(element, name=param_name)
             placeholders.append(exp.Placeholder(this=param_name))
         tuple_expr = exp.Tuple(expressions=placeholders)
@@ -635,11 +635,11 @@ class WhereClauseMixin:
                 param_mapping: dict[str, str] = {}
                 query_builder = cast("QueryBuilder", builder)
                 for param_name, param_value in parameters.items():
-                    unique_name = query_builder._generate_unique_parameter_name(param_name)
+                    unique_name = query_builder._next_parameter_name(param_name)
                     param_mapping[param_name] = unique_name
                     query_builder.add_parameter(param_value, name=unique_name)
                 if param_mapping:
-                    updated = query_builder._update_placeholders_in_expression(parsed_subquery, param_mapping)
+                    updated = query_builder._update_placeholders(parsed_subquery, param_mapping)
                     subquery_expr = exp.paren(updated)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
@@ -649,7 +649,7 @@ class WhereClauseMixin:
             return subquery_expr
 
         if has_expression_and_sql(subquery):
-            self._merge_sql_object_parameters(subquery)
+            self._merge_parameters(subquery)
             expression_attr = subquery.expression
             if isinstance(expression_attr, exp.Expr):
                 return expression_attr
@@ -782,12 +782,12 @@ class WhereClauseMixin:
         if has_expression_and_sql(condition):
             expression_attr = condition.expression
             if isinstance(expression_attr, exp.Expr):
-                self._merge_sql_object_parameters(condition)
+                self._merge_parameters(condition)
                 return _normalize_condition_expression(expression_attr)
             sql_text = getattr(condition, "raw_sql", None)
             if sql_text is None:
                 sql_text = condition.sql
-            self._merge_sql_object_parameters(condition)
+            self._merge_parameters(condition)
             return parse_condition_expression(sql_text)
 
         msg = f"Unsupported condition type: {type(condition).__name__}"
@@ -846,8 +846,8 @@ class WhereClauseMixin:
     def where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
-        low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
-        high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
+        low_param = builder._next_parameter_name(f"{column_name}_low")
+        high_param = builder._next_parameter_name(f"{column_name}_high")
         _, low_param = builder.add_parameter(low, name=low_param)
         _, high_param = builder.add_parameter(high, name=high_param)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -857,7 +857,7 @@ class WhereClauseMixin:
     def where_like(self, column: str | exp.Column, pattern: str, escape: str | None = None) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
+        param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if escape is not None:
@@ -961,7 +961,7 @@ class WhereClauseMixin:
         column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)
+        param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         placeholder = exp.Placeholder(this=param_name)
         if escape is not None:
@@ -1208,10 +1208,10 @@ class CommonTableExpressionMixin:
             if isinstance(parameters, dict):
                 param_mapping: dict[str, str] = {}
                 for param_name, param_value in parameters.items():
-                    unique_name = builder._generate_unique_parameter_name(f"{name}_{param_name}")
+                    unique_name = builder._next_parameter_name(f"{name}_{param_name}")
                     param_mapping[param_name] = unique_name
                     builder.add_parameter(param_value, name=unique_name)
-                cte_select = builder._update_placeholders_in_expression(cte_select, param_mapping)
+                cte_select = builder._update_placeholders(cte_select, param_mapping)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
                     builder.add_parameter(param_value)
@@ -1275,7 +1275,7 @@ class SetOperationMixin:
             merged_parameters[target_name] = param_value
 
         if rename_map:
-            right_expr = builder._update_placeholders_in_expression(right_expr, rename_map)
+            right_expr = builder._update_placeholders(right_expr, rename_map)
 
         combined: exp.Expr
         if operator == "union":

@@ -75,7 +75,7 @@ def test_duplicate_context_keys_are_rejected() -> None:
     )
     plugin._config_states = [state_one, state_two]
     with pytest.raises(ImproperConfigurationError) as exc_info:
-        plugin._validate_unique_keys()
+        plugin._ensure_unique_keys()
     assert "Duplicate context keys" in str(exc_info.value)
 
 

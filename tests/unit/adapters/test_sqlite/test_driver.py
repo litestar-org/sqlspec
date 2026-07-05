@@ -3,8 +3,8 @@ import inspect
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 
 
-def test_driver_cache_stmt_cache_execute_direct_has_no_unreachable_returns_rows_guard() -> None:
-    source = inspect.getsource(SqliteDriver._stmt_cache_execute_direct)
+def test_driver_cache_execute_cache_hit_has_no_unreachable_returns_rows_guard() -> None:
+    source = inspect.getsource(SqliteDriver._execute_cache_hit)
     assert "if returns_rows:" not in source
 
 
