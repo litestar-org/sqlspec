@@ -108,9 +108,7 @@ def assert_sync_listen_notify_delivery_contract(make_config: Any, case: ListenNo
         listener = channel.listen(channel_name, received.append, poll_interval=_LISTEN_NOTIFY_POLL_INTERVAL)
         time.sleep(_LISTEN_NOTIFY_SUBSCRIBE_WAIT)
         event_id = channel.publish(
-            channel_name,
-            {"case": case.id, "mode": case.mode},
-            metadata={"source": "contract", "adapter": case.adapter},
+            channel_name, {"case": case.id, "mode": case.mode}, metadata={"source": "contract", "adapter": case.adapter}
         )
         _wait_for_sync_message(received)
         if not received:
@@ -155,9 +153,7 @@ async def assert_async_listen_notify_delivery_contract(make_config: Any, case: L
         listener = channel.listen(channel_name, _handler, poll_interval=_LISTEN_NOTIFY_POLL_INTERVAL)
         await asyncio.sleep(_LISTEN_NOTIFY_SUBSCRIBE_WAIT)
         event_id = await channel.publish(
-            channel_name,
-            {"case": case.id, "mode": case.mode},
-            metadata={"source": "contract", "adapter": case.adapter},
+            channel_name, {"case": case.id, "mode": case.mode}, metadata={"source": "contract", "adapter": case.adapter}
         )
         await _wait_for_async_message(received)
         if not received:

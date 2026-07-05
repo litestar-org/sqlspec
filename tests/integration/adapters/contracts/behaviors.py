@@ -1382,7 +1382,10 @@ def _merge_upsert_query(table: str, rows: list[dict[str, object]], case: DriverC
 
 
 def _merge_price(value: object) -> float | None:
-    return None if value is None else float(value)
+    if value is None:
+        return None
+    assert isinstance(value, int | float | Decimal)
+    return float(value)
 
 
 def assert_sync_merge_contract(driver: object, case: DriverCase) -> None:
@@ -3241,7 +3244,7 @@ def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
             "[1, 2, 3, 4, 5], "
             "{'name': 'nested', 'values': [10, 20, 30]}, "
             "MAP(['key1', 'key2'], [100, 200]), "
-            "'{\"type\": \"test\", \"version\": 1}'"
+            '\'{"type": "test", "version": 1}\''
             ")"
         )
         advanced_row = sync_driver.execute(
@@ -3523,7 +3526,7 @@ register_sync_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEAT
 register_async_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEATURES_SCOPE, _oracle_batch_errors_async)
 
 
-def _lower_keys(row: dict[str, object]) -> dict[str, object]:
+def _lower_keys(row: dict[str, object]) -> dict[str, Any]:
     return {key.lower(): value for key, value in row.items()}
 
 

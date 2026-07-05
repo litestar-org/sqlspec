@@ -142,4 +142,3 @@ async def test_asyncpg_concurrent_multi_channel_subscribe(postgres_service: "Any
         if config.connection_instance:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(config.close_pool(), timeout=2.0)
-

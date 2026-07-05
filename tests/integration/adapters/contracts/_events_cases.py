@@ -135,11 +135,7 @@ ASYNC_EVENTS_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for
 
 SYNC_LISTEN_NOTIFY_CASES = (
     ListenNotifyCase(
-        "psycopg-sync",
-        "listen_notify_config_psycopg_sync",
-        "psycopg",
-        "sync",
-        marks=(POSTGRES_XDIST_MARK,),
+        "psycopg-sync", "listen_notify_config_psycopg_sync", "psycopg", "sync", marks=(POSTGRES_XDIST_MARK,)
     ),
 )
 
@@ -152,11 +148,7 @@ ASYNC_LISTEN_NOTIFY_CASES = (
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
     ),
     ListenNotifyCase(
-        "psqlpy-async",
-        "listen_notify_config_psqlpy",
-        "psqlpy",
-        "async",
-        marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
+        "psqlpy-async", "listen_notify_config_psqlpy", "psqlpy", "async", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)
     ),
     ListenNotifyCase(
         "psycopg-async",
@@ -167,9 +159,7 @@ ASYNC_LISTEN_NOTIFY_CASES = (
     ),
 )
 
-SYNC_LISTEN_NOTIFY_PARAMS = tuple(
-    pytest.param(case, id=case.id, marks=case.marks) for case in SYNC_LISTEN_NOTIFY_CASES
-)
+SYNC_LISTEN_NOTIFY_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in SYNC_LISTEN_NOTIFY_CASES)
 ASYNC_LISTEN_NOTIFY_PARAMS = tuple(
     pytest.param(case, id=case.id, marks=case.marks) for case in ASYNC_LISTEN_NOTIFY_CASES
 )

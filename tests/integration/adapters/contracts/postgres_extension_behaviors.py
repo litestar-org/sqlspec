@@ -7,7 +7,7 @@ from sqlspec.builder import Column
 from tests.integration.adapters.contracts._postgres_extension_cases import PostgresExtensionCase
 
 
-def _lower_keys(row: dict[str, object]) -> dict[str, object]:
+def _lower_keys(row: dict[str, object]) -> dict[str, Any]:
     return {key.lower(): value for key, value in row.items()}
 
 

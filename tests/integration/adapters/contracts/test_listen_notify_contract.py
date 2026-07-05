@@ -14,4 +14,6 @@ def test_sync_listen_notify_delivery_contract(sync_listen_notify_case: ListenNot
 
 async def test_async_listen_notify_delivery_contract(async_listen_notify_case: ListenNotifyCaseContext) -> None:
     """Async native LISTEN/NOTIFY backends deliver payloads and metadata."""
-    await assert_async_listen_notify_delivery_contract(async_listen_notify_case.make_config, async_listen_notify_case.case)
+    await assert_async_listen_notify_delivery_contract(
+        async_listen_notify_case.make_config, async_listen_notify_case.case
+    )

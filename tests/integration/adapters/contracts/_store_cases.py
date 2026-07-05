@@ -68,7 +68,9 @@ STORE_CASES = (
     ),
     StoreCase("pymysql", "contract_pymysql_store", "pymysql", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)),
     StoreCase("adbc", "contract_adbc_store", "adbc", marks=(ADBC_MARK, POSTGRES_XDIST_MARK, pytest.mark.anyio)),
-    StoreCase("oracledb-async", "contract_oracle_async_store", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)),
+    StoreCase(
+        "oracledb-async", "contract_oracle_async_store", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)
+    ),
     StoreCase("oracledb-sync", "contract_oracle_sync_store", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)),
 )
 

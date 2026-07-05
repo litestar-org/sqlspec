@@ -4,7 +4,7 @@ import contextlib
 from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -154,7 +154,7 @@ def _ensure_postgres_extension(postgres_service: PostgresService, extension: str
     import psycopg
 
     with psycopg.connect(_postgres_conninfo(postgres_service)) as conn:
-        conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        cast("Any", conn).execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
         conn.commit()
 
 
@@ -1088,9 +1088,7 @@ def _resolve_events_case(request: pytest.FixtureRequest, case: EventsCase) -> Ev
     return EventsCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
 
 
-def _resolve_listen_notify_case(
-    request: pytest.FixtureRequest, case: ListenNotifyCase
-) -> ListenNotifyCaseContext:
+def _resolve_listen_notify_case(request: pytest.FixtureRequest, case: ListenNotifyCase) -> ListenNotifyCaseContext:
     return ListenNotifyCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
 
 
@@ -2049,8 +2047,7 @@ async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenera
 async def contract_oracle_async_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncStore, None]":
     """Provide a ready Oracle async Litestar store for contract tests."""
     config = OracleAsyncConfig(
-        connection_config=_oracle_pool_params(oracle_23ai_service),
-        extension_config=_STORE_EXTENSION_CONFIG,
+        connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_STORE_EXTENSION_CONFIG
     )
     store = OracleAsyncStore(config)
     await store.create_table()
@@ -2065,8 +2062,7 @@ async def contract_oracle_async_store(oracle_23ai_service: OracleService) -> "As
 async def contract_oracle_sync_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleSyncStore, None]":
     """Provide a ready Oracle sync Litestar store for contract tests."""
     config = OracleSyncConfig(
-        connection_config=_oracle_pool_params(oracle_23ai_service),
-        extension_config=_STORE_EXTENSION_CONFIG,
+        connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_STORE_EXTENSION_CONFIG
     )
     store = OracleSyncStore(config)
     await store.create_table()
