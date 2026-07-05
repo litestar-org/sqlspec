@@ -69,10 +69,9 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
     makefile = (PROJECT_ROOT / "Makefile").read_text()
     target_match = re.search("^test-mypyc:.*?(?=^\\S)", makefile, flags=re.MULTILINE | re.DOTALL)
     assert target_match is not None
-    smoke_invocations = re.findall(
-        "uv run mypyc --check-untyped-defs --no-warn-unused-configs (\\S+)", target_match.group(0)
-    )
+    smoke_invocations = re.findall(r"uv run mypyc .*? (sqlspec/\S+\.py)", target_match.group(0))
     assert smoke_invocations == [
+        "sqlspec/base.py",
         "sqlspec/utils/text.py",
         "sqlspec/utils/sync_tools.py",
         "sqlspec/utils/env.py",
@@ -88,6 +87,9 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/adapters/sqlite/pool.py",
         "sqlspec/storage/_paths.py",
         "sqlspec/storage/_utils.py",
+        "sqlspec/storage/backends/local.py",
+        "sqlspec/storage/backends/fsspec.py",
+        "sqlspec/storage/backends/obstore.py",
         "sqlspec/data_dictionary/_loader.py",
         "sqlspec/data_dictionary/dialects/bigquery.py",
         "sqlspec/data_dictionary/dialects/cockroachdb.py",
@@ -100,10 +102,14 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/dialects/postgres/_generators.py",
         "sqlspec/dialects/postgres/_operators.py",
         "sqlspec/dialects/spanner/_generators.py",
+        "sqlspec/extensions/prometheus/_observer.py",
+        "sqlspec/extensions/fastapi/providers.py",
+        "sqlspec/extensions/litestar/providers.py",
         "sqlspec/extensions/events/_hints.py",
         "sqlspec/extensions/events/_models.py",
         "sqlspec/extensions/events/_names.py",
         "sqlspec/extensions/events/_payload.py",
+        "sqlspec/extensions/events/_channel.py",
         "sqlspec/extensions/events/_queue.py",
         "sqlspec/extensions/adk/_types.py",
         "sqlspec/extensions/adk/memory/_types.py",
