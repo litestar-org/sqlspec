@@ -21,6 +21,14 @@ from tests.integration.adapters.contracts._inputs import (
     ParameterStyleCase,
 )
 
+MYSQL_ROW_LOCKING_CASE_IDS = {
+    "aiomysql-async",
+    "asyncmy-async",
+    "mysqlconnector-async",
+    "mysqlconnector-sync",
+    "pymysql-sync",
+}
+
 
 def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
     return tuple(cast("DriverCase", param.values[0]) for param in params)
@@ -65,6 +73,14 @@ def test_capability_params_match_requested_capability() -> None:
         async_cases = _driver_cases(async_driver_params_with(capability_name))
         assert all(getattr(case, capability_name) for case in sync_cases)
         assert all(getattr(case, capability_name) for case in async_cases)
+
+
+def test_mysql_row_locking_cases_are_contract_owned() -> None:
+    """MySQL row-locking behavior belongs to the shared driver contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in MYSQL_ROW_LOCKING_CASE_IDS}
+    assert set(cases) == MYSQL_ROW_LOCKING_CASE_IDS
+    assert all(case.supports_for_update for case in cases.values())
+    assert all(case.supports_for_share for case in cases.values())
 
 
 def test_adk_capability_params_match_requested_capability() -> None:
