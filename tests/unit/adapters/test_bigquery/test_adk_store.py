@@ -106,7 +106,7 @@ def test_bigquery_adk_session_ddl_is_partitioned_and_clustered_without_filter_by
 
     store = _make_store()
 
-    ddl = store._get_create_sessions_table_sql()
+    ddl = store._sessions_table_ddl()
 
     assert "PARTITION BY DATE(create_time)" in ddl
     assert "CLUSTER BY app_name, user_id, id" in ddl
@@ -119,8 +119,8 @@ def test_bigquery_adk_event_ddl_clusters_and_carries_event_ttl_only() -> None:
 
     store = _make_store({"retention": {"event_ttl_seconds": 86400 * 30}})
 
-    session_ddl = store._get_create_sessions_table_sql()
-    event_ddl = store._get_create_events_table_sql()
+    session_ddl = store._sessions_table_ddl()
+    event_ddl = store._events_table_ddl()
 
     assert "PARTITION BY DATE(timestamp)" in event_ddl
     assert "CLUSTER BY app_name, user_id, session_id" in event_ddl

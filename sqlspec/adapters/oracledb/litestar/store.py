@@ -71,7 +71,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
 
         Returns:
@@ -105,7 +105,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL with PL/SQL error handling.
 
         Returns:
@@ -136,7 +136,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
 
@@ -374,7 +374,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
 
         Returns:
@@ -408,7 +408,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL with PL/SQL error handling.
 
         Returns:
@@ -439,7 +439,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
 

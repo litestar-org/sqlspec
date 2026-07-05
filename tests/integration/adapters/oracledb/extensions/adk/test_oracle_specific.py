@@ -38,7 +38,7 @@ def _event_record(
 
 def _drop_table_statements(store: object) -> "list[str]":
     """Return drop table statements for ADK stores."""
-    dropper = cast("Any", getattr(store, "_get_drop_tables_sql"))
+    dropper = cast("Any", getattr(store, "_drop_tables_sql"))
     return cast("list[str]", dropper())
 
 

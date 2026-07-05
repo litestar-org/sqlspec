@@ -33,7 +33,7 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
         _raise_missing_config()
     store = store_class(config=context.config)
 
-    return [store._get_create_table_sql()]  # pyright: ignore[reportPrivateUsage]
+    return [store._table_ddl()]  # pyright: ignore[reportPrivateUsage]
 
 
 async def down(context: "MigrationContext | None" = None) -> "list[str]":
@@ -54,7 +54,7 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
         _raise_missing_config()
     store = store_class(config=context.config)
 
-    return store._get_drop_table_sql()  # pyright: ignore[reportPrivateUsage]
+    return store._drop_table_sql()  # pyright: ignore[reportPrivateUsage]
 
 
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseSQLSpecStore]":

@@ -22,7 +22,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonAsyncConfig"]):
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         async with self._config.provide_session() as session:
-            await session.execute_script(self._get_create_table_sql())
+            await session.execute_script(self._table_ddl())
         self._log_table_created()
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -135,7 +135,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonAsyncConfig"]):
             self._log_delete_expired(count)
         return count
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
         return f"""
         IF NOT EXISTS (
@@ -159,7 +159,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonAsyncConfig"]):
         END;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         return [f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};"]
 

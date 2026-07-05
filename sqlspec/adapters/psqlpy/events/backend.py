@@ -161,7 +161,7 @@ class PsqlpyHybridEventsBackend:
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    self._queue._upsert_sql,  # pyright: ignore[reportPrivateUsage]
+                    self._queue._insert_statement,  # pyright: ignore[reportPrivateUsage]
                     {
                         "event_id": event_id,
                         "channel": channel,

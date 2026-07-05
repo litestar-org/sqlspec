@@ -198,7 +198,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         return _adk_memory_store_config(self._config)
 
     @abstractmethod
-    async def _get_create_memory_table_sql(self) -> "str | list[str]":
+    async def _memory_table_ddl(self) -> "str | list[str]":
         """Get the CREATE TABLE SQL for the memory table.
 
         Returns:
@@ -207,7 +207,7 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect.
 
         Returns:
@@ -215,17 +215,17 @@ class BaseAsyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def _get_reset_drop_memory_table_sql(self) -> "list[str]":
+    def _reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
         return reset_drop_sql(
-            list(self._get_drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._get_drop_memory_table_sql_for_table
+            list(self._drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._drop_memory_sql_for_table
         )
 
-    def _get_drop_memory_table_sql_for_table(self, table_name: str) -> "list[str]":
+    def _drop_memory_sql_for_table(self, table_name: str) -> "list[str]":
         current_table = self._memory_table
         self._memory_table = table_name
         try:
-            return list(self._get_drop_memory_table_sql())
+            return list(self._drop_memory_table_sql())
         finally:
             self._memory_table = current_table
 
@@ -424,7 +424,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         return _adk_memory_store_config(self._config)
 
     @abstractmethod
-    def _get_create_memory_table_sql(self) -> "str | list[str]":
+    def _memory_table_ddl(self) -> "str | list[str]":
         """Get the CREATE TABLE SQL for the memory table.
 
         Returns:
@@ -432,17 +432,17 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def _get_reset_drop_memory_table_sql(self) -> "list[str]":
+    def _reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
         return reset_drop_sql(
-            list(self._get_drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._get_drop_memory_table_sql_for_table
+            list(self._drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._drop_memory_sql_for_table
         )
 
-    def _get_drop_memory_table_sql_for_table(self, table_name: str) -> "list[str]":
+    def _drop_memory_sql_for_table(self, table_name: str) -> "list[str]":
         current_table = self._memory_table
         self._memory_table = table_name
         try:
-            return list(self._get_drop_memory_table_sql())
+            return list(self._drop_memory_table_sql())
         finally:
             self._memory_table = current_table
 
@@ -466,7 +466,7 @@ class BaseSyncADKMemoryStore(ABC, Generic[ConfigT]):
         )
 
     @abstractmethod
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect.
 
         Returns:

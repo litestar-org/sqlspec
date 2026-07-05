@@ -26,7 +26,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
     def __init__(self, config: "PyMysqlConfig") -> None:
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id VARCHAR(255) PRIMARY KEY,
@@ -38,14 +38,14 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         return [
             f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
             f"DROP TABLE IF EXISTS {self._table_name}",
         ]
 
     def _create_table(self) -> None:
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
             driver.commit()

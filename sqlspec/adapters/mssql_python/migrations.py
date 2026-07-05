@@ -28,7 +28,7 @@ class MssqlPythonMigrationTrackerMixin:
 
     version_table: str
 
-    def _get_create_table_sql(self) -> CreateTable:
+    def _tracking_table_ddl(self) -> CreateTable:
         """Return T-SQL-compatible migration tracking table DDL."""
         return (
             sql
@@ -44,10 +44,10 @@ class MssqlPythonMigrationTrackerMixin:
             .column("replaces", "NVARCHAR(MAX)")
         )
 
-    def _get_idempotent_create_table_sql_text(self) -> str:
+    def _idempotent_tracking_table_ddl_text(self) -> str:
         """Wrap CREATE TABLE in a T-SQL sys.tables existence probe."""
         schema_name, table_name = _split_schema_table(self.version_table)
-        create_sql = self._get_create_table_sql_text().rstrip().rstrip(";")
+        create_sql = self._tracking_table_ddl_text().rstrip().rstrip(";")
         return (
             "IF NOT EXISTS (SELECT 1 FROM sys.tables "
             f"WHERE name = '{_escape_sql_literal(table_name)}' "
@@ -55,10 +55,10 @@ class MssqlPythonMigrationTrackerMixin:
             f"BEGIN {create_sql}; END;"
         )
 
-    def _get_create_table_sql_text(self) -> str:
+    def _tracking_table_ddl_text(self) -> str:
         """Render CREATE TABLE text without routing SQL Server types through sqlglot."""
         column_lines: list[str] = []
-        for column_def in self._get_create_table_sql().columns:
+        for column_def in self._tracking_table_ddl().columns:
             default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
             not_null_clause = " NOT NULL" if column_def.not_null else ""
             primary_key_clause = " PRIMARY KEY" if column_def.primary_key else ""
@@ -67,7 +67,7 @@ class MssqlPythonMigrationTrackerMixin:
             )
         return f"CREATE TABLE {self.version_table} (\n" + ",\n".join(column_lines) + "\n)"
 
-    def _get_existing_columns_sql(self) -> str:
+    def _existing_columns_query(self) -> str:
         """Return T-SQL query text for migration tracking table columns."""
         schema_name, table_name = _split_schema_table(self.version_table)
         return f"""
@@ -78,9 +78,9 @@ class MssqlPythonMigrationTrackerMixin:
               AND t.schema_id = SCHEMA_ID('{_escape_sql_literal(schema_name)}')
         """
 
-    def _get_add_column_sql_text(self, column_name: str) -> str | None:
+    def _add_column_statement_text(self, column_name: str) -> str | None:
         """Return T-SQL ALTER TABLE text for a missing migration column."""
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
         if column_def is None:
             return None
@@ -94,7 +94,7 @@ class MssqlPythonSyncMigrationTracker(MssqlPythonMigrationTrackerMixin, SyncMigr
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it does not exist."""
-        driver.execute_script(self._get_idempotent_create_table_sql_text())
+        driver.execute_script(self._idempotent_tracking_table_ddl_text())
         driver.commit()
         self._migrate_schema_if_needed(driver)
 
@@ -104,10 +104,10 @@ class MssqlPythonSyncMigrationTracker(MssqlPythonMigrationTrackerMixin, SyncMigr
         """Record a successfully applied migration with T-SQL-compatible metadata."""
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
-        result = driver.execute(self._get_next_execution_sequence_sql())
+        result = driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
         driver.execute(
-            self._get_record_migration_sql(
+            self._record_migration_statement(
                 version,
                 version_type,
                 next_sequence,
@@ -122,7 +122,7 @@ class MssqlPythonSyncMigrationTracker(MssqlPythonMigrationTrackerMixin, SyncMigr
     def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Check and add missing tracking table columns through SQL Server catalog views."""
         try:
-            rows = driver.select(self._get_existing_columns_sql())
+            rows = driver.select(self._existing_columns_query())
             existing_columns = {str(row["column_name"]).lower() for row in rows if row.get("column_name") is not None}
             missing_columns = self._detect_missing_columns(existing_columns)
             if not missing_columns:
@@ -146,7 +146,7 @@ class MssqlPythonSyncMigrationTracker(MssqlPythonMigrationTrackerMixin, SyncMigr
 
     def _add_column(self, driver: "SyncDriverAdapterBase", column_name: str) -> None:
         """Add a single missing migration tracking column."""
-        add_column_sql = self._get_add_column_sql_text(column_name)
+        add_column_sql = self._add_column_statement_text(column_name)
         if add_column_sql is None:
             return
         driver.execute_script(add_column_sql)
@@ -157,7 +157,7 @@ class MssqlPythonAsyncMigrationTracker(MssqlPythonMigrationTrackerMixin, AsyncMi
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it does not exist."""
-        await driver.execute_script(self._get_idempotent_create_table_sql_text())
+        await driver.execute_script(self._idempotent_tracking_table_ddl_text())
         await driver.commit()
         await self._migrate_schema_if_needed(driver)
 
@@ -167,10 +167,10 @@ class MssqlPythonAsyncMigrationTracker(MssqlPythonMigrationTrackerMixin, AsyncMi
         """Record a successfully applied migration with T-SQL-compatible metadata."""
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
-        result = await driver.execute(self._get_next_execution_sequence_sql())
+        result = await driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
         await driver.execute(
-            self._get_record_migration_sql(
+            self._record_migration_statement(
                 version,
                 version_type,
                 next_sequence,
@@ -185,7 +185,7 @@ class MssqlPythonAsyncMigrationTracker(MssqlPythonMigrationTrackerMixin, AsyncMi
     async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Check and add missing tracking table columns through SQL Server catalog views."""
         try:
-            rows = await driver.select(self._get_existing_columns_sql())
+            rows = await driver.select(self._existing_columns_query())
             existing_columns = {str(row["column_name"]).lower() for row in rows if row.get("column_name") is not None}
             missing_columns = self._detect_missing_columns(existing_columns)
             if not missing_columns:
@@ -209,7 +209,7 @@ class MssqlPythonAsyncMigrationTracker(MssqlPythonMigrationTrackerMixin, AsyncMi
 
     async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
         """Add a single missing migration tracking column."""
-        add_column_sql = self._get_add_column_sql_text(column_name)
+        add_column_sql = self._add_column_statement_text(column_name)
         if add_column_sql is None:
             return
         await driver.execute_script(add_column_sql)

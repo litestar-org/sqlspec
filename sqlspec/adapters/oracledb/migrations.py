@@ -59,7 +59,7 @@ class OracleMigrationTrackerMixin:
             return f"{self._quote_oracle_identifier(version_table_schema)}.{quoted_table_name}"
         return quoted_table_name
 
-    def _get_create_table_builder(self) -> CreateTable:
+    def _tracking_table_builder(self) -> CreateTable:
         """Return an Oracle CREATE TABLE builder for the tracker table."""
         table_name = self._normalize_oracle_identifier(self.version_table_name)
         builder = sql.create_table(table_name)
@@ -67,7 +67,7 @@ class OracleMigrationTrackerMixin:
             builder.in_schema(self._normalize_oracle_identifier(self.version_table_schema))
         return builder
 
-    def _get_create_table_sql(self) -> CreateTable:
+    def _tracking_table_ddl(self) -> CreateTable:
         """Get Oracle-specific SQL builder for creating the tracking table.
 
         Oracle doesn't support:
@@ -80,7 +80,7 @@ class OracleMigrationTrackerMixin:
         """
         return (
             self
-            ._get_create_table_builder()
+            ._tracking_table_builder()
             .column("version_num", "VARCHAR2(32)", primary_key=True)
             .column("version_type", "VARCHAR2(16)")
             .column("execution_sequence", "INTEGER")
@@ -91,7 +91,7 @@ class OracleMigrationTrackerMixin:
             .column("applied_by", "VARCHAR2(255)")
         )
 
-    def _get_current_version_sql(self) -> Select:
+    def _current_version_query(self) -> Select:
         """Get Oracle-specific SQL for retrieving current version.
 
         Uses uppercase column names with lowercase aliases to match Python expectations.
@@ -109,7 +109,7 @@ class OracleMigrationTrackerMixin:
             .limit(1)
         )
 
-    def _get_applied_migrations_sql(self) -> Select:
+    def _applied_migrations_query(self) -> Select:
         """Get Oracle-specific SQL for retrieving all applied migrations.
 
         Uses uppercase column names with lowercase aliases to match Python expectations.
@@ -135,7 +135,7 @@ class OracleMigrationTrackerMixin:
             .order_by("EXECUTION_SEQUENCE")
         )
 
-    def _get_next_execution_sequence_sql(self) -> Select:
+    def _next_execution_sequence_query(self) -> Select:
         """Get Oracle-specific SQL for retrieving next execution sequence.
 
         Uses uppercase column names with lowercase alias to match Python expectations.
@@ -156,7 +156,7 @@ class OracleMigrationTrackerMixin:
         Returns:
             Set of missing column names (lowercase).
         """
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         target_columns = {col.name.lower() for col in target_create.columns}
         existing_lower = {col.lower() for col in existing_columns}
         return target_columns - existing_lower
@@ -212,7 +212,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
             column_name: Name of the column to add (lowercase).
         """
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
 
         if not column_def:
@@ -274,7 +274,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         Returns:
             The current migration version or None if no migrations applied.
         """
-        result = driver.execute(self._get_current_version_sql())
+        result = driver.execute(self._current_version_query())
         data = result.get_data()
         return data[0]["version_num"] if data else None
 
@@ -287,7 +287,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         Returns:
             List of migration records as dictionaries with lowercase keys.
         """
-        result = driver.execute(self._get_applied_migrations_sql())
+        result = driver.execute(self._applied_migrations_query())
         return result.get_data()
 
     def record_migration(
@@ -306,11 +306,11 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
 
-        next_seq_result = driver.execute(self._get_next_execution_sequence_sql())
+        next_seq_result = driver.execute(self._next_execution_sequence_query())
         seq_data = next_seq_result.get_data()
         execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
-        record_sql = self._get_record_migration_sql(
+        record_sql = self._record_migration_statement(
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
         )
         driver.execute(record_sql)
@@ -323,7 +323,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
             version: Version number to remove.
         """
-        remove_sql = self._get_remove_migration_sql(version)
+        remove_sql = self._remove_migration_statement(version)
         driver.execute(remove_sql)
         driver.commit()
 
@@ -347,10 +347,10 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         parsed_new_version = parse_version(new_version)
         new_version_type = parsed_new_version.type.value
 
-        result = driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+        result = driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = driver.execute(self._get_applied_migrations_sql())
+            check_result = driver.execute(self._applied_migrations_query())
             applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
@@ -413,7 +413,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
             column_name: Name of the column to add (lowercase).
         """
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
 
         if not column_def:
@@ -475,7 +475,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         Returns:
             The current migration version or None if no migrations applied.
         """
-        result = await driver.execute(self._get_current_version_sql())
+        result = await driver.execute(self._current_version_query())
         data = result.get_data()
         return data[0]["version_num"] if data else None
 
@@ -488,7 +488,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         Returns:
             List of migration records as dictionaries with lowercase keys.
         """
-        result = await driver.execute(self._get_applied_migrations_sql())
+        result = await driver.execute(self._applied_migrations_query())
         return result.get_data()
 
     async def record_migration(
@@ -508,11 +508,11 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
 
-        next_seq_result = await driver.execute(self._get_next_execution_sequence_sql())
+        next_seq_result = await driver.execute(self._next_execution_sequence_query())
         seq_data = next_seq_result.get_data()
         execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
-        record_sql = self._get_record_migration_sql(
+        record_sql = self._record_migration_statement(
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
         )
         await driver.execute(record_sql)
@@ -525,7 +525,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
             version: Version number to remove.
         """
-        remove_sql = self._get_remove_migration_sql(version)
+        remove_sql = self._remove_migration_statement(version)
         await driver.execute(remove_sql)
         await driver.commit()
 
@@ -549,10 +549,10 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         parsed_new_version = parse_version(new_version)
         new_version_type = parsed_new_version.type.value
 
-        result = await driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+        result = await driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = await driver.execute(self._get_applied_migrations_sql())
+            check_result = await driver.execute(self._applied_migrations_query())
             applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:

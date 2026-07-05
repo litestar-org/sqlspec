@@ -190,8 +190,8 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
     def _database(self) -> "Database":
         return self._config.get_database()
 
-    def _get_reset_drop_tables_sql(self) -> "list[str]":
-        return _filter_existing_spanner_drops(super()._get_reset_drop_tables_sql(), self._existing_tables())
+    def _reset_drop_tables_sql(self) -> "list[str]":
+        return _filter_existing_spanner_drops(super()._reset_drop_tables_sql(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
         database = self._database()
@@ -648,23 +648,23 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._session_table not in existing_tables:
-            ddl_statements.append(self._get_create_sessions_table_sql())
+            ddl_statements.append(self._sessions_table_ddl())
         if self._events_table not in existing_tables:
-            ddl_statements.append(self._get_create_events_table_sql())
+            ddl_statements.append(self._events_table_ddl())
         if self._app_state_table not in existing_tables:
-            ddl_statements.append(self._get_create_app_states_table_sql())
+            ddl_statements.append(self._app_states_table_ddl())
         if self._user_state_table not in existing_tables:
-            ddl_statements.append(self._get_create_user_states_table_sql())
+            ddl_statements.append(self._user_states_table_ddl())
         if self._metadata_table not in existing_tables:
-            ddl_statements.append(self._get_create_metadata_table_sql())
-        ddl_statements.extend(self._get_create_expiration_index_sql())
+            ddl_statements.append(self._metadata_table_ddl())
+        ddl_statements.extend(self._expiration_index_ddl())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
             if self._metadata_table not in existing_tables:
-                self._run_write([(self._get_seed_metadata_sql(), {}, {})])
+                self._run_write([(self._metadata_seed_sql(), {}, {})])
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
@@ -687,7 +687,7 @@ CREATE TABLE {self._session_table} (
 ) {pk}{options}{self._session_row_deletion_policy}
 """
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         shard_column = ""
         pk = "PRIMARY KEY (session_id, timestamp)"
         if self._shard_count > 1:
@@ -706,7 +706,7 @@ CREATE TABLE {self._events_table} (
 ) {pk}{options}{self._events_row_deletion_policy}
 """
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         return f"""
 CREATE TABLE {self._app_state_table} (
   app_name STRING(128) NOT NULL,
@@ -715,7 +715,7 @@ CREATE TABLE {self._app_state_table} (
 ) PRIMARY KEY (app_name)
 """
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         return f"""
 CREATE TABLE {self._user_state_table} (
   app_name STRING(128) NOT NULL,
@@ -725,7 +725,7 @@ CREATE TABLE {self._user_state_table} (
 ) PRIMARY KEY (app_name, user_id)
 """
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         return f"""
 CREATE TABLE {self._metadata_table} (
   key STRING(128) NOT NULL,
@@ -733,13 +733,13 @@ CREATE TABLE {self._metadata_table} (
 ) PRIMARY KEY (key)
 """
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         return f"""
 INSERT INTO {self._metadata_table} (key, value)
 VALUES ('schema_version', '1')
 """
 
-    def _get_create_expiration_index_sql(self) -> "list[str]":
+    def _expiration_index_ddl(self) -> "list[str]":
         options = f" OPTIONS ({self._expires_index_options})" if self._expires_index_options else ""
         return [
             f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time "
@@ -748,22 +748,22 @@ VALUES ('schema_version', '1')
             f"ON {self._events_table}(timestamp){options}",
         ]
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         return [
             f"DROP INDEX idx_{self._events_table}_timestamp",
             f"DROP INDEX idx_{self._session_table}_update_time",
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE {self._events_table}",
             f"DROP TABLE {self._session_table}",
         ]
@@ -807,8 +807,8 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
     def _database(self) -> "Database":
         return self._config.get_database()
 
-    def _get_reset_drop_memory_table_sql(self) -> "list[str]":
-        return _filter_existing_spanner_drops(super()._get_reset_drop_memory_table_sql(), self._existing_tables())
+    def _reset_drop_memory_table_sql(self) -> "list[str]":
+        return _filter_existing_spanner_drops(super()._reset_drop_memory_table_sql(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
         database = self._database()
@@ -862,12 +862,12 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
         ddl_statements: list[str] = []
         if self._memory_table not in existing_tables:
-            ddl_statements.extend(self._get_create_memory_table_sql())
+            ddl_statements.extend(self._memory_table_ddl())
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
-    def _get_create_memory_table_sql(self) -> "list[str]":
+    def _memory_table_ddl(self) -> "list[str]":
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
@@ -914,7 +914,7 @@ CREATE TABLE {self._memory_table} (
             statements.append(fts_index)
         return statements
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get SQL to drop the memory table and its indexes.
 
         Returns:

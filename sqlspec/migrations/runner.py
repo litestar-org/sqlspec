@@ -517,7 +517,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
-                has_downgrade = bool(self._get_migration_sql({"loader": loader, "file_path": file_path}, "down"))
+                has_downgrade = bool(self._migration_sql({"loader": loader, "file_path": file_path}, "down"))
             except Exception:
                 has_downgrade = False
 
@@ -580,7 +580,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        upgrade_sql_list = self._get_migration_sql(migration, "up")
+        upgrade_sql_list = self._migration_sql(migration, "up")
         if upgrade_sql_list is None:
             self._metric("migrations.upgrade.skipped")
             self._log_migration_event(
@@ -671,7 +671,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        downgrade_sql_list = self._get_migration_sql(migration, "down")
+        downgrade_sql_list = self._migration_sql(migration, "down")
         if downgrade_sql_list is None:
             self._metric("migrations.downgrade.skipped")
             self._log_migration_event(
@@ -747,7 +747,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         return None, execution_time
 
-    def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
+    def _migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (sync version).
 
         Args:
@@ -863,9 +863,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
-                has_downgrade = bool(
-                    await self._migration_sql_async({"loader": loader, "file_path": file_path}, "down")
-                )
+                has_downgrade = bool(await self._migration_sql({"loader": loader, "file_path": file_path}, "down"))
             except Exception:
                 has_downgrade = False
 
@@ -928,7 +926,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        upgrade_sql_list = await self._migration_sql_async(migration, "up")
+        upgrade_sql_list = await self._migration_sql(migration, "up")
         if upgrade_sql_list is None:
             self._metric("migrations.upgrade.skipped")
             self._log_migration_event(
@@ -1019,7 +1017,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        downgrade_sql_list = await self._migration_sql_async(migration, "down")
+        downgrade_sql_list = await self._migration_sql(migration, "down")
         if downgrade_sql_list is None:
             self._metric("migrations.downgrade.skipped")
             self._log_migration_event(
@@ -1095,7 +1093,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         return None, execution_time
 
-    async def _migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
+    async def _migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (async version).
 
         Args:

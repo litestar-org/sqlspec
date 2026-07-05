@@ -102,7 +102,7 @@ async def test_psycopg_async_adk_events_table_uses_plain_schema_by_default() -> 
 
     store = PsycopgAsyncADKStore(_mock_config())
 
-    sql = await store._get_create_events_table_sql()
+    sql = await store._events_table_ddl()
 
     assert "author_gc" not in sql
     assert "node_path_gc" not in sql
@@ -116,7 +116,7 @@ async def test_psycopg_async_adk_events_table_applies_adapter_local_extension_co
         _mock_config({"enable_event_generated_columns": True, "enable_covering_indexes": True})
     )
 
-    sql = await store._get_create_events_table_sql()
+    sql = await store._events_table_ddl()
 
     assert "author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED" in sql
     assert "node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED" in sql
@@ -130,7 +130,7 @@ def test_psycopg_sync_adk_events_table_uses_plain_schema_by_default() -> None:
 
     store = PsycopgSyncADKStore(_mock_config())
 
-    sql = store._get_create_events_table_sql()
+    sql = store._events_table_ddl()
 
     assert "author_gc" not in sql
     assert "node_path_gc" not in sql
@@ -142,7 +142,7 @@ def test_psycopg_sync_adk_events_table_applies_adapter_local_extension_config() 
 
     store = PsycopgSyncADKStore(_mock_config({"enable_event_generated_columns": True, "enable_covering_indexes": True}))
 
-    sql = store._get_create_events_table_sql()
+    sql = store._events_table_ddl()
 
     assert "author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED" in sql
     assert "node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED" in sql

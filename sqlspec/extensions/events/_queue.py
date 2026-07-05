@@ -37,21 +37,21 @@ class _BaseTableEventQueue:
     """Base class with shared SQL generation and hydration logic."""
 
     __slots__ = (
-        "_ack_sql",
-        "_acked_cleanup_sql",
-        "_claim_sql",
+        "_ack_statement",
+        "_acked_cleanup_statement",
+        "_claim_statement",
         "_config",
         "_dialect",
+        "_insert_statement",
         "_lease_seconds",
         "_max_claim_attempts",
-        "_nack_sql",
+        "_nack_statement",
         "_retention_seconds",
         "_runtime",
-        "_select_by_id_sql",
-        "_select_sql",
+        "_select_by_id_statement",
+        "_select_statement",
         "_statement_config",
         "_table_name",
-        "_upsert_sql",
     )
 
     def __init__(
@@ -72,24 +72,24 @@ class _BaseTableEventQueue:
         self._lease_seconds = lease_seconds or 30
         self._retention_seconds = retention_seconds or 86_400
         self._max_claim_attempts = 5
-        self._upsert_sql = self._build_insert_sql()
-        self._select_sql = self._build_select_sql(bool(select_for_update), bool(skip_locked))
-        self._select_by_id_sql = self._build_select_by_id_sql()
-        self._claim_sql = self._build_claim_sql()
-        self._ack_sql = self._build_ack_sql()
-        self._nack_sql = self._build_nack_sql()
-        self._acked_cleanup_sql = self._build_cleanup_sql()
+        self._insert_statement = self._insert_sql()
+        self._select_statement = self._select_sql(bool(select_for_update), bool(skip_locked))
+        self._select_by_id_statement = self._select_by_id_sql()
+        self._claim_statement = self._claim_sql()
+        self._ack_statement = self._ack_sql()
+        self._nack_statement = self._nack_sql()
+        self._acked_cleanup_statement = self._cleanup_sql()
 
     @property
     def statement_config(self) -> "StatementConfig":
         return self._statement_config
 
-    def _build_insert_sql(self) -> str:
+    def _insert_sql(self) -> str:
         columns = "event_id, channel, payload_json, metadata_json, status, available_at, lease_expires_at, attempts, created_at"
         values = ":event_id, :channel, :payload_json, :metadata_json, :status, :available_at, :lease_expires_at, :attempts, :created_at"
         return f"INSERT INTO {self._table_name} ({columns}) VALUES ({values})"
 
-    def _build_select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
+    def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = self._row_limit_clause()
         base = (
@@ -106,7 +106,7 @@ class _BaseTableEventQueue:
                 locking_clause += " SKIP LOCKED"
         return base + limit_clause + locking_clause
 
-    def _build_select_by_id_sql(self) -> str:
+    def _select_by_id_sql(self) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = self._row_limit_clause()
         return (
@@ -124,7 +124,7 @@ class _BaseTableEventQueue:
             return " FETCH FIRST 1 ROWS ONLY"
         return " LIMIT 1"
 
-    def _build_claim_sql(self) -> str:
+    def _claim_sql(self) -> str:
         return (
             f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 "
             "WHERE event_id = :event_id AND ("
@@ -132,13 +132,13 @@ class _BaseTableEventQueue:
             ")"
         )
 
-    def _build_ack_sql(self) -> str:
+    def _ack_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
 
-    def _build_nack_sql(self) -> str:
+    def _nack_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL, attempts = attempts + 1 WHERE event_id = :event_id"
 
-    def _build_cleanup_sql(self) -> str:
+    def _cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
 
     @staticmethod
@@ -196,7 +196,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         event_id = uuid4().hex
         now = self._utcnow()
         self._execute(
-            self._upsert_sql,
+            self._insert_statement,
             {
                 "event_id": event_id,
                 "channel": channel,
@@ -224,7 +224,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
             claimed = self._execute(
-                self._claim_sql,
+                self._claim_statement,
                 {
                     "claimed_status": _LEASED_STATUS,
                     "lease_expires_at": leased_until,
@@ -245,7 +245,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         now = self._utcnow()
         leased_until = now + timedelta(seconds=self._lease_seconds)
         claimed = self._execute(
-            self._claim_sql,
+            self._claim_statement,
             {
                 "claimed_status": _LEASED_STATUS,
                 "lease_expires_at": leased_until,
@@ -261,12 +261,12 @@ class SyncTableEventQueue(_BaseTableEventQueue):
 
     def ack(self, event_id: str) -> None:
         now = self._utcnow()
-        self._execute(self._ack_sql, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
+        self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
         self._cleanup(now)
         self._runtime.increment_metric("events.ack")
 
     def nack(self, event_id: str) -> None:
-        self._execute(self._nack_sql, {"pending": _PENDING_STATUS, "event_id": event_id})
+        self._execute(self._nack_statement, {"pending": _PENDING_STATUS, "event_id": event_id})
         self._runtime.increment_metric("events.nack")
 
     def shutdown(self) -> None:
@@ -274,7 +274,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
 
     def _cleanup(self, reference: "datetime") -> None:
         cutoff = reference - timedelta(seconds=self._retention_seconds)
-        self._execute(self._acked_cleanup_sql, {"acked": _ACKED_STATUS, "cutoff": cutoff})
+        self._execute(self._acked_cleanup_statement, {"acked": _ACKED_STATUS, "cutoff": cutoff})
 
     def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
@@ -283,7 +283,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 # SQL allocation here is intentional: DB round-trip dominates by >=100x,
                 # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
-                    self._select_sql,
+                    self._select_statement,
                     {
                         "channel": channel,
                         "available_cutoff": current_time,
@@ -298,7 +298,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
     def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
         with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
             return driver.select_one_or_none(
-                SQL(self._select_by_id_sql, {"event_id": event_id}, statement_config=self._statement_config)
+                SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
             )
 
     def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
@@ -324,7 +324,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         event_id = uuid4().hex
         now = self._utcnow()
         await self._execute(
-            self._upsert_sql,
+            self._insert_statement,
             {
                 "event_id": event_id,
                 "channel": channel,
@@ -352,7 +352,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
             claimed = await self._execute(
-                self._claim_sql,
+                self._claim_statement,
                 {
                     "claimed_status": _LEASED_STATUS,
                     "lease_expires_at": leased_until,
@@ -373,7 +373,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         now = self._utcnow()
         leased_until = now + timedelta(seconds=self._lease_seconds)
         claimed = await self._execute(
-            self._claim_sql,
+            self._claim_statement,
             {
                 "claimed_status": _LEASED_STATUS,
                 "lease_expires_at": leased_until,
@@ -389,12 +389,12 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     async def ack(self, event_id: str) -> None:
         now = self._utcnow()
-        await self._execute(self._ack_sql, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
+        await self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
         await self._cleanup(now)
         self._runtime.increment_metric("events.ack")
 
     async def nack(self, event_id: str) -> None:
-        await self._execute(self._nack_sql, {"pending": _PENDING_STATUS, "event_id": event_id})
+        await self._execute(self._nack_statement, {"pending": _PENDING_STATUS, "event_id": event_id})
         self._runtime.increment_metric("events.nack")
 
     async def shutdown(self) -> None:
@@ -402,7 +402,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     async def _cleanup(self, reference: "datetime") -> None:
         cutoff = reference - timedelta(seconds=self._retention_seconds)
-        await self._execute(self._acked_cleanup_sql, {"acked": _ACKED_STATUS, "cutoff": cutoff})
+        await self._execute(self._acked_cleanup_statement, {"acked": _ACKED_STATUS, "cutoff": cutoff})
 
     async def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
@@ -413,7 +413,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 # SQL allocation here is intentional: DB round-trip dominates by >=100x,
                 # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
-                    self._select_sql,
+                    self._select_statement,
                     {
                         "channel": channel,
                         "available_cutoff": current_time,
@@ -430,7 +430,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
         ) as driver:
             return await driver.select_one_or_none(
-                SQL(self._select_by_id_sql, {"event_id": event_id}, statement_config=self._statement_config)
+                SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
             )
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:

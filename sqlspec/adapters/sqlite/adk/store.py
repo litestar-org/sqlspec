@@ -314,12 +314,12 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """Synchronous implementation of create_tables."""
         with self._config.provide_session() as driver:
             self._apply_pragmas(driver.connection)
-            driver.execute_script(self._get_create_sessions_table_sql())
-            driver.execute_script(self._get_create_events_table_sql())
-            driver.execute_script(self._get_create_app_states_table_sql())
-            driver.execute_script(self._get_create_user_states_table_sql())
-            driver.execute_script(self._get_create_metadata_table_sql())
-            driver.execute_script(self._get_seed_metadata_sql())
+            driver.execute_script(self._sessions_table_ddl())
+            driver.execute_script(self._events_table_ddl())
+            driver.execute_script(self._app_states_table_ddl())
+            driver.execute_script(self._user_states_table_ddl())
+            driver.execute_script(self._metadata_table_ddl())
+            driver.execute_script(self._metadata_seed_sql())
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -761,7 +761,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             conn.execute(sql, (key, value))
             conn.commit()
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
 
         Returns:
@@ -786,7 +786,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             ON {self._session_table}(update_time DESC);
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for events."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -807,7 +807,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             ON {self._events_table}(timestamp ASC);
         """
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for app-scoped state."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
@@ -817,7 +817,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         );
         """
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for user-scoped state."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
@@ -829,7 +829,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         );
         """
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for ADK internal metadata."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
@@ -838,7 +838,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         );
         """
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         """Get SQLite SQL to seed the ADK schema-version metadata row."""
         return f"""
         INSERT INTO {self._metadata_table} (key, value)
@@ -846,24 +846,24 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         ON CONFLICT(key) DO NOTHING;
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for user-scoped state."""
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for ADK internal metadata."""
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements."""
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -918,7 +918,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days)
 
-    def _get_create_memory_table_sql(self) -> str:
+    def _memory_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -977,7 +977,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         {fts_table}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements.
 
         Returns:
@@ -1006,7 +1006,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         with self._config.provide_session() as driver:
             self._enable_foreign_keys(driver.connection)
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(self._memory_table_ddl())
 
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.

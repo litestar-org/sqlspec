@@ -256,10 +256,10 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
 
         if self._table_name not in existing_tables:
-            ddl_statements = [self._get_create_table_sql(), self._get_create_index_sql()]
+            ddl_statements = [self._table_ddl(), self._index_ddl()]
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         shard_column = ""
         pk = "PRIMARY KEY (session_id)"
         if self._shard_count > 1:
@@ -278,7 +278,7 @@ CREATE TABLE {self._table_name} (
 ) {pk}{options}
 """
 
-    def _get_create_index_sql(self) -> str:
+    def _index_ddl(self) -> str:
         leading = "expires_at"
         if self._shard_count > 1:
             leading = "shard_id, expires_at"
@@ -287,5 +287,5 @@ CREATE TABLE {self._table_name} (
             opts = f" OPTIONS ({self._index_options})"
         return f"CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}({leading}){opts}"
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX idx_{self._table_name}_expires_at", f"DROP TABLE {self._table_name}"]

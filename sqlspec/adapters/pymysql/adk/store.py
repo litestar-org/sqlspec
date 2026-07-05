@@ -151,54 +151,54 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         """Set a value in the ADK internal metadata table."""
         _set_metadata(self, key, value)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for sessions."""
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "session_table_options")
         return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for events."""
         return _mysql_events_ddl(self._events_table, self._session_table, _adk_config(self._config))
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for app-scoped state."""
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "app_state_table_options")
         return _mysql_app_state_ddl(self._app_state_table, table_options)
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for user-scoped state."""
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "user_state_table_options")
         return _mysql_user_state_ddl(self._user_state_table, table_options)
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for ADK metadata."""
         return _mysql_metadata_ddl(self._metadata_table)
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         """Get MySQL metadata seed SQL."""
         return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for user-scoped state."""
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for ADK metadata."""
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get MySQL DROP TABLE SQL statements."""
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -234,7 +234,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days)
 
-    def _get_create_memory_table_sql(self) -> str:
+    def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         owner_id_line = ""
         fk_constraint = ""
@@ -267,7 +267,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     def _create_tables(self) -> None:
@@ -275,7 +275,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(self._memory_table_ddl())
 
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -419,12 +419,12 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
 
 def _create_tables(store: PyMysqlADKStore) -> None:
     with store._config.provide_session() as driver:
-        driver.execute_script(store._get_create_sessions_table_sql())
-        driver.execute_script(store._get_create_events_table_sql())
-        driver.execute_script(store._get_create_app_states_table_sql())
-        driver.execute_script(store._get_create_user_states_table_sql())
-        driver.execute_script(store._get_create_metadata_table_sql())
-        driver.execute_script(store._get_seed_metadata_sql())
+        driver.execute_script(store._sessions_table_ddl())
+        driver.execute_script(store._events_table_ddl())
+        driver.execute_script(store._app_states_table_ddl())
+        driver.execute_script(store._user_states_table_ddl())
+        driver.execute_script(store._metadata_table_ddl())
+        driver.execute_script(store._metadata_seed_sql())
 
 
 def _create_session(

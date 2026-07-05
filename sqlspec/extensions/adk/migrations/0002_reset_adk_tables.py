@@ -43,23 +43,23 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     memory_store_class = _get_memory_store_class(context)
     if memory_store_class is not None:
         memory_store = memory_store_class(config=context.config)
-        statements.extend(memory_store._get_reset_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
+        statements.extend(memory_store._reset_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
         log_with_context(logger, logging.DEBUG, "adk.migration.reset.memory.drop", table_name=memory_store.memory_table)
 
-    statements.extend(store_instance._get_reset_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
+    statements.extend(store_instance._reset_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
 
     statements.extend([
-        await _resolve_sql(store_instance._get_create_sessions_table_sql()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._get_create_events_table_sql()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._get_create_app_states_table_sql()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._get_create_user_states_table_sql()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._get_create_metadata_table_sql()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._get_seed_metadata_sql()),  # pyright: ignore[reportPrivateUsage]
+        await _resolve_sql(store_instance._sessions_table_ddl()),  # pyright: ignore[reportPrivateUsage]
+        await _resolve_sql(store_instance._events_table_ddl()),  # pyright: ignore[reportPrivateUsage]
+        await _resolve_sql(store_instance._app_states_table_ddl()),  # pyright: ignore[reportPrivateUsage]
+        await _resolve_sql(store_instance._user_states_table_ddl()),  # pyright: ignore[reportPrivateUsage]
+        await _resolve_sql(store_instance._metadata_table_ddl()),  # pyright: ignore[reportPrivateUsage]
+        await _resolve_sql(store_instance._metadata_seed_sql()),  # pyright: ignore[reportPrivateUsage]
     ])
 
     if _is_memory_enabled(context) and memory_store_class is not None:
         memory_store = memory_store_class(config=context.config)
-        memory_sql = memory_store._get_create_memory_table_sql()  # pyright: ignore[reportPrivateUsage]
+        memory_sql = memory_store._memory_table_ddl()  # pyright: ignore[reportPrivateUsage]
         if inspect.isawaitable(memory_sql):
             memory_sql = await memory_sql
         if isinstance(memory_sql, list):
@@ -85,9 +85,9 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
         memory_store_class = _get_memory_store_class(context)
         if memory_store_class is not None:
             memory_store = memory_store_class(config=context.config)
-            statements.extend(memory_store._get_reset_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
+            statements.extend(memory_store._reset_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
 
-    statements.extend(store_instance._get_reset_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
+    statements.extend(store_instance._reset_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
 
     return statements
 

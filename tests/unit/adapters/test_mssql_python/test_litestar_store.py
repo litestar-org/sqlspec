@@ -74,7 +74,7 @@ def test_mssql_python_store_create_table_uses_tsql_guards() -> None:
     """The store DDL should use SQL Server idempotent guards and binary payload storage."""
     store = MssqlPythonStore(cast("Any", FakeConfig(FakeSession())))
 
-    ddl = store._get_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "IF NOT EXISTS" in ddl
     assert "sys.tables" in ddl

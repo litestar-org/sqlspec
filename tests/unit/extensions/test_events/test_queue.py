@@ -84,38 +84,38 @@ def test_table_event_queue_select_for_update_disabled(tmp_path) -> None:
     """SELECT FOR UPDATE is disabled by default."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     queue = SyncTableEventQueue(config)
-    assert "FOR UPDATE" not in queue._select_sql.upper()
+    assert "FOR UPDATE" not in queue._select_statement.upper()
 
 
 def test_table_event_queue_select_for_update_enabled(tmp_path) -> None:
     """SELECT FOR UPDATE clause is added when enabled."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     queue = SyncTableEventQueue(config, select_for_update=True)
-    assert "FOR UPDATE" in queue._select_sql.upper()
+    assert "FOR UPDATE" in queue._select_statement.upper()
 
 
 def test_table_event_queue_skip_locked_requires_for_update(tmp_path) -> None:
     """SKIP LOCKED is only added when FOR UPDATE is enabled."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     queue = SyncTableEventQueue(config, skip_locked=True)
-    assert "SKIP LOCKED" not in queue._select_sql.upper()
+    assert "SKIP LOCKED" not in queue._select_statement.upper()
 
     queue_with_both = SyncTableEventQueue(config, select_for_update=True, skip_locked=True)
-    assert "FOR UPDATE SKIP LOCKED" in queue_with_both._select_sql.upper()
+    assert "FOR UPDATE SKIP LOCKED" in queue_with_both._select_statement.upper()
 
 
 def test_table_event_queue_insert_sql_contains_table(tmp_path) -> None:
     """Insert SQL references the configured table name."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     queue = SyncTableEventQueue(config, queue_table="my_events")
-    assert "my_events" in queue._upsert_sql
+    assert "my_events" in queue._insert_statement
 
 
 def test_table_event_queue_select_sql_contains_table(tmp_path) -> None:
     """Select SQL references the configured table name."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     queue = SyncTableEventQueue(config, queue_table="my_events")
-    assert "my_events" in queue._select_sql
+    assert "my_events" in queue._select_statement
 
 
 def test_table_event_queue_oracle_dialect_uses_fetch_first(tmp_path) -> None:
@@ -125,8 +125,8 @@ def test_table_event_queue_oracle_dialect_uses_fetch_first(tmp_path) -> None:
         connection_config={"database": str(tmp_path / "test.db")}, statement_config=StatementConfig(dialect="oracle")
     )
     queue = SyncTableEventQueue(config)
-    assert "FETCH FIRST 1 ROWS ONLY" in queue._select_sql.upper()
-    assert "LIMIT" not in queue._select_sql.upper()
+    assert "FETCH FIRST 1 ROWS ONLY" in queue._select_statement.upper()
+    assert "LIMIT" not in queue._select_statement.upper()
 
 
 def test_table_event_queue_statement_config_property(tmp_path) -> None:

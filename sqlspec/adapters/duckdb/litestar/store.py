@@ -42,7 +42,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL.
 
         Returns:
@@ -60,7 +60,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         ON {self._table_name}(expires_at);
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get DuckDB DROP TABLE SQL statements.
 
         Returns:
@@ -103,7 +103,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
         self._log_table_created()

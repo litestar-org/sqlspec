@@ -93,7 +93,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     ) -> Any:
         """Mock execute upgrade."""
         _ = driver, use_transaction, on_success
-        sql = self._get_migration_sql(migration, "up")
+        sql = self._migration_sql(migration, "up")
         if sql:
             self._executed_migrations.append({"version": migration["version"], "direction": "up", "sql": sql})
             return Mock(spec=ExecutionResult)
@@ -109,7 +109,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     ) -> Any:
         """Mock execute downgrade."""
         _ = driver, use_transaction, on_success
-        sql = self._get_migration_sql(migration, "down")
+        sql = self._migration_sql(migration, "down")
         if sql:
             self._executed_migrations.append({"version": migration["version"], "direction": "down", "sql": sql})
             return Mock(spec=ExecutionResult)
@@ -128,7 +128,7 @@ def test_tracking_table_sql_generation() -> None:
     """Test migration tracking table SQL generation."""
     tracker = MockMigrationTracker("test_migrations")
 
-    create_sql = tracker._get_create_table_sql()
+    create_sql = tracker._tracking_table_ddl()
 
     assert hasattr(create_sql, "to_statement")
     stmt = create_sql.to_statement()
@@ -146,7 +146,7 @@ def test_current_version_sql_generation() -> None:
     """Test current version query SQL generation."""
     tracker = MockMigrationTracker("test_migrations")
 
-    version_sql = tracker._get_current_version_sql()
+    version_sql = tracker._current_version_query()
 
     assert hasattr(version_sql, "to_statement")
     stmt = version_sql.to_statement()
@@ -161,7 +161,7 @@ def test_applied_migrations_sql_generation() -> None:
     """Test applied migrations query SQL generation."""
     tracker = MockMigrationTracker("test_migrations")
 
-    applied_sql = tracker._get_applied_migrations_sql()
+    applied_sql = tracker._applied_migrations_query()
 
     assert hasattr(applied_sql, "to_statement")
     stmt = applied_sql.to_statement()
@@ -176,7 +176,7 @@ def test_record_migration_sql_generation() -> None:
     """Test migration recording SQL generation."""
     tracker = MockMigrationTracker("test_migrations")
 
-    record_sql = tracker._get_record_migration_sql(
+    record_sql = tracker._record_migration_statement(
         version="0001",
         version_type="sequential",
         execution_sequence=1,
@@ -201,7 +201,7 @@ def test_remove_migration_sql_generation() -> None:
     """Test migration removal SQL generation."""
     tracker = MockMigrationTracker("test_migrations")
 
-    remove_sql = tracker._get_remove_migration_sql("0001")
+    remove_sql = tracker._remove_migration_statement("0001")
 
     assert hasattr(remove_sql, "to_statement")
     stmt = remove_sql.to_statement()

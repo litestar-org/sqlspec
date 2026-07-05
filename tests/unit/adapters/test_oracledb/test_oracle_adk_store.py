@@ -142,7 +142,7 @@ def test_oracle_adk_session_table_applies_partition_compression_and_inmemory_cla
     })
     store = OracleAsyncADKStore(config)
 
-    sql = store._get_create_sessions_table_sql_for_type(JSONStorageType.JSON_NATIVE)
+    sql = store._sessions_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
 
     assert "COLUMN STORE COMPRESS FOR ARCHIVE HIGH" in sql
     assert "INMEMORY PRIORITY HIGH" in sql
@@ -157,7 +157,7 @@ def test_oracle_adk_events_table_applies_hash_partitioning_and_table_options() -
     })
     store = OracleSyncADKStore(config)
 
-    sql = store._get_create_events_table_sql_for_type(JSONStorageType.JSON_NATIVE)
+    sql = store._events_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
 
     assert "TABLESPACE adk_data" in sql
     assert "PARTITION BY HASH (session_id) PARTITIONS 32" in sql
@@ -171,7 +171,7 @@ def test_oracle_adk_memory_table_applies_memory_specific_partition_key_and_compr
     })
     store = OracleAsyncADKMemoryStore(config)
 
-    sql = store._get_create_memory_table_sql_for_type(JSONStorageType.JSON_NATIVE)
+    sql = store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
 
     assert "ROW STORE COMPRESS ADVANCED" in sql
     assert "TABLESPACE adk_memory" in sql
@@ -185,7 +185,7 @@ def test_oracle_adk_sync_memory_table_uses_same_lifecycle_clauses() -> None:
     })
     store = OracleSyncADKMemoryStore(config)
 
-    sql = store._get_create_memory_table_sql_for_type(JSONStorageType.JSON_NATIVE)
+    sql = store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
 
     assert "COLUMN STORE COMPRESS FOR QUERY HIGH" in sql
     assert "PARTITION BY RANGE (inserted_at)" in sql

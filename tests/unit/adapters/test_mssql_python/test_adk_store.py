@@ -66,10 +66,10 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
 
     store = MssqlPythonSyncADKStore(_mock_config())
 
-    sessions_sql = store._get_create_sessions_table_sql()
-    events_sql = store._get_create_events_table_sql()
-    app_state_sql = store._get_create_app_states_table_sql()
-    metadata_sql = store._get_seed_metadata_sql()
+    sessions_sql = store._sessions_table_ddl()
+    events_sql = store._events_table_ddl()
+    app_state_sql = store._app_states_table_ddl()
+    metadata_sql = store._metadata_seed_sql()
 
     assert "IF NOT EXISTS (SELECT 1 FROM sys.tables" in sessions_sql
     assert "schema_id = SCHEMA_ID(N'dbo')" in sessions_sql
@@ -91,8 +91,8 @@ def test_sync_store_can_force_native_json_from_extension_config() -> None:
 
     store = MssqlPythonSyncADKStore(_mock_config({"native_json": True}))
 
-    assert "state JSON NOT NULL" in store._get_create_sessions_table_sql()
-    assert "event_data JSON NOT NULL" in store._get_create_events_table_sql()
+    assert "state JSON NOT NULL" in store._sessions_table_ddl()
+    assert "event_data JSON NOT NULL" in store._events_table_ddl()
 
 
 def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
@@ -100,8 +100,8 @@ def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
 
     store = MssqlPythonSyncADKStore(_mock_config())
 
-    app_upsert = store._get_upsert_app_state_sql()
-    events_sql, params = store._get_events_query("app", "user", "session", limit=5)
+    app_upsert = store._upsert_app_state_sql()
+    events_sql, params = store._events_query("app", "user", "session", limit=5)
 
     assert "MERGE INTO [dbo].[adk_app_state]" in app_upsert
     assert "WITH (HOLDLOCK)" in app_upsert
@@ -116,8 +116,8 @@ async def test_async_store_generates_same_tsql_schema() -> None:
 
     store = MssqlPythonAsyncADKStore(_mock_config())
 
-    sessions_sql = await store._get_create_sessions_table_sql()
-    events_sql = await store._get_create_events_table_sql()
+    sessions_sql = await store._sessions_table_ddl()
+    events_sql = await store._events_table_ddl()
 
     assert "IF NOT EXISTS (SELECT 1 FROM sys.tables" in sessions_sql
     assert "row_id UNIQUEIDENTIFIER NOT NULL" in sessions_sql

@@ -50,7 +50,7 @@ async def test_inmemory_enabled_creates_sessions_table_with_inmemory_async(
     finally:
         async with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
@@ -90,7 +90,7 @@ async def test_inmemory_enabled_creates_events_table_with_inmemory_async(
     finally:
         async with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
@@ -130,7 +130,7 @@ async def test_inmemory_disabled_creates_tables_without_inmemory_async(oracle_as
     finally:
         async with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
@@ -165,7 +165,7 @@ async def test_inmemory_default_disabled_async(oracle_async_config: OracleAsyncC
     finally:
         async with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
@@ -231,7 +231,7 @@ async def test_inmemory_with_owner_id_column_async(oracle_async_config: OracleAs
 
         async with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
@@ -293,7 +293,7 @@ async def test_inmemory_tables_functional_async(oracle_async_config: OracleAsync
     finally:
         async with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     await cursor.execute(stmt)
                 except Exception:
@@ -334,7 +334,7 @@ async def test_inmemory_enabled_sync(oracle_sync_config: OracleSyncConfig) -> No
     finally:
         with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     cursor.execute(stmt)
                 except Exception:
@@ -373,7 +373,7 @@ async def test_inmemory_disabled_sync(oracle_sync_config: OracleSyncConfig) -> N
     finally:
         with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     cursor.execute(stmt)
                 except Exception:
@@ -408,7 +408,7 @@ async def test_inmemory_tables_functional_sync(oracle_sync_config: OracleSyncCon
     finally:
         with config.provide_connection() as conn:
             cursor = conn.cursor()
-            for stmt in store._get_drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
+            for stmt in store._drop_tables_sql():  # pyright: ignore[reportPrivateUsage]
                 try:
                     cursor.execute(stmt)
                 except Exception:

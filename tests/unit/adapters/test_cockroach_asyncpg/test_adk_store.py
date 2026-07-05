@@ -52,9 +52,9 @@ async def test_cockroach_asyncpg_adk_tables_use_plain_schema_by_default() -> Non
     store = CockroachAsyncpgADKStore(_mock_config())
     memory_store = CockroachAsyncpgADKMemoryStore(_mock_config())
 
-    session_sql = await store._get_create_sessions_table_sql()
-    events_sql = await store._get_create_events_table_sql()
-    memory_sql = await memory_store._get_create_memory_table_sql()
+    session_sql = await store._sessions_table_ddl()
+    events_sql = await store._events_table_ddl()
+    memory_sql = await memory_store._memory_table_ddl()
 
     assert "LOCALITY" not in session_sql
     assert "LOCALITY" not in events_sql
@@ -80,8 +80,8 @@ async def test_cockroach_asyncpg_adk_tables_apply_locality_hash_and_storing_inde
     })
     store = CockroachAsyncpgADKStore(config)
 
-    session_sql = await store._get_create_sessions_table_sql()
-    events_sql = await store._get_create_events_table_sql()
+    session_sql = await store._sessions_table_ddl()
+    events_sql = await store._events_table_ddl()
 
     assert 'LOCALITY REGIONAL BY TABLE IN "us-east1"' in session_sql
     assert "LOCALITY REGIONAL BY ROW" in events_sql
@@ -99,7 +99,7 @@ async def test_cockroach_asyncpg_memory_table_applies_trigram_index_and_locality
     config = _mock_config({"memory_table_locality": "LOCALITY GLOBAL", "enable_memory_trigram_index": True})
     memory_store = CockroachAsyncpgADKMemoryStore(config)
 
-    sql = await memory_store._get_create_memory_table_sql()
+    sql = await memory_store._memory_table_ddl()
 
     assert "LOCALITY GLOBAL" in sql
     assert "idx_adk_memory_content_trgm" in sql

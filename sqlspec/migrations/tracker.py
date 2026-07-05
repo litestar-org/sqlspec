@@ -105,7 +105,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver: The database driver to use.
             column_name: Name of the column to add (lowercase).
         """
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
 
         if not column_def:
@@ -134,7 +134,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        driver.execute(self._get_create_table_sql())
+        driver.execute(self._tracking_table_ddl())
         self._safe_commit(driver)
 
         self._migrate_schema_if_needed(driver)
@@ -148,7 +148,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Returns:
             The current version number or None if no migrations applied.
         """
-        result = driver.execute(self._get_current_version_sql())
+        result = driver.execute(self._current_version_query())
         current = result.get_data()[0]["version_num"] if result.data else None
         log_with_context(
             logger,
@@ -169,7 +169,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Returns:
             List of migration records.
         """
-        result = driver.execute(self._get_applied_migrations_sql())
+        result = driver.execute(self._applied_migrations_query())
         applied = result.get_data()
         log_with_context(
             logger,
@@ -199,11 +199,11 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
 
-        result = driver.execute(self._get_next_execution_sequence_sql())
+        result = driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         driver.execute(
-            self._get_record_migration_sql(
+            self._record_migration_statement(
                 version,
                 version_type,
                 next_sequence,
@@ -231,7 +231,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver: The database driver to use.
             version: Version number to remove.
         """
-        driver.execute(self._get_remove_migration_sql(version))
+        driver.execute(self._remove_migration_statement(version))
         self._safe_commit(driver)
         log_with_context(
             logger,
@@ -263,10 +263,10 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         parsed_new_version = parse_version(new_version)
         new_version_type = parsed_new_version.type.value
 
-        result = driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+        result = driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = driver.execute(self._get_applied_migrations_sql())
+            check_result = driver.execute(self._applied_migrations_query())
             applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
@@ -317,9 +317,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             description: Description of the squashed migration.
             checksum: MD5 checksum of the squashed migration content.
         """
-        driver.execute(self._get_delete_versions_sql(replaced_versions))
+        driver.execute(self._delete_versions_statement(replaced_versions))
 
-        result = driver.execute(self._get_next_execution_sequence_sql())
+        result = driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         parsed_version = parse_version(squashed_version)
@@ -327,7 +327,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
         replaces_str = ",".join(replaced_versions)
         driver.execute(
-            self._get_record_squashed_migration_sql(
+            self._record_squashed_migration_statement(
                 squashed_version,
                 version_type,
                 next_sequence,
@@ -367,7 +367,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Returns:
             True if any replaced version exists (squash already applied), False otherwise.
         """
-        result = driver.execute(self._get_check_versions_exist_sql(replaced_versions))
+        result = driver.execute(self._check_versions_query(replaced_versions))
         return bool(result.data)
 
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
@@ -493,7 +493,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: The database driver to use.
             column_name: Name of the column to add (lowercase).
         """
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
 
         if not column_def:
@@ -522,7 +522,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        await driver.execute(self._get_create_table_sql())
+        await driver.execute(self._tracking_table_ddl())
         await self._safe_commit_async(driver)
 
         await self._migrate_schema_if_needed(driver)
@@ -536,7 +536,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Returns:
             The current version number or None if no migrations applied.
         """
-        result = await driver.execute(self._get_current_version_sql())
+        result = await driver.execute(self._current_version_query())
         current = result.get_data()[0]["version_num"] if result.data else None
         log_with_context(
             logger,
@@ -557,7 +557,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Returns:
             List of migration records.
         """
-        result = await driver.execute(self._get_applied_migrations_sql())
+        result = await driver.execute(self._applied_migrations_query())
         applied = result.get_data()
         log_with_context(
             logger,
@@ -587,11 +587,11 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
 
-        result = await driver.execute(self._get_next_execution_sequence_sql())
+        result = await driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         await driver.execute(
-            self._get_record_migration_sql(
+            self._record_migration_statement(
                 version,
                 version_type,
                 next_sequence,
@@ -619,7 +619,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: The database driver to use.
             version: Version number to remove.
         """
-        await driver.execute(self._get_remove_migration_sql(version))
+        await driver.execute(self._remove_migration_statement(version))
         await self._safe_commit_async(driver)
         log_with_context(
             logger,
@@ -651,10 +651,10 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         parsed_new_version = parse_version(new_version)
         new_version_type = parsed_new_version.type.value
 
-        result = await driver.execute(self._get_update_version_sql(old_version, new_version, new_version_type))
+        result = await driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = await driver.execute(self._get_applied_migrations_sql())
+            check_result = await driver.execute(self._applied_migrations_query())
             applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
 
             if new_version in applied_versions:
@@ -705,9 +705,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             description: Description of the squashed migration.
             checksum: MD5 checksum of the squashed migration content.
         """
-        await driver.execute(self._get_delete_versions_sql(replaced_versions))
+        await driver.execute(self._delete_versions_statement(replaced_versions))
 
-        result = await driver.execute(self._get_next_execution_sequence_sql())
+        result = await driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
 
         parsed_version = parse_version(squashed_version)
@@ -715,7 +715,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
 
         replaces_str = ",".join(replaced_versions)
         await driver.execute(
-            self._get_record_squashed_migration_sql(
+            self._record_squashed_migration_statement(
                 squashed_version,
                 version_type,
                 next_sequence,
@@ -755,7 +755,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Returns:
             True if any replaced version exists (squash already applied), False otherwise.
         """
-        result = await driver.execute(self._get_check_versions_exist_sql(replaced_versions))
+        result = await driver.execute(self._check_versions_query(replaced_versions))
         return bool(result.data)
 
     async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:

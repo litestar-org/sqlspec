@@ -233,7 +233,7 @@ class PsycopgSyncHybridEventsBackend:
         with self._config.provide_session() as driver:
             driver.execute(
                 SQL(
-                    self._queue._upsert_sql,
+                    self._queue._insert_statement,
                     {
                         "event_id": event_id,
                         "channel": channel,
@@ -322,7 +322,7 @@ class PsycopgAsyncHybridEventsBackend:
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
-                    self._queue._upsert_sql,
+                    self._queue._insert_statement,
                     {
                         "event_id": event_id,
                         "channel": channel,

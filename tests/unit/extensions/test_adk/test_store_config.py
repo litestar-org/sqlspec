@@ -113,36 +113,36 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def create_tables(self) -> None:
         return None
 
-    async def _get_create_sessions_table_sql(self) -> str:
+    async def _sessions_table_ddl(self) -> str:
         return ""
 
-    async def _get_create_events_table_sql(self) -> str:
+    async def _events_table_ddl(self) -> str:
         return ""
 
-    async def _get_create_app_states_table_sql(self) -> str:
+    async def _app_states_table_ddl(self) -> str:
         return ""
 
-    async def _get_create_user_states_table_sql(self) -> str:
+    async def _user_states_table_ddl(self) -> str:
         return ""
 
-    async def _get_create_metadata_table_sql(self) -> str:
+    async def _metadata_table_ddl(self) -> str:
         return ""
 
-    async def _get_seed_metadata_sql(self) -> str:
+    async def _metadata_seed_sql(self) -> str:
         return ""
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return ""
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return ""
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> list[str]:
+    def _drop_tables_sql(self) -> list[str]:
         return [
-            self._get_drop_metadata_table_sql(),
+            self._drop_metadata_table_sql(),
             f"DROP TABLE IF EXISTS {self._user_state_table}",
             f"DROP TABLE IF EXISTS {self._app_state_table}",
             f"DROP TABLE IF EXISTS {self._events_table}",
@@ -234,36 +234,36 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
     def create_tables(self) -> None:
         self.create_tables_called = True
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         return ""
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         return ""
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         return ""
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         return ""
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         return ""
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         return ""
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return ""
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return ""
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> list[str]:
+    def _drop_tables_sql(self) -> list[str]:
         return [
-            self._get_drop_metadata_table_sql(),
+            self._drop_metadata_table_sql(),
             f"DROP TABLE IF EXISTS {self._user_state_table}",
             f"DROP TABLE IF EXISTS {self._app_state_table}",
             f"DROP TABLE IF EXISTS {self._events_table}",
@@ -291,11 +291,29 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
     def delete_entries_older_than(self, days: int) -> int:
         return 0
 
-    def _get_create_memory_table_sql(self) -> str | list[str]:
+    def _memory_table_ddl(self) -> str | list[str]:
         return ""
 
-    def _get_drop_memory_table_sql(self) -> list[str]:
+    def _drop_memory_table_sql(self) -> list[str]:
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+
+def test_adk_store_private_sql_helpers_use_purpose_names() -> None:
+    assert hasattr(_SyncSessionStore, "_sessions_table_ddl")
+    assert hasattr(_SyncSessionStore, "_events_table_ddl")
+    assert hasattr(_SyncSessionStore, "_metadata_seed_sql")
+    assert hasattr(_SyncSessionStore, "_drop_tables_sql")
+    assert not hasattr(_SyncSessionStore, "_get_create_sessions_table_sql")
+    assert not hasattr(_SyncSessionStore, "_get_create_events_table_sql")
+    assert not hasattr(_SyncSessionStore, "_get_seed_metadata_sql")
+    assert not hasattr(_SyncSessionStore, "_get_drop_tables_sql")
+
+
+def test_adk_memory_store_private_sql_helpers_use_purpose_names() -> None:
+    assert hasattr(_SyncMemoryStore, "_memory_table_ddl")
+    assert hasattr(_SyncMemoryStore, "_drop_memory_table_sql")
+    assert not hasattr(_SyncMemoryStore, "_get_create_memory_table_sql")
+    assert not hasattr(_SyncMemoryStore, "_get_drop_memory_table_sql")
 
 
 class _SyncArtifactStore(BaseSyncADKArtifactStore[Any]):
@@ -404,7 +422,7 @@ def test_sync_memory_store_logs_disabled_with_log_with_context(monkeypatch: pyte
 def test_session_store_reset_drop_tables_includes_legacy_metadata_table() -> None:
     store = _AsyncSessionStore(_Config())
 
-    statements = store._get_reset_drop_tables_sql()
+    statements = store._reset_drop_tables_sql()
 
     assert "DROP TABLE IF EXISTS adk_internal_metadata" in statements
     assert "DROP TABLE IF EXISTS adk_metadata" in statements
@@ -422,7 +440,7 @@ def test_session_store_reset_drop_tables_includes_legacy_metadata_table() -> Non
 def test_session_store_reset_drop_tables_does_not_duplicate_configured_legacy_metadata_table() -> None:
     store = _AsyncSessionStore(_Config({"metadata_table": "adk_metadata"}))
 
-    statements = store._get_reset_drop_tables_sql()
+    statements = store._reset_drop_tables_sql()
 
     assert statements.count("DROP TABLE IF EXISTS adk_metadata") == 1
     assert store.metadata_table == "adk_metadata"
@@ -444,7 +462,7 @@ async def test_reset_migration_accepts_sync_session_store(monkeypatch: pytest.Mo
 def test_sync_memory_store_reset_drop_tables_uses_drop_sql() -> None:
     store = _SyncMemoryStore(_Config({"memory_table": "agent_memory"}))
 
-    assert store._get_reset_drop_memory_table_sql() == [
+    assert store._reset_drop_memory_table_sql() == [
         "DROP TABLE IF EXISTS agent_memory",
         "DROP TABLE IF EXISTS adk_memory",
         "DROP TABLE IF EXISTS adk_memory_entries",

@@ -166,7 +166,7 @@ async def test_sync_store_without_owner_id_column(postgres_service: "PostgresSer
 
 async def test_async_ddl_includes_owner_id_column(psycopg_async_store_with_fk: PsycopgAsyncADKStore) -> None:
     """Test that the DDL generation includes the owner_id_column."""
-    ddl = await psycopg_async_store_with_fk._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
+    ddl = await psycopg_async_store_with_fk._sessions_table_ddl()  # pyright: ignore[reportPrivateUsage]
 
     assert "tenant_id INTEGER NOT NULL" in ddl
     assert "test_sessions_fk" in ddl
@@ -174,7 +174,7 @@ async def test_async_ddl_includes_owner_id_column(psycopg_async_store_with_fk: P
 
 async def test_sync_ddl_includes_owner_id_column(psycopg_sync_store_with_fk: PsycopgSyncADKStore) -> None:
     """Test that the DDL generation includes the owner_id_column."""
-    ddl = psycopg_sync_store_with_fk._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
+    ddl = psycopg_sync_store_with_fk._sessions_table_ddl()  # pyright: ignore[reportPrivateUsage]
 
     assert "account_id VARCHAR(64) NOT NULL" in ddl
     assert "test_sessions_sync_fk" in ddl

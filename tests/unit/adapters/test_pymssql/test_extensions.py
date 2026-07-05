@@ -22,7 +22,7 @@ def test_litestar_store_ddl_is_tsql_idempotent() -> None:
     from sqlspec.adapters.pymssql.litestar.store import PymssqlStore
 
     store = PymssqlStore(PymssqlConfig(extension_config={"litestar": {"session_table": "litestar_session"}}))
-    ddl = store._get_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "IF NOT EXISTS" in ddl
     assert "CREATE TABLE litestar_session" in ddl
@@ -51,8 +51,8 @@ def test_adk_store_ddl_uses_tsql_tables_and_json_fallback() -> None:
 
     store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {}}))
 
-    sessions_ddl = store._get_create_sessions_table_sql()
-    events_ddl = store._get_create_events_table_sql()
+    sessions_ddl = store._sessions_table_ddl()
+    events_ddl = store._events_table_ddl()
 
     assert "CREATE TABLE" in sessions_ddl
     assert "NVARCHAR(MAX)" in sessions_ddl
@@ -67,4 +67,4 @@ def test_adk_store_can_force_native_json_column_type() -> None:
 
     store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {"native_json": True}}))
 
-    assert "state JSON NOT NULL" in store._get_create_sessions_table_sql()
+    assert "state JSON NOT NULL" in store._sessions_table_ddl()

@@ -48,7 +48,7 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         """Return Spanner inline PRIMARY KEY clause."""
         return " PRIMARY KEY (event_id)"
 
-    def _build_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Build Spanner CREATE TABLE with PRIMARY KEY inline.
 
         Spanner does not support DEFAULT clauses on non-computed columns,
@@ -76,7 +76,7 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
             f"){pk_inline}"
         )
 
-    def _build_index_sql(self) -> str | None:
+    def _index_ddl(self) -> str | None:
         """Build Spanner secondary index for queue operations."""
         index_name = self._index_name()
         return f"CREATE INDEX {index_name} ON {self.table_name}(channel, status, available_at)"
@@ -104,8 +104,8 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         Spanner requires DDL statements to be executed individually.
         The caller should handle errors for already-existing objects.
         """
-        statements = [self._build_create_table_sql()]
-        index_sql = self._build_index_sql()
+        statements = [self._table_ddl()]
+        index_sql = self._index_ddl()
         if index_sql:
             statements.append(index_sql)
         return statements

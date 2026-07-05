@@ -505,7 +505,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             parts.append(f"partition_expiration_days = {self._partition_expiration_days}")
         return f"\nOPTIONS({', '.join(parts)})" if parts else ""
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         owner_column = f",\n            {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._qualified(self._session_table)} (
@@ -520,7 +520,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         CLUSTER BY app_name, user_id, id{self._partition_options()}
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._qualified(self._events_table)} (
             id STRING NOT NULL,
@@ -535,7 +535,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         CLUSTER BY app_name, user_id, session_id{self._partition_options(include_expiration=True)}
         """
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._qualified(self._app_state_table)} (
             app_name STRING NOT NULL,
@@ -545,7 +545,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         CLUSTER BY app_name
         """
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._qualified(self._user_state_table)} (
             app_name STRING NOT NULL,
@@ -556,7 +556,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         CLUSTER BY app_name, user_id
         """
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._qualified(self._metadata_table)} (
             key STRING NOT NULL,
@@ -565,7 +565,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         CLUSTER BY key
         """
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         return f"""
         MERGE {self._qualified(self._metadata_table)} target
         USING (SELECT 'schema_version' AS key, '1' AS value) source
@@ -573,16 +573,16 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         WHEN NOT MATCHED THEN INSERT (key, value) VALUES (source.key, source.value)
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._qualified(self._app_state_table)}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._qualified(self._user_state_table)}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._qualified(self._metadata_table)}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         return [
             f"DROP TABLE IF EXISTS {self._qualified(self._events_table)}",
             f"DROP TABLE IF EXISTS {self._qualified(self._user_state_table)}",
@@ -593,12 +593,12 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def _create_tables(self) -> None:
         for statement in (
-            self._get_create_sessions_table_sql(),
-            self._get_create_events_table_sql(),
-            self._get_create_app_states_table_sql(),
-            self._get_create_user_states_table_sql(),
-            self._get_create_metadata_table_sql(),
-            self._get_seed_metadata_sql(),
+            self._sessions_table_ddl(),
+            self._events_table_ddl(),
+            self._app_states_table_ddl(),
+            self._user_states_table_ddl(),
+            self._metadata_table_ddl(),
+            self._metadata_seed_sql(),
         ):
             self._run_query(statement)
 

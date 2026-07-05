@@ -162,7 +162,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for this database dialect.
 
         Returns:
@@ -171,7 +171,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect.
 
         Returns:

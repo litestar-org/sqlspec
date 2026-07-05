@@ -57,7 +57,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
     def _create_table(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_table_sql())
+            driver.execute_script(self._table_ddl())
             driver.commit()
         self._log_table_created()
 
@@ -205,7 +205,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         )
         return "".join(str(_row_value(row, "data", 0) or "") for row in rows)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
         return f"""
         IF NOT EXISTS (
@@ -246,7 +246,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         END;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         return [
             f"IF OBJECT_ID(N'dbo.{self._chunk_table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._chunk_table_name};",

@@ -55,7 +55,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         """Return BigQuery CLUSTER BY clause for query optimization."""
         return " CLUSTER BY channel, status, available_at"
 
-    def _build_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Build BigQuery CREATE TABLE with CLUSTER BY optimization.
 
         BigQuery uses CLUSTER BY for query optimization instead of indexes.
@@ -85,7 +85,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
             f"){table_clause}"
         )
 
-    def _build_index_sql(self) -> str | None:
+    def _index_ddl(self) -> str | None:
         """Return None since BigQuery uses CLUSTER BY instead of indexes.
 
         Returns:
@@ -99,7 +99,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         Returns:
             List containing single CREATE TABLE statement.
         """
-        return [self._build_create_table_sql()]
+        return [self._table_ddl()]
 
     def drop_statements(self) -> "list[str]":
         """Return DDL statement for table deletion.

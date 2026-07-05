@@ -41,12 +41,12 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
     def create_tables(self) -> None:
         """Create all ADK session tables if they do not exist."""
         with self._config.provide_session() as driver:
-            driver.execute(self._get_create_sessions_table_sql())
-            driver.execute(self._get_create_events_table_sql())
-            driver.execute(self._get_create_app_states_table_sql())
-            driver.execute(self._get_create_user_states_table_sql())
-            driver.execute(self._get_create_metadata_table_sql())
-            driver.execute(self._get_seed_metadata_sql())
+            driver.execute(self._sessions_table_ddl())
+            driver.execute(self._events_table_ddl())
+            driver.execute(self._app_states_table_ddl())
+            driver.execute(self._user_states_table_ddl())
+            driver.execute(self._metadata_table_ddl())
+            driver.execute(self._metadata_seed_sql())
             driver.commit()
 
     def create_session(
@@ -70,9 +70,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                 """,
                 params,
             )
-            row = driver.select_one_or_none(
-                _get_session_select_sql(self._session_table), (app_name, user_id, session_id)
-            )
+            row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
             driver.commit()
         if row is None:
             msg = "Failed to fetch created session"
@@ -95,7 +93,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                         (app_name, user_id, session_id),
                     )
                 row = driver.select_one_or_none(
-                    _get_session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    _session_select_sql(self._session_table), (app_name, user_id, session_id)
                 )
                 if renew_for is not None:
                     driver.commit()
@@ -153,7 +151,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
-        self._execute(_get_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
+        self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
 
     def append_event_and_update_state(
         self,
@@ -176,16 +174,14 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                 """,
                 (to_json(state), app_name, user_id, session_id),
             )
-            row = driver.select_one_or_none(
-                _get_session_select_sql(self._session_table), (app_name, user_id, session_id)
-            )
+            row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
             if row is None:
                 _raise_session_not_found(session_id)
-            driver.execute(_get_insert_event_sql(self._events_table), _event_insert_params(event_record))
+            driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
             if app_state is not None:
-                driver.execute(self._get_upsert_app_state_sql(), (app_name, to_json(app_state)))
+                driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
             if user_state is not None:
-                driver.execute(self._get_upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
+                driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
             driver.commit()
         return _session_record_from_row(row)
 
@@ -200,7 +196,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         """Return events for a scoped session ordered by event timestamp."""
         if limit is not None and limit <= 0:
             return []
-        sql, params = self._get_events_query(app_name, user_id, session_id, after_timestamp, limit)
+        sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
             rows = self._execute_fetchall(sql, params)
         except SQLSpecError as exc:
@@ -278,11 +274,11 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state."""
-        self._execute(self._get_upsert_app_state_sql(), (app_name, to_json(state)), commit=True)
+        self._execute(self._upsert_app_state_sql(), (app_name, to_json(state)), commit=True)
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state."""
-        self._execute(self._get_upsert_user_state_sql(), (app_name, user_id, to_json(state)), commit=True)
+        self._execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(state)), commit=True)
 
     def get_metadata(self, key: str) -> "str | None":
         """Return an ADK metadata value."""
@@ -299,57 +295,57 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set an ADK metadata value."""
-        self._execute(_get_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
+        self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Return T-SQL DDL for the ADK session table."""
-        return _get_create_sessions_table_sql(self._session_table, self._owner_id_column_ddl)
+        return _sessions_table_ddl(self._session_table, self._owner_id_column_ddl)
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Return T-SQL DDL for the ADK event table."""
-        return _get_create_events_table_sql(self._events_table, self._session_table)
+        return _events_table_ddl(self._events_table, self._session_table)
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         """Return T-SQL DDL for the app-scoped state table."""
-        return _get_create_app_states_table_sql(self._app_state_table)
+        return _app_states_table_ddl(self._app_state_table)
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         """Return T-SQL DDL for the user-scoped state table."""
-        return _get_create_user_states_table_sql(self._user_state_table)
+        return _user_states_table_ddl(self._user_state_table)
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         """Return T-SQL DDL for the ADK metadata table."""
-        return _get_create_metadata_table_sql(self._metadata_table)
+        return _metadata_table_ddl(self._metadata_table)
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         """Return T-SQL to seed schema-version metadata."""
-        return _get_seed_metadata_sql(self._metadata_table)
+        return _metadata_seed_sql(self._metadata_table)
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(self._app_state_table)}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(self._user_state_table)}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(self._metadata_table)}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {_table_ref(self._events_table)}",
             f"DROP TABLE IF EXISTS {_table_ref(self._session_table)}",
         ]
 
-    def _get_upsert_app_state_sql(self) -> str:
-        return _get_upsert_state_sql(self._app_state_table, ("app_name",), ("?",))
+    def _upsert_app_state_sql(self) -> str:
+        return _upsert_state_sql(self._app_state_table, ("app_name",), ("?",))
 
-    def _get_upsert_user_state_sql(self) -> str:
-        return _get_upsert_state_sql(self._user_state_table, ("app_name", "user_id"), ("?", "?"))
+    def _upsert_user_state_sql(self) -> str:
+        return _upsert_state_sql(self._user_state_table, ("app_name", "user_id"), ("?", "?"))
 
-    def _get_events_query(
+    def _events_query(
         self,
         app_name: str,
         user_id: str,
@@ -357,7 +353,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, tuple[Any, ...]]":
-        return _get_events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
+        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = ()) -> "dict[str, Any] | None":
         with self._config.provide_session() as driver:
@@ -390,7 +386,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
-            for statement in self._get_create_memory_table_sql():
+            for statement in self._memory_table_ddl():
                 driver.execute(statement)
             driver.commit()
 
@@ -481,7 +477,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         )
         return count
 
-    def _get_create_memory_table_sql(self) -> "list[str]":
+    def _memory_table_ddl(self) -> "list[str]":
         owner_line = f",\n        {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return [
             f"""
@@ -508,13 +504,13 @@ BEGIN
     );
 END;
 """,
-            _get_create_index_sql(
+            _create_index_sql(
                 self._memory_table, f"idx_{self._memory_table}_app_user_time", "app_name, user_id, timestamp DESC"
             ),
-            _get_create_index_sql(self._memory_table, f"idx_{self._memory_table}_session", "session_id"),
+            _create_index_sql(self._memory_table, f"idx_{self._memory_table}_session", "session_id"),
         ]
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[dict[str, Any]]":
@@ -534,7 +530,7 @@ END;
         return int(value or 0)
 
 
-def _get_session_select_sql(table: str) -> str:
+def _session_select_sql(table: str) -> str:
     return f"""
     SELECT TOP 1 id, app_name, user_id, state, create_time, update_time
     FROM {_table_ref(table)}
@@ -542,7 +538,7 @@ def _get_session_select_sql(table: str) -> str:
     """
 
 
-def _get_create_sessions_table_sql(table: str, owner_id_column_ddl: "str | None") -> str:
+def _sessions_table_ddl(table: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f",\n        {owner_id_column_ddl}" if owner_id_column_ddl else ""
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
@@ -559,12 +555,12 @@ BEGIN
         CONSTRAINT {_constraint_ref("uq", table, "id")} UNIQUE (id)
     );
 END;
-{_get_create_index_sql(table, f"idx_{table}_app_user", "app_name, user_id")}
-{_get_create_index_sql(table, f"idx_{table}_update_time", "update_time DESC")}
+{_create_index_sql(table, f"idx_{table}_app_user", "app_name, user_id")}
+{_create_index_sql(table, f"idx_{table}_update_time", "update_time DESC")}
 """
 
 
-def _get_create_events_table_sql(table: str, session_table: str) -> str:
+def _events_table_ddl(table: str, session_table: str) -> str:
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
 BEGIN
@@ -583,14 +579,14 @@ BEGIN
             REFERENCES {_table_ref(session_table)}(id) ON DELETE CASCADE
     );
 END;
-{_get_create_index_sql(table, f"idx_{table}_scope", "app_name, user_id, session_id, timestamp ASC")}
-{_get_create_index_sql(table, f"idx_{table}_session", "session_id, timestamp ASC")}
-{_get_create_index_sql(table, f"idx_{table}_invocation", "invocation_id")}
-{_get_create_index_sql(table, f"idx_{table}_timestamp", "timestamp ASC")}
+{_create_index_sql(table, f"idx_{table}_scope", "app_name, user_id, session_id, timestamp ASC")}
+{_create_index_sql(table, f"idx_{table}_session", "session_id, timestamp ASC")}
+{_create_index_sql(table, f"idx_{table}_invocation", "invocation_id")}
+{_create_index_sql(table, f"idx_{table}_timestamp", "timestamp ASC")}
 """
 
 
-def _get_create_app_states_table_sql(table: str) -> str:
+def _app_states_table_ddl(table: str) -> str:
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
 BEGIN
@@ -604,7 +600,7 @@ END;
 """
 
 
-def _get_create_user_states_table_sql(table: str) -> str:
+def _user_states_table_ddl(table: str) -> str:
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
 BEGIN
@@ -619,7 +615,7 @@ END;
 """
 
 
-def _get_create_metadata_table_sql(table: str) -> str:
+def _metadata_table_ddl(table: str) -> str:
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
 BEGIN
@@ -632,7 +628,7 @@ END;
 """
 
 
-def _get_create_index_sql(table: str, index_name: str, columns: str) -> str:
+def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     return f"""
 IF NOT EXISTS (
     SELECT 1 FROM sys.indexes
@@ -645,7 +641,7 @@ END;
 """
 
 
-def _get_insert_event_sql(table: str) -> str:
+def _insert_event_sql(table: str) -> str:
     return f"""
     INSERT INTO {_table_ref(table)} (
         id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -654,7 +650,7 @@ def _get_insert_event_sql(table: str) -> str:
     """
 
 
-def _get_upsert_state_sql(table: str, key_columns: "tuple[str, ...]", key_params: "tuple[str, ...]") -> str:
+def _upsert_state_sql(table: str, key_columns: "tuple[str, ...]", key_params: "tuple[str, ...]") -> str:
     source_columns = ", ".join(
         f"{param} AS {_quote_identifier(column)}" for column, param in zip(key_columns, key_params, strict=False)
     )
@@ -676,7 +672,7 @@ def _get_upsert_state_sql(table: str, key_columns: "tuple[str, ...]", key_params
     """
 
 
-def _get_upsert_metadata_sql(table: str) -> str:
+def _upsert_metadata_sql(table: str) -> str:
     return f"""
     MERGE INTO {_table_ref(table)} WITH (HOLDLOCK) AS target
     USING (SELECT ? AS [key], ? AS value) AS source
@@ -689,7 +685,7 @@ def _get_upsert_metadata_sql(table: str) -> str:
     """
 
 
-def _get_seed_metadata_sql(table: str) -> str:
+def _metadata_seed_sql(table: str) -> str:
     return f"""
     MERGE INTO {_table_ref(table)} WITH (HOLDLOCK) AS target
     USING (SELECT N'schema_version' AS [key], N'1' AS value) AS source
@@ -702,7 +698,7 @@ def _get_seed_metadata_sql(table: str) -> str:
     """
 
 
-def _get_events_query(
+def _events_query(
     table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
 ) -> "tuple[str, tuple[Any, ...]]":
     top_clause = f"TOP {int(limit)} " if limit is not None else ""

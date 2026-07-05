@@ -25,12 +25,12 @@ def test_column_types_returns_spanner_types() -> None:
     assert timestamp_type == "TIMESTAMP"
 
 
-def test_build_create_table_sql_uses_string_types() -> None:
+def test_table_ddl_uses_string_types() -> None:
     """Verify CREATE TABLE uses STRING instead of VARCHAR."""
     config = _mock_spanner_config()
     store = SpannerSyncEventQueueStore(config)
 
-    sql = store._build_create_table_sql()
+    sql = store._table_ddl()
 
     assert "STRING(64)" in sql
     assert "STRING(128)" in sql
@@ -38,43 +38,43 @@ def test_build_create_table_sql_uses_string_types() -> None:
     assert "VARCHAR" not in sql
 
 
-def test_build_create_table_sql_uses_int64() -> None:
+def test_table_ddl_uses_int64() -> None:
     """Verify CREATE TABLE uses INT64 instead of INTEGER."""
     config = _mock_spanner_config()
     store = SpannerSyncEventQueueStore(config)
 
-    sql = store._build_create_table_sql()
+    sql = store._table_ddl()
 
     assert "INT64" in sql
     assert "INTEGER" not in sql
 
 
-def test_build_create_table_sql_no_default_clauses() -> None:
+def test_table_ddl_no_default_clauses() -> None:
     """Verify CREATE TABLE has no DEFAULT clauses (Spanner restriction)."""
     config = _mock_spanner_config()
     store = SpannerSyncEventQueueStore(config)
 
-    sql = store._build_create_table_sql()
+    sql = store._table_ddl()
 
     assert "DEFAULT" not in sql
 
 
-def test_build_create_table_sql_inline_primary_key() -> None:
+def test_table_ddl_inline_primary_key() -> None:
     """Verify PRIMARY KEY is declared inline (Spanner requirement)."""
     config = _mock_spanner_config()
     store = SpannerSyncEventQueueStore(config)
 
-    sql = store._build_create_table_sql()
+    sql = store._table_ddl()
 
     assert sql.endswith(") PRIMARY KEY (event_id)")
 
 
-def test_build_index_sql_no_if_not_exists() -> None:
+def test_index_ddl_no_if_not_exists() -> None:
     """Verify index creation has no IF NOT EXISTS (Spanner restriction)."""
     config = _mock_spanner_config()
     store = SpannerSyncEventQueueStore(config)
 
-    sql = store._build_index_sql()
+    sql = store._index_ddl()
 
     assert sql is not None
     assert "IF NOT EXISTS" not in sql

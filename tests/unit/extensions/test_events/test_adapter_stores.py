@@ -39,7 +39,7 @@ def test_asyncmy_store_index_sql_dynamic_check() -> None:
 
     config = AsyncmyConfig(connection_config={"host": "localhost", "database": "test"})
     store = AsyncmyEventQueueStore(config)
-    index_sql = store._build_index_sql()
+    index_sql = store._index_ddl()
 
     assert index_sql is not None
     assert "information_schema.statistics" in index_sql.lower()
@@ -58,7 +58,7 @@ def test_asyncmy_store_schema_qualified_index() -> None:
         extension_config={"events": {"queue_table": "myschema.events"}},
     )
     store = AsyncmyEventQueueStore(config)
-    index_sql = store._build_index_sql()
+    index_sql = store._index_ddl()
     assert index_sql is not None
     assert "'myschema'" in index_sql
 
@@ -71,7 +71,7 @@ def test_asyncmy_store_unqualified_table_uses_database() -> None:
 
     config = AsyncmyConfig(connection_config={"host": "localhost", "database": "test"})
     store = AsyncmyEventQueueStore(config)
-    index_sql = store._build_index_sql()
+    index_sql = store._index_ddl()
     assert index_sql is not None
     assert "DATABASE()" in index_sql
 
@@ -99,7 +99,7 @@ def test_bigquery_store_create_table_uses_cluster_by() -> None:
 
     config = BigQueryConfig(connection_config={"project": "test-project"})
     store = BigQueryEventQueueStore(config)
-    create_sql = store._build_create_table_sql()
+    create_sql = store._table_ddl()
 
     assert "CREATE TABLE IF NOT EXISTS" in create_sql
     assert "STRING NOT NULL" in create_sql
@@ -115,7 +115,7 @@ def test_bigquery_store_create_table_has_defaults() -> None:
 
     config = BigQueryConfig(connection_config={"project": "test-project"})
     store = BigQueryEventQueueStore(config)
-    create_sql = store._build_create_table_sql()
+    create_sql = store._table_ddl()
 
     assert "DEFAULT 'pending'" in create_sql
     assert "DEFAULT 0" in create_sql
@@ -131,7 +131,7 @@ def test_bigquery_store_no_index() -> None:
     config = BigQueryConfig(connection_config={"project": "test-project"})
     store = BigQueryEventQueueStore(config)
 
-    assert store._build_index_sql() is None
+    assert store._index_ddl() is None
 
 
 def test_bigquery_store_create_statements_single() -> None:
@@ -176,7 +176,7 @@ def test_bigquery_store_custom_table_name() -> None:
     store = BigQueryEventQueueStore(config)
 
     assert store.table_name == "custom_events"
-    assert "custom_events" in store._build_create_table_sql()
+    assert "custom_events" in store._table_ddl()
     assert "custom_events" in store.drop_statements()[0]
 
 
@@ -363,7 +363,7 @@ def test_spanner_store_create_table_uses_string_types() -> None:
 
     config = SpannerSyncConfig(connection_config={"project": "test", "instance": "inst", "database": "db"})
     store = SpannerSyncEventQueueStore(config)
-    create_sql = store._build_create_table_sql()
+    create_sql = store._table_ddl()
 
     assert "STRING(64)" in create_sql
     assert "STRING(128)" in create_sql
@@ -379,7 +379,7 @@ def test_spanner_store_separate_index_statement() -> None:
 
     config = SpannerSyncConfig(connection_config={"project": "test", "instance": "inst", "database": "db"})
     store = SpannerSyncEventQueueStore(config)
-    index_sql = store._build_index_sql()
+    index_sql = store._index_ddl()
 
     assert index_sql is not None
     assert "CREATE INDEX" in index_sql
@@ -455,7 +455,7 @@ def test_adbc_store_snowflake_no_index() -> None:
     config = AdbcConfig(connection_config={"driver_name": "snowflake"})
     store = AdbcEventQueueStore(config)
 
-    assert store._build_index_sql() is None
+    assert store._index_ddl() is None
 
 
 def test_adbc_store_bigquery_dialect() -> None:
@@ -466,7 +466,7 @@ def test_adbc_store_bigquery_dialect() -> None:
 
     config = AdbcConfig(connection_config={"uri": "bigquery://project"})
     store = AdbcEventQueueStore(config)
-    create_sql = store._build_create_table_sql()
+    create_sql = store._table_ddl()
 
     assert "STRING NOT NULL" in create_sql
     assert "INT64 NOT NULL" in create_sql
@@ -482,7 +482,7 @@ def test_adbc_store_bigquery_no_index() -> None:
     config = AdbcConfig(connection_config={"uri": "bigquery://project"})
     store = AdbcEventQueueStore(config)
 
-    assert store._build_index_sql() is None
+    assert store._index_ddl() is None
 
 
 def test_adbc_store_flightsql_dialect() -> None:
@@ -538,7 +538,7 @@ def test_adbc_store_postgresql_partial_index() -> None:
 
     config = AdbcConfig(connection_config={"driver_name": "postgres"})
     store = AdbcEventQueueStore(config)
-    index_sql = store._build_index_sql()
+    index_sql = store._index_ddl()
 
     assert index_sql is not None
     assert "WHERE status = 'pending'" in index_sql
@@ -622,8 +622,8 @@ def test_adbc_store_dialect_caching() -> None:
     assert dialect1 is dialect2
 
     store._column_types()
-    store._build_create_table_sql()
-    store._build_index_sql()
+    store._table_ddl()
+    store._index_ddl()
     store.drop_statements()
     assert store._dialect == "postgres"
 
