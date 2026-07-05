@@ -17,9 +17,7 @@ class AutodocTypehintsGuardedImportFilter(Filter):
     def filter(self, record: LogRecord) -> bool:
         message = record.getMessage()
         return not (
-            "Failed guarded type import" in message
-            and "QueryParams" in message
-            and "pymssql._pymssql" in message
+            "Failed guarded type import" in message and "QueryParams" in message and "pymssql._pymssql" in message
         )
 
 
