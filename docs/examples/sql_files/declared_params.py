@@ -39,14 +39,14 @@ def test_declared_params(tmp_path: "Path") -> None:
         session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
 
         # A declared query validates supplied parameters automatically.
-        row = session.execute(query, {"name": "SQLSpec"}).one()
+        row = session.execute(query, name="SQLSpec").one()
 
         # Optional named parameters are bound as NULL when omitted.
         optional_rows = session.execute(spec.get_sql("list_teams")).all()
 
         # Omitting a declared parameter raises before the query reaches the driver.
         try:
-            session.execute(spec.get_sql("get_team_by_name"), {})
+            session.execute(spec.get_sql("get_team_by_name"))
         except SQLSpecError as exc:
             missing_error = str(exc)
     # end-example

@@ -16,7 +16,7 @@ def test_basic_connection(tmp_path: Path) -> None:
 
     with spec.provide_session(config) as session:
         session.execute("create table if not exists notes (id integer primary key, body text)")
-        session.execute("insert into notes (body) values (?)", ("Hello, SQLSpec!",))
+        session.execute("insert into notes (body) values (?)", "Hello, SQLSpec!")
         result = session.execute("select id, body from notes")
         print(result.all())
     # end-example

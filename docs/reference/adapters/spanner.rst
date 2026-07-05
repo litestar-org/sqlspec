@@ -34,7 +34,7 @@ Per-call overrides use the existing ``execute()``, ``execute_many()``, and
 
    result = driver.execute(
        "SELECT id FROM users WHERE id = @id",
-       {"id": "u-1"},
+       id="u-1",
        request_options={"request_tag": "users.lookup"},
        directed_read_options=directed_read_options,
        timeout=10.0,
@@ -58,7 +58,7 @@ for the returned session context:
        retry=retry,
        timeout=20.0,
    ) as driver:
-       driver.execute("UPDATE orders SET status = @status WHERE id = @id", params)
+       driver.execute("UPDATE orders SET status = @status WHERE id = @id", status="paid", id="o-1")
 
 The explicit ``provide_session()`` arguments are copied into the returned
 driver's feature set and do not mutate ``config.driver_features``. They also do

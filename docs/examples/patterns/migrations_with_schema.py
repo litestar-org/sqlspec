@@ -53,7 +53,8 @@ def down():
                 FROM information_schema.tables
                 WHERE table_schema = ? AND table_name = ?
                 """,
-                ("app_schema", "users"),
+                "app_schema",
+                "users",
             )
             tracker_table = session.select_value(
                 """
@@ -61,7 +62,8 @@ def down():
                 FROM information_schema.tables
                 WHERE table_schema = ? AND table_name = ?
                 """,
-                ("admin_schema", "schema_versions"),
+                "admin_schema",
+                "schema_versions",
             )
 
         assert users_table == "users"

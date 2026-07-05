@@ -31,7 +31,7 @@ transfers between databases that support native Arrow (ADBC, DuckDB, BigQuery).
     # Extract as Arrow table
     arrow_result = await source_session.select_to_arrow(
         "SELECT * FROM large_table WHERE updated > :since",
-        {"since": last_sync},
+        since=last_sync,
     )
 
     # Arrow table can be converted to pandas, polars, or written to Parquet

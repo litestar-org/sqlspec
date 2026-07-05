@@ -15,7 +15,7 @@ def test_named_queries() -> None:
     with spec.provide_session(config) as session:
         session.execute("create table teams (id integer primary key, name text)")
         session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
-        result = session.execute(spec.get_sql("find_team"), {"name": "SQLSpec"})
+        result = session.execute(spec.get_sql("find_team"), name="SQLSpec")
         row = result.one()
     # end-example
 

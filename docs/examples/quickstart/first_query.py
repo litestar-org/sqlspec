@@ -16,8 +16,8 @@ def test_first_query(tmp_path: Path) -> None:
 
     with spec.provide_session(config) as session:
         session.execute("create table if not exists users (id integer primary key, name text)")
-        session.execute("insert into users (name) values (?)", ("Ada",))
-        result = session.execute("select id, name from users where name = ?", ("Ada",))
+        session.execute("insert into users (name) values (?)", "Ada")
+        result = session.execute("select id, name from users where name = ?", "Ada")
         print(result.one())
     # end-example
 
