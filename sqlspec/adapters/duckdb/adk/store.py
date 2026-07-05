@@ -957,10 +957,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
     def _fts_index_ddl(self, *, overwrite: bool) -> str:
         """Return DuckDB FTS index PRAGMA SQL for the memory table."""
-        return (
-            f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
-            f"{self._render_fts_options(overwrite=overwrite)})"
-        )
+        return f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', {self._render_fts_options(overwrite=overwrite)})"
 
     def _render_fts_options(self, *, overwrite: bool) -> str:
         """Render DuckDB FTS options from adapter-local ADK config."""

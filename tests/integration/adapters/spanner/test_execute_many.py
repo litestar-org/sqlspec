@@ -1,7 +1,8 @@
-"""Integration tests for Spanner execute_many (batch) operations.
+"""Spanner execute_many residuals for mutation-style batch DML.
 
-These tests verify that batch DML operations work correctly through
-SQLSpec's execute_many() interface.
+Spanner batch behavior depends on write sessions and emulator-created tables,
+so it stays local until the shared contract matrix has Spanner-safe table
+fixture support.
 """
 
 from uuid import uuid4

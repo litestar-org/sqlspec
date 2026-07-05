@@ -1,7 +1,9 @@
-"""Test Oracle CLOB automatic hydration with msgspec.
+"""Oracle CLOB/BLOB msgspec hydration residuals.
 
-Tests that CLOB values are automatically read into strings before msgspec
-struct hydration, preventing LOB handle leakage into user code.
+The shared result contracts verify schema hydration generally. This module keeps
+Oracle-only LOB behavior: CLOB values are read into strings before msgspec
+struct hydration, JSON-in-CLOB values hydrate as structured data, BLOB values
+remain bytes, and multi/NULL CLOB cases do not leak LOB handles into user code.
 """
 
 import json

@@ -1,7 +1,8 @@
-"""Integration tests for EXPLAIN plan support with spanner adapter.
+"""Spanner query-plan residuals.
 
-Note: Spanner uses query_mode=PLAN for execution plans, not SQL EXPLAIN syntax.
-The emulator also has limited DDL support. These tests are skipped in CI.
+Spanner uses ``query_mode=PLAN`` rather than SQL EXPLAIN syntax, and its
+emulator DDL support is limited. This behavior is not represented by the
+portable explain contract.
 """
 
 from collections.abc import Generator

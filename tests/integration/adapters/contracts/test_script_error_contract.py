@@ -45,7 +45,7 @@ def test_bigquery_sync_script_contract_matches_emulator_safe_main_shape() -> Non
         dialect="bigquery",
         mode="sync",
         table=build_bigquery_contract_table("contract_items"),
-        deviations=("emulator-retries-invalid-sql",),
+        invalid_sql_error_policy="emulator_retries",
     )
 
     assert_sync_script_error_contract(driver, case)

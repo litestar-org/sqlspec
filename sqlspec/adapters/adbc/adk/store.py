@@ -542,27 +542,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(self._sessions_table_ddl())
                 conn.commit()
 
-                sessions_idx_app_user = (
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user "
-                    f"ON {self._session_table}(app_name, user_id)"
-                )
+                sessions_idx_app_user = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)"
                 cursor.execute(sessions_idx_app_user)
                 conn.commit()
 
-                sessions_idx_update = (
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time "
-                    f"ON {self._session_table}(update_time DESC)"
-                )
+                sessions_idx_update = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)"
                 cursor.execute(sessions_idx_update)
                 conn.commit()
 
                 cursor.execute(self._events_table_ddl())
                 conn.commit()
 
-                events_idx = (
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session "
-                    f"ON {self._events_table}(session_id, timestamp ASC)"
-                )
+                events_idx = f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)"
                 cursor.execute(events_idx)
                 conn.commit()
 
@@ -1125,10 +1116,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
-        insert_sql = (
-            f"INSERT INTO {self._app_state_table} (app_name, state, update_time) "
-            f"VALUES (?, {self._json_placeholder()}, ?)"
-        )
+        insert_sql = f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (?, {self._json_placeholder()}, ?)"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -1370,10 +1358,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 cursor.execute(self._memory_table_ddl())
                 conn.commit()
 
-                idx_app_user = (
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time "
-                    f"ON {self._memory_table}(app_name, user_id, timestamp DESC)"
-                )
+                idx_app_user = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time ON {self._memory_table}(app_name, user_id, timestamp DESC)"
                 cursor.execute(idx_app_user)
                 conn.commit()
 

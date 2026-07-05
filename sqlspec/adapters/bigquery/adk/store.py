@@ -329,16 +329,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return [_session_record_from_row(row) for row in rows]
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        events_sql = (
-            f"DELETE FROM {self._qualified(self._events_table)} "
-            "WHERE app_name = @app_name AND user_id = @user_id AND session_id = @id"
-            f"{self._partition_filter('timestamp')}"
-        )
-        sessions_sql = (
-            f"DELETE FROM {self._qualified(self._session_table)} "
-            "WHERE app_name = @app_name AND user_id = @user_id AND id = @id"
-            f"{self._partition_filter('create_time')}"
-        )
+        events_sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE app_name = @app_name AND user_id = @user_id AND session_id = @id{self._partition_filter('timestamp')}"
+        sessions_sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE app_name = @app_name AND user_id = @user_id AND id = @id{self._partition_filter('create_time')}"
         params = [
             self._query_param("app_name", app_name),
             self._query_param("user_id", user_id),
@@ -418,18 +410,12 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return [_event_record_from_row(row) for row in rows]
 
     def _delete_expired_events(self, before: datetime) -> int:
-        sql = (
-            f"DELETE FROM {self._qualified(self._events_table)} "
-            f"WHERE timestamp < @before{self._partition_filter('timestamp')}"
-        )
+        sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE timestamp < @before{self._partition_filter('timestamp')}"
         self._run_query(sql, [self._query_param("before", before, bq_type="TIMESTAMP")])
         return 0
 
     def _delete_idle_sessions(self, updated_before: datetime) -> int:
-        sql = (
-            f"DELETE FROM {self._qualified(self._session_table)} "
-            f"WHERE update_time < @before{self._partition_filter('create_time')}"
-        )
+        sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE update_time < @before{self._partition_filter('create_time')}"
         self._run_query(sql, [self._query_param("before", updated_before, bq_type="TIMESTAMP")])
         return 0
 

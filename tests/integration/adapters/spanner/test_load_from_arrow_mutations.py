@@ -1,4 +1,8 @@
-"""Integration tests for Spanner load_from_arrow mutations transport."""
+"""Spanner load_from_arrow mutation residuals.
+
+Spanner Arrow ingest is implemented through mutation/batch-write behavior
+rather than the portable Arrow load path, so it stays adapter-local.
+"""
 
 from uuid import uuid4
 

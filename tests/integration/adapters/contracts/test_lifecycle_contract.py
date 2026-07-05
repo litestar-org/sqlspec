@@ -4,7 +4,11 @@ from typing import cast
 
 import pytest
 
-from tests.integration.adapters.contracts._cases import DriverCaseContext
+from tests.integration.adapters.contracts._cases import (
+    DriverCaseContext,
+    async_driver_params_with,
+    sync_driver_params_with,
+)
 from tests.integration.adapters.contracts.behaviors import (
     AsyncConfigFactory,
     SyncConfigFactory,
@@ -38,92 +42,126 @@ def _async_factory(context: DriverCaseContext) -> AsyncConfigFactory:
     return cast("AsyncConfigFactory", context.make_config)
 
 
-def test_sync_pooling_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize("sync_lifecycle_driver_case", sync_driver_params_with("supports_pooling"), indirect=True)
+def test_sync_pooling_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync pooled configs share data across sessions drawn from the same pool."""
-    if not sync_driver_case.case.supports_pooling:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified pooling support")
-    assert_sync_pooling_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_pooling
+    assert_sync_pooling_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
 
 
-async def test_async_pooling_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize("async_lifecycle_driver_case", async_driver_params_with("supports_pooling"), indirect=True)
+async def test_async_pooling_contract(async_lifecycle_driver_case: DriverCaseContext) -> None:
     """Async pooled configs share data across sessions drawn from the same pool."""
-    if not async_driver_case.case.supports_pooling:
-        pytest.skip(f"{async_driver_case.case.adapter} has no verified pooling support")
-    await assert_async_pooling_contract(_async_factory(async_driver_case), async_driver_case.case)
+    assert async_lifecycle_driver_case.case.supports_pooling
+    await assert_async_pooling_contract(_async_factory(async_lifecycle_driver_case), async_lifecycle_driver_case.case)
 
 
-def test_sync_connection_instance_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "sync_lifecycle_driver_case", sync_driver_params_with("supports_connection_instance"), indirect=True
+)
+def test_sync_connection_instance_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync configs honor an injected connection_instance pool."""
-    if not sync_driver_case.case.supports_connection_instance:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified connection-instance support")
-    assert_sync_connection_instance_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_connection_instance
+    assert_sync_connection_instance_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
 
 
-async def test_async_connection_instance_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "async_lifecycle_driver_case", async_driver_params_with("supports_connection_instance"), indirect=True
+)
+async def test_async_connection_instance_contract(async_lifecycle_driver_case: DriverCaseContext) -> None:
     """Async configs honor an injected connection_instance pool."""
-    if not async_driver_case.case.supports_connection_instance:
-        pytest.skip(f"{async_driver_case.case.adapter} has no verified connection-instance support")
-    await assert_async_connection_instance_contract(_async_factory(async_driver_case), async_driver_case.case)
+    assert async_lifecycle_driver_case.case.supports_connection_instance
+    await assert_async_connection_instance_contract(
+        _async_factory(async_lifecycle_driver_case), async_lifecycle_driver_case.case
+    )
 
 
-def test_sync_connection_hook_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "sync_lifecycle_driver_case", sync_driver_params_with("supports_connection_hook"), indirect=True
+)
+def test_sync_connection_hook_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync adapters invoke the on_connection_create driver-feature hook."""
-    if not sync_driver_case.case.supports_connection_hook:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified connection-hook support")
-    assert_sync_connection_hook_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_connection_hook
+    assert_sync_connection_hook_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
 
 
-async def test_async_connection_hook_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "async_lifecycle_driver_case", async_driver_params_with("supports_connection_hook"), indirect=True
+)
+async def test_async_connection_hook_contract(async_lifecycle_driver_case: DriverCaseContext) -> None:
     """Async adapters invoke the on_connection_create driver-feature hook."""
-    if not async_driver_case.case.supports_connection_hook:
-        pytest.skip(f"{async_driver_case.case.adapter} has no verified connection-hook support")
-    await assert_async_connection_hook_contract(_async_factory(async_driver_case), async_driver_case.case)
+    assert async_lifecycle_driver_case.case.supports_connection_hook
+    await assert_async_connection_hook_contract(
+        _async_factory(async_lifecycle_driver_case), async_lifecycle_driver_case.case
+    )
 
 
-def test_sync_lowercase_columns_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "sync_lifecycle_driver_case", sync_driver_params_with("supports_lowercase_columns"), indirect=True
+)
+def test_sync_lowercase_columns_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync drivers honor the lowercase-column-name driver feature (default on; uppercase when disabled)."""
-    if not sync_driver_case.case.supports_lowercase_columns:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified column-case feature")
-    assert_sync_lowercase_columns_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_lowercase_columns
+    assert_sync_lowercase_columns_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
 
 
-async def test_async_lowercase_columns_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "async_lifecycle_driver_case", async_driver_params_with("supports_lowercase_columns"), indirect=True
+)
+async def test_async_lowercase_columns_contract(async_lifecycle_driver_case: DriverCaseContext) -> None:
     """Async drivers honor the lowercase-column-name driver feature (default on; uppercase when disabled)."""
-    if not async_driver_case.case.supports_lowercase_columns:
-        pytest.skip(f"{async_driver_case.case.adapter} has no verified column-case feature")
-    await assert_async_lowercase_columns_contract(_async_factory(async_driver_case), async_driver_case.case)
+    assert async_lifecycle_driver_case.case.supports_lowercase_columns
+    await assert_async_lowercase_columns_contract(
+        _async_factory(async_lifecycle_driver_case), async_lifecycle_driver_case.case
+    )
 
 
-def test_sync_uuid_feature_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize("sync_lifecycle_driver_case", sync_driver_params_with("supports_uuid_feature"), indirect=True)
+def test_sync_uuid_feature_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync drivers honor the UUID driver feature (enabled binds/returns uuid.UUID; disabled returns raw form)."""
-    if not sync_driver_case.case.supports_uuid_feature:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified UUID feature")
-    assert_sync_uuid_feature_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_uuid_feature
+    assert_sync_uuid_feature_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
 
 
-async def test_async_uuid_feature_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "async_lifecycle_driver_case", async_driver_params_with("supports_uuid_feature"), indirect=True
+)
+async def test_async_uuid_feature_contract(async_lifecycle_driver_case: DriverCaseContext) -> None:
     """Async drivers honor the UUID driver feature (enabled binds/returns uuid.UUID; disabled returns raw form)."""
-    if not async_driver_case.case.supports_uuid_feature:
-        pytest.skip(f"{async_driver_case.case.adapter} has no verified UUID feature")
-    await assert_async_uuid_feature_contract(_async_factory(async_driver_case), async_driver_case.case)
+    assert async_lifecycle_driver_case.case.supports_uuid_feature
+    await assert_async_uuid_feature_contract(
+        _async_factory(async_lifecycle_driver_case), async_lifecycle_driver_case.case
+    )
 
 
-def test_sync_custom_json_serializer_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "sync_lifecycle_driver_case", sync_driver_params_with("supports_custom_json_serializer"), indirect=True
+)
+def test_sync_custom_json_serializer_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync drivers invoke a custom json_serializer driver feature when binding a dict to a JSON column."""
-    if not sync_driver_case.case.supports_custom_json_serializer:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified custom-json-serializer feature")
-    assert_sync_custom_json_serializer_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_custom_json_serializer
+    assert_sync_custom_json_serializer_contract(
+        _sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case
+    )
 
 
-async def test_async_custom_json_serializer_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "async_lifecycle_driver_case", async_driver_params_with("supports_custom_json_serializer"), indirect=True
+)
+async def test_async_custom_json_serializer_contract(async_lifecycle_driver_case: DriverCaseContext) -> None:
     """Async drivers invoke a custom json_serializer driver feature when binding a dict to a JSON column."""
-    if not async_driver_case.case.supports_custom_json_serializer:
-        pytest.skip(f"{async_driver_case.case.adapter} has no verified custom-json-serializer feature")
-    await assert_async_custom_json_serializer_contract(_async_factory(async_driver_case), async_driver_case.case)
+    assert async_lifecycle_driver_case.case.supports_custom_json_serializer
+    await assert_async_custom_json_serializer_contract(
+        _async_factory(async_lifecycle_driver_case), async_lifecycle_driver_case.case
+    )
 
 
-def test_sync_custom_type_adapters_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "sync_lifecycle_driver_case", sync_driver_params_with("supports_custom_type_adapters"), indirect=True
+)
+def test_sync_custom_type_adapters_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
     """Sync drivers hydrate JSON columns to dict/list with custom type adapters enabled (str without)."""
-    if not sync_driver_case.case.supports_custom_type_adapters:
-        pytest.skip(f"{sync_driver_case.case.adapter} has no verified custom-type-adapters feature")
-    assert_sync_custom_type_adapters_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+    assert sync_lifecycle_driver_case.case.supports_custom_type_adapters
+    assert_sync_custom_type_adapters_contract(
+        _sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case
+    )

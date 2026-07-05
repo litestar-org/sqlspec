@@ -129,6 +129,18 @@ def test_table_event_queue_oracle_dialect_uses_fetch_first(tmp_path) -> None:
     assert "LIMIT" not in queue._select_statement.upper()
 
 
+def test_table_event_queue_oracle_dialect_locks_without_fetch_first(tmp_path) -> None:
+    """Oracle locked candidate SQL avoids the invalid FETCH FIRST + FOR UPDATE shape."""
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")}, statement_config=StatementConfig(dialect="oracle")
+    )
+    queue = SyncTableEventQueue(config, select_for_update=True, skip_locked=True)
+    select_sql = queue._select_statement.upper()
+    assert "FOR UPDATE SKIP LOCKED" in select_sql
+    assert "FETCH FIRST" not in select_sql
+
+
 def test_table_event_queue_statement_config_property(tmp_path) -> None:
     """_statement_config property returns config's statement_config."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})

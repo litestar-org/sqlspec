@@ -3243,10 +3243,7 @@ def _oracle_range_partition_clause(partitioning: dict[str, Any], partition_key: 
         raise ValueError(msg)
 
     initial_less_than = str(partitioning.get("initial_less_than") or "TIMESTAMP '2000-01-01 00:00:00'")
-    return (
-        f"PARTITION BY RANGE ({partition_key}) INTERVAL ({interval_sql}) "
-        f"(PARTITION p_initial VALUES LESS THAN ({initial_less_than}))"
-    )
+    return f"PARTITION BY RANGE ({partition_key}) INTERVAL ({interval_sql}) (PARTITION p_initial VALUES LESS THAN ({initial_less_than}))"
 
 
 def _oracle_partition_clause(

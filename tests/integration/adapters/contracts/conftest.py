@@ -4,7 +4,7 @@ import contextlib
 from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -19,6 +19,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.adbc.adk import AdbcADKStore
+from sqlspec.adapters.adbc.litestar import ADBCStore
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
@@ -70,13 +71,15 @@ from sqlspec.adapters.oracledb import (
     OracleSyncDriver,
 )
 from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures
+from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
+from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures, PsqlpyPoolParams
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
 from sqlspec.adapters.psycopg import (
     PsycopgAsyncConfig,
     PsycopgAsyncDriver,
     PsycopgDriverFeatures,
+    PsycopgPoolParams,
     PsycopgSyncConfig,
     PsycopgSyncDriver,
 )
@@ -99,15 +102,23 @@ from tests.integration.adapters.contracts._cases import (
 )
 from tests.integration.adapters.contracts._events_cases import (
     ASYNC_EVENTS_PARAMS,
+    ASYNC_LISTEN_NOTIFY_PARAMS,
     SYNC_EVENTS_PARAMS,
+    SYNC_LISTEN_NOTIFY_PARAMS,
     EventsCase,
     EventsCaseContext,
+    ListenNotifyCase,
+    ListenNotifyCaseContext,
 )
 from tests.integration.adapters.contracts._migration_cases import (
     ASYNC_MIGRATION_PARAMS,
     SYNC_MIGRATION_PARAMS,
     MigrationCase,
     MigrationCaseContext,
+)
+from tests.integration.adapters.contracts._postgres_extension_cases import (
+    PostgresExtensionCase,
+    PostgresExtensionCaseContext,
 )
 from tests.integration.adapters.contracts._schema import (
     DEFAULT_CONTRACT_TABLE,
@@ -139,10 +150,35 @@ def _postgres_conninfo(postgres_service: PostgresService) -> str:
     )
 
 
+def _ensure_postgres_extension(postgres_service: PostgresService, extension: str) -> None:
+    import psycopg
+
+    with psycopg.connect(_postgres_conninfo(postgres_service)) as conn:
+        cast("Any", conn).execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        conn.commit()
+
+
 def _psqlpy_dsn(postgres_service: PostgresService) -> str:
     return (
         f"postgres://{postgres_service.user}:{postgres_service.password}"
         f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+
+
+def _adbc_postgres_uri(postgres_service: PostgresService) -> str:
+    return (
+        f"postgresql://{postgres_service.user}:{postgres_service.password}"
+        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+    )
+
+
+def _asyncpg_pool_config(postgres_service: PostgresService) -> AsyncpgPoolConfig:
+    return AsyncpgPoolConfig(
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        database=postgres_service.database,
     )
 
 
@@ -151,6 +187,101 @@ def _cockroach_conninfo(cockroachdb_service: CockroachDBService) -> str:
         f"host={cockroachdb_service.host} port={cockroachdb_service.port} "
         f"user=root dbname={cockroachdb_service.database} sslmode=disable"
     )
+
+
+@pytest.fixture
+def pgvector_config_adbc(pgvector_service: PostgresService) -> Generator[AdbcConfig, None, None]:
+    """Provide an ADBC config connected to a pgvector-enabled PostgreSQL service."""
+    from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_connect_func
+
+    connection_config = {"uri": _adbc_postgres_uri(pgvector_service)}
+    conn = resolve_driver_connect_func(None, connection_config["uri"])(**build_connection_config(connection_config))
+    try:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        finally:
+            cursor.close()
+        conn.commit()
+    finally:
+        conn.close()
+
+    config = AdbcConfig(connection_config=connection_config)
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def pgvector_config_asyncpg(pgvector_service: PostgresService) -> AsyncpgConfig:
+    """Provide an asyncpg config connected to a pgvector-enabled PostgreSQL service."""
+    _ensure_postgres_extension(pgvector_service, "vector")
+    return AsyncpgConfig(connection_config=_asyncpg_pool_config(pgvector_service))
+
+
+@pytest.fixture
+def pgvector_config_psqlpy(pgvector_service: PostgresService) -> PsqlpyConfig:
+    """Provide a psqlpy config connected to a pgvector-enabled PostgreSQL service."""
+    _ensure_postgres_extension(pgvector_service, "vector")
+    return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(pgvector_service)))
+
+
+@pytest.fixture
+def pgvector_config_psycopg(pgvector_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
+    """Provide a psycopg config connected to a pgvector-enabled PostgreSQL service."""
+    import psycopg
+
+    connection_config = PsycopgPoolParams(conninfo=_postgres_conninfo(pgvector_service))
+    with psycopg.connect(connection_config["conninfo"]) as conn:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.commit()
+
+    config = PsycopgSyncConfig(connection_config=connection_config, pool_config={"min_size": 1})
+    try:
+        yield config
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            config.close_pool()
+            config.connection_instance = None
+
+
+@pytest.fixture
+def paradedb_config_adbc(paradedb_service: PostgresService) -> Generator[AdbcConfig, None, None]:
+    """Provide an ADBC config connected to a ParadeDB service."""
+    config = AdbcConfig(connection_config={"uri": _adbc_postgres_uri(paradedb_service)})
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def paradedb_config_asyncpg(paradedb_service: PostgresService) -> AsyncpgConfig:
+    """Provide an asyncpg config connected to a ParadeDB service."""
+    return AsyncpgConfig(connection_config=_asyncpg_pool_config(paradedb_service))
+
+
+@pytest.fixture
+def paradedb_config_psqlpy(paradedb_service: PostgresService) -> PsqlpyConfig:
+    """Provide a psqlpy config connected to a ParadeDB service."""
+    return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(paradedb_service)))
+
+
+@pytest.fixture
+def paradedb_config_psycopg(paradedb_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
+    """Provide a psycopg config connected to a ParadeDB service."""
+    config = PsycopgSyncConfig(
+        connection_config=PsycopgPoolParams(conninfo=_postgres_conninfo(paradedb_service)), pool_config={"min_size": 1}
+    )
+    try:
+        yield config
+    finally:
+        pool = config.connection_instance
+        if pool is not None:
+            config.close_pool()
+            config.connection_instance = None
 
 
 @pytest.fixture
@@ -873,8 +1004,92 @@ def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) 
     return make
 
 
+@pytest.fixture
+def events_config_oracle_sync(oracle_23ai_service: OracleService, tmp_path: Path) -> Callable[..., Any]:
+    """Build Oracle sync event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> OracleSyncConfig:
+        return OracleSyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_oracle_async(oracle_23ai_service: OracleService, tmp_path: Path) -> Callable[..., Any]:
+    """Build Oracle async event-channel configs for contract tests."""
+
+    def make(*, extension_config: dict[str, Any], suffix: str) -> OracleAsyncConfig:
+        return OracleAsyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build asyncpg native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> AsyncpgConfig:
+        return AsyncpgConfig(
+            connection_config={"dsn": _postgres_conninfo(postgres_service)},
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psqlpy native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> PsqlpyConfig:
+        return PsqlpyConfig(
+            connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(postgres_service)),
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psycopg sync native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> PsycopgSyncConfig:
+        return PsycopgSyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
+@pytest.fixture
+def listen_notify_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build psycopg async native LISTEN/NOTIFY configs for contract tests."""
+
+    def make(*, suffix: str) -> PsycopgAsyncConfig:
+        return PsycopgAsyncConfig(
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
+            extension_config={"events": {"backend": "listen_notify"}},
+        )
+
+    return make
+
+
 def _resolve_events_case(request: pytest.FixtureRequest, case: EventsCase) -> EventsCaseContext:
     return EventsCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
+
+
+def _resolve_listen_notify_case(request: pytest.FixtureRequest, case: ListenNotifyCase) -> ListenNotifyCaseContext:
+    return ListenNotifyCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
 
 
 @pytest.fixture(params=SYNC_EVENTS_PARAMS)
@@ -887,6 +1102,18 @@ def sync_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
 def async_events_case(request: pytest.FixtureRequest) -> EventsCaseContext:
     """Resolve an async event-channel contract case by factory fixture name."""
     return _resolve_events_case(request, request.param)
+
+
+@pytest.fixture(params=SYNC_LISTEN_NOTIFY_PARAMS)
+def sync_listen_notify_case(request: pytest.FixtureRequest) -> ListenNotifyCaseContext:
+    """Resolve a sync native LISTEN/NOTIFY contract case by factory fixture name."""
+    return _resolve_listen_notify_case(request, request.param)
+
+
+@pytest.fixture(params=ASYNC_LISTEN_NOTIFY_PARAMS)
+def async_listen_notify_case(request: pytest.FixtureRequest) -> ListenNotifyCaseContext:
+    """Resolve an async native LISTEN/NOTIFY contract case by factory fixture name."""
+    return _resolve_listen_notify_case(request, request.param)
 
 
 def _lifecycle_connection_config(
@@ -994,13 +1221,21 @@ def lifecycle_config_asyncpg(postgres_service: PostgresService) -> "Callable[...
 def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[..., PsqlpyConfig]":
     """Build fresh psqlpy configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "PsqlpyDriverFeatures | None" = None) -> PsqlpyConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PsqlpyDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PsqlpyConfig:
         connection_config: dict[str, Any] = {"dsn": _psqlpy_dsn(postgres_service)}
         if pooled:
             connection_config["max_db_pool_size"] = 5
-        if driver_features is None:
-            return PsqlpyConfig(connection_config=connection_config)
-        return PsqlpyConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PsqlpyConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1009,13 +1244,21 @@ def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[...,
 def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., PsycopgSyncConfig]":
     """Build fresh psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "PsycopgDriverFeatures | None" = None) -> PsycopgSyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PsycopgSyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return PsycopgSyncConfig(connection_config=connection_config)
-        return PsycopgSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PsycopgSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1024,13 +1267,21 @@ def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callabl
 def lifecycle_config_psycopg_async(postgres_service: PostgresService) -> "Callable[..., PsycopgAsyncConfig]":
     """Build fresh psycopg async configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "PsycopgDriverFeatures | None" = None) -> PsycopgAsyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PsycopgAsyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return PsycopgAsyncConfig(connection_config=connection_config)
-        return PsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PsycopgAsyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1042,7 +1293,10 @@ def lifecycle_config_cockroach_asyncpg(
     """Build fresh CockroachDB asyncpg configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "CockroachAsyncpgDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "CockroachAsyncpgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> CockroachAsyncpgConfig:
         connection_config: dict[str, Any] = {
             "host": cockroachdb_service.host,
@@ -1054,9 +1308,12 @@ def lifecycle_config_cockroach_asyncpg(
         }
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return CockroachAsyncpgConfig(connection_config=connection_config)
-        return CockroachAsyncpgConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return CockroachAsyncpgConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1068,14 +1325,20 @@ def lifecycle_config_cockroach_psycopg_sync(
     """Build fresh CockroachDB psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "CockroachPsycopgDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "CockroachPsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> CockroachPsycopgSyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return CockroachPsycopgSyncConfig(connection_config=connection_config)
-        return CockroachPsycopgSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return CockroachPsycopgSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1087,14 +1350,20 @@ def lifecycle_config_cockroach_psycopg_async(
     """Build fresh CockroachDB psycopg async configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "CockroachPsycopgDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "CockroachPsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> CockroachPsycopgAsyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return CockroachPsycopgAsyncConfig(connection_config=connection_config)
-        return CockroachPsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return CockroachPsycopgAsyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1103,13 +1372,21 @@ def lifecycle_config_cockroach_psycopg_async(
 def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., AiomysqlConfig]":
     """Build fresh aiomysql configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "AiomysqlDriverFeatures | None" = None) -> AiomysqlConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "AiomysqlDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> AiomysqlConfig:
         connection_config = _mysql_connection_config(mysql_service, database_key="db")
         if pooled:
             connection_config.update({"minsize": 2, "maxsize": 5})
-        if driver_features is None:
-            return AiomysqlConfig(connection_config=connection_config)
-        return AiomysqlConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return AiomysqlConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1118,13 +1395,21 @@ def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., Aio
 def lifecycle_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., AsyncmyConfig]":
     """Build fresh asyncmy configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "AsyncmyDriverFeatures | None" = None) -> AsyncmyConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "AsyncmyDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> AsyncmyConfig:
         connection_config = _mysql_connection_config(mysql_service)
         if pooled:
             connection_config.update({"minsize": 2, "maxsize": 5})
-        if driver_features is None:
-            return AsyncmyConfig(connection_config=connection_config)
-        return AsyncmyConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return AsyncmyConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1134,15 +1419,21 @@ def lifecycle_config_mysqlconnector_sync(mysql_service: MySQLService) -> "Callab
     """Build fresh mysql-connector sync configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "MysqlConnectorDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "MysqlConnectorDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> MysqlConnectorSyncConfig:
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
         if pooled:
             connection_config["pool_size"] = 5
-        if driver_features is None:
-            return MysqlConnectorSyncConfig(connection_config=connection_config)
-        return MysqlConnectorSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return MysqlConnectorSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1167,11 +1458,19 @@ def lifecycle_config_mysqlconnector_async(mysql_service: MySQLService) -> "Calla
 def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMysqlConfig]":
     """Build fresh PyMySQL configs for the pooling/connection-hook lifecycle contracts (thread-local pool)."""
 
-    def make(*, pooled: bool = False, driver_features: "PyMysqlDriverFeatures | None" = None) -> PyMysqlConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PyMysqlDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PyMysqlConfig:
         connection_config = _mysql_connection_config(mysql_service)
-        if driver_features is None:
-            return PyMysqlConfig(connection_config=connection_config)
-        return PyMysqlConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PyMysqlConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1198,11 +1497,19 @@ def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..
 def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callable[..., OracleSyncConfig]":
     """Build fresh Oracle sync configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "OracleDriverFeatures | None" = None) -> OracleSyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "OracleDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> OracleSyncConfig:
         connection_config = _oracle_pool_params(oracle_23ai_service)
-        if driver_features is None:
-            return OracleSyncConfig(connection_config=connection_config)
-        return OracleSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return OracleSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1211,11 +1518,19 @@ def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callabl
 def lifecycle_config_oracle_async(oracle_23ai_service: OracleService) -> "Callable[..., OracleAsyncConfig]":
     """Build fresh Oracle async configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "OracleDriverFeatures | None" = None) -> OracleAsyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "OracleDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> OracleAsyncConfig:
         connection_config = _oracle_pool_params(oracle_23ai_service)
-        if driver_features is None:
-            return OracleAsyncConfig(connection_config=connection_config)
-        return OracleAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return OracleAsyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1237,10 +1552,24 @@ def migration_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
 def migration_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
     """Build DuckDB configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> DuckDBConfig:
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> DuckDBConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
         return DuckDBConfig(
-            connection_config={"database": str(tmp_path / f"mig_{suffix}.duckdb")},
-            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+            connection_config={"database": str(tmp_path / f"mig_{suffix}.duckdb")}, migration_config=migration_config
         )
 
     return make
@@ -1314,13 +1643,54 @@ def migration_config_mysqlconnector_async(mysql_service: MySQLService) -> Callab
 
 
 @pytest.fixture
+def migration_config_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build asyncpg configs for migration contract tests."""
+
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> AsyncpgConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return AsyncpgConfig(
+            connection_config=_postgres_connection_config(postgres_service), migration_config=migration_config
+        )
+
+    return make
+
+
+@pytest.fixture
 def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
     """Build psycopg sync configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsycopgSyncConfig:
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PsycopgSyncConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
         return PsycopgSyncConfig(
-            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
-            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)}, migration_config=migration_config
         )
 
     return make
@@ -1330,10 +1700,24 @@ def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable
 def migration_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
     """Build psycopg async configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsycopgAsyncConfig:
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PsycopgAsyncConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
         return PsycopgAsyncConfig(
-            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
-            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)}, migration_config=migration_config
         )
 
     return make
@@ -1343,9 +1727,92 @@ def migration_config_psycopg_async(postgres_service: PostgresService) -> Callabl
 def migration_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
     """Build psqlpy configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsqlpyConfig:
-        return PsqlpyConfig(
-            connection_config={"dsn": _psqlpy_dsn(postgres_service)},
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PsqlpyConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return PsqlpyConfig(connection_config={"dsn": _psqlpy_dsn(postgres_service)}, migration_config=migration_config)
+
+    return make
+
+
+@pytest.fixture
+def migration_config_adbc_postgres(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build ADBC PostgreSQL configs for migration contract tests."""
+
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> AdbcConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return AdbcConfig(
+            connection_config={"uri": _postgres_conninfo(postgres_service), "driver_name": "adbc_driver_postgresql"},
+            migration_config=migration_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build ADBC SQLite configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> AdbcConfig:
+        return AdbcConfig(
+            connection_config={
+                "uri": f"file:{tmp_path / f'mig_{suffix}.db'}",
+                "driver_name": "adbc_driver_sqlite",
+                "autocommit": True,
+            },
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_oracle_sync(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+    """Build Oracle sync configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> OracleSyncConfig:
+        return OracleSyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_oracle_async(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+    """Build Oracle async configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> OracleAsyncConfig:
+        return OracleAsyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
         )
 
@@ -1559,6 +2026,51 @@ async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenera
     with contextlib.suppress(Exception):
         await store.delete_all()
     config.close_pool()
+
+
+@pytest.fixture
+async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenerator[ADBCStore, None]":
+    """Provide a ready PostgreSQL-backed ADBC Litestar store for contract tests."""
+    config = AdbcConfig(
+        connection_config={"uri": _adbc_postgres_uri(postgres_service), "driver_name": "adbc_driver_postgresql"},
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = ADBCStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_oracle_async_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncStore, None]":
+    """Provide a ready Oracle async Litestar store for contract tests."""
+    config = OracleAsyncConfig(
+        connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = OracleAsyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    if config.connection_instance:
+        await config.close_pool()
+
+
+@pytest.fixture
+async def contract_oracle_sync_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleSyncStore, None]":
+    """Provide a ready Oracle sync Litestar store for contract tests."""
+    config = OracleSyncConfig(
+        connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = OracleSyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    if config.connection_instance:
+        config.close_pool()
 
 
 def _adk_extension_config(suffix: str) -> dict[str, Any]:
@@ -1924,6 +2436,12 @@ def adk_store_case(request: pytest.FixtureRequest) -> AdkStoreCaseContext:
     return _resolve_adk_store_case(request, request.param)
 
 
+@pytest.fixture
+def adk_capability_store_case(request: pytest.FixtureRequest) -> AdkStoreCaseContext:
+    """Resolve an ADK store case selected by a capability-filtered param list."""
+    return _resolve_adk_store_case(request, request.param)
+
+
 def _resolve_store_case(request: pytest.FixtureRequest, case: StoreCase) -> StoreCaseContext:
     return StoreCaseContext(case=case, store=request.getfixturevalue(case.fixture_name))
 
@@ -1942,6 +2460,32 @@ def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> Dr
     return DriverCaseContext(case=case, driver=driver, make_config=make_config)
 
 
+@pytest.fixture
+def sync_postgres_extension_case(request: pytest.FixtureRequest) -> Generator[PostgresExtensionCaseContext, None, None]:
+    """Resolve a sync PostgreSQL extension contract case."""
+    case = request.param
+    assert isinstance(case, PostgresExtensionCase)
+    config = request.getfixturevalue(case.config_fixture_name)
+    with config.provide_session() as driver:
+        yield PostgresExtensionCaseContext(case=case, config=config, driver=driver)
+
+
+@pytest.fixture
+async def async_postgres_extension_case(
+    request: pytest.FixtureRequest,
+) -> AsyncGenerator[PostgresExtensionCaseContext, None]:
+    """Resolve an async PostgreSQL extension contract case."""
+    case = request.param
+    assert isinstance(case, PostgresExtensionCase)
+    config = request.getfixturevalue(case.config_fixture_name)
+    try:
+        async with config.provide_session() as driver:
+            yield PostgresExtensionCaseContext(case=case, config=config, driver=driver)
+    finally:
+        await config.close_pool()
+        config.connection_instance = None
+
+
 @pytest.fixture(params=SYNC_DRIVER_PARAMS)
 def sync_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
     """Resolve a sync driver contract case by fixture name."""
@@ -1952,6 +2496,34 @@ def sync_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
 @pytest.fixture(params=ASYNC_DRIVER_PARAMS)
 def async_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
     """Resolve an async driver contract case by fixture name."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def sync_capability_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve a sync driver case supplied by a capability-filtered parametrization."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def async_capability_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve an async driver case supplied by a capability-filtered parametrization."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def sync_lifecycle_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve a sync driver case that supports at least one lifecycle contract."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def async_lifecycle_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve an async driver case that supports at least one lifecycle contract."""
     case = request.param
     return _resolve_driver_case(request, case)
 

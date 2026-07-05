@@ -1,4 +1,9 @@
-"""Test ADBC connection with various database backends."""
+"""ADBC raw connection residuals outside the shared driver contracts.
+
+The contract matrix owns SQLSpec session CRUD and in-memory SQLite session
+behavior. This module keeps raw DB-API `create_connection()` smoke, driver info,
+BigQuery ADBC gating, and explicit PostgreSQL transaction plumbing.
+"""
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -6,14 +11,12 @@ from pytest_databases.docker.postgres import PostgresService
 from sqlspec.adapters.adbc import AdbcConfig
 from tests.integration.adapters.adbc.conftest import xfail_if_driver_missing
 
-# xdist_group is assigned per test based on database backend to enable parallel execution
-
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
 @xfail_if_driver_missing
 def test_connection(postgres_service: "PostgresService") -> None:
-    """Test ADBC connection to PostgreSQL."""
+    """Test raw ADBC connection creation to PostgreSQL."""
     config = AdbcConfig(
         connection_config={
             "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
@@ -24,38 +27,35 @@ def test_connection(postgres_service: "PostgresService") -> None:
         assert conn is not None
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
-            result = cur.fetchone()
-            assert result == (1,)
+            assert cur.fetchone() == (1,)
 
 
 @pytest.mark.xdist_group("duckdb")
 @pytest.mark.adbc
 @xfail_if_driver_missing
 def test_duckdb_connection() -> None:
-    """Test ADBC connection to DuckDB."""
+    """Test raw ADBC connection creation to DuckDB."""
     config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
     with config.create_connection() as conn:
         assert conn is not None
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
-            result = cur.fetchone()
-            assert result == (1,)
+            assert cur.fetchone() == (1,)
 
 
 @pytest.mark.xdist_group("sqlite")
 @pytest.mark.adbc
 @xfail_if_driver_missing
 def test_sqlite_connection() -> None:
-    """Test ADBC connection to SQLite."""
+    """Test raw ADBC connection creation to SQLite."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite.dbapi.connect"})
 
     with config.create_connection() as conn:
         assert conn is not None
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
-            result = cur.fetchone()
-            assert result == (1,)
+            assert cur.fetchone() == (1,)
 
 
 @pytest.mark.skipif(
@@ -66,7 +66,7 @@ def test_sqlite_connection() -> None:
 @pytest.mark.adbc
 @xfail_if_driver_missing
 def test_bigquery_connection() -> None:
-    """Test ADBC connection to BigQuery (requires valid GCP setup)."""
+    """Test raw ADBC connection creation to BigQuery when explicitly enabled."""
     config = AdbcConfig(
         connection_config={
             "driver_name": "adbc_driver_bigquery.dbapi.connect",
@@ -79,14 +79,13 @@ def test_bigquery_connection() -> None:
         assert conn is not None
         with conn.cursor() as cur:
             cur.execute("SELECT 1 as test_value")
-            result = cur.fetchone()
-            assert result == (1,)
+            assert cur.fetchone() == (1,)
 
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
 def test_connection_info_retrieval(postgres_service: "PostgresService") -> None:
-    """Test ADBC connection info retrieval for dialect detection."""
+    """Test ADBC connection info retrieval used by dialect detection."""
     config = AdbcConfig(
         connection_config={
             "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
@@ -105,72 +104,8 @@ def test_connection_info_retrieval(postgres_service: "PostgresService") -> None:
 
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
-def test_connection_with_session_management(postgres_service: "PostgresService") -> None:
-    """Test ADBC connection with session management."""
-    config = AdbcConfig(
-        connection_config={
-            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        }
-    )
-
-    with config.provide_session() as session:
-        assert session is not None
-        result = session.execute("SELECT 1 as test_value")
-        assert result is not None
-        assert result.data is not None
-        assert result.get_data()[0]["test_value"] == 1
-
-
-@pytest.mark.xdist_group("sqlite")
-@pytest.mark.adbc
-def test_sqlite_memory_connection() -> None:
-    """Test ADBC SQLite in-memory connection."""
-    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
-
-    with config.provide_session() as session:
-        session.execute_script("""
-            CREATE TABLE memory_test_adbc (
-                id INTEGER PRIMARY KEY,
-                data TEXT
-            )
-        """)
-
-        session.execute("INSERT INTO memory_test_adbc (data) VALUES (?)", ("test_data",))
-        result = session.execute("SELECT data FROM memory_test_adbc")
-
-        assert result.data is not None
-        assert len(result.data) == 1
-        assert result.get_data()[0]["data"] == "test_data"
-
-
-@pytest.mark.xdist_group("duckdb")
-@pytest.mark.adbc
-@xfail_if_driver_missing
-def test_duckdb_connection_with_arrow_features() -> None:
-    """Test ADBC DuckDB connection with Arrow-specific features."""
-    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
-
-    with config.provide_session() as session:
-        result = session.execute("""
-            SELECT
-                [1, 2, 3, 4] as int_array,
-                {'key': 'value', 'num': 42} as json_obj,
-                CURRENT_TIMESTAMP as current_time
-        """)
-
-        assert result.data is not None
-        assert len(result.data) == 1
-        row = result.get_data()[0]
-
-        assert row["int_array"] is not None
-        assert row["json_obj"] is not None
-        assert row["current_time"] is not None
-
-
-@pytest.mark.xdist_group("postgres")
-@pytest.mark.adbc
 def test_connection_transaction_handling(postgres_service: "PostgresService") -> None:
-    """Test ADBC connection transaction handling."""
+    """Test ADBC PostgreSQL explicit transaction plumbing."""
     config = AdbcConfig(
         connection_config={
             "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
@@ -191,7 +126,6 @@ def test_connection_transaction_handling(postgres_service: "PostgresService") ->
             session.commit()
 
             result = session.execute("SELECT COUNT(*) as count FROM transaction_test_adbc")
-            assert result.data is not None
             assert result.get_data()[0]["count"] >= 1
 
         finally:

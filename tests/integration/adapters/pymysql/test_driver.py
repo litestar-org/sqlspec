@@ -2,7 +2,7 @@
 
 import pytest
 
-from sqlspec import StatementStack, sql
+from sqlspec import StatementStack
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, default_statement_config
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql, pytest.mark.pymysql]
@@ -140,22 +140,3 @@ def test_pymysql_execute_stack_preserves_explicit_caller_transaction(
     finally:
         pymysql_transaction_config.close_pool()
         reader_config.close_pool()
-
-
-def test_pymysql_for_update(pymysql_driver: PyMysqlDriver) -> None:
-    """Test FOR UPDATE row locking with MySQL."""
-    driver = pymysql_driver
-
-    driver.execute("INSERT INTO test_table_pymysql (name, value) VALUES (?, ?)", ("mysql_lock", 100))
-
-    try:
-        driver.begin()
-        result = driver.select_one(
-            sql.select("id", "name", "value").from_("test_table_pymysql").where_eq("name", "mysql_lock").for_update()
-        )
-        assert result is not None
-        assert result["name"] == "mysql_lock"
-        driver.commit()
-    except Exception:
-        driver.rollback()
-        raise

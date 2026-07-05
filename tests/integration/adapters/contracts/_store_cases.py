@@ -6,11 +6,13 @@ import pytest
 from _pytest.mark.structures import Mark, MarkDecorator
 
 from tests.integration.adapters.contracts._cases import (
+    ADBC_MARK,
     ARROW_ODBC_MARK,
     DUCKDB_XDIST_MARK,
     MSSQL_MARK,
     MSSQL_XDIST_MARK,
     MYSQL_XDIST_MARK,
+    ORACLE_XDIST_MARK,
     POSTGRES_XDIST_MARK,
     SQLITE_XDIST_MARK,
 )
@@ -65,6 +67,11 @@ STORE_CASES = (
         marks=(MYSQL_XDIST_MARK, pytest.mark.anyio),
     ),
     StoreCase("pymysql", "contract_pymysql_store", "pymysql", marks=(MYSQL_XDIST_MARK, pytest.mark.anyio)),
+    StoreCase("adbc", "contract_adbc_store", "adbc", marks=(ADBC_MARK, POSTGRES_XDIST_MARK, pytest.mark.anyio)),
+    StoreCase(
+        "oracledb-async", "contract_oracle_async_store", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)
+    ),
+    StoreCase("oracledb-sync", "contract_oracle_sync_store", "oracledb", marks=(ORACLE_XDIST_MARK, pytest.mark.anyio)),
 )
 
 STORE_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in STORE_CASES)

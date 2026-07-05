@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -49,6 +50,7 @@ class _BaseTableEventQueue:
         "_retention_seconds",
         "_runtime",
         "_select_by_id_statement",
+        "_select_for_update",
         "_select_statement",
         "_statement_config",
         "_table_name",
@@ -72,8 +74,9 @@ class _BaseTableEventQueue:
         self._lease_seconds = lease_seconds or 30
         self._retention_seconds = retention_seconds or 86_400
         self._max_claim_attempts = 5
+        self._select_for_update = bool(select_for_update)
         self._insert_statement = self._insert_sql()
-        self._select_statement = self._select_sql(bool(select_for_update), bool(skip_locked))
+        self._select_statement = self._select_sql(self._select_for_update, bool(skip_locked))
         self._select_by_id_statement = self._select_by_id_sql()
         self._claim_statement = self._claim_sql()
         self._ack_statement = self._ack_sql()
@@ -91,14 +94,8 @@ class _BaseTableEventQueue:
 
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
-        limit_clause = self._row_limit_clause()
-        base = (
-            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
-            f"FROM {self._table_name} "
-            "WHERE channel = :channel AND available_at <= :available_cutoff AND ("
-            "status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))"
-            ") ORDER BY created_at ASC"
-        )
+        limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
+        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC"
         locking_clause = ""
         if select_for_update:
             locking_clause = " FOR UPDATE"
@@ -109,10 +106,8 @@ class _BaseTableEventQueue:
     def _select_by_id_sql(self) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = self._row_limit_clause()
-        return (
-            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
-            f"FROM {self._table_name} WHERE event_id = :event_id" + limit_clause
-        )
+        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE event_id = :event_id"
+        return base + limit_clause
 
     def _uses_tsql_limit(self) -> bool:
         return self._dialect in {"mssql", "tsql"} or "sql server" in self._dialect
@@ -124,13 +119,12 @@ class _BaseTableEventQueue:
             return " FETCH FIRST 1 ROWS ONLY"
         return " LIMIT 1"
 
+    def _uses_oracle_locking_select(self, select_for_update: bool | None = None) -> bool:
+        locking_enabled = self._select_for_update if select_for_update is None else select_for_update
+        return bool(locking_enabled) and "oracle" in self._dialect
+
     def _claim_sql(self) -> str:
-        return (
-            f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 "
-            "WHERE event_id = :event_id AND ("
-            "status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff))"
-            ")"
-        )
+        return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
 
     def _ack_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
@@ -140,6 +134,27 @@ class _BaseTableEventQueue:
 
     def _cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
+
+    @staticmethod
+    def _candidate_parameters(channel: str, current_time: "datetime") -> "dict[str, Any]":
+        return {
+            "channel": channel,
+            "available_cutoff": current_time,
+            "pending_status": _PENDING_STATUS,
+            "leased_status": _LEASED_STATUS,
+            "lease_cutoff": current_time,
+        }
+
+    @staticmethod
+    def _claim_parameters(row: "dict[str, Any]", now: "datetime", leased_until: "datetime") -> "dict[str, Any]":
+        return {
+            "claimed_status": _LEASED_STATUS,
+            "lease_expires_at": leased_until,
+            "event_id": row["event_id"],
+            "pending_status": _PENDING_STATUS,
+            "leased_status": _LEASED_STATUS,
+            "lease_reentry_cutoff": now,
+        }
 
     @staticmethod
     def _utcnow() -> "datetime":
@@ -216,6 +231,13 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         attempt = 0
         while attempt < self._max_claim_attempts:
             attempt += 1
+            if self._select_for_update:
+                event = self._claim_locked_candidate(channel)
+                if event is not None:
+                    return event
+                if poll_interval is not None and poll_interval > 0:
+                    time.sleep(poll_interval)
+                return None
             row = self._fetch_candidate(channel)
             if row is None:
                 if poll_interval is not None and poll_interval > 0:
@@ -284,13 +306,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
                     self._select_statement,
-                    {
-                        "channel": channel,
-                        "available_cutoff": current_time,
-                        "pending_status": _PENDING_STATUS,
-                        "leased_status": _LEASED_STATUS,
-                        "lease_cutoff": current_time,
-                    },
+                    self._candidate_parameters(channel, current_time),
                     statement_config=self._statement_config,
                 )
             )
@@ -305,9 +321,74 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         with cast(
             "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
         ) as driver:
-            result = driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
+            rows_affected = self._execute_with_driver(driver, sql, parameters)
             driver.commit()
-            return result.rows_affected
+            return rows_affected
+
+    def _claim_locked_candidate(self, channel: str) -> "EventMessage | None":
+        current_time = self._utcnow()
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
+            try:
+                row = self._fetch_candidate_with_driver(driver, channel, current_time)
+                if row is None:
+                    driver.rollback()
+                    return None
+                now = self._utcnow()
+                leased_until = now + timedelta(seconds=self._lease_seconds)
+                claimed = self._execute_with_driver(
+                    driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
+                )
+                if not claimed:
+                    driver.rollback()
+                    return None
+                driver.commit()
+                return self._hydrate_event(row, leased_until)
+            except Exception:
+                with suppress(Exception):
+                    driver.rollback()
+                raise
+
+    def _fetch_candidate_with_driver(
+        self, driver: "SyncDriverAdapterBase", channel: str, current_time: "datetime"
+    ) -> "dict[str, Any] | None":
+        statement = SQL(
+            self._select_statement,
+            self._candidate_parameters(channel, current_time),
+            statement_config=self._statement_config,
+        )
+        if self._uses_oracle_locking_select():
+            return self._fetch_oracle_candidate_with_driver(driver, statement)
+        return driver.select_one_or_none(statement)
+
+    def _fetch_oracle_candidate_with_driver(
+        self, driver: "SyncDriverAdapterBase", statement: "SQL"
+    ) -> "dict[str, Any] | None":
+        from sqlspec.adapters.oracledb.core import collect_sync_rows
+
+        oracle_driver = cast("Any", driver)
+        sql, prepared_parameters = oracle_driver._compiled_sql(statement, self._statement_config)
+        with oracle_driver.with_cursor(oracle_driver.connection) as cursor:
+            cursor.execute(sql, prepared_parameters or {})
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            column_names, requires_lob_coercion = oracle_driver._resolve_row_metadata(cursor.description)
+            rows, column_names = collect_sync_rows(
+                [row],
+                cursor.description,
+                oracle_driver.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
+            )
+        if not rows:
+            return None
+        return dict(zip(column_names, rows[0], strict=False))
+
+    def _execute_with_driver(self, driver: "SyncDriverAdapterBase", sql: str, parameters: "dict[str, Any]") -> int:
+        result = driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
+        return result.rows_affected
 
 
 @final
@@ -344,6 +425,13 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         attempt = 0
         while attempt < self._max_claim_attempts:
             attempt += 1
+            if self._select_for_update:
+                event = await self._claim_locked_candidate(channel)
+                if event is not None:
+                    return event
+                if poll_interval is not None and poll_interval > 0:
+                    await asyncio.sleep(poll_interval)
+                return None
             row = await self._fetch_candidate(channel)
             if row is None:
                 if poll_interval is not None and poll_interval > 0:
@@ -414,13 +502,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
                     self._select_statement,
-                    {
-                        "channel": channel,
-                        "available_cutoff": current_time,
-                        "pending_status": _PENDING_STATUS,
-                        "leased_status": _LEASED_STATUS,
-                        "lease_cutoff": current_time,
-                    },
+                    self._candidate_parameters(channel, current_time),
                     statement_config=self._statement_config,
                 )
             )
@@ -437,9 +519,76 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         async with cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
         ) as driver:
-            result = await driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
+            rows_affected = await self._execute_with_driver(driver, sql, parameters)
             await driver.commit()
-            return result.rows_affected
+            return rows_affected
+
+    async def _claim_locked_candidate(self, channel: str) -> "EventMessage | None":
+        current_time = self._utcnow()
+        async with cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
+            try:
+                row = await self._fetch_candidate_with_driver(driver, channel, current_time)
+                if row is None:
+                    await driver.rollback()
+                    return None
+                now = self._utcnow()
+                leased_until = now + timedelta(seconds=self._lease_seconds)
+                claimed = await self._execute_with_driver(
+                    driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
+                )
+                if not claimed:
+                    await driver.rollback()
+                    return None
+                await driver.commit()
+                return self._hydrate_event(row, leased_until)
+            except Exception:
+                with suppress(Exception):
+                    await driver.rollback()
+                raise
+
+    async def _fetch_candidate_with_driver(
+        self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"
+    ) -> "dict[str, Any] | None":
+        statement = SQL(
+            self._select_statement,
+            self._candidate_parameters(channel, current_time),
+            statement_config=self._statement_config,
+        )
+        if self._uses_oracle_locking_select():
+            return await self._fetch_oracle_candidate_with_driver(driver, statement)
+        return await driver.select_one_or_none(statement)
+
+    async def _fetch_oracle_candidate_with_driver(
+        self, driver: "AsyncDriverAdapterBase", statement: "SQL"
+    ) -> "dict[str, Any] | None":
+        from sqlspec.adapters.oracledb.core import collect_async_rows
+
+        oracle_driver = cast("Any", driver)
+        sql, prepared_parameters = oracle_driver._compiled_sql(statement, self._statement_config)
+        async with oracle_driver.with_cursor(oracle_driver.connection) as cursor:
+            await cursor.execute(sql, prepared_parameters or {})
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            column_names, requires_lob_coercion = oracle_driver._resolve_row_metadata(cursor.description)
+            rows, column_names = await collect_async_rows(
+                [row],
+                cursor.description,
+                oracle_driver.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
+            )
+        if not rows:
+            return None
+        return dict(zip(column_names, rows[0], strict=False))
+
+    async def _execute_with_driver(
+        self, driver: "AsyncDriverAdapterBase", sql: str, parameters: "dict[str, Any]"
+    ) -> int:
+        result = await driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
+        return result.rows_affected
 
 
 def build_queue_backend(

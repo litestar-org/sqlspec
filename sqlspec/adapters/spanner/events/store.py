@@ -61,20 +61,7 @@ class SpannerSyncEventQueueStore(BaseEventQueueStore["SpannerSyncConfig"]):
         integer_type = self._integer_type()
         pk_inline = self._primary_key_syntax()
 
-        return (
-            f"CREATE TABLE {self.table_name} ("
-            f"event_id {string_64} NOT NULL,"
-            f" channel {string_128} NOT NULL,"
-            f" payload_json {payload_type} NOT NULL,"
-            f" metadata_json {metadata_type},"
-            f" status {string_32} NOT NULL,"
-            f" available_at {timestamp_type} NOT NULL,"
-            f" lease_expires_at {timestamp_type},"
-            f" attempts {integer_type} NOT NULL,"
-            f" created_at {timestamp_type} NOT NULL,"
-            f" acknowledged_at {timestamp_type}"
-            f"){pk_inline}"
-        )
+        return f"CREATE TABLE {self.table_name} (event_id {string_64} NOT NULL, channel {string_128} NOT NULL, payload_json {payload_type} NOT NULL, metadata_json {metadata_type}, status {string_32} NOT NULL, available_at {timestamp_type} NOT NULL, lease_expires_at {timestamp_type}, attempts {integer_type} NOT NULL, created_at {timestamp_type} NOT NULL, acknowledged_at {timestamp_type}){pk_inline}"
 
     def _index_ddl(self) -> str | None:
         """Build Spanner secondary index for queue operations."""

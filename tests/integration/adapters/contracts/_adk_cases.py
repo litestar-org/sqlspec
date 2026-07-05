@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 import pytest
-from _pytest.mark.structures import Mark, MarkDecorator
+from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 
 from tests.integration.adapters.contracts._cases import (
     ADBC_MARK,
@@ -107,3 +107,12 @@ ADK_STORE_CASES = (
 )
 
 ADK_STORE_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in ADK_STORE_CASES)
+
+
+def adk_store_params_with(*capability_names: str) -> "tuple[ParameterSet, ...]":
+    """Return ADK store params that opt into at least one named capability."""
+    return tuple(
+        pytest.param(case, id=case.id, marks=case.marks)
+        for case in ADK_STORE_CASES
+        if any(getattr(case, name) for name in capability_names)
+    )

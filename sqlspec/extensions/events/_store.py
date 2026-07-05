@@ -126,20 +126,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
         pk_column = " PRIMARY KEY" if not pk_inline else ""
 
-        return (
-            f"CREATE TABLE {self.table_name} ("
-            f"event_id {string_64}{pk_column},"
-            f" channel {string_128} NOT NULL,"
-            f" payload_json {payload_type} NOT NULL,"
-            f" metadata_json {metadata_type},"
-            f" status {string_32} NOT NULL DEFAULT 'pending',"
-            f" available_at {timestamp_type} NOT NULL DEFAULT {ts_default},"
-            f" lease_expires_at {timestamp_type},"
-            f" attempts {integer_type} NOT NULL DEFAULT 0,"
-            f" created_at {timestamp_type} NOT NULL DEFAULT {ts_default},"
-            f" acknowledged_at {timestamp_type}"
-            f"){pk_inline}{table_clause}"
-        )
+        return f"CREATE TABLE {self.table_name} (event_id {string_64}{pk_column}, channel {string_128} NOT NULL, payload_json {payload_type} NOT NULL, metadata_json {metadata_type}, status {string_32} NOT NULL DEFAULT 'pending', available_at {timestamp_type} NOT NULL DEFAULT {ts_default}, lease_expires_at {timestamp_type}, attempts {integer_type} NOT NULL DEFAULT 0, created_at {timestamp_type} NOT NULL DEFAULT {ts_default}, acknowledged_at {timestamp_type}){pk_inline}{table_clause}"
 
     def _index_ddl(self) -> str | None:
         """Build CREATE INDEX SQL for queue operations."""

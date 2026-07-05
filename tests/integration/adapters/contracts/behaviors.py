@@ -3,16 +3,19 @@
 import contextlib
 import inspect
 import json
+import math
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 
 import msgspec
 import pytest
 
-from sqlspec import SQL, SQLResult, StatementConfig, StatementStack, sql
+from sqlspec import SQL, SQLResult, StackExecutionError, StatementConfig, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
+from sqlspec.data_dictionary import VersionInfo
 from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
@@ -226,8 +229,22 @@ async def _execute_async(driver: AsyncContractDriver, statement: object, paramet
     return await driver.execute(statement, parameters)
 
 
-def _reports_execute_rows_affected(case: DriverCase) -> bool:
-    return "execute-rows-affected-unavailable" not in case.deviations
+def _rowcount_policy(case: DriverCase, method: Literal["execute", "execute_many"] = "execute") -> str:
+    return case.execute_many_rowcount_policy if method == "execute_many" else case.execute_rowcount_policy
+
+
+def _reports_execute_rows_affected(case: DriverCase, method: Literal["execute", "execute_many"] = "execute") -> bool:
+    return _rowcount_policy(case, method) == "exact"
+
+
+def _assert_sql_result_rows_affected(
+    result: object, case: DriverCase, rows_affected: int, method: Literal["execute", "execute_many"] = "execute"
+) -> SQLResult:
+    policy = _rowcount_policy(case, method)
+    sql_result = assert_sql_result(result, rows_affected=rows_affected if policy == "exact" else None)
+    if policy == "non_negative":
+        assert sql_result.rows_affected >= 0
+    return sql_result
 
 
 def _sqlglot_dialect(case: DriverCase) -> str:
@@ -420,21 +437,21 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
     iterator = iter(stream)
     first = next(iterator)
     assert first["value"] == 0
-    if "streaming-page-size-advisory" not in case.deviations:
+    if case.stream_chunk_policy == "bounded":
         assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
     remaining = list(iterator)
     assert len(remaining) == count - 1
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
     assert remaining[-1]["value"] == count - 1
 
-    if "emulator-streaming-reopen-hangs" not in case.deviations:
+    if case.supports_stream_reopen_after_partial_iteration:
         with sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
             partial_iterator = iter(partial)
             for _ in range(50):
                 next(partial_iterator)
         assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
         with pytest.raises(Exception):
             next(iter(bad_stream))
@@ -458,21 +475,21 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
     iterator = aiter(stream)
     first = await anext(iterator)
     assert first["value"] == 0
-    if "streaming-page-size-advisory" not in case.deviations:
+    if case.stream_chunk_policy == "bounded":
         assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
     remaining: list[dict[str, Any]] = [row async for row in iterator]
     assert len(remaining) == count - 1
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
     assert remaining[-1]["value"] == count - 1
 
-    if "emulator-streaming-reopen-hangs" not in case.deviations:
+    if case.supports_stream_reopen_after_partial_iteration:
         async with async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
             partial_iterator = aiter(partial)
             for _ in range(50):
                 await anext(partial_iterator)
         assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
         with pytest.raises(Exception):
             await anext(aiter(bad_stream))
@@ -655,7 +672,7 @@ def assert_sync_for_update_contract(driver: object, case: DriverCase) -> None:
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
     ]
-    if "no-for-share" not in case.deviations:
+    if case.supports_for_share:
         builders.append(sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share())
     try:
         for builder in builders:
@@ -684,7 +701,7 @@ async def assert_async_for_update_contract(driver: object, case: DriverCase) -> 
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
     ]
-    if "no-for-share" not in case.deviations:
+    if case.supports_for_share:
         builders.append(sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share())
     try:
         for builder in builders:
@@ -729,7 +746,7 @@ def assert_sync_filter_contract(driver: object, case: DriverCase) -> None:
     in_collection = sync_driver.execute(base, InCollectionFilter("value", [20, 40]), OrderByFilter("value", "asc"))
     assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
 
-    if "emulator-no-search-filter" not in case.deviations:
+    if case.supports_search_filter:
         searched = sync_driver.execute(base, SearchFilter("name", "lta"))
         assert [row["name"] for row in searched.get_data()] == ["delta"]
 
@@ -749,15 +766,15 @@ async def assert_async_filter_contract(driver: object, case: DriverCase) -> None
     )
     assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
 
-    if "emulator-no-search-filter" not in case.deviations:
+    if case.supports_search_filter:
         searched = await async_driver.execute(base, SearchFilter("name", "lta"))
         assert [row["name"] for row in searched.get_data()] == ["delta"]
 
 
 def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers run grouped aggregation and correlated subquery selects."""
-    if "emulator-no-grouped-subquery" in case.deviations:
-        pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
+    if not case.supports_grouped_subquery:
+        pytest.skip(f"{case.adapter} does not support grouped aggregation / correlated subqueries")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
     _seed_sync(sync_driver, _GROUPED_SEED_ROWS, table, case)
@@ -775,8 +792,8 @@ def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None
 
 async def assert_async_complex_query_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers run grouped aggregation and correlated subquery selects."""
-    if "emulator-no-grouped-subquery" in case.deviations:
-        pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
+    if not case.supports_grouped_subquery:
+        pytest.skip(f"{case.adapter} does not support grouped aggregation / correlated subqueries")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
     await _seed_async(async_driver, _GROUPED_SEED_ROWS, table, case)
@@ -790,6 +807,9 @@ async def assert_async_complex_query_contract(driver: object, case: DriverCase) 
         f"SELECT name FROM {table.name} WHERE value = (SELECT MAX(value) FROM {table.name}) ORDER BY name"
     )
     assert [row["name"] for row in top.get_data()] == ["delta", "epsilon"]
+
+
+STATEMENT_STACK_SCOPE = "statement_stack"
 
 
 def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> None:
@@ -816,6 +836,7 @@ def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> No
         count_result = results[2].result
         assert isinstance(count_result, SQLResult)
         assert count_result.get_data()[0]["count"] == 2
+        dispatch_sync_extra_assertions(driver, case, STATEMENT_STACK_SCOPE)
     finally:
         sync_driver.execute(table.delete_sql)
         sync_driver.commit()
@@ -845,9 +866,78 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
         count_result = results[2].result
         assert isinstance(count_result, SQLResult)
         assert count_result.get_data()[0]["count"] == 2
+        await dispatch_async_extra_assertions(driver, case, STATEMENT_STACK_SCOPE)
     finally:
         await async_driver.execute(table.delete_sql)
         await async_driver.commit()
+
+
+async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> None:
+    """Fold Oracle async native pipeline and continue-on-error stack proofs."""
+    async_driver = cast("AsyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    if not await driver_any._pipeline_native_supported():
+        pytest.skip("Oracle native pipeline unavailable")
+
+    native_table = _pc_table(case, "stack_native")
+    error_table = _pc_table(case, "stack_errors")
+    await _async_drop_table(async_driver, native_table)
+    await _async_drop_table(async_driver, error_table)
+    await async_driver.execute(f"CREATE TABLE {native_table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    await async_driver.execute(f"CREATE TABLE {error_table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+    await async_driver.commit()
+
+    driver_type = type(driver)
+    original_execute_stack_native = getattr(driver_type, "_execute_stack_native")
+    call_counter = {"count": 0}
+
+    async def tracking_execute_stack_native(
+        self: object, stack: StatementStack, *, continue_on_error: bool
+    ) -> tuple[Any, ...]:
+        call_counter["count"] += 1
+        result = await original_execute_stack_native(self, stack, continue_on_error=continue_on_error)
+        return cast("tuple[Any, ...]", result)
+
+    setattr(driver_type, "_execute_stack_native", tracking_execute_stack_native)
+    try:
+        stack = (
+            StatementStack()
+            .push_execute(f"INSERT INTO {native_table} (id, name) VALUES (:id, :name)", {"id": 1, "name": "alpha"})
+            .push_execute(f"INSERT INTO {native_table} (id, name) VALUES (:id, :name)", {"id": 2, "name": "beta"})
+            .push_execute(f"SELECT name FROM {native_table} WHERE id = :id", {"id": 2})
+        )
+        results = await async_driver.execute_stack(stack)
+        assert call_counter["count"] == 1
+        assert len(results) == 3
+        assert results[0].rows_affected == 1
+        assert results[1].rows_affected == 1
+        last_result = results[2].result
+        assert isinstance(last_result, SQLResult)
+        assert last_result.get_data()[0]["name"] == "beta"
+
+        error_stack = (
+            StatementStack()
+            .push_execute(f"INSERT INTO {error_table} (id, name) VALUES (:id, :name)", {"id": 1, "name": "alpha"})
+            .push_execute(f"INSERT INTO {error_table} (id, name) VALUES (:id, :name)", {"id": 1, "name": "duplicate"})
+            .push_execute(f"INSERT INTO {error_table} (id, name) VALUES (:id, :name)", {"id": 2, "name": "beta"})
+        )
+        error_results = await async_driver.execute_stack(error_stack, continue_on_error=True)
+        assert len(error_results) == 3
+        assert error_results[0].rows_affected == 1
+        assert isinstance(error_results[1].error, StackExecutionError)
+        assert error_results[2].rows_affected == 1
+
+        verify_result = await async_driver.execute(
+            f"SELECT COUNT(*) AS total_rows FROM {error_table} WHERE id = :id", {"id": 2}
+        )
+        assert verify_result.get_data()[0]["total_rows"] == 1
+    finally:
+        setattr(driver_type, "_execute_stack_native", original_execute_stack_native)
+        await _async_drop_table(async_driver, native_table)
+        await _async_drop_table(async_driver, error_table)
+
+
+register_async_extra_assertion("statement_stack:oracle_native", STATEMENT_STACK_SCOPE, _oracle_native_statement_stack)
 
 
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
@@ -861,7 +951,7 @@ def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
         table.insert_qmark_sql, [("alpha", 10, None), ("beta", 20, None), ("gamma", 30, None)]
     )
 
-    assert_sql_result(result, rows_affected=3)
+    _assert_sql_result_rows_affected(result, case, 3, "execute_many")
     assert_result_data(
         sync_driver.execute(table.select_ordered_sql),
         (
@@ -883,7 +973,7 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
         table.insert_qmark_sql, [("alpha", 10, None), ("beta", 20, None), ("gamma", 30, None)]
     )
 
-    assert_sql_result(result, rows_affected=3)
+    _assert_sql_result_rows_affected(result, case, 3, "execute_many")
     assert_result_data(
         await async_driver.execute(table.select_ordered_sql),
         (
@@ -902,16 +992,16 @@ def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase)
     table = case.table
 
     inserted = sync_driver.execute_many(table.insert_qmark_sql, [("a", 1, None), ("b", 2, None), ("c", 3, None)])
-    assert_sql_result(inserted, rows_affected=3)
+    _assert_sql_result_rows_affected(inserted, case, 3, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 3
 
     updated = sync_driver.execute_many(_update_value_sql(table), [(10, "a"), (20, "b")])
-    assert_sql_result(updated, rows_affected=2)
+    _assert_sql_result_rows_affected(updated, case, 2, "execute_many")
     sync_driver.commit()
 
     deleted = sync_driver.execute_many(_delete_by_name_sql(table), [("a",), ("b",)])
-    assert_sql_result(deleted, rows_affected=2)
+    _assert_sql_result_rows_affected(deleted, case, 2, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 1
 
@@ -924,16 +1014,16 @@ async def assert_async_execute_many_mutation_contract(driver: object, case: Driv
     table = case.table
 
     inserted = await async_driver.execute_many(table.insert_qmark_sql, [("a", 1, None), ("b", 2, None), ("c", 3, None)])
-    assert_sql_result(inserted, rows_affected=3)
+    _assert_sql_result_rows_affected(inserted, case, 3, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 3
 
     updated = await async_driver.execute_many(_update_value_sql(table), [(10, "a"), (20, "b")])
-    assert_sql_result(updated, rows_affected=2)
+    _assert_sql_result_rows_affected(updated, case, 2, "execute_many")
     await async_driver.commit()
 
     deleted = await async_driver.execute_many(_delete_by_name_sql(table), [("a",), ("b",)])
-    assert_sql_result(deleted, rows_affected=2)
+    _assert_sql_result_rows_affected(deleted, case, 2, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 1
 
@@ -947,13 +1037,13 @@ def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) ->
 
     large_batch = [(f"item-{index}", index, None) for index in range(200)]
     large_result = sync_driver.execute_many(table.insert_qmark_sql, large_batch)
-    assert_sql_result(large_result, rows_affected=200)
+    _assert_sql_result_rows_affected(large_result, case, 200, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 200
 
     sql_object = SQL(table.insert_qmark_sql, [("obj-1", 1, None), ("obj-2", 2, None)], is_many=True)
     object_result = sync_driver.execute(sql_object)
-    assert_sql_result(object_result, rows_affected=2)
+    _assert_sql_result_rows_affected(object_result, case, 2, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 202
 
@@ -967,13 +1057,13 @@ async def assert_async_execute_many_input_contract(driver: object, case: DriverC
 
     large_batch = [(f"item-{index}", index, None) for index in range(200)]
     large_result = await async_driver.execute_many(table.insert_qmark_sql, large_batch)
-    assert_sql_result(large_result, rows_affected=200)
+    _assert_sql_result_rows_affected(large_result, case, 200, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 200
 
     sql_object = SQL(table.insert_qmark_sql, [("obj-1", 1, None), ("obj-2", 2, None)], is_many=True)
     object_result = await async_driver.execute(sql_object)
-    assert_sql_result(object_result, rows_affected=2)
+    _assert_sql_result_rows_affected(object_result, case, 2, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 202
 
@@ -1230,6 +1320,861 @@ PARAM_CODECS_SCOPE = "param_codecs"
 
 def _pc_table(case: DriverCase, suffix: str) -> str:
     return f"pc_{suffix}_{case.adapter}_{case.mode}"
+
+
+def _merge_dialect(case: DriverCase) -> str:
+    return "oracle" if case.dialect == "oracle" else "postgres"
+
+
+def _merge_table_sql(case: DriverCase, table: str) -> str:
+    if case.dialect == "oracle":
+        return (
+            f"CREATE TABLE {table} ("
+            "id NUMBER PRIMARY KEY, "
+            "name VARCHAR2(100) NOT NULL, "
+            "price NUMBER(10, 2), "
+            "stock NUMBER DEFAULT 0, "
+            "category VARCHAR2(50)"
+            ")"
+        )
+    return (
+        f"CREATE TABLE {table} ("
+        "id INTEGER PRIMARY KEY, "
+        "name TEXT NOT NULL, "
+        "price NUMERIC(10, 2), "
+        "stock INTEGER DEFAULT 0, "
+        "category TEXT"
+        ")"
+    )
+
+
+def _drop_merge_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        driver.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        driver.commit()
+
+
+async def _drop_merge_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        await driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        await driver.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        await driver.commit()
+
+
+def _merge_source(rows: list[dict[str, object]], case: DriverCase) -> object:
+    return rows[0] if case.dialect == "oracle" and len(rows) == 1 else rows
+
+
+def _merge_upsert_query(table: str, rows: list[dict[str, object]], case: DriverCase) -> object:
+    return (
+        sql
+        .merge(dialect=_merge_dialect(case))
+        .into(table, alias="t")
+        .using(_merge_source(rows, case), alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
+        .when_not_matched_then_insert(
+            id="src.id", name="src.name", price="src.price", stock="src.stock", category="src.category"
+        )
+    )
+
+
+def _merge_price(value: object) -> float | None:
+    if value is None:
+        return None
+    assert isinstance(value, int | float | Decimal)
+    return float(value)
+
+
+def assert_sync_merge_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync MERGE updates, inserts, expressions, conditions, NULLs, and table sources."""
+    if not case.supports_merge:
+        pytest.skip(f"{case.id} does not support MERGE")
+    sync_driver = cast("SyncContractDriver", driver)
+    target = _pc_table(case, "merge")
+    source = _pc_table(case, "merge_src")
+    _drop_merge_table_sync(sync_driver, case, source)
+    _drop_merge_table_sync(sync_driver, case, target)
+    sync_driver.execute(_merge_table_sql(case, target))
+    sync_driver.execute(_merge_table_sql(case, source))
+    sync_driver.execute(
+        f"INSERT INTO {target} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+        id=1,
+        name="Existing Product",
+        price=Decimal("19.99"),
+        stock=10,
+        category="old",
+    )
+    sync_driver.commit()
+    try:
+        result = sync_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 1, "name": "Updated Product", "price": Decimal("24.99"), "stock": 11, "category": "new"}],
+                case,
+            )
+        )
+        assert isinstance(result, SQLResult)
+        row = _lower_keys(sync_driver.execute(f"SELECT name, price FROM {target} WHERE id = 1").get_data()[0])
+        assert row["name"] == "Updated Product"
+        assert _merge_price(row["price"]) == 24.99
+
+        sync_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 2, "name": "Inserted Product", "price": Decimal("39.99"), "stock": 5, "category": "new"}],
+                case,
+            )
+        )
+        inserted = _lower_keys(sync_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 2").get_data()[0])
+        assert inserted["name"] == "Inserted Product"
+        assert inserted["stock"] == 5
+
+        sync_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(_merge_source([{"id": 1, "additional": 5, "new_price": Decimal("5.00")}], case), alias="src")
+            .on("t.id = src.id")
+            .when_matched_then_update({"stock": "t.stock + src.additional", "price": "src.new_price"})
+        )
+        expression = _lower_keys(sync_driver.execute(f"SELECT price, stock FROM {target} WHERE id = 1").get_data()[0])
+        assert _merge_price(expression["price"]) == 5.0
+        assert expression["stock"] == 16
+
+        sync_driver.execute(
+            _merge_upsert_query(
+                target, [{"id": 1, "name": "Null Product", "price": None, "stock": None, "category": None}], case
+            )
+        )
+        null_row = _lower_keys(
+            sync_driver.execute(f"SELECT price, stock, category FROM {target} WHERE id = 1").get_data()[0]
+        )
+        assert null_row["price"] is None
+        assert null_row["stock"] is None
+        assert null_row["category"] is None
+
+        sync_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=1,
+            name="Staged Update",
+            price=Decimal("99.99"),
+            stock=100,
+            category="staged",
+        )
+        sync_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=3,
+            name="Staged Insert",
+            price=Decimal("149.99"),
+            stock=50,
+            category="staged",
+        )
+        sync_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(source, alias="s")
+            .on("t.id = s.id")
+            .when_matched_then_update(name="s.name", price="s.price", stock="s.stock", category="s.category")
+            .when_not_matched_then_insert(columns=["id", "name", "price", "stock", "category"])
+        )
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {target}") == 3
+        staged = _lower_keys(sync_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 3").get_data()[0])
+        assert staged["name"] == "Staged Insert"
+        assert staged["stock"] == 50
+    finally:
+        _drop_merge_table_sync(sync_driver, case, source)
+        _drop_merge_table_sync(sync_driver, case, target)
+
+
+async def assert_async_merge_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of assert_sync_merge_contract."""
+    if not case.supports_merge:
+        pytest.skip(f"{case.id} does not support MERGE")
+    async_driver = cast("AsyncContractDriver", driver)
+    target = _pc_table(case, "merge")
+    source = _pc_table(case, "merge_src")
+    await _drop_merge_table_async(async_driver, case, source)
+    await _drop_merge_table_async(async_driver, case, target)
+    await async_driver.execute(_merge_table_sql(case, target))
+    await async_driver.execute(_merge_table_sql(case, source))
+    await async_driver.execute(
+        f"INSERT INTO {target} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+        id=1,
+        name="Existing Product",
+        price=Decimal("19.99"),
+        stock=10,
+        category="old",
+    )
+    await async_driver.commit()
+    try:
+        result = await async_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 1, "name": "Updated Product", "price": Decimal("24.99"), "stock": 11, "category": "new"}],
+                case,
+            )
+        )
+        assert isinstance(result, SQLResult)
+        row = _lower_keys((await async_driver.execute(f"SELECT name, price FROM {target} WHERE id = 1")).get_data()[0])
+        assert row["name"] == "Updated Product"
+        assert _merge_price(row["price"]) == 24.99
+
+        await async_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 2, "name": "Inserted Product", "price": Decimal("39.99"), "stock": 5, "category": "new"}],
+                case,
+            )
+        )
+        inserted = _lower_keys(
+            (await async_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 2")).get_data()[0]
+        )
+        assert inserted["name"] == "Inserted Product"
+        assert inserted["stock"] == 5
+
+        await async_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(_merge_source([{"id": 1, "additional": 5, "new_price": Decimal("5.00")}], case), alias="src")
+            .on("t.id = src.id")
+            .when_matched_then_update({"stock": "t.stock + src.additional", "price": "src.new_price"})
+        )
+        expression = _lower_keys(
+            (await async_driver.execute(f"SELECT price, stock FROM {target} WHERE id = 1")).get_data()[0]
+        )
+        assert _merge_price(expression["price"]) == 5.0
+        assert expression["stock"] == 16
+
+        await async_driver.execute(
+            _merge_upsert_query(
+                target, [{"id": 1, "name": "Null Product", "price": None, "stock": None, "category": None}], case
+            )
+        )
+        null_row = _lower_keys(
+            (await async_driver.execute(f"SELECT price, stock, category FROM {target} WHERE id = 1")).get_data()[0]
+        )
+        assert null_row["price"] is None
+        assert null_row["stock"] is None
+        assert null_row["category"] is None
+
+        await async_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=1,
+            name="Staged Update",
+            price=Decimal("99.99"),
+            stock=100,
+            category="staged",
+        )
+        await async_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=3,
+            name="Staged Insert",
+            price=Decimal("149.99"),
+            stock=50,
+            category="staged",
+        )
+        await async_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(source, alias="s")
+            .on("t.id = s.id")
+            .when_matched_then_update(name="s.name", price="s.price", stock="s.stock", category="s.category")
+            .when_not_matched_then_insert(columns=["id", "name", "price", "stock", "category"])
+        )
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {target}") == 3
+        staged = _lower_keys(
+            (await async_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 3")).get_data()[0]
+        )
+        assert staged["name"] == "Staged Insert"
+        assert staged["stock"] == 50
+    finally:
+        await _drop_merge_table_async(async_driver, case, source)
+        await _drop_merge_table_async(async_driver, case, target)
+
+
+def _merge_bulk_rows(count: int, *, include_nulls: bool = False) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = [
+        {
+            "id": i,
+            "name": f"Product {i}",
+            "price": Decimal(f"{10 + i}.99"),
+            "stock": i * 10,
+            "category": "bulk" if i % 2 == 0 else "regular",
+        }
+        for i in range(1, count + 1)
+    ]
+    if include_nulls:
+        rows.extend([
+            {"id": count + 1, "name": "Null Price", "price": None, "stock": 10, "category": None},
+            {"id": count + 2, "name": "Null Stock", "price": Decimal("30.99"), "stock": None, "category": "books"},
+        ])
+    return rows
+
+
+def assert_sync_merge_bulk_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync bulk MERGE handles JSON/recordset source expansion, updates, inserts, and NULL values."""
+    if not case.supports_merge_bulk:
+        pytest.skip(f"{case.id} does not support bulk MERGE")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "mergebulk")
+    _drop_merge_table_sync(sync_driver, case, table)
+    sync_driver.execute(_merge_table_sql(case, table))
+    sync_driver.commit()
+    try:
+        sync_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(100), case))
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {table}") == 100
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {table} WHERE category = 'bulk'") == 50
+
+        sync_driver.execute(
+            f"INSERT INTO {table} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=200,
+            name="Old Product",
+            price=Decimal("5.00"),
+            stock=100,
+            category="old",
+        )
+        sync_driver.execute(
+            _merge_upsert_query(
+                table,
+                [
+                    {
+                        "id": 200,
+                        "name": "Updated Product",
+                        "price": Decimal("15.00"),
+                        "stock": 50,
+                        "category": "updated",
+                    },
+                    {
+                        "id": 201,
+                        "name": "Inserted Product",
+                        "price": Decimal("30.00"),
+                        "stock": 10,
+                        "category": "inserted",
+                    },
+                ],
+                case,
+            )
+        )
+        updated = _lower_keys(sync_driver.execute(f"SELECT name, category FROM {table} WHERE id = 200").get_data()[0])
+        assert updated["name"] == "Updated Product"
+        assert updated["category"] == "updated"
+
+        sync_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(10, include_nulls=True), case))
+        null_row = _lower_keys(sync_driver.execute(f"SELECT price, category FROM {table} WHERE id = 11").get_data()[0])
+        assert null_row["price"] is None
+        assert null_row["category"] is None
+    finally:
+        _drop_merge_table_sync(sync_driver, case, table)
+
+
+async def assert_async_merge_bulk_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of assert_sync_merge_bulk_contract."""
+    if not case.supports_merge_bulk:
+        pytest.skip(f"{case.id} does not support bulk MERGE")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "mergebulk")
+    await _drop_merge_table_async(async_driver, case, table)
+    await async_driver.execute(_merge_table_sql(case, table))
+    await async_driver.commit()
+    try:
+        await async_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(100), case))
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {table}") == 100
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {table} WHERE category = 'bulk'") == 50
+
+        await async_driver.execute(
+            f"INSERT INTO {table} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=200,
+            name="Old Product",
+            price=Decimal("5.00"),
+            stock=100,
+            category="old",
+        )
+        await async_driver.execute(
+            _merge_upsert_query(
+                table,
+                [
+                    {
+                        "id": 200,
+                        "name": "Updated Product",
+                        "price": Decimal("15.00"),
+                        "stock": 50,
+                        "category": "updated",
+                    },
+                    {
+                        "id": 201,
+                        "name": "Inserted Product",
+                        "price": Decimal("30.00"),
+                        "stock": 10,
+                        "category": "inserted",
+                    },
+                ],
+                case,
+            )
+        )
+        updated = _lower_keys(
+            (await async_driver.execute(f"SELECT name, category FROM {table} WHERE id = 200")).get_data()[0]
+        )
+        assert updated["name"] == "Updated Product"
+        assert updated["category"] == "updated"
+
+        await async_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(10, include_nulls=True), case))
+        null_row = _lower_keys(
+            (await async_driver.execute(f"SELECT price, category FROM {table} WHERE id = 11")).get_data()[0]
+        )
+        assert null_row["price"] is None
+        assert null_row["category"] is None
+    finally:
+        await _drop_merge_table_async(async_driver, case, table)
+
+
+def _vector_table_sql(case: DriverCase, table: str, dimension: int = 3) -> str:
+    if case.dialect == "oracle":
+        return (
+            f"CREATE TABLE {table} ("
+            "id NUMBER PRIMARY KEY, "
+            "content VARCHAR2(100) NOT NULL, "
+            f"embedding VECTOR({dimension}, FLOAT32)"
+            ")"
+        )
+    return f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, content TEXT NOT NULL, embedding DOUBLE[{dimension}])"
+
+
+def _drop_vector_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+
+
+async def _drop_vector_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        await driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+
+
+def _enable_vector_runtime_sync(driver: "SyncContractDriver", case: DriverCase) -> None:
+    if case.dialect != "duckdb":
+        return
+    try:
+        driver.execute_script("INSTALL vss")
+        driver.execute_script("LOAD vss")
+    except Exception as exc:
+        pytest.skip(f"DuckDB VSS unavailable: {exc}")
+
+
+def _seed_vector_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    rows: tuple[tuple[int, str, object], ...]
+    if case.dialect == "oracle":
+        rows = ((1, "doc1", "[0.1, 0.2, 0.3]"), (2, "doc2", "[0.4, 0.5, 0.6]"), (3, "doc3", "[0.7, 0.8, 0.9]"))
+        for row in rows:
+            driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        rows = ((1, "doc1", [0.1, 0.2, 0.3]), (2, "doc2", [0.4, 0.5, 0.6]), (3, "doc3", [0.7, 0.8, 0.9]))
+        for row in rows:
+            driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+    driver.commit()
+
+
+async def _seed_vector_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        rows: tuple[tuple[int, str, object], ...] = (
+            (1, "doc1", "[0.1, 0.2, 0.3]"),
+            (2, "doc2", "[0.4, 0.5, 0.6]"),
+            (3, "doc3", "[0.7, 0.8, 0.9]"),
+        )
+        for row in rows:
+            await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        rows = ((1, "doc1", [0.1, 0.2, 0.3]), (2, "doc2", [0.4, 0.5, 0.6]), (3, "doc3", [0.7, 0.8, 0.9]))
+        for row in rows:
+            await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+    await driver.commit()
+
+
+def _assert_vector_result_order(rows: list[dict[str, Any]]) -> None:
+    normalized = [_lower_keys(row) for row in rows]
+    assert [row["content"] for row in normalized] == ["doc1", "doc2", "doc3"]
+    assert normalized[0]["distance"] < normalized[1]["distance"]
+    assert normalized[1]["distance"] < normalized[2]["distance"]
+
+
+def _assert_vector_score_range(score: object) -> None:
+    assert isinstance(score, int | float | Decimal)
+    value = float(score)
+    assert (
+        -1 <= value <= 1
+        or math.isclose(value, 1.0, rel_tol=1e-9, abs_tol=1e-9)
+        or math.isclose(value, -1.0, rel_tol=1e-9, abs_tol=1e-9)
+    )
+
+
+def _insert_vector_sync(
+    driver: "SyncContractDriver", case: DriverCase, table: str, row: tuple[int, str, object]
+) -> None:
+    if case.dialect == "oracle":
+        driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+
+
+async def _insert_vector_async(
+    driver: "AsyncContractDriver", case: DriverCase, table: str, row: tuple[int, str, object]
+) -> None:
+    if case.dialect == "oracle":
+        await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, :3)", row)
+    else:
+        await driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", row)
+
+
+def _assert_sync_duckdb_vector_residuals(sync_driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    zero_value = [0.0, 0.0, 0.0]
+    _insert_vector_sync(sync_driver, case, table, (5, "zero_vec", zero_value))
+    zero = (
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.0, 0.0, 0.0]).alias("distance"))
+        .from_(table)
+        .where(sql.column("embedding").is_not_null())
+        .order_by("distance")
+    )
+    zero_rows = [_lower_keys(row) for row in sync_driver.execute(zero).get_data()]
+    assert zero_rows[0]["content"] == "zero_vec"
+    assert zero_rows[0]["distance"] == 0
+
+    aggregate_source = sql.select(
+        "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance")
+    ).from_(table)
+    aggregate = sql.select("MIN(distance) AS min_distance", "MAX(distance) AS max_distance").from_(
+        aggregate_source, alias="distances"
+    )
+    aggregate_row = _lower_keys(sync_driver.execute(aggregate).get_data()[0])
+    assert aggregate_row["min_distance"] < aggregate_row["max_distance"]
+
+    large = _pc_table(case, "vector10")
+    _drop_vector_table_sync(sync_driver, case, large)
+    sync_driver.execute_script(_vector_table_sql(case, large, dimension=10))
+    try:
+        _insert_vector_sync(sync_driver, case, large, (1, "large1", [0.1] * 10))
+        _insert_vector_sync(sync_driver, case, large, (2, "large2", [0.5] * 10))
+        large_query = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1] * 10).alias("distance"))
+            .from_(large)
+            .order_by("distance")
+        )
+        large_rows = [_lower_keys(row) for row in sync_driver.execute(large_query).get_data()]
+        assert large_rows[0]["content"] == "large1"
+        assert large_rows[0]["distance"] < large_rows[1]["distance"]
+    finally:
+        _drop_vector_table_sync(sync_driver, case, large)
+
+
+async def _assert_async_duckdb_vector_residuals(
+    async_driver: "AsyncContractDriver", case: DriverCase, table: str
+) -> None:
+    zero_value = [0.0, 0.0, 0.0]
+    await _insert_vector_async(async_driver, case, table, (5, "zero_vec", zero_value))
+    zero = (
+        sql
+        .select("content", sql.column("embedding").vector_distance([0.0, 0.0, 0.0]).alias("distance"))
+        .from_(table)
+        .where(sql.column("embedding").is_not_null())
+        .order_by("distance")
+    )
+    zero_rows = [_lower_keys(row) for row in (await async_driver.execute(zero)).get_data()]
+    assert zero_rows[0]["content"] == "zero_vec"
+    assert zero_rows[0]["distance"] == 0
+
+    aggregate_source = sql.select(
+        "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance")
+    ).from_(table)
+    aggregate = sql.select("MIN(distance) AS min_distance", "MAX(distance) AS max_distance").from_(
+        aggregate_source, alias="distances"
+    )
+    aggregate_row = _lower_keys((await async_driver.execute(aggregate)).get_data()[0])
+    assert aggregate_row["min_distance"] < aggregate_row["max_distance"]
+
+    large = _pc_table(case, "vector10")
+    await _drop_vector_table_async(async_driver, case, large)
+    await async_driver.execute_script(_vector_table_sql(case, large, dimension=10))
+    try:
+        await _insert_vector_async(async_driver, case, large, (1, "large1", [0.1] * 10))
+        await _insert_vector_async(async_driver, case, large, (2, "large2", [0.5] * 10))
+        large_query = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1] * 10).alias("distance"))
+            .from_(large)
+            .order_by("distance")
+        )
+        large_rows = [_lower_keys(row) for row in (await async_driver.execute(large_query)).get_data()]
+        assert large_rows[0]["content"] == "large1"
+        assert large_rows[0]["distance"] < large_rows[1]["distance"]
+    finally:
+        await _drop_vector_table_async(async_driver, case, large)
+
+
+def assert_sync_vector_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync vector distance/similarity builder execution for cases with native vector tables."""
+    if not case.supports_vector:
+        pytest.skip(f"{case.id} does not support vector execution")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "vector")
+    _enable_vector_runtime_sync(sync_driver, case)
+    _drop_vector_table_sync(sync_driver, case, table)
+    sync_driver.execute_script(_vector_table_sql(case, table))
+    try:
+        _seed_vector_table_sync(sync_driver, case, table)
+
+        distance = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .order_by("distance")
+        )
+        _assert_vector_result_order(sync_driver.execute(distance).get_data())
+
+        threshold = (
+            sql.select("content").from_(table).where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
+        )
+        threshold_rows = [_lower_keys(row) for row in sync_driver.execute(threshold).get_data()]
+        assert len(threshold_rows) == 1
+        assert threshold_rows[0]["content"] == "doc1"
+
+        cosine = (
+            sql
+            .select(
+                "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert _lower_keys(sync_driver.execute(cosine).get_data()[0])["content"] == "doc1"
+
+        inner_product = (
+            sql
+            .select(
+                "content",
+                sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert len(sync_driver.execute(inner_product).get_data()) == 3
+
+        if case.dialect == "oracle":
+            euclidean_squared = (
+                sql
+                .select(
+                    "content",
+                    sql
+                    .column("embedding")
+                    .vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared")
+                    .alias("distance"),
+                )
+                .from_(table)
+                .order_by("distance")
+            )
+            assert _lower_keys(sync_driver.execute(euclidean_squared).get_data()[0])["content"] == "doc1"
+
+        similarity = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+        )
+        similarity_rows = [_lower_keys(row) for row in sync_driver.execute(similarity).get_data()]
+        assert similarity_rows[0]["content"] == "doc1"
+        assert similarity_rows[0]["score"] > similarity_rows[1]["score"]
+
+        top_k = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+            .limit(2)
+        )
+        top_k_rows = [_lower_keys(row) for row in sync_driver.execute(top_k).get_data()]
+        assert [row["content"] for row in top_k_rows] == ["doc1", "doc2"]
+        for row in similarity_rows:
+            _assert_vector_score_range(row["score"])
+
+        multi = sql.select(
+            "content",
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean").alias("euclidean_dist"),
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("cosine_dist"),
+        ).from_(table)
+        for row in sync_driver.execute(multi).get_data():
+            normalized = _lower_keys(row)
+            assert normalized["euclidean_dist"] is not None
+            assert normalized["cosine_dist"] is not None
+
+        if case.dialect == "oracle":
+            sync_driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, NULL)", (4, "doc_null"))
+        else:
+            sync_driver.execute(f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", (4, "doc_null", None))
+        not_null = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(sql.column("embedding").is_not_null())
+            .order_by("distance")
+        )
+        assert all(_lower_keys(row)["content"] != "doc_null" for row in sync_driver.execute(not_null).get_data())
+
+        combined = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(
+                (sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
+                & (sql.column("content").in_(["doc1", "doc2"]))
+            )
+            .order_by("distance")
+        )
+        assert len(sync_driver.execute(combined).get_data()) == 2
+
+        if case.dialect == "duckdb":
+            _assert_sync_duckdb_vector_residuals(sync_driver, case, table)
+    finally:
+        _drop_vector_table_sync(sync_driver, case, table)
+
+
+async def assert_async_vector_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of assert_sync_vector_contract."""
+    if not case.supports_vector:
+        pytest.skip(f"{case.id} does not support vector execution")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "vector")
+    await _drop_vector_table_async(async_driver, case, table)
+    await async_driver.execute_script(_vector_table_sql(case, table))
+    try:
+        await _seed_vector_table_async(async_driver, case, table)
+
+        distance = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .order_by("distance")
+        )
+        _assert_vector_result_order((await async_driver.execute(distance)).get_data())
+
+        threshold = (
+            sql.select("content").from_(table).where(sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 0.3)
+        )
+        threshold_rows = [_lower_keys(row) for row in (await async_driver.execute(threshold)).get_data()]
+        assert len(threshold_rows) == 1
+        assert threshold_rows[0]["content"] == "doc1"
+
+        cosine = (
+            sql
+            .select(
+                "content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("distance")
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert _lower_keys((await async_driver.execute(cosine)).get_data()[0])["content"] == "doc1"
+
+        inner_product = (
+            sql
+            .select(
+                "content",
+                sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="inner_product").alias("distance"),
+            )
+            .from_(table)
+            .order_by("distance")
+        )
+        assert len((await async_driver.execute(inner_product)).get_data()) == 3
+
+        if case.dialect == "oracle":
+            euclidean_squared = (
+                sql
+                .select(
+                    "content",
+                    sql
+                    .column("embedding")
+                    .vector_distance([0.1, 0.2, 0.3], metric="euclidean_squared")
+                    .alias("distance"),
+                )
+                .from_(table)
+                .order_by("distance")
+            )
+            assert _lower_keys((await async_driver.execute(euclidean_squared)).get_data()[0])["content"] == "doc1"
+
+        similarity = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+        )
+        similarity_rows = [_lower_keys(row) for row in (await async_driver.execute(similarity)).get_data()]
+        assert similarity_rows[0]["content"] == "doc1"
+        assert similarity_rows[0]["score"] > similarity_rows[1]["score"]
+
+        top_k = (
+            sql
+            .select("content", sql.column("embedding").cosine_similarity([0.1, 0.2, 0.3]).alias("score"))
+            .from_(table)
+            .order_by(sql.column("score").desc())
+            .limit(2)
+        )
+        top_k_rows = [_lower_keys(row) for row in (await async_driver.execute(top_k)).get_data()]
+        assert [row["content"] for row in top_k_rows] == ["doc1", "doc2"]
+        for row in similarity_rows:
+            _assert_vector_score_range(row["score"])
+
+        multi = sql.select(
+            "content",
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="euclidean").alias("euclidean_dist"),
+            sql.column("embedding").vector_distance([0.1, 0.2, 0.3], metric="cosine").alias("cosine_dist"),
+        ).from_(table)
+        for row in (await async_driver.execute(multi)).get_data():
+            normalized = _lower_keys(row)
+            assert normalized["euclidean_dist"] is not None
+            assert normalized["cosine_dist"] is not None
+
+        if case.dialect == "oracle":
+            await async_driver.execute(
+                f"INSERT INTO {table} (id, content, embedding) VALUES (:1, :2, NULL)", (4, "doc_null")
+            )
+        else:
+            await async_driver.execute(
+                f"INSERT INTO {table} (id, content, embedding) VALUES (?, ?, ?)", (4, "doc_null", None)
+            )
+        not_null = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(sql.column("embedding").is_not_null())
+            .order_by("distance")
+        )
+        assert all(
+            _lower_keys(row)["content"] != "doc_null" for row in (await async_driver.execute(not_null)).get_data()
+        )
+
+        combined = (
+            sql
+            .select("content", sql.column("embedding").vector_distance([0.1, 0.2, 0.3]).alias("distance"))
+            .from_(table)
+            .where(
+                (sql.column("embedding").vector_distance([0.1, 0.2, 0.3]) < 1.0)
+                & (sql.column("content").in_(["doc1", "doc2"]))
+            )
+            .order_by("distance")
+        )
+        assert len((await async_driver.execute(combined)).get_data()) == 2
+
+        if case.dialect == "duckdb":
+            await _assert_async_duckdb_vector_residuals(async_driver, case, table)
+    finally:
+        await _drop_vector_table_async(async_driver, case, table)
 
 
 async def _asyncpg_param_codecs(driver: object, case: DriverCase) -> None:
@@ -2074,18 +3019,32 @@ async def _oracle_param_codecs_async(driver: object, case: DriverCase) -> None:
 
 
 def _adbc_postgres_param_codecs(driver: object, case: DriverCase) -> None:
-    """Fold ADBC-PostgreSQL params: NULL-literal pruning, repeated NULL, RETURNING+NULL, JSONB cast, count-mismatch."""
+    """Fold ADBC-PostgreSQL params and Arrow-backed result codecs."""
     from datetime import date
 
     sync_driver = cast("SyncContractDriver", driver)
     items = _pc_table(case, "items")
     jsonb = _pc_table(case, "jsonb")
+    types = _pc_table(case, "types")
     _sync_drop_table(sync_driver, items)
     _sync_drop_table(sync_driver, jsonb)
+    _sync_drop_table(sync_driver, types)
     sync_driver.execute(
         f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, active BOOLEAN, created_date DATE)"
     )
     sync_driver.execute(f"CREATE TABLE {jsonb} (id INTEGER PRIMARY KEY, metadata JSONB, config JSONB)")
+    sync_driver.execute(
+        f"CREATE TABLE {types} ("
+        "id SERIAL PRIMARY KEY, "
+        "label TEXT, "
+        "amount NUMERIC(10, 2), "
+        "flag BOOLEAN, "
+        "tags TEXT[], "
+        "big_integer BIGINT, "
+        "small_integer SMALLINT, "
+        "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    )
     sync_driver.commit()
     try:
         pruned = sync_driver.execute(
@@ -2139,19 +3098,70 @@ def _adbc_postgres_param_codecs(driver: object, case: DriverCase) -> None:
         assert jrow[0]["active"] == "true"
         assert jrow[0]["config"] is None
 
+        sync_driver.execute(
+            f"INSERT INTO {types} (label, amount, flag, tags, big_integer, small_integer) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            "Product A",
+            Decimal("19.99"),
+            True,
+            ["electronics", "gadget"],
+            9223372036854775807,
+            32767,
+        )
+        sync_driver.execute(
+            f"INSERT INTO {types} (label, amount, flag, tags, big_integer, small_integer) "
+            "VALUES ($1, NULL, NULL, NULL, $2, $3)",
+            "Null Product",
+            -9223372036854775808,
+            -32768,
+        )
+        sync_driver.commit()
+        typed = sync_driver.execute(
+            f"SELECT label, amount, flag, tags, big_integer, small_integer FROM {types} ORDER BY id"
+        ).get_data()
+        assert typed[0]["label"] == "Product A"
+        assert float(typed[0]["amount"]) == 19.99
+        assert typed[0]["flag"] is True
+        assert typed[0]["tags"] == ["electronics", "gadget"]
+        assert typed[0]["big_integer"] == 9223372036854775807
+        assert typed[0]["small_integer"] == 32767
+        assert typed[1]["amount"] is None
+        assert typed[1]["flag"] is None
+        assert typed[1]["tags"] is None
+        assert typed[1]["big_integer"] == -9223372036854775808
+        assert typed[1]["small_integer"] == -32768
+
+        alias_result = sync_driver.execute(
+            f"SELECT label AS product_name, amount AS product_price, flag AS is_available "
+            f"FROM {types} WHERE label = $1",
+            "Product A",
+        )
+        assert {"product_name", "product_price", "is_available"} <= set(alias_result.column_names)
+        alias_row = alias_result.get_data()[0]
+        assert alias_row["product_name"] == "Product A"
+        assert float(alias_row["product_price"]) == 19.99
+        assert alias_row["is_available"] is True
+
         with pytest.raises(SQLSpecError):
             sync_driver.execute(f"INSERT INTO {items} (id, name) VALUES ($1, $2)", 30, None, "extra")
     finally:
         _sync_drop_table(sync_driver, items)
         _sync_drop_table(sync_driver, jsonb)
+        _sync_drop_table(sync_driver, types)
 
 
 def _adbc_sqlite_param_codecs(driver: object, case: DriverCase) -> None:
-    """Fold ADBC-SQLite params: qmark placeholders preserve NULLs and boolean values."""
+    """Fold ADBC-SQLite params and dynamic/binary Arrow-backed result codecs."""
     sync_driver = cast("SyncContractDriver", driver)
     items = _pc_table(case, "items")
+    dynamic = _pc_table(case, "dynamic")
+    binary = _pc_table(case, "binary")
     _sync_drop_table(sync_driver, items)
+    _sync_drop_table(sync_driver, dynamic)
+    _sync_drop_table(sync_driver, binary)
     sync_driver.execute(f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, active BOOLEAN)")
+    sync_driver.execute(f"CREATE TABLE {dynamic} (id INTEGER PRIMARY KEY, flexible_column)")
+    sync_driver.execute(f"CREATE TABLE {binary} (id INTEGER PRIMARY KEY, name TEXT, data BLOB)")
     try:
         inserted = sync_driver.execute(
             f"INSERT INTO {items} (id, name, value, active) VALUES (?, ?, ?, ?)", 1, None, None, True
@@ -2161,17 +3171,50 @@ def _adbc_sqlite_param_codecs(driver: object, case: DriverCase) -> None:
         assert row["name"] is None
         assert row["value"] is None
         assert row["active"] in (True, 1)
+
+        flexible_data = [(1, "text_value"), (2, 42), (3, math.pi), (4, b"binary_data"), (5, None)]
+        for row_id, value in flexible_data:
+            sync_driver.execute(f"INSERT INTO {dynamic} (id, flexible_column) VALUES (?, ?)", row_id, value)
+        dynamic_rows = sync_driver.execute(
+            f"SELECT id, flexible_column, typeof(flexible_column) AS column_type FROM {dynamic} ORDER BY id"
+        ).get_data()
+        assert dynamic_rows[0]["flexible_column"] in ("text_value", b"text_value")
+        assert dynamic_rows[1]["flexible_column"] in (42, b"42")
+        assert dynamic_rows[4]["flexible_column"] is None
+        types_found = {row["column_type"].lower() for row in dynamic_rows if row["column_type"]}
+        assert {"text", "integer", "real"} <= types_found
+
+        binary_rows = [
+            (1, "small", b"small data"),
+            (2, "empty", b""),
+            (3, "null", None),
+            (4, "large", b"x" * 1000),
+            (5, "range", bytes(range(256))),
+        ]
+        sync_driver.execute_many(f"INSERT INTO {binary} (id, name, data) VALUES (?, ?, ?)", binary_rows)
+        blob_rows = sync_driver.execute(
+            f"SELECT id, name, data, length(data) AS data_size FROM {binary} ORDER BY id"
+        ).get_data()
+        assert blob_rows[0]["data"] == b"small data"
+        assert blob_rows[1]["data"] == b""
+        assert blob_rows[2]["data"] is None
+        assert blob_rows[3]["data_size"] == 1000
+        assert blob_rows[4]["data"] == bytes(range(256))
     finally:
         _sync_drop_table(sync_driver, items)
+        _sync_drop_table(sync_driver, dynamic)
+        _sync_drop_table(sync_driver, binary)
 
 
 def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
-    """Fold ADBC-DuckDB params: numeric placeholders with backend DDL, qmark feeding the native Arrow path."""
+    """Fold ADBC-DuckDB params and nested/list/map Arrow-backed result codecs."""
     from sqlspec.typing import PYARROW_INSTALLED
 
     sync_driver = cast("SyncContractDriver", driver)
     items = _pc_table(case, "items")
+    advanced = _pc_table(case, "advanced")
     _sync_drop_table(sync_driver, items)
+    _sync_drop_table(sync_driver, advanced)
     sync_driver.execute(f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name VARCHAR, value INTEGER)")
     try:
         for entry in [(1, "low", 10), (2, "mid", 20), (3, "high", 30)]:
@@ -2186,8 +3229,37 @@ def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
             frame = arrow.to_pandas()
             assert list(frame["name"]) == ["mid", "high"]
             assert list(frame["value"]) == [20, 30]
+
+        sync_driver.execute(
+            f"CREATE TABLE {advanced} ("
+            "id INTEGER, "
+            "numbers INTEGER[], "
+            "nested_data STRUCT(name VARCHAR, values INTEGER[]), "
+            "map_data MAP(VARCHAR, INTEGER), "
+            "json_col JSON"
+            ")"
+        )
+        sync_driver.execute(
+            f"INSERT INTO {advanced} VALUES ("
+            "1, "
+            "[1, 2, 3, 4, 5], "
+            "{'name': 'nested', 'values': [10, 20, 30]}, "
+            "MAP(['key1', 'key2'], [100, 200]), "
+            '\'{"type": "test", "version": 1}\''
+            ")"
+        )
+        advanced_row = sync_driver.execute(
+            f"SELECT id, numbers, nested_data, map_data, json_extract_string(json_col, '$.type') AS json_type "
+            f"FROM {advanced}"
+        ).get_data()[0]
+        assert advanced_row["id"] == 1
+        assert advanced_row["numbers"] == [1, 2, 3, 4, 5]
+        assert advanced_row["nested_data"] is not None
+        assert advanced_row["map_data"] is not None
+        assert advanced_row["json_type"] == "test"
     finally:
         _sync_drop_table(sync_driver, items)
+        _sync_drop_table(sync_driver, advanced)
 
 
 def _bigquery_param_codecs(driver: object, case: DriverCase) -> None:
@@ -2344,7 +3416,7 @@ def _duckdb_set_variable(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("driver_features:duckdb_set_variable", DRIVER_FEATURES_SCOPE, _duckdb_set_variable)
 
 
-_ORACLE_DROP_CODE = {"TABLE": -942, "SEQUENCE": -2289}
+_ORACLE_DROP_CODE = {"TABLE": -942, "SEQUENCE": -2289, "PROCEDURE": -4043}
 
 
 def _oracle_drop_sql(kind: str, name: str) -> str:
@@ -2455,6 +3527,109 @@ register_sync_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEAT
 register_async_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEATURES_SCOPE, _oracle_batch_errors_async)
 
 
+def _lower_keys(row: dict[str, object]) -> dict[str, Any]:
+    return {key.lower(): value for key, value in row.items()}
+
+
+def _oracle_plsql(driver: object, case: DriverCase) -> None:
+    """Fold Oracle PL/SQL script execution with local variables, control flow, loops, and DML."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "plsql")
+    sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    sync_driver.execute_script(
+        f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50), calculated_value NUMBER)"
+    )
+    try:
+        result = sync_driver.execute_script(
+            f"""
+            DECLARE
+                v_base_value NUMBER := 10;
+                v_multiplier NUMBER := 3;
+                v_result NUMBER;
+                v_name VARCHAR2(50) := 'plsql_test';
+            BEGIN
+                v_result := v_base_value * v_multiplier;
+
+                IF v_result > 25 THEN
+                    v_result := v_result + 100;
+                END IF;
+
+                INSERT INTO {table} (id, name, calculated_value)
+                VALUES (1, v_name, v_result);
+
+                FOR i IN 2..4 LOOP
+                    INSERT INTO {table} (id, name, calculated_value)
+                    VALUES (i, v_name || '_' || i, v_result + i);
+                END LOOP;
+
+                COMMIT;
+            END;
+            """
+        )
+        assert isinstance(result, SQLResult)
+        rows = [_lower_keys(row) for row in sync_driver.execute(f"SELECT * FROM {table} ORDER BY id").get_data()]
+        assert len(rows) == 4
+        assert rows[0]["name"] == "plsql_test"
+        assert rows[0]["calculated_value"] == 130
+    finally:
+        sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+async def _oracle_plsql_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of _oracle_plsql with a stored procedure invocation path."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "proc")
+    procedure = _pc_table(case, "plsql_proc")
+    await async_driver.execute_script(_oracle_drop_sql("PROCEDURE", procedure))
+    await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    await async_driver.execute_script(
+        f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, input_value NUMBER, output_value NUMBER)"
+    )
+    try:
+        await async_driver.execute_script(
+            f"""
+            CREATE OR REPLACE PROCEDURE {procedure}(
+                p_input IN NUMBER,
+                p_output OUT NUMBER
+            ) AS
+            BEGIN
+                p_output := p_input * 2 + 10;
+
+                INSERT INTO {table} (id, input_value, output_value)
+                VALUES (p_input, p_input, p_output);
+
+                COMMIT;
+            END {procedure};
+            """
+        )
+        result = await async_driver.execute_script(
+            f"""
+            DECLARE
+                v_output NUMBER;
+            BEGIN
+                {procedure}(5, v_output);
+                {procedure}(10, v_output);
+            END;
+            """
+        )
+        assert isinstance(result, SQLResult)
+        rows = [
+            _lower_keys(row) for row in (await async_driver.execute(f"SELECT * FROM {table} ORDER BY id")).get_data()
+        ]
+        assert len(rows) == 2
+        assert rows[0]["input_value"] == 5
+        assert rows[0]["output_value"] == 20
+        assert rows[1]["input_value"] == 10
+        assert rows[1]["output_value"] == 30
+    finally:
+        await async_driver.execute_script(_oracle_drop_sql("PROCEDURE", procedure))
+        await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+register_sync_extra_assertion("driver_features:oracle_plsql", DRIVER_FEATURES_SCOPE, _oracle_plsql)
+register_async_extra_assertion("driver_features:oracle_plsql", DRIVER_FEATURES_SCOPE, _oracle_plsql_async)
+
+
 def _oracle_json_payloads() -> "list[object]":
     """Payloads exercising the native DB_TYPE_JSON path: dict, list[dict], >4000B dict, special values."""
     return [
@@ -2519,8 +3694,8 @@ register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEAT
 def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
     """Fold BigQuery dialect scalar SQL: math/string/conditional/specific functions + ARRAY/STRUCT.
 
-    Window functions + schema DDL are left as bigquery-local residuals (emulator-flaky; see the
-    case's emulator-* deviations).
+    Window functions + schema DDL are left as bigquery-local residuals because
+    the emulator capability profile does not support them reliably.
     """
     sync_driver = cast("SyncContractDriver", driver)
 
@@ -3218,8 +4393,8 @@ def assert_sync_parameter_style_contract(
     else:
         result = _execute_sync(sync_driver, style_statement, parameter_style_case.parameters)
 
-    if parameter_style_case.expected_rows_affected is not None and (
-        parameter_style_case.method == "execute_many" or _reports_execute_rows_affected(case)
+    if parameter_style_case.expected_rows_affected is not None and _reports_execute_rows_affected(
+        case, parameter_style_case.method
     ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
@@ -3251,8 +4426,8 @@ async def assert_async_parameter_style_contract(
     else:
         result = await _execute_async(async_driver, style_statement, parameter_style_case.parameters)
 
-    if parameter_style_case.expected_rows_affected is not None and (
-        parameter_style_case.method == "execute_many" or _reports_execute_rows_affected(case)
+    if parameter_style_case.expected_rows_affected is not None and _reports_execute_rows_affected(
+        case, parameter_style_case.method
     ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
@@ -3336,7 +4511,7 @@ def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         with pytest.raises(SQLParsingError):
             sync_driver.execute(f"SELCT * FROM {table}")
         with pytest.raises(SQLSpecError):
@@ -3360,7 +4535,7 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         with pytest.raises(SQLParsingError):
             await async_driver.execute(f"SELCT * FROM {table}")
         with pytest.raises(SQLSpecError):
@@ -3368,8 +4543,8 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
 
 
 def _explain_skip_reason(case: DriverCase) -> str:
-    if "explain-copy-incompatible" in case.deviations:
-        return f"{case.adapter}-{case.dialect} EXPLAIN is incompatible with the driver's COPY result transfer"
+    if case.unsupported_explain_reason is not None:
+        return case.unsupported_explain_reason
     return f"{case.adapter} ({case.dialect}) has no verified EXPLAIN support"
 
 
@@ -4031,8 +5206,19 @@ async def _oracle_arrow_specifics(driver: object, case: DriverCase) -> None:
         await _async_drop_table(async_driver, json_table)
 
 
+def _adbc_select_to_arrow_error(driver: object, case: DriverCase) -> None:
+    """Fold ADBC select_to_arrow mapped-error coverage."""
+    sync_driver = cast("SyncContractDriver", driver)
+    missing_table = _pc_table(case, "missing_arrow")
+    with pytest.raises(SQLParsingError):
+        sync_driver.select_to_arrow(f"SELECT * FROM {missing_table}")
+
+
 register_sync_extra_assertion("arrow_specifics:duckdb", ARROW_SPECIFICS_SCOPE, _duckdb_arrow_specifics)
 register_sync_extra_assertion("arrow_specifics:postgres", ARROW_SPECIFICS_SCOPE, _postgres_arrow_specifics)
+register_sync_extra_assertion(
+    "arrow_specifics:adbc_select_to_arrow_error", ARROW_SPECIFICS_SCOPE, _adbc_select_to_arrow_error
+)
 register_async_extra_assertion("arrow_specifics:sqlite", ARROW_SPECIFICS_SCOPE, _sqlite_arrow_specifics)
 register_async_extra_assertion("arrow_specifics:mysql", ARROW_SPECIFICS_SCOPE, _mysql_arrow_specifics)
 register_async_extra_assertion("arrow_specifics:postgres", ARROW_SPECIFICS_SCOPE, _postgres_arrow_specifics_async)
@@ -4057,6 +5243,7 @@ _STORAGE_BRIDGE_EXPECTED = (
     {"name": "alpha", "value": 1, "note": "first"},
     {"name": "beta", "value": 2, "note": "second"},
 )
+STORAGE_BRIDGE_SCOPE = "storage_bridge"
 
 
 def _storage_bridge_arrow_table() -> Any:
@@ -4083,6 +5270,7 @@ def assert_sync_storage_bridge_local_contract(driver: object, case: DriverCase, 
     load_job = sync_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
     assert load_job.telemetry["rows_processed"] == 2
     assert_result_data(sync_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+    dispatch_sync_extra_assertions(driver, case, STORAGE_BRIDGE_SCOPE)
 
 
 async def assert_async_storage_bridge_local_contract(driver: object, case: DriverCase, tmp_path: Any) -> None:
@@ -4103,6 +5291,42 @@ async def assert_async_storage_bridge_local_contract(driver: object, case: Drive
     load_job = await async_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
     assert load_job.telemetry["rows_processed"] == 2
     assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+    await dispatch_async_extra_assertions(driver, case, STORAGE_BRIDGE_SCOPE)
+
+
+async def _mysql_decimal_storage_bridge(driver: object, case: DriverCase) -> None:
+    """Fold MySQL DECIMAL fidelity for parquet load_from_storage."""
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "storage_scores")
+    await _async_drop_table(async_driver, table)
+    await async_driver.execute(f"CREATE TABLE {table} (id INT PRIMARY KEY, score DECIMAL(5,2))")
+    try:
+        with TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "scores.parquet"
+            pq.write_table(pa.table({"id": [5, 6], "score": [12.5, 99.1]}), destination)
+
+            job = await async_driver.load_from_storage(table, str(destination), file_format="parquet", overwrite=True)
+            assert job.telemetry["destination"] == table
+            assert job.telemetry["extra"]["source"]["destination"].endswith("scores.parquet")  # type: ignore[index]
+            assert job.telemetry["extra"]["source"]["backend"]  # type: ignore[index]
+
+        rows = (await async_driver.execute(f"SELECT id, score FROM {table} ORDER BY id")).get_data()
+        assert len(rows) == 2
+        assert rows[0]["id"] == 5
+        assert float(rows[0]["score"]) == pytest.approx(12.5)
+        assert rows[1]["id"] == 6
+        assert float(rows[1]["score"]) == pytest.approx(99.1)
+    finally:
+        await _async_drop_table(async_driver, table)
+
+
+register_async_extra_assertion("storage_bridge:mysql_decimal", STORAGE_BRIDGE_SCOPE, _mysql_decimal_storage_bridge)
 
 
 def _bulk_ingest_arrow(row_count: int) -> Any:
@@ -4368,3 +5592,238 @@ def assert_sync_native_statistics_contract(driver: object, case: DriverCase) -> 
         assert entry["table_name"] == case.table.name
         assert isinstance(entry["statistic_name"], str)
         assert isinstance(entry["is_approximate"], bool)
+
+
+_DATA_DICTIONARY_TYPE_CATEGORIES = ("text", "boolean", "timestamp", "blob", "unknown_type")
+
+
+def _normalized_name(value: object) -> str:
+    return str(value).strip('`"').split(".")[-1].lower()
+
+
+def _assert_data_dictionary_version(version: object) -> None:
+    assert isinstance(version, VersionInfo)
+    assert version.major >= 0
+    assert version.minor >= 0
+    assert version.patch >= 0
+
+
+def _assert_data_dictionary_version_cache(first: object, second: object) -> None:
+    _assert_data_dictionary_version(first)
+    _assert_data_dictionary_version(second)
+    assert cast("VersionInfo", first).version_tuple == cast("VersionInfo", second).version_tuple
+
+
+def _assert_data_dictionary_dialect(driver: object, case: DriverCase) -> None:
+    dialect = getattr(driver, "dialect", None)
+    assert dialect is not None
+    assert _normalized_name(dialect) == _normalized_name(case.dialect)
+
+
+def _data_dictionary_expected_columns(case: DriverCase) -> set[str]:
+    expected = {"name", "value", "note"}
+    if case.table is not DUCKDB_CONTRACT_TABLE:
+        expected.add("id")
+    return expected
+
+
+def _assert_data_dictionary_tables(tables: object, case: DriverCase) -> None:
+    assert isinstance(tables, list)
+    table_names = {_normalized_name(entry.get("table_name")) for entry in tables if isinstance(entry, dict)}
+    assert _normalized_name(case.table.name) in table_names
+
+
+def _assert_data_dictionary_columns(columns: object, case: DriverCase) -> None:
+    assert isinstance(columns, list)
+    column_names = {_normalized_name(entry["column_name"]) for entry in columns if isinstance(entry, dict)}
+    assert _data_dictionary_expected_columns(case) <= column_names
+
+
+def _assert_data_dictionary_feature_list(features: object) -> tuple[str, ...]:
+    assert isinstance(features, list)
+    assert features
+    assert all(isinstance(feature, str) for feature in features)
+    return tuple(features)
+
+
+def _data_dictionary_schema_for_case(case: DriverCase) -> str:
+    if case.dialect == "postgres":
+        return "public"
+    return ""
+
+
+def _data_dictionary_topology_sql(case: DriverCase, users: str, orders: str, items: str, index_name: str) -> str:
+    if case.dialect not in {"postgres", "sqlite"}:
+        msg = f"{case.id} has no topology DDL contract"
+        raise ValueError(msg)
+    return f"""
+        CREATE TABLE {users} (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(50)
+        );
+        CREATE TABLE {orders} (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER REFERENCES {users}(id),
+            amount INTEGER
+        );
+        CREATE TABLE {items} (
+            id INTEGER PRIMARY KEY,
+            order_id INTEGER REFERENCES {orders}(id),
+            name VARCHAR(50)
+        );
+        CREATE INDEX {index_name} ON {users}(name);
+    """
+
+
+def _data_dictionary_topology_drop_sql(users: str, orders: str, items: str) -> str:
+    return f"""
+        DROP TABLE IF EXISTS {items};
+        DROP TABLE IF EXISTS {orders};
+        DROP TABLE IF EXISTS {users};
+    """
+
+
+def _assert_data_dictionary_topology(
+    tables: object, foreign_keys: object, indexes: object, users: str, orders: str, items: str, index_name: str
+) -> None:
+    assert isinstance(tables, list)
+    table_names = [_normalized_name(entry.get("table_name")) for entry in tables if isinstance(entry, dict)]
+    expected = (users, orders, items)
+    test_tables = [name for name in table_names if name in expected]
+    assert test_tables == list(expected)
+
+    assert isinstance(foreign_keys, list)
+    matching_fk = next(
+        (
+            fk
+            for fk in foreign_keys
+            if _normalized_name(fk.referenced_table) == users and _normalized_name(fk.column_name) == "user_id"
+        ),
+        None,
+    )
+    assert matching_fk is not None
+
+    assert isinstance(indexes, list)
+    assert any(_normalized_name(index.get("index_name")) == index_name for index in indexes if isinstance(index, dict))
+
+
+def assert_sync_data_dictionary_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync drivers expose portable data-dictionary version, feature, type, table, and column metadata."""
+    if not case.supports_data_dictionary:
+        pytest.skip(f"{case.adapter} has no verified data-dictionary support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+
+    _assert_data_dictionary_dialect(sync_driver, case)
+    _assert_data_dictionary_version_cache(
+        data_dictionary.get_version(sync_driver), data_dictionary.get_version(sync_driver)
+    )
+    features = _assert_data_dictionary_feature_list(data_dictionary.list_available_features())
+    for feature in features:
+        assert isinstance(data_dictionary.get_feature_flag(sync_driver, feature), bool)
+    for type_category in _DATA_DICTIONARY_TYPE_CATEGORIES:
+        optimal_type = data_dictionary.get_optimal_type(sync_driver, type_category)
+        assert isinstance(optimal_type, str)
+        assert optimal_type
+
+    _assert_data_dictionary_tables(data_dictionary.get_tables(sync_driver), case)
+    _assert_data_dictionary_columns(data_dictionary.get_columns(sync_driver, table=case.table.name), case)
+
+
+async def assert_async_data_dictionary_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers expose portable data-dictionary version, feature, type, table, and column metadata."""
+    if not case.supports_data_dictionary:
+        pytest.skip(f"{case.adapter} has no verified data-dictionary support")
+    async_driver = cast("AsyncContractDriver", driver)
+    data_dictionary = cast("Any", async_driver).data_dictionary
+
+    _assert_data_dictionary_dialect(async_driver, case)
+    _assert_data_dictionary_version_cache(
+        await data_dictionary.get_version(async_driver), await data_dictionary.get_version(async_driver)
+    )
+    features = _assert_data_dictionary_feature_list(data_dictionary.list_available_features())
+    for feature in features:
+        assert isinstance(await data_dictionary.get_feature_flag(async_driver, feature), bool)
+    for type_category in _DATA_DICTIONARY_TYPE_CATEGORIES:
+        optimal_type = await data_dictionary.get_optimal_type(async_driver, type_category)
+        assert isinstance(optimal_type, str)
+        assert optimal_type
+
+    _assert_data_dictionary_tables(await data_dictionary.get_tables(async_driver), case)
+    _assert_data_dictionary_columns(await data_dictionary.get_columns(async_driver, table=case.table.name), case)
+
+
+def assert_sync_data_dictionary_schema_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync data dictionaries honor schema-qualified column discovery."""
+    if not case.supports_schema_qualified_data_dictionary:
+        pytest.skip(f"{case.adapter} has no schema-qualified data-dictionary support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+    schema_name = _data_dictionary_schema_for_case(case)
+    _assert_data_dictionary_columns(
+        data_dictionary.get_columns(sync_driver, table=case.table.name, schema=schema_name), case
+    )
+
+
+async def assert_async_data_dictionary_schema_contract(driver: object, case: DriverCase) -> None:
+    """Assert async data dictionaries honor schema-qualified column discovery."""
+    if not case.supports_schema_qualified_data_dictionary:
+        pytest.skip(f"{case.adapter} has no schema-qualified data-dictionary support")
+    async_driver = cast("AsyncContractDriver", driver)
+    data_dictionary = cast("Any", async_driver).data_dictionary
+    schema_name = _data_dictionary_schema_for_case(case)
+    columns = await data_dictionary.get_columns(async_driver, table=case.table.name, schema=schema_name)
+    _assert_data_dictionary_columns(columns, case)
+
+
+def assert_sync_data_dictionary_topology_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync data dictionaries sort table dependencies and surface FK/index metadata."""
+    if not case.supports_data_dictionary_topology:
+        pytest.skip(f"{case.adapter} has no data-dictionary topology support")
+    sync_driver = cast("SyncContractDriver", driver)
+    data_dictionary = cast("Any", sync_driver).data_dictionary
+    suffix = uuid4().hex[:8]
+    users = f"dd_users_{suffix}"
+    orders = f"dd_orders_{suffix}"
+    items = f"dd_items_{suffix}"
+    index_name = f"idx_dd_users_{suffix}"
+    sync_driver.execute_script(_data_dictionary_topology_sql(case, users, orders, items, index_name))
+    sync_driver.commit()
+    try:
+        _assert_data_dictionary_topology(
+            data_dictionary.get_tables(sync_driver),
+            data_dictionary.get_foreign_keys(sync_driver, table=orders),
+            data_dictionary.get_indexes(sync_driver, table=users),
+            users,
+            orders,
+            items,
+            index_name,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.execute_script(_data_dictionary_topology_drop_sql(users, orders, items))
+            sync_driver.commit()
+
+
+async def assert_async_data_dictionary_topology_contract(driver: object, case: DriverCase) -> None:
+    """Assert async data dictionaries sort table dependencies and surface FK/index metadata."""
+    if not case.supports_data_dictionary_topology:
+        pytest.skip(f"{case.adapter} has no data-dictionary topology support")
+    async_driver = cast("AsyncContractDriver", driver)
+    data_dictionary = cast("Any", async_driver).data_dictionary
+    suffix = uuid4().hex[:8]
+    users = f"dd_users_{suffix}"
+    orders = f"dd_orders_{suffix}"
+    items = f"dd_items_{suffix}"
+    index_name = f"idx_dd_users_{suffix}"
+    await async_driver.execute_script(_data_dictionary_topology_sql(case, users, orders, items, index_name))
+    await async_driver.commit()
+    try:
+        tables = await data_dictionary.get_tables(async_driver)
+        foreign_keys = await data_dictionary.get_foreign_keys(async_driver, table=orders)
+        indexes = await data_dictionary.get_indexes(async_driver, table=users)
+        _assert_data_dictionary_topology(tables, foreign_keys, indexes, users, orders, items, index_name)
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.execute_script(_data_dictionary_topology_drop_sql(users, orders, items))
+            await async_driver.commit()

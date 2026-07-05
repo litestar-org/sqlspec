@@ -14,7 +14,7 @@ only irreducible, adapter-specific behavior.
 Every contract is the cross product of three things:
 
 1. **Cases** (`_cases.py`) — a `DriverCase` per adapter/mode, carrying the fixture name, dialect,
-   marks, capability flags, deviations, and extra-assertion keys. `SYNC_DRIVER_CASES` and
+   marks, capability flags/policies, exceptional deviations, and extra-assertion keys. `SYNC_DRIVER_CASES` and
    `ASYNC_DRIVER_CASES` feed the parametrized fixtures; `DEFERRED_DRIVER_CASES` holds adapters that
    are not yet wired (each with a concrete `reason`).
 2. **Behaviors** (`behaviors.py`) — reusable `assert_*_contract` functions. Central test bodies stay
@@ -48,7 +48,7 @@ Every contract is the cross product of three things:
 | Module | Responsibility |
 | --- | --- |
 | `_adk_cases.py` / `adk_behaviors.py` | Google ADK session-store contract cases and behaviors. |
-| `_events_cases.py` / `events_behaviors.py` | Event-queue store contract cases and behaviors. |
+| `_events_cases.py` / `events_behaviors.py` | Event-queue store and native PostgreSQL LISTEN/NOTIFY contract cases and behaviors. |
 | `_store_cases.py` / `store_behaviors.py` | Litestar session-store contract cases and behaviors. |
 | `_migration_cases.py` / `migration_behaviors.py` | Migration contract cases and behaviors. |
 
@@ -70,7 +70,7 @@ Every contract is the cross product of three things:
 | `test_exceptions_contract.py` | Exception translation (gated by `supports_exception_translation`). |
 | `test_storage_bridge_contract.py` / `test_storage_bridge_rustfs_contract.py` | Storage bridge round-trips (local and RustFS/S3). |
 | `test_migrations_contract.py` | Migration apply/rollback (gated by `supports_migrations`). |
-| `test_adk_store_contract.py` / `test_events_queue_contract.py` / `test_litestar_store_contract.py` | Extension store contracts (ADK / events / Litestar). |
+| `test_adk_store_contract.py` / `test_events_queue_contract.py` / `test_listen_notify_contract.py` / `test_litestar_store_contract.py` | Extension store contracts (ADK / events queue / native PostgreSQL LISTEN/NOTIFY / Litestar). |
 | `test_extra_assertions_proof_contract.py` | Proves the extra-assertion registry mechanism end-to-end (`driver_basics:noop`). |
 
 ## Capability Flags
@@ -87,7 +87,10 @@ Complete flag set:
 - **Result / IO**: `supports_arrow`, `supports_arrow_streaming`, `supports_native_arrow`,
   `supports_storage_bridge`, `supports_native_bulk_ingest`, `supports_copy`
 - **Statements**: `supports_execute_many`, `supports_execute_script`, `supports_filtered_statement`,
-  `supports_loader_input`, `supports_merge`, `supports_returning`, `supports_for_update`
+  `supports_loader_input`, `supports_merge`, `supports_returning`, `supports_for_update`,
+  `supports_for_share`
+- **Statement policies**: `execute_rowcount_policy`, `execute_many_rowcount_policy`,
+  `unsupported_explain_reason`
 - **Types / codecs**: `supports_json`, `supports_json_native`, `supports_arrays`,
   `supports_native_array_codec`, `supports_vector`, `supports_lob`
 - **Schema / migrations**: `supports_migrations`, `supports_schema_qualified_ddl`,
@@ -97,6 +100,9 @@ Complete flag set:
 - **Lifecycle (config-factory)**: `supports_pooling`, `supports_connection_hook`,
   `supports_connection_instance`, `supports_lowercase_columns`, `supports_uuid_feature`,
   `supports_custom_json_serializer`, `supports_custom_type_adapters`
+- **Fixture/profile limits**: `supports_search_filter`, `supports_grouped_subquery`,
+  `supports_stream_reopen_after_partial_iteration`, `stream_chunk_policy`,
+  `invalid_sql_error_policy`
 
 ## Lifecycle Contracts & Config Factories
 
@@ -110,13 +116,12 @@ driver-feature toggles). These run through a per-adapter **config factory**.
 2. Point the case at it with `config_factory_fixture="lifecycle_config_<adapter>"`. The fixture layer
    resolves it into `DriverCaseContext.make_config`.
 3. Opt the case into the relevant `supports_*` lifecycle flag.
-4. Gate the contract on the flag and call the behavior with the factory:
+4. Parametrize the contract with cases filtered by the exact capability and call the behavior with the factory:
 
    ```python
-   def test_sync_pooling_contract(sync_driver_case: DriverCaseContext) -> None:
-       if not sync_driver_case.case.supports_pooling:
-           pytest.skip(f"{sync_driver_case.case.adapter} has no verified pooling support")
-       assert_sync_pooling_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+   @pytest.mark.parametrize("sync_lifecycle_driver_case", sync_driver_params_with("supports_pooling"), indirect=True)
+   def test_sync_pooling_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
+       assert_sync_pooling_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
    ```
 
 Lifecycle behaviors (each has a sync and async form):
@@ -136,9 +141,13 @@ protocols in `behaviors.py` (`provide_session`, `provide_pool`, `close_pool`, `c
 
 ## Deviations vs Extra Assertions
 
-`deviations` is **subtractive**: a tuple of string keys that relax or skip a generic assertion
-(`if "key" not in case.deviations: ...`). Use it when an adapter cannot satisfy part of a shared
-contract (e.g. `"no-returning"`, `"no-for-share"`, `"execute-rows-affected-unavailable"`).
+Typed `DriverCase` metadata is the default way to express adapter differences. Use capability flags
+for supported behavior, policy fields for rowcount/streaming/error-profile differences, and filtered
+param lists so unsupported cases are not collected for a behavior they cannot run.
+
+`deviations` is an exceptional **subtractive** escape hatch: a tuple of string keys that relax or skip a
+generic assertion only when the difference cannot be represented as typed capability or policy data.
+Every deviation key must be consumed by a behavior and justified by a contract metadata guard.
 
 `extra_assertions` is the **additive** counterpart: a tuple of registered proof keys that let a single
 contract run adapter-specific extra checks without a separate per-adapter file. This is how
@@ -194,6 +203,22 @@ deliberately leaves **irreducible** per-adapter tests in place. Do not fold thes
 - Deferred adapters (spanner, mssql_python) until their cases move from
   `DEFERRED_DRIVER_CASES` to active rows.
 
+Current residual inventory:
+
+| Area | Local files | Why they stay local |
+| --- | --- | --- |
+| Oracle type handlers | `oracledb/test_msgspec_clob.py`, `test_numpy_vectors.py`, `test_smart_lob_coercion.py`, `test_sparse_vectors.py`, `test_uuid_binary.py` | Oracle-specific LOB/CLOB/BLOB hydration, NumPy/vector type handlers, sparse vector passthrough, and RAW/VARCHAR UUID coexistence. Portable vector, UUID, result, JSON, PL/SQL, and StatementStack behavior is contract-owned. |
+| Oracle direct/load/driver specifics | `oracledb/test_direct_path_load.py`, `test_driver_sync.py`, `test_driver_async.py`, `test_execute_many.py`, `test_features.py`, `test_migrations.py` | Direct-path loading, Oracle statement/session details, and Oracle-specific migration/feature surfaces that do not generalize without adapter-name conditionals. |
+| ADBC connection/backend internals | `adbc/test_adbc_connection.py`, `test_adbc_backends.py`, `test_sqlite_session.py`, `test_transactions.py` | Raw ADBC `create_connection()`, `adbc_get_info`, backend-native SQL features, SQLite dialect fallback, and ADBC transaction plumbing. Portable driver/result/parameter/Arrow behavior is contract-owned through active ADBC cases. |
+| ADBC execution edge cases | `adbc/test_adbc_driver.py`, `test_adbc_edge_cases.py`, `test_arrow_features.py` | ADBC PostgreSQL `continue_on_error` recovery, exact SQLite lock SQL generation, script parsing around comments/empty statements, post-error connection recovery, and DuckDB analytical/window SQL. |
+| GizmoSQL ADBC | `adbc/test_gizmosql.py`, `test_gizmosql_arrow.py`, `test_gizmosql_data_dictionary.py` | GizmoSQL FlightSQL backend behavior is not a `DriverCase`; these tests cover service-specific result streams, xfails, storage, migration, and dictionary behavior. |
+| BigQuery cloud/analytics specifics | `bigquery/test_arrow.py`, `test_config.py`, `test_driver.py`, `test_parameter_variants.py`, `test_vector_functions.py` | Emulator/native BigQuery project-dataset setup, job controls, parameter forms, and vector/analytics behavior beyond the active BigQuery contract case. |
+| Spanner GoogleSQL | `spanner/test_arrow.py`, `test_batch_write_api.py`, `test_bytes_direct.py`, `test_crud_operations.py`, `test_driver.py`, `test_exceptions.py`, `test_execute_many.py`, `test_explain.py`, `test_load_from_arrow_mutations.py`, `test_parameter_variants.py`, `test_session_defaults.py` | Spanner needs admin-API DDL, separate read/write sessions, SDK BYTES encoding, mutation transports, and `query_mode=PLAN`; it remains deferred until the contract table fixture can preserve those semantics safely. |
+| Spangres placeholders | `spanner/test_spangres_driver.py`, `test_spangres_parameter_styles.py` | Runtime Spangres coverage needs PostgreSQL-dialect Spanner fixtures that do not exist yet. The files keep only executable dialect/default-style documentation assertions. |
+| Google Cloud asyncpg connectors | `asyncpg/test_cloud_connectors.py` | Cloud SQL and AlloyDB connector authentication, IAM, private-IP, and instance URI setup require real Google Cloud instances; shared contracts cover PostgreSQL behavior after a pool exists. |
+| PostgreSQL-family driver quirks | `asyncpg/test_driver.py`, `psqlpy/test_driver.py`, `psycopg/test_driver.py`, `psycopg/test_async_copy.py`, `*/extensions/events/test_listen_notify.py` | Driver-specific cursor/prepared statement/COPY behavior plus native LISTEN/NOTIFY concurrency and durable-hybrid regressions. Portable native delivery, metadata, backend selection, and ack behavior is contract-owned. |
+| Adapter extension storage details | `*/extensions/adk/test_owner_id_column.py`, `*/extensions/adk/test_memory_store.py`, `*/extensions/litestar/test_numpy_serialization.py`, `spanner/extensions/adk/test_adk_store.py`, `spanner/extensions/litestar/test_store.py`, `spanner/extensions/events/test_queue_backend.py` | Extension storage/serialization details and Spanner extension stores that need adapter-specific DDL/session fixtures; generic ADK/events/Litestar behavior is handled by the extension contracts for active cases. |
+
 ## Adding A Case
 
 1. Add or update the `DriverCase` in `_cases.py` (fixture name, dialect, mode, marks, capability flags).
@@ -219,3 +244,16 @@ uv run pytest tests/integration/adapters/contracts
 Service-backed adapters keep their opt-in marks and xdist groups when they move from deferred to
 active rows. BigQuery integration runs in CI by default; local runs require
 `SQLSPEC_ENABLE_BIGQUERY_TESTS=1` and `--run-bigquery-tests`.
+
+## Reconciliation Snapshot
+
+The consolidation moved repeated adapter behavior into the contract package and left only documented
+residuals in adapter-local folders. Measured against `main` before this branch:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Adapter integration `test_*.py` files | 176 | 142 |
+| Adapter integration test lines | 32,318 | 22,209 |
+
+`test_case_metadata_contract.py` includes a no-orphan guard for files removed by the consolidation, so
+contract-owned adapter-local files fail collection if they are accidentally reintroduced.

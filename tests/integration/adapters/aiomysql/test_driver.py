@@ -7,7 +7,7 @@ transaction management, and error handling.
 
 import pytest
 
-from sqlspec import StatementStack, sql
+from sqlspec import StatementStack
 from sqlspec.adapters.aiomysql import AiomysqlDriver
 
 pytestmark = pytest.mark.xdist_group("mysql")
@@ -133,77 +133,3 @@ async def test_aiomysql_result_metadata(aiomysql_driver: AiomysqlDriver) -> None
     assert empty_result.num_rows == 0
     assert empty_result.operation_type == "SELECT"
     assert len(empty_result.get_data()) == 0
-
-
-async def test_aiomysql_for_update_locking(aiomysql_driver: AiomysqlDriver) -> None:
-    """Test FOR UPDATE row locking with MySQL."""
-
-    driver = aiomysql_driver
-
-    # Insert test data
-    await driver.execute("INSERT INTO test_table_aiomysql (name, value) VALUES (?, ?)", ("mysql_lock", 100))
-
-    try:
-        await driver.begin()
-
-        # Test basic FOR UPDATE
-        result = await driver.select_one(
-            sql.select("id", "name", "value").from_("test_table_aiomysql").where_eq("name", "mysql_lock").for_update()
-        )
-        assert result is not None
-        assert result["name"] == "mysql_lock"
-        assert result["value"] == 100
-
-        await driver.commit()
-    except Exception:
-        await driver.rollback()
-        raise
-
-
-async def test_aiomysql_for_update_skip_locked(aiomysql_driver: AiomysqlDriver) -> None:
-    """Test FOR UPDATE SKIP LOCKED with MySQL (MySQL 8.0+ feature)."""
-
-    driver = aiomysql_driver
-
-    # Insert test data
-    await driver.execute("INSERT INTO test_table_aiomysql (name, value) VALUES (?, ?)", ("mysql_skip", 200))
-
-    try:
-        await driver.begin()
-
-        # Test FOR UPDATE SKIP LOCKED
-        result = await driver.select_one(
-            sql.select("*").from_("test_table_aiomysql").where_eq("name", "mysql_skip").for_update(skip_locked=True)
-        )
-        assert result is not None
-        assert result["name"] == "mysql_skip"
-
-        await driver.commit()
-    except Exception:
-        await driver.rollback()
-        raise
-
-
-async def test_aiomysql_for_share_locking(aiomysql_driver: AiomysqlDriver) -> None:
-    """Test FOR SHARE row locking with MySQL."""
-
-    driver = aiomysql_driver
-
-    # Insert test data
-    await driver.execute("INSERT INTO test_table_aiomysql (name, value) VALUES (?, ?)", ("mysql_share", 300))
-
-    try:
-        await driver.begin()
-
-        # Test basic FOR SHARE (MySQL uses FOR SHARE syntax like PostgreSQL)
-        result = await driver.select_one(
-            sql.select("id", "name", "value").from_("test_table_aiomysql").where_eq("name", "mysql_share").for_share()
-        )
-        assert result is not None
-        assert result["name"] == "mysql_share"
-        assert result["value"] == 300
-
-        await driver.commit()
-    except Exception:
-        await driver.rollback()
-        raise

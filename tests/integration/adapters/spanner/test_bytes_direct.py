@@ -1,4 +1,9 @@
-"""Debug test for bytes handling in Spanner."""
+"""Spanner BYTES residual outside the SQLSpec driver contracts.
+
+This test exercises the Google Spanner SDK's base64 parameter convention
+directly. It stays local because the shared contracts assert SQLSpec driver
+materialization, not raw SDK BYTES parameter encoding.
+"""
 
 import base64
 from typing import TYPE_CHECKING
