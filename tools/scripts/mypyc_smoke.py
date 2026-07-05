@@ -24,6 +24,8 @@ class SmokeImport(NamedTuple):
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("package", "sqlspec"),
+    SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
+    SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
@@ -32,21 +34,41 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
     SmokeImport("storage_pipeline", "sqlspec.storage.pipeline", "SyncStoragePipeline", True),
+    SmokeImport("storage_backend_local", "sqlspec.storage.backends.local", "LocalStore", True),
+    SmokeImport("storage_backend_fsspec", "sqlspec.storage.backends.fsspec", "FSSpecBackend", True),
+    SmokeImport("storage_backend_obstore", "sqlspec.storage.backends.obstore", "ObStoreBackend", True),
     SmokeImport("sqlite_pool", "sqlspec.adapters.sqlite.pool", "SqliteConnectionPool", True),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
-    SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", False, "fastapi"),
+    SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", True, "fastapi"),
     SmokeImport(
-        "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", False, "litestar"
+        "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", True, "litestar"
     ),
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
+    SmokeImport("event_channel", "sqlspec.extensions.events._channel", "SyncEventChannel", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
 )
+
+
+def _new_smoke_result(
+    *, name: str, module: str, attribute: str | None, compiled_required: bool = False
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "module": module,
+        "attribute": attribute,
+        "imported": False,
+        "compiled": False,
+        "compiled_required": compiled_required,
+        "error": None,
+        "skipped": False,
+        "skip_reason": None,
+    }
 
 
 def is_compiled_module(module: Any) -> bool:
@@ -63,6 +85,32 @@ def _is_missing_optional_dependency(missing_name: str, optional_dependency: str 
         or missing_name.startswith(f"{optional_dependency}.")
         or optional_dependency.startswith(f"{missing_name}.")
     )
+
+
+def _check_sqlspec_construction() -> dict[str, Any]:
+    """Construct SQLSpec surfaces that must work from a compiled wheel."""
+    result = _new_smoke_result(name="sqlspec_construction", module="sqlspec.base", attribute="SQLSpec")
+    try:
+        base_module = importlib.import_module("sqlspec.base")
+        loader_module = importlib.import_module("sqlspec.loader")
+        sqlite_module = importlib.import_module("sqlspec.adapters.sqlite")
+        sqlspec_cls = base_module.SQLSpec
+        sql_file_loader_cls = loader_module.SQLFileLoader
+        sqlite_config_cls = sqlite_module.SqliteConfig
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(base_module)
+    try:
+        manager = sqlspec_cls(loader=sql_file_loader_cls())
+        config = manager.add_config(sqlite_config_cls(connection_config={"database": ":memory:"}))
+        manager.event_channel(config)
+        manager.telemetry_snapshot()
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
@@ -102,7 +150,7 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     return results
 
 
-def _check_litestar_filter_construction() -> dict[str, Any]:
+def _check_litestar_filter_construction(*, require_compiled: bool = False) -> dict[str, Any]:
     """Construct every paired-annotation Litestar filter provider (issue #475).
 
     This invokes ``create_filter_dependencies`` with a config that drives every
@@ -111,17 +159,12 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
     ``_LimitOffsetFilterProvider``, ``_SearchFilterProvider``, and
     ``_OrderByProvider``. The provider module intentionally remains interpreted.
     """
-    result: dict[str, Any] = {
-        "name": "litestar_filter_construction",
-        "module": "sqlspec.extensions.litestar.providers",
-        "attribute": "create_filter_dependencies",
-        "imported": False,
-        "compiled": False,
-        "compiled_required": False,
-        "error": None,
-        "skipped": False,
-        "skip_reason": None,
-    }
+    result = _new_smoke_result(
+        name="litestar_filter_construction",
+        module="sqlspec.extensions.litestar.providers",
+        attribute="create_filter_dependencies",
+        compiled_required=require_compiled,
+    )
     try:
         providers = importlib.import_module("sqlspec.extensions.litestar.providers")
     except ModuleNotFoundError as exc:
@@ -137,6 +180,9 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
 
     result["imported"] = True
     result["compiled"] = is_compiled_module(providers)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
     config = providers.FilterConfig(
         created_at=True,
         updated_at=True,
@@ -160,19 +206,14 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
     return result
 
 
-def _check_fastapi_filter_construction() -> dict[str, Any]:
+def _check_fastapi_filter_construction(*, require_compiled: bool = False) -> dict[str, Any]:
     """Construct every generated FastAPI filter provider."""
-    result: dict[str, Any] = {
-        "name": "fastapi_filter_construction",
-        "module": "sqlspec.extensions.fastapi.providers",
-        "attribute": "provide_filters",
-        "imported": False,
-        "compiled": False,
-        "compiled_required": False,
-        "error": None,
-        "skipped": False,
-        "skip_reason": None,
-    }
+    result = _new_smoke_result(
+        name="fastapi_filter_construction",
+        module="sqlspec.extensions.fastapi.providers",
+        attribute="provide_filters",
+        compiled_required=require_compiled,
+    )
     try:
         providers = importlib.import_module("sqlspec.extensions.fastapi.providers")
     except ModuleNotFoundError as exc:
@@ -188,6 +229,9 @@ def _check_fastapi_filter_construction() -> dict[str, Any]:
 
     result["imported"] = True
     result["compiled"] = is_compiled_module(providers)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
     config = providers.FilterConfig(
         id_filter=int,
         created_at=True,
@@ -238,8 +282,11 @@ def _check_fastapi_filter_construction() -> dict[str, Any]:
 
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
-    del require_compiled
-    return [_check_fastapi_filter_construction(), _check_litestar_filter_construction()]
+    return [
+        _check_sqlspec_construction(),
+        _check_fastapi_filter_construction(require_compiled=require_compiled),
+        _check_litestar_filter_construction(require_compiled=require_compiled),
+    ]
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

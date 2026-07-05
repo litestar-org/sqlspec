@@ -16,8 +16,6 @@ from sqlspec.utils.module_loader import ensure_fsspec
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from fsspec import AbstractFileSystem
-
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("FSSpecBackend",)
@@ -38,8 +36,6 @@ class FSSpecBackend:
     __slots__ = ("_fs_uri", "base_path", "fs", "protocol")
 
     backend_type: ClassVar[str] = "fsspec"
-    if TYPE_CHECKING:
-        fs: AbstractFileSystem
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         """Initialize the fsspec-backed storage backend.

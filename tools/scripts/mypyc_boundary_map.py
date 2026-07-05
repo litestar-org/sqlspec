@@ -58,18 +58,25 @@ CONFIG_RUNTIME_BOUNDARIES: tuple[dict[str, Any], ...] = (
 STORAGE_ARROW_BOUNDARIES: tuple[dict[str, Any], ...] = (
     {
         "from_module": "sqlspec/storage/pipeline.py",
-        "to_module": "sqlspec/storage/_utils.py",
+        "to_module": "sqlspec/storage/_arrow_payload.py",
         "sites": [
-            {"line": 13, "symbol": "import_pyarrow/import_pyarrow_csv/import_pyarrow_parquet"},
-            {"line": 211, "symbol": "_encode_arrow_payload"},
-            {"line": 256, "symbol": "_decode_arrow_payload"},
+            {"line": 15, "symbol": "decode_arrow_payload/encode_arrow_payload import"},
+            {"line": 226, "symbol": "_encode_arrow_payload"},
+            {"line": 342, "symbol": "_decode_arrow_payload"},
             {"line": 357, "symbol": "SyncStoragePipeline.write_arrow"},
             {"line": 382, "symbol": "SyncStoragePipeline.read_arrow"},
             {"line": 500, "symbol": "AsyncStoragePipeline.write_arrow"},
             {"line": 578, "symbol": "AsyncStoragePipeline.read_arrow_async"},
         ],
-        "classification": "interpreted_to_interpreted_arrow_boundary",
-        "reason": "Pipeline orchestration is still interpreted and delegates Arrow imports/codecs to `_utils.py`.",
+        "classification": "compiled_to_interpreted_arrow_boundary",
+        "reason": "Compiled pipeline orchestration delegates PyArrow payload encoding and decoding to interpreted `_arrow_payload.py`.",
+    },
+    {
+        "from_module": "sqlspec/storage/_arrow_payload.py",
+        "to_module": "sqlspec/storage/_utils.py",
+        "sites": [{"line": 5, "symbol": "import_pyarrow/import_pyarrow_csv/import_pyarrow_parquet"}],
+        "classification": "interpreted_to_compiled_optional_dependency_boundary",
+        "reason": "Interpreted Arrow payload codecs call compiled optional-dependency import helpers before importing PyArrow.",
     },
     {
         "from_module": "sqlspec/storage/_utils.py",
@@ -85,14 +92,10 @@ STORAGE_ARROW_BOUNDARIES: tuple[dict[str, Any], ...] = (
     },
     {
         "from_module": "sqlspec/utils/serializers.py",
-        "to_module": "sqlspec/_serialization.py",
-        "sites": [
-            {"line": 11, "symbol": "decode_json/encode_json import"},
-            {"line": 103, "symbol": "to_json"},
-            {"line": 126, "symbol": "from_json"},
-        ],
-        "classification": "compiled_to_interpreted_json_boundary",
-        "reason": "Compiled serializer helpers still terminate in the interpreted fallback serializers defined in `_serialization.py`.",
+        "to_module": "sqlspec/utils/serializers/_json.py",
+        "sites": [{"line": 4, "symbol": "decode_json as from_json"}, {"line": 5, "symbol": "encode_json as to_json"}],
+        "classification": "interpreted_facade_to_compiled_json_boundary",
+        "reason": "The interpreted serializers package facade re-exports the compiled JSON engine.",
     },
 )
 
@@ -111,20 +114,6 @@ ANY_AUDIT_SEAMS: tuple[dict[str, Any], ...] = (
         "symbol": "LifecycleConfig",
         "annotation": "Callable[[Any], None] and query hooks with dict[str, Any]",
         "reason": "Observability lifecycle hooks bridge raw driver objects and event payload maps.",
-    },
-    {
-        "module": "sqlspec/_serialization.py",
-        "line": 23,
-        "symbol": "_type_to_string",
-        "annotation": "Any -> Any",
-        "reason": "Serializer fallback path handles arbitrary runtime values and optional third-party model types.",
-    },
-    {
-        "module": "sqlspec/_serialization.py",
-        "line": 274,
-        "symbol": "encode_json",
-        "annotation": "data: Any",
-        "reason": "Top-level JSON encoding surface is intentionally untyped because it serves every adapter/runtime layer.",
     },
     {
         "module": "sqlspec/storage/pipeline.py",
@@ -191,24 +180,24 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
         "reason": "SQLGlot dialect subclass module fails native class import under mypyc.",
     },
     "sqlspec/extensions/events/_channel.py": {
-        "bucket": "hard_block",
-        "reason": "Dynamic native backend import and listener task/thread lifecycle stay interpreted while table queue helpers compile.",
+        "bucket": "compiled",
+        "reason": "Event channel iteration uses explicit iterator classes and is covered by compiled-wheel smoke.",
     },
     "sqlspec/extensions/events/_models.py": {
-        "bucket": "hard_block",
-        "reason": "Slot dataclass must expose __slots__; native mypyc class changes that observable runtime behavior.",
+        "bucket": "compiled",
+        "reason": "EventMessage is a final slot dataclass with concrete annotations and is now in the compiled include set.",
     },
     "sqlspec/extensions/events/_queue.py": {
-        "bucket": "hard_block",
-        "reason": "Table-backed event queue class flags and listener ack paths regress under native mypyc classes.",
+        "bucket": "compiled",
+        "reason": "Table-backed event queue helpers are final, avoid async generators, and are now in the compiled include set.",
     },
     "sqlspec/extensions/adk/converters.py": {
         "bucket": "hard_block",
         "reason": "Imports Google ADK models at module import time and reconstructs Pydantic payloads; compile only record type modules.",
     },
     "sqlspec/observability/_formatting.py": {
-        "bucket": "low_roi",
-        "reason": "Small logging formatter module with negligible performance upside.",
+        "bucket": "compiled",
+        "reason": "OTel console formatter is now included in the compiled observability utility surface.",
     },
     "sqlspec/migrations/commands.py": {
         "bucket": "low_roi",
@@ -366,11 +355,13 @@ def collect_serializer_bridges(root: Path) -> list[dict[str, Any]]:
                 "from_status": "compiled",
                 "via_module": "sqlspec/utils/serializers.py",
                 "via_status": classify_module("sqlspec/utils/serializers.py", include_patterns, exclude_patterns),
-                "terminal_module": "sqlspec/_serialization.py",
-                "terminal_status": classify_module("sqlspec/_serialization.py", include_patterns, exclude_patterns),
+                "terminal_module": "sqlspec/utils/serializers/_json.py",
+                "terminal_status": classify_module(
+                    "sqlspec/utils/serializers/_json.py", include_patterns, exclude_patterns
+                ),
                 "import_line": node.lineno,
                 "helpers": imported_symbols,
-                "classification": "compiled_to_interpreted_json_boundary",
+                "classification": "compiled_to_interpreted_facade_to_compiled_json_boundary",
             })
             break
 

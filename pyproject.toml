@@ -221,7 +221,6 @@ exclude = [
   "sqlspec/dialects/spanner/_spanner.py",   # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/spanner/_spangres.py",  # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted
-  "sqlspec/extensions/events/_channel.py",  # interpreted: importlib + async-generator iter_events
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/adapters/**/data_dictionary.py", # Cross-module inheritance causes mypyc segfaults
@@ -229,6 +228,7 @@ exclude = [
   "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
 include = [
+  "sqlspec/base.py",                            # SQLSpec registry/session manager
   "sqlspec/core/**/*.py",                          # Core module
   "sqlspec/builder/**/*.py",                       # Builder module
   "sqlspec/exceptions.py",                         # Exceptions module
@@ -247,13 +247,20 @@ include = [
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
+  "sqlspec/storage/backends/fsspec.py",            # fsspec backend import surface
+  "sqlspec/storage/backends/local.py",             # Local storage backend
+  "sqlspec/storage/backends/obstore.py",           # obstore backend import surface
   "sqlspec/storage/_utils.py",                      # Storage optional dependency import helpers
   "sqlspec/service.py",                            # Service base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
+  "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
+  "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider helpers
+  "sqlspec/extensions/litestar/providers.py",      # Litestar filter provider helpers
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_models.py",          # Event message value object
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators
   "sqlspec/extensions/events/_payload.py",         # Event JSON payload codec helpers
+  "sqlspec/extensions/events/_channel.py",         # Event channel runtime and iterator shell
   "sqlspec/extensions/events/_queue.py",           # Table-backed event queue
   "sqlspec/extensions/adk/_types.py",              # ADK session/event record types
   "sqlspec/extensions/adk/memory/_types.py",       # ADK memory record types
@@ -289,6 +296,7 @@ mypy-args = [
   "--no-implicit-reexport",
   "--no-warn-redundant-casts",
   "--no-warn-unused-ignores",
+  "--disable-error-code=overload-cannot-match",
   "--follow-imports=skip",
 ]
 require-runtime-dependencies = true

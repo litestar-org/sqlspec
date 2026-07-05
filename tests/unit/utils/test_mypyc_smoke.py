@@ -25,18 +25,24 @@ def _load_mypyc_smoke_module() -> ModuleType:
     return module
 
 
-def _load_mypyc_include_paths() -> set[str]:
+def _load_mypyc_paths(config_key: str) -> set[str]:
     pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
-    include_patterns: Sequence[str] = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["hooks"]["mypyc"][
-        "include"
-    ]
+    patterns: Sequence[str] = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["hooks"]["mypyc"][config_key]
     paths: set[str] = set()
-    for pattern in include_patterns:
+    for pattern in patterns:
         if any(marker in pattern for marker in "*?["):
             paths.update(path.relative_to(PROJECT_ROOT).as_posix() for path in PROJECT_ROOT.glob(pattern))
         else:
             paths.add(pattern)
     return paths
+
+
+def _load_mypyc_include_paths() -> set[str]:
+    return _load_mypyc_paths("include")
+
+
+def _load_mypyc_exclude_paths() -> set[str]:
+    return _load_mypyc_paths("exclude")
 
 
 def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
@@ -46,6 +52,8 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
 
     assert {
         "package",
+        "base_sqlspec",
+        "prometheus_observer",
         "async_bridge",
         "core_statement",
         "builder_select",
@@ -53,6 +61,9 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "sync_driver",
         "async_driver",
         "storage_registry",
+        "storage_backend_local",
+        "storage_backend_fsspec",
+        "storage_backend_obstore",
         "data_dictionary_registry",
         "sqlite_type_converter",
     }.issubset(smoke_names)
@@ -62,16 +73,24 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "async_driver",
         "adk_record_types",
         "async_bridge",
+        "base_sqlspec",
         "builder_select",
         "core_statement",
         "data_dictionary_loader",
         "data_dictionary_registry",
         "env_utils",
+        "event_channel",
         "event_payload",
         "event_queue",
+        "fastapi_providers",
+        "litestar_providers",
         "migration_runner",
+        "prometheus_observer",
         "sqlite_pool",
         "sqlite_type_converter",
+        "storage_backend_fsspec",
+        "storage_backend_local",
+        "storage_backend_obstore",
         "storage_registry",
         "storage_pipeline",
         "sync_driver",
@@ -88,6 +107,16 @@ def test_compiled_smoke_requirements_are_in_mypyc_include_list() -> None:
     assert missing == []
 
 
+def test_compiled_smoke_requirements_are_not_in_mypyc_exclude_list() -> None:
+    module = _load_mypyc_smoke_module()
+    excluded_paths = _load_mypyc_exclude_paths()
+
+    excluded = [entry.module.replace(".", "/") + ".py" for entry in module.SMOKE_IMPORTS if entry.require_compiled]
+    excluded = [path for path in excluded if path in excluded_paths]
+
+    assert excluded == []
+
+
 def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
     module = _load_mypyc_smoke_module()
 
@@ -97,6 +126,9 @@ def test_smoke_runner_imports_matrix_without_requiring_compilation() -> None:
     assert any(result["module"] == "sqlspec.driver._sync" for result in results)
     assert any(result["module"] == "sqlspec.adapters.sqlite.type_converter" for result in results)
     assert any(result["module"] == "sqlspec.storage.pipeline" for result in results)
+    assert any(result["module"] == "sqlspec.storage.backends.local" for result in results)
+    assert any(result["module"] == "sqlspec.storage.backends.fsspec" for result in results)
+    assert any(result["module"] == "sqlspec.storage.backends.obstore" for result in results)
     assert any(result["module"] == "sqlspec.migrations.runner" for result in results)
     assert any(result["module"] == "sqlspec.utils.env" for result in results)
     assert any(result["module"] == "sqlspec.utils.sync_tools" for result in results)
@@ -108,7 +140,11 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
     results = module.run_construction_checks(require_compiled=False)
 
     assert all(result["imported"] or result["skipped"] for result in results)
-    assert {result["name"] for result in results} == {"fastapi_filter_construction", "litestar_filter_construction"}
+    assert {result["name"] for result in results} == {
+        "fastapi_filter_construction",
+        "litestar_filter_construction",
+        "sqlspec_construction",
+    }
 
 
 def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) -> None:

@@ -48,6 +48,7 @@ __all__ = ("SQLSpec",)
 logger = get_logger()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 

@@ -107,6 +107,7 @@ build-performance:                                 ## Build package with mypyc c
 .PHONY: test-mypyc
 test-mypyc:                                        ## Test mypyc compilation on individual modules
 	@echo "${INFO} Testing mypyc compilation... 🔧"
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/base.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/text.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/sync_tools.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/env.py
@@ -122,6 +123,9 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/pool.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_paths.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_utils.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/storage/backends/local.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/storage/backends/fsspec.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/storage/backends/obstore.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/_loader.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/bigquery.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/cockroachdb.py
@@ -134,10 +138,14 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_generators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_operators.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/spanner/_generators.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/prometheus/_observer.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/fastapi/providers.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/litestar/providers.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_hints.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_models.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_names.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_payload.py
+	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/events/_channel.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_queue.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/_types.py
 	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/memory/_types.py

@@ -1,10 +1,13 @@
 """Tests for mypyc inventory and smoke-gate tooling."""
 
+import ast
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import sqlspec.utils.correlation as correlation_module
 import sqlspec.utils.schema as schema_module
@@ -16,6 +19,16 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_mypyc_boundary_map_module() -> ModuleType:
+    module_path = PROJECT_ROOT / "tools" / "scripts" / "mypyc_boundary_map.py"
+    spec = importlib.util.spec_from_file_location("mypyc_boundary_map_for_tests", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_inventory_cli_default_json_summary_names_live_surfaces() -> None:
@@ -31,7 +44,7 @@ def test_inventory_cli_default_json_summary_names_live_surfaces() -> None:
         payload["summary"]["total_modules"]
         == payload["summary"]["compiled_count"] + payload["summary"]["interpreted_count"]
     )
-    assert set(payload["surface_counts"]) == {"candidate", "compiled", "interpreted", "keep_interpreted"}
+    assert set(payload["surface_counts"]) == {"candidate", "compiled", "hard_block", "interpreted", "keep_interpreted"}
     assert "sqlspec/utils/serializers.py" not in payload["hot_surfaces"]
     assert all((PROJECT_ROOT / module_path).is_file() for module_path in payload["hot_surfaces"])
 
@@ -56,10 +69,9 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
     makefile = (PROJECT_ROOT / "Makefile").read_text()
     target_match = re.search("^test-mypyc:.*?(?=^\\S)", makefile, flags=re.MULTILINE | re.DOTALL)
     assert target_match is not None
-    smoke_invocations = re.findall(
-        "uv run mypyc --check-untyped-defs --no-warn-unused-configs (\\S+)", target_match.group(0)
-    )
+    smoke_invocations = re.findall(r"uv run mypyc .*? (sqlspec/\S+\.py)", target_match.group(0))
     assert smoke_invocations == [
+        "sqlspec/base.py",
         "sqlspec/utils/text.py",
         "sqlspec/utils/sync_tools.py",
         "sqlspec/utils/env.py",
@@ -75,6 +87,9 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/adapters/sqlite/pool.py",
         "sqlspec/storage/_paths.py",
         "sqlspec/storage/_utils.py",
+        "sqlspec/storage/backends/local.py",
+        "sqlspec/storage/backends/fsspec.py",
+        "sqlspec/storage/backends/obstore.py",
         "sqlspec/data_dictionary/_loader.py",
         "sqlspec/data_dictionary/dialects/bigquery.py",
         "sqlspec/data_dictionary/dialects/cockroachdb.py",
@@ -87,10 +102,14 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/dialects/postgres/_generators.py",
         "sqlspec/dialects/postgres/_operators.py",
         "sqlspec/dialects/spanner/_generators.py",
+        "sqlspec/extensions/prometheus/_observer.py",
+        "sqlspec/extensions/fastapi/providers.py",
+        "sqlspec/extensions/litestar/providers.py",
         "sqlspec/extensions/events/_hints.py",
         "sqlspec/extensions/events/_models.py",
         "sqlspec/extensions/events/_names.py",
         "sqlspec/extensions/events/_payload.py",
+        "sqlspec/extensions/events/_channel.py",
         "sqlspec/extensions/events/_queue.py",
         "sqlspec/extensions/adk/_types.py",
         "sqlspec/extensions/adk/memory/_types.py",
@@ -111,6 +130,13 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/storage/pipeline.py" in payload["compiled_modules"]
     assert "sqlspec/storage/_paths.py" in payload["compiled_modules"]
     assert "sqlspec/storage/_utils.py" in payload["compiled_modules"]
+    assert "sqlspec/base.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/prometheus/_observer.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/fastapi/providers.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/litestar/providers.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/backends/fsspec.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/backends/local.py" in payload["compiled_modules"]
+    assert "sqlspec/storage/backends/obstore.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/_loader.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/bigquery.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/cockroachdb.py" in payload["compiled_modules"]
@@ -127,6 +153,7 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/extensions/events/_models.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_names.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_payload.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/events/_channel.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_queue.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/_types.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/memory/_types.py" in payload["compiled_modules"]
@@ -140,14 +167,11 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/adapters/cockroach_psycopg/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/sqlite/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/aiosqlite/driver.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/events/_channel.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/postgres/_paradedb.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/postgres/_pgvector.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/spanner/_spangres.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/spanner/_spanner.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/fastapi/providers.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/litestar/providers.py" in payload["interpreted_modules"]
     assert "sqlspec/storage/_arrow_payload.py" in payload["interpreted_modules"]
     assert "sqlspec/extensions/adk/converters.py" in payload["preserved_exclusions"]
     assert payload["adapter_pool_runtimes"]["status"] == "compiled"
@@ -157,6 +181,99 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/adapters/psycopg/driver.py" in payload["adapter_driver_shells"]["modules"]
     assert "sqlspec/adapters/cockroach_asyncpg/driver.py" in payload["adapter_driver_shells"]["modules"]
     assert "sqlspec/adapters/cockroach_psycopg/driver.py" in payload["adapter_driver_shells"]["modules"]
+
+
+def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
+    """Wave 4 planning surfaces should distinguish promotable candidates from hard blocks."""
+    script_path = PROJECT_ROOT / "tools" / "scripts" / "mypyc_inventory.py"
+    completed = subprocess.run(
+        [sys.executable, str(script_path)], check=True, cwd=PROJECT_ROOT, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+    hot_surfaces = payload["hot_surfaces"]
+
+    expected_candidates: set[str] = set()
+    expected_hard_blocks = {
+        "sqlspec/dialects/postgres/_paradedb.py",
+        "sqlspec/dialects/postgres/_pgvector.py",
+        "sqlspec/dialects/spanner/_spangres.py",
+        "sqlspec/dialects/spanner/_spanner.py",
+        "sqlspec/storage/_arrow_payload.py",
+        "sqlspec/utils/arrow_helpers.py",
+    }
+
+    for module_path in expected_candidates:
+        details = hot_surfaces[module_path]
+        assert details["surface"] == "candidate"
+        assert details["status"] == "interpreted"
+        assert details["reason"]
+
+    assert hot_surfaces["sqlspec/base.py"]["surface"] == "compiled"
+    assert hot_surfaces["sqlspec/base.py"]["status"] == "compiled"
+    assert hot_surfaces["sqlspec/base.py"]["reason"]
+    assert hot_surfaces["sqlspec/extensions/prometheus/_observer.py"]["surface"] == "compiled"
+    assert hot_surfaces["sqlspec/extensions/prometheus/_observer.py"]["status"] == "compiled"
+    assert hot_surfaces["sqlspec/extensions/prometheus/_observer.py"]["reason"]
+    assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["surface"] == "keep_interpreted"
+    assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["status"] == "interpreted"
+    assert hot_surfaces["sqlspec/extensions/prometheus/__init__.py"]["reason"]
+    for module_path in {
+        "sqlspec/extensions/fastapi/providers.py",
+        "sqlspec/extensions/litestar/providers.py",
+        "sqlspec/extensions/events/_channel.py",
+        "sqlspec/storage/backends/fsspec.py",
+        "sqlspec/storage/backends/local.py",
+        "sqlspec/storage/backends/obstore.py",
+    }:
+        assert hot_surfaces[module_path]["surface"] == "compiled"
+        assert hot_surfaces[module_path]["status"] == "compiled"
+        assert hot_surfaces[module_path]["reason"]
+
+    for module_path in expected_hard_blocks:
+        details = hot_surfaces[module_path]
+        assert details["surface"] == "hard_block"
+        assert details["status"] == "interpreted"
+        assert details["classification"] == "hard_block"
+        assert details["reason"]
+
+    assert "sqlspec/_serialization.py" not in hot_surfaces
+
+
+def test_boundary_map_uses_live_wave4_module_edges() -> None:
+    """Boundary-map output should not preserve stale pre-Wave-4 module edges."""
+    module = _load_mypyc_boundary_map_module()
+
+    boundary_map = module.build_boundary_map(PROJECT_ROOT)
+    serialized = json.dumps(boundary_map, sort_keys=True)
+
+    assert "sqlspec/_serialization.py" not in serialized
+    assert any(
+        boundary["from_module"] == "sqlspec/storage/pipeline.py"
+        and boundary["from_status"] == "compiled"
+        and boundary["to_module"] == "sqlspec/storage/_arrow_payload.py"
+        and boundary["to_status"] == "interpreted"
+        and boundary["classification"] == "compiled_to_interpreted_arrow_boundary"
+        for boundary in boundary_map["storage_arrow_boundaries"]
+    )
+    assert all(
+        details["bucket"] != "hard_block"
+        for module_path, details in boundary_map["exclusion_revalidation_seed"].items()
+        if module_path in {"sqlspec/extensions/events/_models.py", "sqlspec/extensions/events/_queue.py"}
+    )
+
+
+def test_event_channel_module_has_no_async_generators() -> None:
+    """Event channel iteration should stay compatible with compiled-wheel builds."""
+    source_path = PROJECT_ROOT / "sqlspec" / "extensions" / "events" / "_channel.py"
+    module_ast = ast.parse(source_path.read_text(), filename=str(source_path))
+    async_generators = [
+        node.name
+        for node in ast.walk(module_ast)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and any(isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(node))
+    ]
+
+    assert async_generators == []
 
 
 def test_mypy_2_toolchain_policy_is_explicit_and_parallel_gate_is_default() -> None:

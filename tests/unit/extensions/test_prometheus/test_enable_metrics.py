@@ -1,6 +1,7 @@
 """Unit tests for the Prometheus extension helper."""
 
 from sqlspec import create_event
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.extensions import prometheus
 from sqlspec.utils import module_loader
 
@@ -39,3 +40,21 @@ def test_enable_metrics_registers_observer(monkeypatch) -> None:
     )
 
     observer(event)
+
+
+def test_enable_metrics_requires_prometheus_client(monkeypatch) -> None:
+    original = module_loader.module_available
+
+    def _missing(name: str) -> bool:
+        return False if name == "prometheus_client" else original(name)
+
+    monkeypatch.setattr(module_loader, "module_available", _missing)
+
+    try:
+        prometheus.enable_metrics()
+    except MissingDependencyError as exc:
+        assert "prometheus-client" in str(exc)
+        assert "sqlspec[prometheus]" in str(exc)
+    else:  # pragma: no cover
+        msg = "enable_metrics should require prometheus_client"
+        raise AssertionError(msg)
