@@ -15,8 +15,8 @@ from sqlspec.data_dictionary import ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import (
     CATTRS_INSTALLED,
-    MSGSPEC_INSTALLED,
     NUMPY_INSTALLED,
+    MsgspecValidationError,
     SchemaT,
     attrs_asdict,
     cattrs_structure,
@@ -65,12 +65,6 @@ _MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
     "pascal": pascalize,
 }
 _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
-
-MsgspecValidationError: "type[Exception]"
-if MSGSPEC_INSTALLED:
-    from msgspec import ValidationError as MsgspecValidationError
-else:
-    MsgspecValidationError = ValueError
 
 
 # =============================================================================

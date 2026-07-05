@@ -792,8 +792,6 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
                 continue
 
             if coerced_values is None:
-                if processed_value is value:
-                    continue
                 coerced_values = list(row[:index])
             coerced_values.append(processed_value)
             continue
