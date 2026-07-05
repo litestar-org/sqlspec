@@ -1,4 +1,10 @@
-"""Test ADBC multi-backend support and backend-specific features."""
+"""ADBC backend-specific residual coverage.
+
+The shared matrix owns backend participation, dialect metadata, CRUD, and
+portable parameter behavior. This module keeps backend-native SQL surfaces:
+PostgreSQL JSONB/arrays/full-text/inet, SQLite dynamic typing/BLOB functions,
+and DuckDB list/struct/map/JSON analytics.
+"""
 
 import math
 from collections.abc import Generator
@@ -42,14 +48,14 @@ def duckdb_session() -> Generator[AdbcDriver, None, None]:
 
         with config.provide_session() as session:
             yield session
-    except Exception as e:
+    except Exception as exc:
         if (
-            "cannot open shared object file" in str(e)
-            or "No module named" in str(e)
-            or "Failed to import connect function" in str(e)
-            or "Could not configure connection" in str(e)
+            "cannot open shared object file" in str(exc)
+            or "No module named" in str(exc)
+            or "Failed to import connect function" in str(exc)
+            or "Could not configure connection" in str(exc)
         ):
-            pytest.skip(f"DuckDB ADBC missing: {e}")
+            pytest.skip(f"DuckDB ADBC missing: {exc}")
         raise
 
 
@@ -83,9 +89,6 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
 
     result = postgresql_session.execute("SELECT * FROM pg_test_adbc")
     assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-
     row = result.get_data()[0]
     assert row["jsonb_col"] is not None
     assert row["array_col"] == [1, 2, 3, 4, 5]
@@ -101,7 +104,6 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
         FROM pg_test_adbc
     """)
 
-    assert json_query.data is not None
     assert json_query.get_data()[0]["name"] == "John"
     assert json_query.get_data()[0]["age"] == "30"
     assert json_query.get_data()[0]["array_len"] == 5
@@ -125,9 +127,7 @@ def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
 
     test_blob = b"SQLite binary data test"
     sqlite_session.execute_many(
-        """
-        INSERT INTO test_sqlite_adbc (name, data, value) VALUES (?, ?, ?)
-    """,
+        "INSERT INTO test_sqlite_adbc (name, data, value) VALUES (?, ?, ?)",
         [("test1", test_blob, math.pi), ("test2", None, math.e), ("test3", b"another blob", 1.41421)],
     )
 
@@ -139,10 +139,6 @@ def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
         FROM test_sqlite_adbc
         ORDER BY id
     """)
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 3
 
     first_row = result.get_data()[0]
     assert first_row["name"] == "test1"
@@ -163,11 +159,11 @@ def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
         FROM test_sqlite_adbc
     """)
 
-    assert func_result.data is not None
-    assert func_result.get_data()[0]["total"] == 3
-    assert func_result.get_data()[0]["avg_value"] is not None
-    assert "test1" in func_result.get_data()[0]["all_names"]
-    assert func_result.get_data()[0]["version"] is not None
+    func_row = func_result.get_data()[0]
+    assert func_row["total"] == 3
+    assert func_row["avg_value"] is not None
+    assert "test1" in func_row["all_names"]
+    assert func_row["version"] is not None
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -200,10 +196,6 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     """)
 
     result = duckdb_session.execute("SELECT * FROM duckdb_test_adbc")
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-
     row = result.get_data()[0]
     assert row["name"] == "DuckDB Test"
     assert row["numbers"] == [1, 2, 3, 4, 5]
@@ -222,48 +214,6 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
         FROM duckdb_test_adbc
     """)
 
-    assert analytical_result.data is not None
     assert analytical_result.get_data()[0]["array_len"] == 5
     assert analytical_result.get_data()[0]["numbers_sum"] == 15
     assert analytical_result.get_data()[0]["json_type"] == "test"
-
-
-@pytest.mark.xdist_group("postgres")
-@pytest.mark.adbc
-def test_postgresql_dialect_detection(postgresql_session: AdbcDriver) -> None:
-    """Test PostgreSQL dialect detection in ADBC driver."""
-    assert hasattr(postgresql_session, "dialect")
-    assert postgresql_session.dialect in ["postgres", "postgresql"]
-
-    result = postgresql_session.execute("SELECT $1 as param_value", ("postgresql_test",))
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_data()[0]["param_value"] == "postgresql_test"
-
-
-@pytest.mark.xdist_group("sqlite")
-@pytest.mark.adbc
-def test_sqlite_adbc_dialect_detection(sqlite_session: AdbcDriver) -> None:
-    """Test SQLite dialect detection in ADBC driver."""
-    assert hasattr(sqlite_session, "dialect")
-    assert sqlite_session.dialect == "sqlite"
-
-    result = sqlite_session.execute("SELECT ? as param_value", ("test_sqlite_adbc",))
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_data()[0]["param_value"] == "test_sqlite_adbc"
-
-
-@pytest.mark.xdist_group("duckdb")
-@pytest.mark.adbc
-@xfail_if_driver_missing
-def test_duckdb_dialect_detection(duckdb_session: AdbcDriver) -> None:
-    """Test DuckDB dialect detection in ADBC driver."""
-
-    assert hasattr(duckdb_session, "dialect")
-    assert duckdb_session.dialect == "duckdb"
-
-    result = duckdb_session.execute("SELECT ? as param_value", ("duckdb_test_adbc",))
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_data()[0]["param_value"] == "duckdb_test_adbc"

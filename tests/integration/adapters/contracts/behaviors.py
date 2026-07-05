@@ -3015,18 +3015,32 @@ async def _oracle_param_codecs_async(driver: object, case: DriverCase) -> None:
 
 
 def _adbc_postgres_param_codecs(driver: object, case: DriverCase) -> None:
-    """Fold ADBC-PostgreSQL params: NULL-literal pruning, repeated NULL, RETURNING+NULL, JSONB cast, count-mismatch."""
+    """Fold ADBC-PostgreSQL params and Arrow-backed result codecs."""
     from datetime import date
 
     sync_driver = cast("SyncContractDriver", driver)
     items = _pc_table(case, "items")
     jsonb = _pc_table(case, "jsonb")
+    types = _pc_table(case, "types")
     _sync_drop_table(sync_driver, items)
     _sync_drop_table(sync_driver, jsonb)
+    _sync_drop_table(sync_driver, types)
     sync_driver.execute(
         f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, active BOOLEAN, created_date DATE)"
     )
     sync_driver.execute(f"CREATE TABLE {jsonb} (id INTEGER PRIMARY KEY, metadata JSONB, config JSONB)")
+    sync_driver.execute(
+        f"CREATE TABLE {types} ("
+        "id SERIAL PRIMARY KEY, "
+        "label TEXT, "
+        "amount NUMERIC(10, 2), "
+        "flag BOOLEAN, "
+        "tags TEXT[], "
+        "big_integer BIGINT, "
+        "small_integer SMALLINT, "
+        "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    )
     sync_driver.commit()
     try:
         pruned = sync_driver.execute(
@@ -3080,19 +3094,70 @@ def _adbc_postgres_param_codecs(driver: object, case: DriverCase) -> None:
         assert jrow[0]["active"] == "true"
         assert jrow[0]["config"] is None
 
+        sync_driver.execute(
+            f"INSERT INTO {types} (label, amount, flag, tags, big_integer, small_integer) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            "Product A",
+            Decimal("19.99"),
+            True,
+            ["electronics", "gadget"],
+            9223372036854775807,
+            32767,
+        )
+        sync_driver.execute(
+            f"INSERT INTO {types} (label, amount, flag, tags, big_integer, small_integer) "
+            "VALUES ($1, NULL, NULL, NULL, $2, $3)",
+            "Null Product",
+            -9223372036854775808,
+            -32768,
+        )
+        sync_driver.commit()
+        typed = sync_driver.execute(
+            f"SELECT label, amount, flag, tags, big_integer, small_integer FROM {types} ORDER BY id"
+        ).get_data()
+        assert typed[0]["label"] == "Product A"
+        assert float(typed[0]["amount"]) == 19.99
+        assert typed[0]["flag"] is True
+        assert typed[0]["tags"] == ["electronics", "gadget"]
+        assert typed[0]["big_integer"] == 9223372036854775807
+        assert typed[0]["small_integer"] == 32767
+        assert typed[1]["amount"] is None
+        assert typed[1]["flag"] is None
+        assert typed[1]["tags"] is None
+        assert typed[1]["big_integer"] == -9223372036854775808
+        assert typed[1]["small_integer"] == -32768
+
+        alias_result = sync_driver.execute(
+            f"SELECT label AS product_name, amount AS product_price, flag AS is_available "
+            f"FROM {types} WHERE label = $1",
+            "Product A",
+        )
+        assert {"product_name", "product_price", "is_available"} <= set(alias_result.column_names)
+        alias_row = alias_result.get_data()[0]
+        assert alias_row["product_name"] == "Product A"
+        assert float(alias_row["product_price"]) == 19.99
+        assert alias_row["is_available"] is True
+
         with pytest.raises(SQLSpecError):
             sync_driver.execute(f"INSERT INTO {items} (id, name) VALUES ($1, $2)", 30, None, "extra")
     finally:
         _sync_drop_table(sync_driver, items)
         _sync_drop_table(sync_driver, jsonb)
+        _sync_drop_table(sync_driver, types)
 
 
 def _adbc_sqlite_param_codecs(driver: object, case: DriverCase) -> None:
-    """Fold ADBC-SQLite params: qmark placeholders preserve NULLs and boolean values."""
+    """Fold ADBC-SQLite params and dynamic/binary Arrow-backed result codecs."""
     sync_driver = cast("SyncContractDriver", driver)
     items = _pc_table(case, "items")
+    dynamic = _pc_table(case, "dynamic")
+    binary = _pc_table(case, "binary")
     _sync_drop_table(sync_driver, items)
+    _sync_drop_table(sync_driver, dynamic)
+    _sync_drop_table(sync_driver, binary)
     sync_driver.execute(f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, active BOOLEAN)")
+    sync_driver.execute(f"CREATE TABLE {dynamic} (id INTEGER PRIMARY KEY, flexible_column)")
+    sync_driver.execute(f"CREATE TABLE {binary} (id INTEGER PRIMARY KEY, name TEXT, data BLOB)")
     try:
         inserted = sync_driver.execute(
             f"INSERT INTO {items} (id, name, value, active) VALUES (?, ?, ?, ?)", 1, None, None, True
@@ -3102,17 +3167,50 @@ def _adbc_sqlite_param_codecs(driver: object, case: DriverCase) -> None:
         assert row["name"] is None
         assert row["value"] is None
         assert row["active"] in (True, 1)
+
+        flexible_data = [(1, "text_value"), (2, 42), (3, math.pi), (4, b"binary_data"), (5, None)]
+        for row_id, value in flexible_data:
+            sync_driver.execute(f"INSERT INTO {dynamic} (id, flexible_column) VALUES (?, ?)", row_id, value)
+        dynamic_rows = sync_driver.execute(
+            f"SELECT id, flexible_column, typeof(flexible_column) AS column_type FROM {dynamic} ORDER BY id"
+        ).get_data()
+        assert dynamic_rows[0]["flexible_column"] in ("text_value", b"text_value")
+        assert dynamic_rows[1]["flexible_column"] in (42, b"42")
+        assert dynamic_rows[4]["flexible_column"] is None
+        types_found = {row["column_type"].lower() for row in dynamic_rows if row["column_type"]}
+        assert {"text", "integer", "real"} <= types_found
+
+        binary_rows = [
+            (1, "small", b"small data"),
+            (2, "empty", b""),
+            (3, "null", None),
+            (4, "large", b"x" * 1000),
+            (5, "range", bytes(range(256))),
+        ]
+        sync_driver.execute_many(f"INSERT INTO {binary} (id, name, data) VALUES (?, ?, ?)", binary_rows)
+        blob_rows = sync_driver.execute(
+            f"SELECT id, name, data, length(data) AS data_size FROM {binary} ORDER BY id"
+        ).get_data()
+        assert blob_rows[0]["data"] == b"small data"
+        assert blob_rows[1]["data"] == b""
+        assert blob_rows[2]["data"] is None
+        assert blob_rows[3]["data_size"] == 1000
+        assert blob_rows[4]["data"] == bytes(range(256))
     finally:
         _sync_drop_table(sync_driver, items)
+        _sync_drop_table(sync_driver, dynamic)
+        _sync_drop_table(sync_driver, binary)
 
 
 def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
-    """Fold ADBC-DuckDB params: numeric placeholders with backend DDL, qmark feeding the native Arrow path."""
+    """Fold ADBC-DuckDB params and nested/list/map Arrow-backed result codecs."""
     from sqlspec.typing import PYARROW_INSTALLED
 
     sync_driver = cast("SyncContractDriver", driver)
     items = _pc_table(case, "items")
+    advanced = _pc_table(case, "advanced")
     _sync_drop_table(sync_driver, items)
+    _sync_drop_table(sync_driver, advanced)
     sync_driver.execute(f"CREATE TABLE {items} (id INTEGER PRIMARY KEY, name VARCHAR, value INTEGER)")
     try:
         for entry in [(1, "low", 10), (2, "mid", 20), (3, "high", 30)]:
@@ -3127,8 +3225,37 @@ def _adbc_duckdb_param_codecs(driver: object, case: DriverCase) -> None:
             frame = arrow.to_pandas()
             assert list(frame["name"]) == ["mid", "high"]
             assert list(frame["value"]) == [20, 30]
+
+        sync_driver.execute(
+            f"CREATE TABLE {advanced} ("
+            "id INTEGER, "
+            "numbers INTEGER[], "
+            "nested_data STRUCT(name VARCHAR, values INTEGER[]), "
+            "map_data MAP(VARCHAR, INTEGER), "
+            "json_col JSON"
+            ")"
+        )
+        sync_driver.execute(
+            f"INSERT INTO {advanced} VALUES ("
+            "1, "
+            "[1, 2, 3, 4, 5], "
+            "{'name': 'nested', 'values': [10, 20, 30]}, "
+            "MAP(['key1', 'key2'], [100, 200]), "
+            "'{\"type\": \"test\", \"version\": 1}'"
+            ")"
+        )
+        advanced_row = sync_driver.execute(
+            f"SELECT id, numbers, nested_data, map_data, json_extract_string(json_col, '$.type') AS json_type "
+            f"FROM {advanced}"
+        ).get_data()[0]
+        assert advanced_row["id"] == 1
+        assert advanced_row["numbers"] == [1, 2, 3, 4, 5]
+        assert advanced_row["nested_data"] is not None
+        assert advanced_row["map_data"] is not None
+        assert advanced_row["json_type"] == "test"
     finally:
         _sync_drop_table(sync_driver, items)
+        _sync_drop_table(sync_driver, advanced)
 
 
 def _bigquery_param_codecs(driver: object, case: DriverCase) -> None:
