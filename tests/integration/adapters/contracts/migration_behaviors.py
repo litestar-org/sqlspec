@@ -3,12 +3,23 @@
 import contextlib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import pytest
+
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from sqlspec.utils.text import quote_identifier
 from tests.integration.adapters.contracts._migration_cases import MigrationCase
 
 
 def _migration_paths(case: MigrationCase, behavior: str, tmp_path: Path) -> "tuple[str, str, str, str]":
+    if case.adapter == "oracledb":
+        token = f"ora_{case.mode[0]}_{behavior[:5]}_{uuid4().hex[:4]}"
+        script_location = str(tmp_path / f"mig_{token}")
+        version_table = f"dm_{token}".upper()
+        table = f"mu_{token}".upper()
+        return token, script_location, version_table, table
     token = f"{case.id}_{behavior}".replace("-", "_")
     script_location = str(tmp_path / f"mig_{token}")
     version_table = f"ddl_mig_{token}"
@@ -16,29 +27,41 @@ def _migration_paths(case: MigrationCase, behavior: str, tmp_path: Path) -> "tup
     return token, script_location, version_table, table
 
 
-def _create_table_migration(table: str) -> str:
+def _create_table_migration(case: MigrationCase, table: str) -> str:
+    if case.adapter == "oracledb":
+        create_sql = f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)"
+        drop_sql = f"DROP TABLE {table}"
+    else:
+        create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
+        drop_sql = f"DROP TABLE IF EXISTS {table}"
     return f'''"""Create {table}."""
 
 
 def up():
     """Create the table."""
-    return ["CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"]
+    return ["{create_sql}"]
 
 
 def down():
     """Drop the table."""
-    return ["DROP TABLE IF EXISTS {table}"]
+    return ["{drop_sql}"]
 '''
 
 
-def _seeded_table_migration(table: str) -> str:
+def _seeded_table_migration(case: MigrationCase, table: str) -> str:
+    if case.adapter == "oracledb":
+        create_sql = f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)"
+        drop_sql = f"DROP TABLE {table}"
+    else:
+        create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
+        drop_sql = f"DROP TABLE IF EXISTS {table}"
     return f'''"""Create {table} with seed rows."""
 
 
 def up():
     """Create the table and seed two rows."""
     return [
-        "CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)",
+        "{create_sql}",
         "INSERT INTO {table} (id, name) VALUES (1, 'first')",
         "INSERT INTO {table} (id, name) VALUES (2, 'second')",
     ]
@@ -46,7 +69,7 @@ def up():
 
 def down():
     """Drop the table."""
-    return ["DROP TABLE IF EXISTS {table}"]
+    return ["{drop_sql}"]
 '''
 
 
@@ -69,8 +92,72 @@ def _build(make_config: Any, script_location: str, version_table: str, suffix: s
     return make_config(script_location=script_location, version_table_name=version_table, suffix=suffix)
 
 
+def _build_with_schema(
+    make_config: Any,
+    script_location: str,
+    version_table: str,
+    suffix: str,
+    *,
+    default_schema: str | None = None,
+    version_table_schema: str | None = None,
+) -> Any:
+    return make_config(
+        script_location=script_location,
+        version_table_name=version_table,
+        suffix=suffix,
+        default_schema=default_schema,
+        version_table_schema=version_table_schema,
+    )
+
+
 def _write_migration(script_location: str, filename: str, content: str) -> None:
     (Path(script_location) / filename).write_text(content)
+
+
+def _write_non_transactional_sql_migration(script_location: str, table: str) -> None:
+    (Path(script_location) / "0001_create_unqualified_table.sql").write_text(f"""-- transactional: false
+-- name: migrate-0001-up
+CREATE TABLE {table} (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+-- name: migrate-0001-down
+DROP TABLE IF EXISTS {table};""")
+
+
+def _schema_identifier(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex[:10]}"
+
+
+def _create_schema_sql(schema: str) -> str:
+    return f"CREATE SCHEMA {quote_identifier(schema)}"
+
+
+def _drop_schema_sql(schema: str) -> str:
+    return f"DROP SCHEMA IF EXISTS {quote_identifier(schema)} CASCADE"
+
+
+def _default_schema_name(case: MigrationCase) -> str:
+    return "main" if case.schema_dialect == "duckdb" else "public"
+
+
+def _table_exists_in_schema_sync(driver: Any, schema: str, table: str) -> bool:
+    result = driver.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = :schema AND table_name = :table",
+        schema=schema,
+        table=table,
+    )
+    return bool(result.data)
+
+
+async def _table_exists_in_schema_async(driver: Any, schema: str, table: str) -> bool:
+    result = await driver.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = :schema AND table_name = :table",
+        schema=schema,
+        table=table,
+    )
+    return bool(result.data)
 
 
 def _table_exists_sync(config: Any, table: str) -> bool:
@@ -114,7 +201,7 @@ def assert_sync_migration_full_workflow_contract(make_config: Any, case: Migrati
     try:
         commands = SyncMigrationCommands(config)
         commands.init(script_location, package=True)
-        _write_migration(script_location, "0001_create.py", _create_table_migration(table))
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
 
         commands.upgrade()
         assert _table_exists_sync(config, table)
@@ -136,7 +223,7 @@ async def assert_async_migration_full_workflow_contract(make_config: Any, case: 
     try:
         commands = AsyncMigrationCommands(config)
         await commands.init(script_location, package=True)
-        _write_migration(script_location, "0001_create.py", _create_table_migration(table))
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
 
         await commands.upgrade()
         assert await _table_exists_async(config, table)
@@ -159,8 +246,8 @@ def assert_sync_migration_multiple_contract(make_config: Any, case: MigrationCas
     try:
         commands = SyncMigrationCommands(config)
         commands.init(script_location, package=True)
-        _write_migration(script_location, "0001_first.py", _create_table_migration(table))
-        _write_migration(script_location, "0002_second.py", _create_table_migration(second_table))
+        _write_migration(script_location, "0001_first.py", _create_table_migration(case, table))
+        _write_migration(script_location, "0002_second.py", _create_table_migration(case, second_table))
 
         commands.upgrade()
         assert _table_exists_sync(config, table)
@@ -185,8 +272,8 @@ async def assert_async_migration_multiple_contract(make_config: Any, case: Migra
     try:
         commands = AsyncMigrationCommands(config)
         await commands.init(script_location, package=True)
-        _write_migration(script_location, "0001_first.py", _create_table_migration(table))
-        _write_migration(script_location, "0002_second.py", _create_table_migration(second_table))
+        _write_migration(script_location, "0001_first.py", _create_table_migration(case, table))
+        _write_migration(script_location, "0002_second.py", _create_table_migration(case, second_table))
 
         await commands.upgrade()
         assert await _table_exists_async(config, table)
@@ -212,7 +299,7 @@ def assert_sync_migration_current_contract(make_config: Any, case: MigrationCase
         commands.init(script_location, package=True)
         assert commands.current() in (None, "base")
 
-        _write_migration(script_location, "0001_create.py", _create_table_migration(table))
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
         commands.upgrade()
         assert commands.current() == "0001"
 
@@ -231,7 +318,7 @@ async def assert_async_migration_current_contract(make_config: Any, case: Migrat
         await commands.init(script_location, package=True)
         assert await commands.current() in (None, "base")
 
-        _write_migration(script_location, "0001_create.py", _create_table_migration(table))
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
         await commands.upgrade()
         assert await commands.current() == "0001"
 
@@ -280,7 +367,7 @@ def assert_sync_migration_multi_statement_contract(make_config: Any, case: Migra
     try:
         commands = SyncMigrationCommands(config)
         commands.init(script_location, package=True)
-        _write_migration(script_location, "0001_seed.py", _seeded_table_migration(table))
+        _write_migration(script_location, "0001_seed.py", _seeded_table_migration(case, table))
 
         commands.upgrade()
         with config.provide_session() as driver:
@@ -302,7 +389,7 @@ async def assert_async_migration_multi_statement_contract(
     try:
         commands = AsyncMigrationCommands(config)
         await commands.init(script_location, package=True)
-        _write_migration(script_location, "0001_seed.py", _seeded_table_migration(table))
+        _write_migration(script_location, "0001_seed.py", _seeded_table_migration(case, table))
 
         await commands.upgrade()
         async with config.provide_session() as driver:
@@ -312,4 +399,274 @@ async def assert_async_migration_multi_statement_contract(
         await commands.downgrade("base")
         assert not await _table_exists_async(config, table)
     finally:
+        await config.close_pool()
+
+
+def assert_sync_migration_default_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Sync migrations run unqualified DDL in the configured default schema."""
+    if not case.supports_default_schema:
+        pytest.skip(f"{case.adapter} has no default-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "schema", tmp_path)
+    schema = _schema_identifier(f"{case.adapter}_default")
+    config = _build_with_schema(make_config, script_location, version_table, token, default_schema=schema)
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(_create_schema_sql(schema))
+            driver.commit()
+
+        commands = SyncMigrationCommands(config)
+        commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert _table_exists_in_schema_sync(driver, schema, table)
+            assert _table_exists_in_schema_sync(driver, schema, version_table)
+            assert not _table_exists_in_schema_sync(driver, "public", table)
+    finally:
+        with contextlib.suppress(Exception):
+            with config.provide_session() as driver:
+                driver.execute_script(_drop_schema_sql(schema))
+                driver.commit()
+        config.close_pool()
+
+
+async def assert_async_migration_default_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Async migrations run unqualified DDL in the configured default schema."""
+    if not case.supports_default_schema:
+        pytest.skip(f"{case.adapter} has no default-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "schema", tmp_path)
+    schema = _schema_identifier(f"{case.adapter}_default")
+    config = _build_with_schema(make_config, script_location, version_table, token, default_schema=schema)
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script(_create_schema_sql(schema))
+            await driver.commit()
+
+        commands = AsyncMigrationCommands(config)
+        await commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+        await commands.upgrade()
+
+        async with config.provide_session() as driver:
+            assert await _table_exists_in_schema_async(driver, schema, table)
+            assert await _table_exists_in_schema_async(driver, schema, version_table)
+            assert not await _table_exists_in_schema_async(driver, "public", table)
+    finally:
+        with contextlib.suppress(Exception):
+            async with config.provide_session() as driver:
+                await driver.execute_script(_drop_schema_sql(schema))
+                await driver.commit()
+        await config.close_pool()
+
+
+def assert_sync_migration_multi_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Sync migrations can separate migrated DDL and tracker schemas."""
+    if not case.supports_multi_schema_migrations:
+        pytest.skip(f"{case.adapter} has no multi-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "multischema", tmp_path)
+    default_schema = _schema_identifier(f"{case.adapter}_default")
+    tracker_schema = _schema_identifier(f"{case.adapter}_tracker")
+    config = _build_with_schema(
+        make_config,
+        script_location,
+        version_table,
+        token,
+        default_schema=default_schema,
+        version_table_schema=tracker_schema,
+    )
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(_create_schema_sql(default_schema))
+            driver.execute_script(_create_schema_sql(tracker_schema))
+            driver.commit()
+
+        commands = SyncMigrationCommands(config)
+        commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert _table_exists_in_schema_sync(driver, default_schema, table)
+            assert _table_exists_in_schema_sync(driver, tracker_schema, version_table)
+            assert not _table_exists_in_schema_sync(driver, default_schema, version_table)
+    finally:
+        with contextlib.suppress(Exception):
+            with config.provide_session() as driver:
+                driver.execute_script(_drop_schema_sql(default_schema))
+                driver.execute_script(_drop_schema_sql(tracker_schema))
+                driver.commit()
+        config.close_pool()
+
+
+async def assert_async_migration_multi_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Async migrations can separate migrated DDL and tracker schemas."""
+    if not case.supports_multi_schema_migrations:
+        pytest.skip(f"{case.adapter} has no multi-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "multischema", tmp_path)
+    default_schema = _schema_identifier(f"{case.adapter}_default")
+    tracker_schema = _schema_identifier(f"{case.adapter}_tracker")
+    config = _build_with_schema(
+        make_config,
+        script_location,
+        version_table,
+        token,
+        default_schema=default_schema,
+        version_table_schema=tracker_schema,
+    )
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script(_create_schema_sql(default_schema))
+            await driver.execute_script(_create_schema_sql(tracker_schema))
+            await driver.commit()
+
+        commands = AsyncMigrationCommands(config)
+        await commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+        await commands.upgrade()
+
+        async with config.provide_session() as driver:
+            assert await _table_exists_in_schema_async(driver, default_schema, table)
+            assert await _table_exists_in_schema_async(driver, tracker_schema, version_table)
+            assert not await _table_exists_in_schema_async(driver, default_schema, version_table)
+    finally:
+        with contextlib.suppress(Exception):
+            async with config.provide_session() as driver:
+                await driver.execute_script(_drop_schema_sql(default_schema))
+                await driver.execute_script(_drop_schema_sql(tracker_schema))
+                await driver.commit()
+        await config.close_pool()
+
+
+def assert_sync_migration_version_table_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Sync migrations can place the tracker table in a configured schema without changing DDL schema."""
+    if not case.supports_multi_schema_migrations:
+        pytest.skip(f"{case.adapter} has no version-table-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "trackschema", tmp_path)
+    tracker_schema = _schema_identifier(f"{case.adapter}_tracker")
+    config = _build_with_schema(make_config, script_location, version_table, token, version_table_schema=tracker_schema)
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(_create_schema_sql(tracker_schema))
+            driver.commit()
+
+        commands = SyncMigrationCommands(config)
+        commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert _table_exists_in_schema_sync(driver, _default_schema_name(case), table)
+            assert _table_exists_in_schema_sync(driver, tracker_schema, version_table)
+            assert not _table_exists_in_schema_sync(driver, _default_schema_name(case), version_table)
+    finally:
+        with contextlib.suppress(Exception):
+            with config.provide_session() as driver:
+                driver.execute_script(_drop_schema_sql(tracker_schema))
+                driver.commit()
+        config.close_pool()
+
+
+async def assert_async_migration_version_table_schema_contract(
+    make_config: Any, case: MigrationCase, tmp_path: Path
+) -> None:
+    """Async migrations can place the tracker table in a configured schema without changing DDL schema."""
+    if not case.supports_multi_schema_migrations:
+        pytest.skip(f"{case.adapter} has no version-table-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "trackschema", tmp_path)
+    tracker_schema = _schema_identifier(f"{case.adapter}_tracker")
+    config = _build_with_schema(make_config, script_location, version_table, token, version_table_schema=tracker_schema)
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script(_create_schema_sql(tracker_schema))
+            await driver.commit()
+
+        commands = AsyncMigrationCommands(config)
+        await commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+        await commands.upgrade()
+
+        async with config.provide_session() as driver:
+            assert await _table_exists_in_schema_async(driver, _default_schema_name(case), table)
+            assert await _table_exists_in_schema_async(driver, tracker_schema, version_table)
+            assert not await _table_exists_in_schema_async(driver, _default_schema_name(case), version_table)
+    finally:
+        with contextlib.suppress(Exception):
+            async with config.provide_session() as driver:
+                await driver.execute_script(_drop_schema_sql(tracker_schema))
+                await driver.commit()
+        await config.close_pool()
+
+
+def assert_sync_migration_missing_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Sync migrations fail before touching public schema when the configured schema is absent."""
+    if not case.supports_missing_schema_validation:
+        pytest.skip(f"{case.adapter} has no missing-schema validation contract")
+    token, script_location, version_table, table = _migration_paths(case, "misschema", tmp_path)
+    schema = _schema_identifier(f"{case.adapter}_missing")
+    config = _build_with_schema(make_config, script_location, version_table, token, default_schema=schema)
+    try:
+        commands = SyncMigrationCommands(config)
+        commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+
+        with pytest.raises(MigrationError, match=f"Configured schema '{schema}' does not exist"):
+            commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert not _table_exists_in_schema_sync(driver, "public", version_table)
+            assert not _table_exists_in_schema_sync(driver, "public", table)
+    finally:
+        config.close_pool()
+
+
+async def assert_async_migration_missing_schema_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Async migrations fail before touching public schema when the configured schema is absent."""
+    if not case.supports_missing_schema_validation:
+        pytest.skip(f"{case.adapter} has no missing-schema validation contract")
+    token, script_location, version_table, table = _migration_paths(case, "misschema", tmp_path)
+    schema = _schema_identifier(f"{case.adapter}_missing")
+    config = _build_with_schema(make_config, script_location, version_table, token, default_schema=schema)
+    try:
+        commands = AsyncMigrationCommands(config)
+        await commands.init(script_location, package=True)
+        _write_migration(script_location, "0001_create.py", _create_table_migration(case, table))
+
+        with pytest.raises(MigrationError, match=f"Configured schema '{schema}' does not exist"):
+            await commands.upgrade()
+
+        async with config.provide_session() as driver:
+            assert not await _table_exists_in_schema_async(driver, "public", version_table)
+            assert not await _table_exists_in_schema_async(driver, "public", table)
+    finally:
+        await config.close_pool()
+
+
+async def assert_async_migration_non_transactional_default_schema_contract(
+    make_config: Any, case: MigrationCase, tmp_path: Path
+) -> None:
+    """Async non-transactional SQL migrations honor the configured default schema."""
+    if not case.supports_non_transactional_default_schema:
+        pytest.skip(f"{case.adapter} has no non-transactional default-schema migration support")
+    token, script_location, version_table, table = _migration_paths(case, "nontxschema", tmp_path)
+    schema = _schema_identifier(f"{case.adapter}_default")
+    config = _build_with_schema(make_config, script_location, version_table, token, default_schema=schema)
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script(_create_schema_sql(schema))
+            await driver.commit()
+
+        commands = AsyncMigrationCommands(config)
+        await commands.init(script_location, package=True)
+        _write_non_transactional_sql_migration(script_location, table)
+        await commands.upgrade()
+
+        async with config.provide_session() as driver:
+            assert await _table_exists_in_schema_async(driver, schema, table)
+            assert not await _table_exists_in_schema_async(driver, "public", table)
+    finally:
+        with contextlib.suppress(Exception):
+            async with config.provide_session() as driver:
+                await driver.execute_script(_drop_schema_sql(schema))
+                await driver.commit()
         await config.close_pool()

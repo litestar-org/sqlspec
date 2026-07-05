@@ -14,6 +14,7 @@ from tests.integration.adapters.contracts._cases import (
     async_driver_params_with,
     sync_driver_params_with,
 )
+from tests.integration.adapters.contracts._migration_cases import ACTIVE_MIGRATION_CASES
 from tests.integration.adapters.contracts._inputs import (
     PARAMETER_STYLE_EXECUTE_MANY_PARAMS,
     PARAMETER_STYLE_EXECUTE_PARAMS,
@@ -38,6 +39,31 @@ DATA_DICTIONARY_CASE_IDS = {
     "psycopg-async",
     "psycopg-sync",
     "psqlpy-async",
+    "sqlite-sync",
+}
+DEFAULT_SCHEMA_MIGRATION_CASE_IDS = {
+    "adbc-postgres-sync",
+    "asyncpg-async",
+    "duckdb-sync",
+    "psqlpy-async",
+    "psycopg-async",
+    "psycopg-sync",
+}
+MIGRATION_LIFECYCLE_CASE_IDS = {
+    "adbc-postgres-sync",
+    "adbc-sqlite-sync",
+    "aiomysql-async",
+    "aiosqlite-async",
+    "asyncmy-async",
+    "asyncpg-async",
+    "duckdb-sync",
+    "mysqlconnector-async",
+    "oracledb-async",
+    "oracledb-sync",
+    "psqlpy-async",
+    "psycopg-async",
+    "psycopg-sync",
+    "pymysql-sync",
     "sqlite-sync",
 }
 
@@ -103,6 +129,19 @@ def test_data_dictionary_cases_are_contract_owned() -> None:
     cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in DATA_DICTIONARY_CASE_IDS}
     assert set(cases) == DATA_DICTIONARY_CASE_IDS
     assert all(case.supports_data_dictionary for case in cases.values())
+
+
+def test_default_schema_migration_cases_are_contract_owned() -> None:
+    """Default-schema migration behavior belongs to the shared migration contract."""
+    cases = {case.id: case for case in ACTIVE_MIGRATION_CASES if case.id in DEFAULT_SCHEMA_MIGRATION_CASE_IDS}
+    assert set(cases) == DEFAULT_SCHEMA_MIGRATION_CASE_IDS
+    assert all(case.supports_default_schema for case in cases.values())
+
+
+def test_migration_lifecycle_cases_are_contract_owned() -> None:
+    """Migration lifecycle behavior belongs to the shared migration contract."""
+    cases = {case.id: case for case in ACTIVE_MIGRATION_CASES}
+    assert set(cases) == MIGRATION_LIFECYCLE_CASE_IDS
 
 
 def test_adk_capability_params_match_requested_capability() -> None:

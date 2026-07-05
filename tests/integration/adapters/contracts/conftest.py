@@ -1237,10 +1237,24 @@ def migration_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
 def migration_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
     """Build DuckDB configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> DuckDBConfig:
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> DuckDBConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
         return DuckDBConfig(
-            connection_config={"database": str(tmp_path / f"mig_{suffix}.duckdb")},
-            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+            connection_config={"database": str(tmp_path / f"mig_{suffix}.duckdb")}, migration_config=migration_config
         )
 
     return make
@@ -1314,13 +1328,54 @@ def migration_config_mysqlconnector_async(mysql_service: MySQLService) -> Callab
 
 
 @pytest.fixture
+def migration_config_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build asyncpg configs for migration contract tests."""
+
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> AsyncpgConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return AsyncpgConfig(
+            connection_config=_postgres_connection_config(postgres_service), migration_config=migration_config
+        )
+
+    return make
+
+
+@pytest.fixture
 def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
     """Build psycopg sync configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsycopgSyncConfig:
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PsycopgSyncConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
         return PsycopgSyncConfig(
-            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
-            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)}, migration_config=migration_config
         )
 
     return make
@@ -1330,10 +1385,24 @@ def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable
 def migration_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
     """Build psycopg async configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsycopgAsyncConfig:
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PsycopgAsyncConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
         return PsycopgAsyncConfig(
-            connection_config={"conninfo": _postgres_conninfo(postgres_service)},
-            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+            connection_config={"conninfo": _postgres_conninfo(postgres_service)}, migration_config=migration_config
         )
 
     return make
@@ -1343,9 +1412,92 @@ def migration_config_psycopg_async(postgres_service: PostgresService) -> Callabl
 def migration_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
     """Build psqlpy configs for migration contract tests."""
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PsqlpyConfig:
-        return PsqlpyConfig(
-            connection_config={"dsn": _psqlpy_dsn(postgres_service)},
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PsqlpyConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return PsqlpyConfig(connection_config={"dsn": _psqlpy_dsn(postgres_service)}, migration_config=migration_config)
+
+    return make
+
+
+@pytest.fixture
+def migration_config_adbc_postgres(postgres_service: PostgresService) -> Callable[..., Any]:
+    """Build ADBC PostgreSQL configs for migration contract tests."""
+
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> AdbcConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return AdbcConfig(
+            connection_config={"uri": _postgres_conninfo(postgres_service), "driver_name": "adbc_driver_postgresql"},
+            migration_config=migration_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
+    """Build ADBC SQLite configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> AdbcConfig:
+        return AdbcConfig(
+            connection_config={
+                "uri": f"file:{tmp_path / f'mig_{suffix}.db'}",
+                "driver_name": "adbc_driver_sqlite",
+                "autocommit": True,
+            },
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_oracle_sync(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+    """Build Oracle sync configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> OracleSyncConfig:
+        return OracleSyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_oracle_async(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+    """Build Oracle async configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> OracleAsyncConfig:
+        return OracleAsyncConfig(
+            connection_config=_oracle_pool_params(oracle_23ai_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
         )
 
