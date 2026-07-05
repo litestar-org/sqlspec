@@ -1,6 +1,7 @@
 """Unit tests for Spanner core performance helpers."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
@@ -13,8 +14,12 @@ from sqlspec.adapters.spanner.core import (
 )
 
 
-def _field(name: str, code: TypeCode) -> SimpleNamespace:
+def _field(name: str, code: int) -> SimpleNamespace:
     return SimpleNamespace(name=name, type_=SimpleNamespace(code=code))
+
+
+def _json_object(value: str) -> object:
+    return cast("Any", JsonObject).from_str(value)
 
 
 def test_build_param_type_signature_empty_parameters() -> None:
@@ -73,9 +78,20 @@ def test_collect_rows_returns_original_rows_without_a_plan() -> None:
     assert column_names == ["id", "payload"]
 
 
+def test_collect_rows_normalizes_list_rows_without_a_plan() -> None:
+    fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.STRING)]
+    rows: list[Any] = [[1, '{"kind":"string"}']]
+
+    data, column_names = collect_rows(rows, fields, column_names=["id", "payload"], column_plan=None)
+
+    assert data == [(1, '{"kind":"string"}')]
+    assert data is not rows
+    assert column_names == ["id", "payload"]
+
+
 def test_collect_rows_applies_json_plan_to_metadata_only() -> None:
     fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON), _field("note", TypeCode.STRING)]
-    rows = [(1, JsonObject.from_str('{"kind":"payload"}'), '{"kind":"string"}')]
+    rows = [(1, _json_object('{"kind":"payload"}'), '{"kind":"string"}')]
     json_calls: list[str] = []
 
     def json_deserializer(value: str) -> dict[str, str]:

@@ -1,7 +1,7 @@
 """Oracle Driver"""
 
 import logging
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, SchemaT, StatementParameters
 
 __all__ = (
     "OracleAsyncDriver",
@@ -106,12 +106,11 @@ def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
 
 def _row_has_async_readable(row: Any) -> bool:
     if isinstance(row, dict):
-        values = row.values()
-    else:
-        try:
-            values = row if isinstance(row, (list, tuple)) else tuple(row)
-        except TypeError:
-            values = (row,)
+        return any(is_async_readable(value) for value in row.values())
+    try:
+        values = row if isinstance(row, (list, tuple)) else tuple(row)
+    except TypeError:
+        values = (row,)
     return any(is_async_readable(value) for value in values)
 
 
@@ -543,17 +542,43 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             prefetchrows=self.driver_features.get("prefetchrows"),
         )
 
+    @overload
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: type[Any] | None = None,
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         chunk_size: int = 1000,
         native_only: bool = False,
         **kwargs: Any,
-    ) -> "SyncRowStream[Any] | SyncRowStream[dict[str, Any]]":
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
         """Execute a query and stream rows in chunks with Oracle fetch tuning."""
         fetch_lobs = cast("bool | None", kwargs.pop("fetch_lobs", None))
         if chunk_size < 1:
@@ -1176,17 +1201,43 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             prefetchrows=self.driver_features.get("prefetchrows"),
         )
 
+    @overload
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
         /,
         *parameters: "StatementParameters | StatementFilter",
-        schema_type: type[Any] | None = None,
+        schema_type: "type[SchemaT]",
         statement_config: "StatementConfig | None" = None,
         chunk_size: int = 1000,
         native_only: bool = False,
         **kwargs: Any,
-    ) -> "AsyncRowStream[Any] | AsyncRowStream[dict[str, Any]]":
+    ) -> "AsyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT] | AsyncRowStream[dict[str, Any]]":
         """Execute a query and stream rows in chunks with Oracle fetch tuning."""
         fetch_lobs = cast("bool | None", kwargs.pop("fetch_lobs", None))
         if chunk_size < 1:

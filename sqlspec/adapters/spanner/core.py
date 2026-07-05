@@ -1,7 +1,7 @@
 """Spanner adapter compiled helpers."""
 
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.data_types import JsonObject
@@ -151,7 +151,7 @@ def resolve_column_names(fields: "Sequence[Any] | None", cache: "dict[int, tuple
 def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
     """Convert a native Spanner JSON cell using the configured deserializer."""
     if isinstance(value, JsonObject):
-        json_value = value.serialize()
+        json_value = cast("Any", value).serialize()
     elif isinstance(value, str):
         json_value = value
     else:
@@ -229,8 +229,10 @@ def collect_rows(
         Tuple of (rows, column_names).
     """
     resolved_column_names = column_names if column_names is not None else [field.name for field in fields]
-    if column_plan is None:
+    if column_plan is None and all(type(row) is tuple for row in rows):
         return rows, resolved_column_names
+    if column_plan is None:
+        return [tuple(row) for row in rows], resolved_column_names
 
     data: list[Any] = []
     append = data.append

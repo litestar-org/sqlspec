@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Iterator
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 
 import sqlglot as _sqlglot
 from sqlglot import exp as _sqlglot_exp
@@ -155,6 +155,7 @@ class _SpannerSelectStreamSource:
         "_column_names",
         "_column_plan",
         "_driver",
+        "_execute_kwargs",
         "_param_types",
         "_params",
         "_result_set",
@@ -169,12 +170,14 @@ class _SpannerSelectStreamSource:
         params: "dict[str, Any] | None",
         param_types: "dict[str, Any]",
         chunk_size: int,
+        execute_kwargs: "dict[str, Any]",
     ) -> None:
         self._driver = driver
         self._sql = sql
         self._params = params
         self._param_types = param_types
         self._chunk_size = chunk_size
+        self._execute_kwargs = execute_kwargs
         self._column_names: list[str] | None = None
         self._column_plan: tuple[tuple[int, Any], ...] | None = None
         self._result_set: _SpannerResultSetProtocol | None = None
@@ -187,8 +190,28 @@ class _SpannerSelectStreamSource:
                 self._sql,
                 params=self._params,
                 param_types=self._param_types,
-                **self._driver._execute_kwargs(for_read=True),
+                **self._execute_kwargs,
             )
+            self._result_set = result_set
+            self._row_iterator = iter(result_set)
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        result_set = self._result_set
+        row_iterator = self._row_iterator
+        column_names = self._column_names
+        if result_set is None or row_iterator is None:
+            return []
+
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        with handler:
+            rows = list(islice(row_iterator, self._chunk_size))
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+
+        if column_names is None:
             try:
                 metadata = result_set.metadata
                 row_type = metadata.row_type
@@ -202,20 +225,6 @@ class _SpannerSelectStreamSource:
             column_names, column_plan = self._driver._resolve_row_plan(fields)
             self._column_names = column_names
             self._column_plan = column_plan
-            self._result_set = result_set
-            self._row_iterator = iter(result_set)
-        self._driver._check_pending_exception(handler)
-
-    def fetch_chunk(self) -> "list[dict[str, Any]]":
-        result_set = self._result_set
-        row_iterator = self._row_iterator
-        column_names = self._column_names
-        if result_set is None or row_iterator is None or column_names is None:
-            return []
-
-        rows = list(islice(row_iterator, self._chunk_size))
-        if not rows:
-            return []
 
         converted_rows, resolved_column_names = collect_rows(
             rows,
@@ -313,7 +322,14 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         coerced_params = self._coerce_params(params)
         param_types_map = self._infer_param_types(coerced_params)
         return SyncRowStream(
-            _SpannerSelectStreamSource(self, sql, coerced_params, param_types_map, chunk_size)
+            _SpannerSelectStreamSource(
+                self,
+                sql,
+                coerced_params,
+                param_types_map,
+                chunk_size,
+                self._execute_kwargs(for_read=True),
+            )
         )
 
     def dispatch_execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
@@ -471,6 +487,32 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
         finally:
             self._pending_execute_options = previous_options
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
 
     def select_stream(
         self,

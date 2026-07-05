@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 
 class _OracleSyncStreamDriver(Protocol):
     connection: "OracleSyncConnection"
+    driver_features: dict[str, Any]
 
     def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
 
@@ -63,6 +64,7 @@ class _OracleSyncStreamDriver(Protocol):
 
 class _OracleAsyncStreamDriver(Protocol):
     connection: "OracleAsyncConnection"
+    driver_features: dict[str, Any]
 
     def handle_database_exceptions(self) -> "AsyncExceptionHandler": ...
 
@@ -676,7 +678,7 @@ class OracleSyncStreamSource:
             fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
             if self._fetch_lobs is not None:
                 fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-            cursor.execute(self._sql, self._parameters or {}, **fetch_kwargs)
+            cast("Any", cursor).execute(self._sql, self._parameters or {}, **fetch_kwargs)
             self._cursor = cursor
         self._driver._check_pending_exception(handler)
 
@@ -735,7 +737,7 @@ class OracleAsyncStreamSource:
             fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
             if self._fetch_lobs is not None:
                 fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-            await cursor.execute(self._sql, self._parameters or {}, **fetch_kwargs)
+            await cast("Any", cursor).execute(self._sql, self._parameters or {}, **fetch_kwargs)
             self._cursor = cursor
         self._driver._check_pending_exception(handler)
 
