@@ -24,6 +24,7 @@ class SmokeImport(NamedTuple):
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("package", "sqlspec"),
+    SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
@@ -49,6 +50,26 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
 )
 
 
+def _new_smoke_result(
+    *,
+    name: str,
+    module: str,
+    attribute: str | None,
+    compiled_required: bool = False,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "module": module,
+        "attribute": attribute,
+        "imported": False,
+        "compiled": False,
+        "compiled_required": compiled_required,
+        "error": None,
+        "skipped": False,
+        "skip_reason": None,
+    }
+
+
 def is_compiled_module(module: Any) -> bool:
     """Return whether an imported module appears to be a compiled extension."""
     module_file = getattr(module, "__file__", "") or ""
@@ -63,6 +84,36 @@ def _is_missing_optional_dependency(missing_name: str, optional_dependency: str 
         or missing_name.startswith(f"{optional_dependency}.")
         or optional_dependency.startswith(f"{missing_name}.")
     )
+
+
+def _check_sqlspec_construction() -> dict[str, Any]:
+    """Construct SQLSpec surfaces that must work from a compiled wheel."""
+    result = _new_smoke_result(
+        name="sqlspec_construction",
+        module="sqlspec.base",
+        attribute="SQLSpec",
+    )
+    try:
+        base_module = importlib.import_module("sqlspec.base")
+        loader_module = importlib.import_module("sqlspec.loader")
+        sqlite_module = importlib.import_module("sqlspec.adapters.sqlite")
+        SQLSpec = getattr(base_module, "SQLSpec")
+        SQLFileLoader = getattr(loader_module, "SQLFileLoader")
+        SqliteConfig = getattr(sqlite_module, "SqliteConfig")
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(base_module)
+    try:
+        manager = SQLSpec(loader=SQLFileLoader())
+        config = manager.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+        manager.event_channel(config)
+        manager.telemetry_snapshot()
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
@@ -111,17 +162,11 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
     ``_LimitOffsetFilterProvider``, ``_SearchFilterProvider``, and
     ``_OrderByProvider``. The provider module intentionally remains interpreted.
     """
-    result: dict[str, Any] = {
-        "name": "litestar_filter_construction",
-        "module": "sqlspec.extensions.litestar.providers",
-        "attribute": "create_filter_dependencies",
-        "imported": False,
-        "compiled": False,
-        "compiled_required": False,
-        "error": None,
-        "skipped": False,
-        "skip_reason": None,
-    }
+    result = _new_smoke_result(
+        name="litestar_filter_construction",
+        module="sqlspec.extensions.litestar.providers",
+        attribute="create_filter_dependencies",
+    )
     try:
         providers = importlib.import_module("sqlspec.extensions.litestar.providers")
     except ModuleNotFoundError as exc:
@@ -162,17 +207,9 @@ def _check_litestar_filter_construction() -> dict[str, Any]:
 
 def _check_fastapi_filter_construction() -> dict[str, Any]:
     """Construct every generated FastAPI filter provider."""
-    result: dict[str, Any] = {
-        "name": "fastapi_filter_construction",
-        "module": "sqlspec.extensions.fastapi.providers",
-        "attribute": "provide_filters",
-        "imported": False,
-        "compiled": False,
-        "compiled_required": False,
-        "error": None,
-        "skipped": False,
-        "skip_reason": None,
-    }
+    result = _new_smoke_result(
+        name="fastapi_filter_construction", module="sqlspec.extensions.fastapi.providers", attribute="provide_filters"
+    )
     try:
         providers = importlib.import_module("sqlspec.extensions.fastapi.providers")
     except ModuleNotFoundError as exc:
@@ -239,7 +276,7 @@ def _check_fastapi_filter_construction() -> dict[str, Any]:
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     del require_compiled
-    return [_check_fastapi_filter_construction(), _check_litestar_filter_construction()]
+    return [_check_sqlspec_construction(), _check_fastapi_filter_construction(), _check_litestar_filter_construction()]
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

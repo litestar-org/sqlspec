@@ -52,6 +52,7 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
 
     assert {
         "package",
+        "base_sqlspec",
         "async_bridge",
         "core_statement",
         "builder_select",
@@ -68,6 +69,7 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "async_driver",
         "adk_record_types",
         "async_bridge",
+        "base_sqlspec",
         "builder_select",
         "core_statement",
         "data_dictionary_loader",
@@ -124,7 +126,11 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
     results = module.run_construction_checks(require_compiled=False)
 
     assert all(result["imported"] or result["skipped"] for result in results)
-    assert {result["name"] for result in results} == {"fastapi_filter_construction", "litestar_filter_construction"}
+    assert {result["name"] for result in results} == {
+        "fastapi_filter_construction",
+        "litestar_filter_construction",
+        "sqlspec_construction",
+    }
 
 
 def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) -> None:

@@ -123,6 +123,7 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/storage/pipeline.py" in payload["compiled_modules"]
     assert "sqlspec/storage/_paths.py" in payload["compiled_modules"]
     assert "sqlspec/storage/_utils.py" in payload["compiled_modules"]
+    assert "sqlspec/base.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/_loader.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/bigquery.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/dialects/cockroachdb.py" in payload["compiled_modules"]
@@ -181,7 +182,6 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
     hot_surfaces = payload["hot_surfaces"]
 
     expected_candidates = {
-        "sqlspec/base.py",
         "sqlspec/extensions/fastapi/providers.py",
         "sqlspec/extensions/litestar/providers.py",
         "sqlspec/extensions/prometheus/__init__.py",
@@ -204,6 +204,10 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
         assert details["surface"] == "candidate"
         assert details["status"] == "interpreted"
         assert details["reason"]
+
+    assert hot_surfaces["sqlspec/base.py"]["surface"] == "compiled"
+    assert hot_surfaces["sqlspec/base.py"]["status"] == "compiled"
+    assert hot_surfaces["sqlspec/base.py"]["reason"]
 
     for module_path in expected_hard_blocks:
         details = hot_surfaces[module_path]

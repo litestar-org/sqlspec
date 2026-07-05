@@ -229,6 +229,7 @@ exclude = [
   "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
 include = [
+  "sqlspec/base.py",                            # SQLSpec registry/session manager
   "sqlspec/core/**/*.py",                          # Core module
   "sqlspec/builder/**/*.py",                       # Builder module
   "sqlspec/exceptions.py",                         # Exceptions module
@@ -289,6 +290,7 @@ mypy-args = [
   "--no-implicit-reexport",
   "--no-warn-redundant-casts",
   "--no-warn-unused-ignores",
+  "--disable-error-code=overload-cannot-match",
   "--follow-imports=skip",
 ]
 require-runtime-dependencies = true

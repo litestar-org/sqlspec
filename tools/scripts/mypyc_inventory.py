@@ -34,8 +34,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Owns runtime hooks, migration setup, and observability/bootstrap orchestration.",
     },
     "sqlspec/base.py": {
-        "classification": "helper_split_first",
-        "reason": "Registry/session wrappers still manage runtime pool and telemetry orchestration.",
+        "classification": "compile_now",
+        "reason": "SQLSpec registry/session manager is admitted through construction smoke and compiled-wheel coverage.",
     },
     "sqlspec/storage/pipeline.py": {
         "classification": "compile_now",
