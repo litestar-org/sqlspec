@@ -146,8 +146,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Table-backed queue class flags use ClassVar and concrete queue classes are final.",
     },
     "sqlspec/extensions/events/_channel.py": {
-        "classification": "hard_block",
-        "reason": "Owns dynamic native backend imports, listener thread/task lifecycle, and protocol dispatch.",
+        "classification": "compile_now",
+        "reason": "Event channel iteration now uses explicit iterator classes and passes compiled-wheel channel smoke.",
     },
     "sqlspec/extensions/events/_store.py": {
         "classification": "keep_interpreted",

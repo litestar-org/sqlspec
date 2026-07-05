@@ -185,8 +185,8 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
         "reason": "SQLGlot dialect subclass module fails native class import under mypyc.",
     },
     "sqlspec/extensions/events/_channel.py": {
-        "bucket": "hard_block",
-        "reason": "Dynamic native backend import and listener task/thread lifecycle stay interpreted while table queue helpers compile.",
+        "bucket": "compiled",
+        "reason": "Event channel iteration uses explicit iterator classes and is covered by compiled-wheel smoke.",
     },
     "sqlspec/extensions/events/_models.py": {
         "bucket": "compiled",

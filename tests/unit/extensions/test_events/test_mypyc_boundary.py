@@ -36,7 +36,7 @@ def test_compiled_events_modules_do_not_import_interpreted_events_modules() -> N
     """Compiled events helpers should only depend on compiled events siblings."""
     includes, excludes = _events_mypyc_config()
 
-    assert "sqlspec/extensions/events/_channel.py" in excludes
+    assert "sqlspec/extensions/events/_channel.py" in includes
     assert "sqlspec/extensions/events/_models.py" in includes
     assert "sqlspec/extensions/events/_queue.py" in includes
 

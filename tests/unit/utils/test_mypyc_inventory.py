@@ -1,5 +1,6 @@
 """Tests for mypyc inventory and smoke-gate tooling."""
 
+import ast
 import importlib.util
 import json
 import re
@@ -146,6 +147,7 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/extensions/events/_models.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_names.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_payload.py" in payload["compiled_modules"]
+    assert "sqlspec/extensions/events/_channel.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/events/_queue.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/_types.py" in payload["compiled_modules"]
     assert "sqlspec/extensions/adk/memory/_types.py" in payload["compiled_modules"]
@@ -159,7 +161,6 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/adapters/cockroach_psycopg/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/sqlite/driver.py" in payload["interpreted_modules"]
     assert "sqlspec/adapters/aiosqlite/driver.py" in payload["interpreted_modules"]
-    assert "sqlspec/extensions/events/_channel.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/postgres/_paradedb.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/postgres/_pgvector.py" in payload["interpreted_modules"]
     assert "sqlspec/dialects/spanner/_spangres.py" in payload["interpreted_modules"]
@@ -191,7 +192,6 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
         "sqlspec/dialects/postgres/_pgvector.py",
         "sqlspec/dialects/spanner/_spangres.py",
         "sqlspec/dialects/spanner/_spanner.py",
-        "sqlspec/extensions/events/_channel.py",
         "sqlspec/storage/_arrow_payload.py",
         "sqlspec/utils/arrow_helpers.py",
     }
@@ -214,6 +214,7 @@ def test_inventory_records_wave4_candidate_and_hard_block_buckets() -> None:
     for module_path in {
         "sqlspec/extensions/fastapi/providers.py",
         "sqlspec/extensions/litestar/providers.py",
+        "sqlspec/extensions/events/_channel.py",
         "sqlspec/storage/backends/fsspec.py",
         "sqlspec/storage/backends/local.py",
         "sqlspec/storage/backends/obstore.py",
@@ -253,6 +254,20 @@ def test_boundary_map_uses_live_wave4_module_edges() -> None:
         for module_path, details in boundary_map["exclusion_revalidation_seed"].items()
         if module_path in {"sqlspec/extensions/events/_models.py", "sqlspec/extensions/events/_queue.py"}
     )
+
+
+def test_event_channel_module_has_no_async_generators() -> None:
+    """Event channel iteration should stay compatible with compiled-wheel builds."""
+    source_path = PROJECT_ROOT / "sqlspec" / "extensions" / "events" / "_channel.py"
+    module_ast = ast.parse(source_path.read_text(), filename=str(source_path))
+    async_generators = [
+        node.name
+        for node in ast.walk(module_ast)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and any(isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(node))
+    ]
+
+    assert async_generators == []
 
 
 def test_mypy_2_toolchain_policy_is_explicit_and_parallel_gate_is_default() -> None:

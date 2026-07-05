@@ -208,6 +208,137 @@ def _end_event_span(
     runtime.end_span(span, error=error)
 
 
+def _record_event_delivery(
+    runtime: "ObservabilityRuntime",
+    backend_name: str,
+    adapter_name: "str | None",
+    channel: str,
+    event: EventMessage,
+    mode: str,
+) -> None:
+    """Record delivery metrics and debug logging for iterated events."""
+    runtime.increment_metric("events.deliver")
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "event.receive",
+        adapter_name=adapter_name,
+        backend_name=backend_name,
+        channel=channel,
+        event_id=event.event_id,
+        event_type=_resolve_event_type(event.payload, event.metadata),
+        mode=mode,
+    )
+
+
+class _SyncEventIterator:
+    """Explicit sync iterator for event channel consumption."""
+
+    __slots__ = ("_adapter_name", "_backend", "_backend_name", "_channel", "_closed", "_poll_interval", "_runtime")
+
+    def __init__(
+        self,
+        *,
+        backend: "SyncEventBackendProtocol",
+        runtime: "ObservabilityRuntime",
+        backend_name: str,
+        adapter_name: "str | None",
+        channel: str,
+        poll_interval: float,
+    ) -> None:
+        self._backend = backend
+        self._runtime = runtime
+        self._backend_name = backend_name
+        self._adapter_name = adapter_name
+        self._channel = channel
+        self._poll_interval = poll_interval
+        self._closed = False
+
+    def __iter__(self) -> Iterator[EventMessage]:
+        """Return the iterator."""
+        return self
+
+    def __next__(self) -> EventMessage:
+        """Return the next available event."""
+        if self._closed:
+            raise StopIteration
+        while True:
+            span = _start_event_span(
+                self._runtime, "dequeue", self._backend_name, self._adapter_name, self._channel, mode="sync"
+            )
+            try:
+                event = self._backend.dequeue(self._channel, self._poll_interval)
+            except Exception as error:
+                _end_event_span(self._runtime, span, error=error)
+                raise
+            if event is None:
+                _end_event_span(self._runtime, span, result="empty")
+                continue
+            _end_event_span(self._runtime, span, result="delivered")
+            _record_event_delivery(
+                self._runtime, self._backend_name, self._adapter_name, self._channel, event, mode="sync"
+            )
+            return event
+
+    def close(self) -> None:
+        """Close the iterator."""
+        self._closed = True
+
+
+class _AsyncEventIterator:
+    """Explicit async iterator for event channel consumption."""
+
+    __slots__ = ("_adapter_name", "_backend", "_backend_name", "_channel", "_closed", "_poll_interval", "_runtime")
+
+    def __init__(
+        self,
+        *,
+        backend: "AsyncEventBackendProtocol",
+        runtime: "ObservabilityRuntime",
+        backend_name: str,
+        adapter_name: "str | None",
+        channel: str,
+        poll_interval: float,
+    ) -> None:
+        self._backend = backend
+        self._runtime = runtime
+        self._backend_name = backend_name
+        self._adapter_name = adapter_name
+        self._channel = channel
+        self._poll_interval = poll_interval
+        self._closed = False
+
+    def __aiter__(self) -> AsyncIterator[EventMessage]:
+        """Return the async iterator."""
+        return self
+
+    async def __anext__(self) -> EventMessage:
+        """Return the next available event."""
+        if self._closed:
+            raise StopAsyncIteration
+        while True:
+            span = _start_event_span(
+                self._runtime, "dequeue", self._backend_name, self._adapter_name, self._channel, mode="async"
+            )
+            try:
+                event = await self._backend.dequeue(self._channel, self._poll_interval)
+            except Exception as error:
+                _end_event_span(self._runtime, span, error=error)
+                raise
+            if event is None:
+                _end_event_span(self._runtime, span, result="empty")
+                continue
+            _end_event_span(self._runtime, span, result="delivered")
+            _record_event_delivery(
+                self._runtime, self._backend_name, self._adapter_name, self._channel, event, mode="async"
+            )
+            return event
+
+    async def aclose(self) -> None:
+        """Close the async iterator."""
+        self._closed = True
+
+
 class SyncEventChannel:
     """Event channel for synchronous database configurations."""
 
@@ -291,32 +422,14 @@ class SyncEventChannel:
             msg = "Current events backend does not support sync consumption"
             raise ImproperConfigurationError(msg)
         interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
-        while True:
-            span = _start_event_span(
-                self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
-            )
-            try:
-                event = self._backend.dequeue(channel, interval)
-            except Exception as error:
-                _end_event_span(self._runtime, span, error=error)
-                raise
-            if event is None:
-                _end_event_span(self._runtime, span, result="empty")
-                continue
-            _end_event_span(self._runtime, span, result="delivered")
-            self._runtime.increment_metric("events.deliver")
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "event.receive",
-                adapter_name=self._adapter_name,
-                backend_name=self._backend_name,
-                channel=channel,
-                event_id=event.event_id,
-                event_type=_resolve_event_type(event.payload, event.metadata),
-                mode="sync",
-            )
-            yield event
+        return _SyncEventIterator(
+            backend=self._backend,
+            runtime=self._runtime,
+            backend_name=self._backend_name,
+            adapter_name=self._adapter_name,
+            channel=channel,
+            poll_interval=interval,
+        )
 
     def listen(
         self, channel: str, handler: "SyncEventHandler", *, poll_interval: float | None = None, auto_ack: bool = True
@@ -532,39 +645,21 @@ class AsyncEventChannel:
         )
         return event_id
 
-    async def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
+    def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
         """Yield events as they become available."""
         channel = normalize_event_channel_name(channel)
         if not self._backend.supports_async:
             msg = "Current events backend does not support async consumption"
             raise ImproperConfigurationError(msg)
         interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
-        while True:
-            span = _start_event_span(
-                self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
-            )
-            try:
-                event = await self._backend.dequeue(channel, interval)
-            except Exception as error:
-                _end_event_span(self._runtime, span, error=error)
-                raise
-            if event is None:
-                _end_event_span(self._runtime, span, result="empty")
-                continue
-            _end_event_span(self._runtime, span, result="delivered")
-            self._runtime.increment_metric("events.deliver")
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "event.receive",
-                adapter_name=self._adapter_name,
-                backend_name=self._backend_name,
-                channel=channel,
-                event_id=event.event_id,
-                event_type=_resolve_event_type(event.payload, event.metadata),
-                mode="async",
-            )
-            yield event
+        return _AsyncEventIterator(
+            backend=self._backend,
+            runtime=self._runtime,
+            backend_name=self._backend_name,
+            adapter_name=self._adapter_name,
+            channel=channel,
+            poll_interval=interval,
+        )
 
     def listen(
         self,
