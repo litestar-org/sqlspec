@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.53.0 - SQL processing correctness and cleanup
+v0.54.0 - SQL processing correctness and cleanup
 ------------------------------------------------------------------------------
 
 **Changed:**
