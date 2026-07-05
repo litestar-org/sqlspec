@@ -1,7 +1,8 @@
-"""Comprehensive driver tests for Spanner SQLSpec interface.
+"""Spanner driver residuals for optional emulator/session behavior.
 
-These tests verify all driver methods work correctly through SQLSpec,
-not raw SDK calls.
+The shared matrix cannot activate Spanner yet because DDL, write sessions,
+read-only snapshots, and typed GoogleSQL parameters require Spanner-specific
+fixtures. This module keeps those adapter-local driver/session assertions.
 """
 
 from datetime import datetime, timezone

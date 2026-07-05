@@ -1,6 +1,8 @@
-"""Integration tests for Spanner Arrow support.
+"""Spanner Arrow residuals for emulator-backed table fixtures.
 
-All operations use SQLSpec interface, not raw SDK calls.
+The shared Arrow contract does not activate Spanner yet because Spanner needs
+admin-API table creation and write-session setup. These tests keep that
+adapter-specific fixture path local.
 """
 
 import pytest

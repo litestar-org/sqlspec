@@ -1,7 +1,9 @@
-"""Integration tests for Spanner CRUD operations using SQLSpec interface.
+"""Spanner CRUD residuals for read/write session routing.
 
-These tests verify that DML operations (INSERT, UPDATE, DELETE) work correctly
-through the SQLSpec session interface, not raw SDK calls.
+The active contract matrix does not yet run Spanner because Spanner tables are
+created through the admin DDL API and read/write sessions have different
+capabilities. These tests stay adapter-local until a Spanner table-fixture
+contract can preserve that setup safely.
 """
 
 from uuid import uuid4

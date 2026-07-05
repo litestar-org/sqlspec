@@ -1,4 +1,4 @@
-"""Spanner default-session DML smoke (regression for #474).
+"""Spanner default-session DML residual (regression for #474).
 
 Locks in two behaviours:
 

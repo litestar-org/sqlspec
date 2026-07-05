@@ -1,4 +1,8 @@
-"""Integration coverage for the Spanner Batch Write API ingest transport."""
+"""Spanner Batch Write API ingest residuals.
+
+This transport uses Spanner mutations rather than portable SQL execute_many
+behavior, so it stays adapter-local outside the shared driver contract.
+"""
 
 from collections.abc import Generator
 from uuid import uuid4

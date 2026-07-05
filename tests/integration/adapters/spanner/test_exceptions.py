@@ -1,7 +1,7 @@
-"""Integration tests for Spanner exception mapping.
+"""Spanner exception-mapping residuals.
 
-These tests verify that Spanner SDK exceptions are properly mapped
-to SQLSpec exception types.
+Spanner exceptions come from SDK/admin/read-write session paths that are not in
+the active shared exception matrix yet, so the coverage remains adapter-local.
 """
 
 from uuid import uuid4

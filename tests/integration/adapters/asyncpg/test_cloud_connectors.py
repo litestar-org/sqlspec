@@ -1,7 +1,9 @@
-"""Integration tests for Google Cloud SQL and AlloyDB connector support.
+"""Asyncpg Google Cloud connector residuals.
 
-These tests require actual Google Cloud credentials and instances.
-They are skipped by default unless credentials are available.
+These tests assert Cloud SQL and AlloyDB connector pool wiring against real
+Google Cloud credentials and instances. They intentionally stay adapter-local;
+the shared contracts cover PostgreSQL behavior after a pool exists, not cloud
+connector authentication, IAM, private IP, or instance URI setup.
 """
 
 import os
