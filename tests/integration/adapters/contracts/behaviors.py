@@ -4,7 +4,7 @@ import contextlib
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 
 import msgspec
@@ -226,8 +226,22 @@ async def _execute_async(driver: AsyncContractDriver, statement: object, paramet
     return await driver.execute(statement, parameters)
 
 
-def _reports_execute_rows_affected(case: DriverCase) -> bool:
-    return "execute-rows-affected-unavailable" not in case.deviations
+def _rowcount_policy(case: DriverCase, method: Literal["execute", "execute_many"] = "execute") -> str:
+    return case.execute_many_rowcount_policy if method == "execute_many" else case.execute_rowcount_policy
+
+
+def _reports_execute_rows_affected(case: DriverCase, method: Literal["execute", "execute_many"] = "execute") -> bool:
+    return _rowcount_policy(case, method) == "exact"
+
+
+def _assert_sql_result_rows_affected(
+    result: object, case: DriverCase, rows_affected: int, method: Literal["execute", "execute_many"] = "execute"
+) -> SQLResult:
+    policy = _rowcount_policy(case, method)
+    sql_result = assert_sql_result(result, rows_affected=rows_affected if policy == "exact" else None)
+    if policy == "non_negative":
+        assert sql_result.rows_affected >= 0
+    return sql_result
 
 
 def _sqlglot_dialect(case: DriverCase) -> str:
@@ -420,21 +434,21 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
     iterator = iter(stream)
     first = next(iterator)
     assert first["value"] == 0
-    if "streaming-page-size-advisory" not in case.deviations:
+    if case.stream_chunk_policy == "bounded":
         assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
     remaining = list(iterator)
     assert len(remaining) == count - 1
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
     assert remaining[-1]["value"] == count - 1
 
-    if "emulator-streaming-reopen-hangs" not in case.deviations:
+    if case.supports_stream_reopen_after_partial_iteration:
         with sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
             partial_iterator = iter(partial)
             for _ in range(50):
                 next(partial_iterator)
         assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
         with pytest.raises(Exception):
             next(iter(bad_stream))
@@ -458,21 +472,21 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
     iterator = aiter(stream)
     first = await anext(iterator)
     assert first["value"] == 0
-    if "streaming-page-size-advisory" not in case.deviations:
+    if case.stream_chunk_policy == "bounded":
         assert len(stream._buffer) <= _STREAM_CHUNK_SIZE  # pyright: ignore[reportPrivateUsage]
     remaining: list[dict[str, Any]] = [row async for row in iterator]
     assert len(remaining) == count - 1
     assert [row["value"] for row in remaining[:3]] == [1, 2, 3]
     assert remaining[-1]["value"] == count - 1
 
-    if "emulator-streaming-reopen-hangs" not in case.deviations:
+    if case.supports_stream_reopen_after_partial_iteration:
         async with async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE) as partial:
             partial_iterator = aiter(partial)
             for _ in range(50):
                 await anext(partial_iterator)
         assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
         with pytest.raises(Exception):
             await anext(aiter(bad_stream))
@@ -655,7 +669,7 @@ def assert_sync_for_update_contract(driver: object, case: DriverCase) -> None:
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
     ]
-    if "no-for-share" not in case.deviations:
+    if case.supports_for_share:
         builders.append(sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share())
     try:
         for builder in builders:
@@ -684,7 +698,7 @@ async def assert_async_for_update_contract(driver: object, case: DriverCase) -> 
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(),
         sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_update(skip_locked=True),
     ]
-    if "no-for-share" not in case.deviations:
+    if case.supports_for_share:
         builders.append(sql.select("name", "value").from_(table.name).where_eq("name", "lock-row").for_share())
     try:
         for builder in builders:
@@ -729,7 +743,7 @@ def assert_sync_filter_contract(driver: object, case: DriverCase) -> None:
     in_collection = sync_driver.execute(base, InCollectionFilter("value", [20, 40]), OrderByFilter("value", "asc"))
     assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
 
-    if "emulator-no-search-filter" not in case.deviations:
+    if case.supports_search_filter:
         searched = sync_driver.execute(base, SearchFilter("name", "lta"))
         assert [row["name"] for row in searched.get_data()] == ["delta"]
 
@@ -749,15 +763,15 @@ async def assert_async_filter_contract(driver: object, case: DriverCase) -> None
     )
     assert [row["name"] for row in in_collection.get_data()] == ["beta", "delta"]
 
-    if "emulator-no-search-filter" not in case.deviations:
+    if case.supports_search_filter:
         searched = await async_driver.execute(base, SearchFilter("name", "lta"))
         assert [row["name"] for row in searched.get_data()] == ["delta"]
 
 
 def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers run grouped aggregation and correlated subquery selects."""
-    if "emulator-no-grouped-subquery" in case.deviations:
-        pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
+    if not case.supports_grouped_subquery:
+        pytest.skip(f"{case.adapter} does not support grouped aggregation / correlated subqueries")
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
     _seed_sync(sync_driver, _GROUPED_SEED_ROWS, table, case)
@@ -775,8 +789,8 @@ def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None
 
 async def assert_async_complex_query_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers run grouped aggregation and correlated subquery selects."""
-    if "emulator-no-grouped-subquery" in case.deviations:
-        pytest.skip(f"{case.adapter} emulator does not support grouped aggregation / correlated subqueries")
+    if not case.supports_grouped_subquery:
+        pytest.skip(f"{case.adapter} does not support grouped aggregation / correlated subqueries")
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
     await _seed_async(async_driver, _GROUPED_SEED_ROWS, table, case)
@@ -861,7 +875,7 @@ def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
         table.insert_qmark_sql, [("alpha", 10, None), ("beta", 20, None), ("gamma", 30, None)]
     )
 
-    assert_sql_result(result, rows_affected=3)
+    _assert_sql_result_rows_affected(result, case, 3, "execute_many")
     assert_result_data(
         sync_driver.execute(table.select_ordered_sql),
         (
@@ -883,7 +897,7 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
         table.insert_qmark_sql, [("alpha", 10, None), ("beta", 20, None), ("gamma", 30, None)]
     )
 
-    assert_sql_result(result, rows_affected=3)
+    _assert_sql_result_rows_affected(result, case, 3, "execute_many")
     assert_result_data(
         await async_driver.execute(table.select_ordered_sql),
         (
@@ -902,16 +916,16 @@ def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase)
     table = case.table
 
     inserted = sync_driver.execute_many(table.insert_qmark_sql, [("a", 1, None), ("b", 2, None), ("c", 3, None)])
-    assert_sql_result(inserted, rows_affected=3)
+    _assert_sql_result_rows_affected(inserted, case, 3, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 3
 
     updated = sync_driver.execute_many(_update_value_sql(table), [(10, "a"), (20, "b")])
-    assert_sql_result(updated, rows_affected=2)
+    _assert_sql_result_rows_affected(updated, case, 2, "execute_many")
     sync_driver.commit()
 
     deleted = sync_driver.execute_many(_delete_by_name_sql(table), [("a",), ("b",)])
-    assert_sql_result(deleted, rows_affected=2)
+    _assert_sql_result_rows_affected(deleted, case, 2, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 1
 
@@ -924,16 +938,16 @@ async def assert_async_execute_many_mutation_contract(driver: object, case: Driv
     table = case.table
 
     inserted = await async_driver.execute_many(table.insert_qmark_sql, [("a", 1, None), ("b", 2, None), ("c", 3, None)])
-    assert_sql_result(inserted, rows_affected=3)
+    _assert_sql_result_rows_affected(inserted, case, 3, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 3
 
     updated = await async_driver.execute_many(_update_value_sql(table), [(10, "a"), (20, "b")])
-    assert_sql_result(updated, rows_affected=2)
+    _assert_sql_result_rows_affected(updated, case, 2, "execute_many")
     await async_driver.commit()
 
     deleted = await async_driver.execute_many(_delete_by_name_sql(table), [("a",), ("b",)])
-    assert_sql_result(deleted, rows_affected=2)
+    _assert_sql_result_rows_affected(deleted, case, 2, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 1
 
@@ -947,13 +961,13 @@ def assert_sync_execute_many_input_contract(driver: object, case: DriverCase) ->
 
     large_batch = [(f"item-{index}", index, None) for index in range(200)]
     large_result = sync_driver.execute_many(table.insert_qmark_sql, large_batch)
-    assert_sql_result(large_result, rows_affected=200)
+    _assert_sql_result_rows_affected(large_result, case, 200, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 200
 
     sql_object = SQL(table.insert_qmark_sql, [("obj-1", 1, None), ("obj-2", 2, None)], is_many=True)
     object_result = sync_driver.execute(sql_object)
-    assert_sql_result(object_result, rows_affected=2)
+    _assert_sql_result_rows_affected(object_result, case, 2, "execute_many")
     sync_driver.commit()
     assert sync_driver.select_value(table.select_count_sql) == 202
 
@@ -967,13 +981,13 @@ async def assert_async_execute_many_input_contract(driver: object, case: DriverC
 
     large_batch = [(f"item-{index}", index, None) for index in range(200)]
     large_result = await async_driver.execute_many(table.insert_qmark_sql, large_batch)
-    assert_sql_result(large_result, rows_affected=200)
+    _assert_sql_result_rows_affected(large_result, case, 200, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 200
 
     sql_object = SQL(table.insert_qmark_sql, [("obj-1", 1, None), ("obj-2", 2, None)], is_many=True)
     object_result = await async_driver.execute(sql_object)
-    assert_sql_result(object_result, rows_affected=2)
+    _assert_sql_result_rows_affected(object_result, case, 2, "execute_many")
     await async_driver.commit()
     assert await async_driver.select_value(table.select_count_sql) == 202
 
@@ -2519,8 +2533,8 @@ register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEAT
 def _bigquery_sql_features(driver: object, case: DriverCase) -> None:
     """Fold BigQuery dialect scalar SQL: math/string/conditional/specific functions + ARRAY/STRUCT.
 
-    Window functions + schema DDL are left as bigquery-local residuals (emulator-flaky; see the
-    case's emulator-* deviations).
+    Window functions + schema DDL are left as bigquery-local residuals because
+    the emulator capability profile does not support them reliably.
     """
     sync_driver = cast("SyncContractDriver", driver)
 
@@ -3218,8 +3232,8 @@ def assert_sync_parameter_style_contract(
     else:
         result = _execute_sync(sync_driver, style_statement, parameter_style_case.parameters)
 
-    if parameter_style_case.expected_rows_affected is not None and (
-        parameter_style_case.method == "execute_many" or _reports_execute_rows_affected(case)
+    if parameter_style_case.expected_rows_affected is not None and _reports_execute_rows_affected(
+        case, parameter_style_case.method
     ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
@@ -3251,8 +3265,8 @@ async def assert_async_parameter_style_contract(
     else:
         result = await _execute_async(async_driver, style_statement, parameter_style_case.parameters)
 
-    if parameter_style_case.expected_rows_affected is not None and (
-        parameter_style_case.method == "execute_many" or _reports_execute_rows_affected(case)
+    if parameter_style_case.expected_rows_affected is not None and _reports_execute_rows_affected(
+        case, parameter_style_case.method
     ):
         assert_sql_result(result, rows_affected=parameter_style_case.expected_rows_affected)
     if parameter_style_case.expected_result_data is not None:
@@ -3336,7 +3350,7 @@ def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         with pytest.raises(SQLParsingError):
             sync_driver.execute(f"SELCT * FROM {table}")
         with pytest.raises(SQLSpecError):
@@ -3360,7 +3374,7 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    if "emulator-retries-invalid-sql" not in case.deviations:
+    if case.invalid_sql_error_policy == "raises":
         with pytest.raises(SQLParsingError):
             await async_driver.execute(f"SELCT * FROM {table}")
         with pytest.raises(SQLSpecError):
@@ -3368,8 +3382,8 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
 
 
 def _explain_skip_reason(case: DriverCase) -> str:
-    if "explain-copy-incompatible" in case.deviations:
-        return f"{case.adapter}-{case.dialect} EXPLAIN is incompatible with the driver's COPY result transfer"
+    if case.unsupported_explain_reason is not None:
+        return case.unsupported_explain_reason
     return f"{case.adapter} ({case.dialect}) has no verified EXPLAIN support"
 
 

@@ -1,6 +1,12 @@
 """Shared driver behavior contracts."""
 
-from tests.integration.adapters.contracts._cases import DriverCaseContext
+import pytest
+
+from tests.integration.adapters.contracts._cases import (
+    DriverCaseContext,
+    async_driver_params_with,
+    sync_driver_params_with,
+)
 from tests.integration.adapters.contracts.behaviors import (
     assert_async_driver_basics_contract,
     assert_async_execute_many_contract,
@@ -23,14 +29,18 @@ async def test_async_driver_basics_contract(async_driver_case: DriverCaseContext
     await assert_async_driver_basics_contract(async_driver_case.driver, async_driver_case.case)
 
 
-def test_sync_driver_execute_many_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize("sync_capability_driver_case", sync_driver_params_with("supports_execute_many"), indirect=True)
+def test_sync_driver_execute_many_contract(sync_capability_driver_case: DriverCaseContext) -> None:
     """Sync drivers insert batches and return ordered rows consistently."""
-    assert_sync_execute_many_contract(sync_driver_case.driver, sync_driver_case.case)
+    assert_sync_execute_many_contract(sync_capability_driver_case.driver, sync_capability_driver_case.case)
 
 
-async def test_async_driver_execute_many_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize(
+    "async_capability_driver_case", async_driver_params_with("supports_execute_many"), indirect=True
+)
+async def test_async_driver_execute_many_contract(async_capability_driver_case: DriverCaseContext) -> None:
     """Async drivers insert batches and return ordered rows consistently."""
-    await assert_async_execute_many_contract(async_driver_case.driver, async_driver_case.case)
+    await assert_async_execute_many_contract(async_capability_driver_case.driver, async_capability_driver_case.case)
 
 
 def test_sync_statement_stack_contract(sync_driver_case: DriverCaseContext) -> None:
@@ -43,14 +53,16 @@ async def test_async_statement_stack_contract(async_driver_case: DriverCaseConte
     await assert_async_statement_stack_contract(async_driver_case.driver, async_driver_case.case)
 
 
-def test_sync_for_update_contract(sync_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize("sync_capability_driver_case", sync_driver_params_with("supports_for_update"), indirect=True)
+def test_sync_for_update_contract(sync_capability_driver_case: DriverCaseContext) -> None:
     """Sync drivers that support row locking honor FOR UPDATE / SKIP LOCKED / FOR SHARE."""
-    assert_sync_for_update_contract(sync_driver_case.driver, sync_driver_case.case)
+    assert_sync_for_update_contract(sync_capability_driver_case.driver, sync_capability_driver_case.case)
 
 
-async def test_async_for_update_contract(async_driver_case: DriverCaseContext) -> None:
+@pytest.mark.parametrize("async_capability_driver_case", async_driver_params_with("supports_for_update"), indirect=True)
+async def test_async_for_update_contract(async_capability_driver_case: DriverCaseContext) -> None:
     """Async drivers that support row locking honor FOR UPDATE / SKIP LOCKED / FOR SHARE."""
-    await assert_async_for_update_contract(async_driver_case.driver, async_driver_case.case)
+    await assert_async_for_update_contract(async_capability_driver_case.driver, async_capability_driver_case.case)
 
 
 def test_driver_case_metadata_resolves_fixture(driver_case: DriverCaseContext) -> None:

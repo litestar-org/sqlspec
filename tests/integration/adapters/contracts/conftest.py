@@ -1924,6 +1924,12 @@ def adk_store_case(request: pytest.FixtureRequest) -> AdkStoreCaseContext:
     return _resolve_adk_store_case(request, request.param)
 
 
+@pytest.fixture
+def adk_capability_store_case(request: pytest.FixtureRequest) -> AdkStoreCaseContext:
+    """Resolve an ADK store case selected by a capability-filtered param list."""
+    return _resolve_adk_store_case(request, request.param)
+
+
 def _resolve_store_case(request: pytest.FixtureRequest, case: StoreCase) -> StoreCaseContext:
     return StoreCaseContext(case=case, store=request.getfixturevalue(case.fixture_name))
 
@@ -1952,6 +1958,34 @@ def sync_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
 @pytest.fixture(params=ASYNC_DRIVER_PARAMS)
 def async_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
     """Resolve an async driver contract case by fixture name."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def sync_capability_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve a sync driver case supplied by a capability-filtered parametrization."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def async_capability_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve an async driver case supplied by a capability-filtered parametrization."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def sync_lifecycle_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve a sync driver case that supports at least one lifecycle contract."""
+    case = request.param
+    return _resolve_driver_case(request, case)
+
+
+@pytest.fixture
+def async_lifecycle_driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
+    """Resolve an async driver case that supports at least one lifecycle contract."""
     case = request.param
     return _resolve_driver_case(request, case)
 

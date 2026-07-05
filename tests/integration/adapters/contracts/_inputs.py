@@ -604,5 +604,11 @@ EXCEPTION_VIOLATION_CASES = (
 STATEMENT_INPUT_PARAMS = tuple(pytest.param(case, id=case.id) for case in STATEMENT_INPUT_CASES)
 PARAMETER_PROFILE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_PROFILE_CASES)
 PARAMETER_STYLE_PARAMS = tuple(pytest.param(case, id=case.id) for case in PARAMETER_STYLE_CASES)
+PARAMETER_STYLE_EXECUTE_PARAMS = tuple(
+    pytest.param(case, id=case.id) for case in PARAMETER_STYLE_CASES if case.method == "execute"
+)
+PARAMETER_STYLE_EXECUTE_MANY_PARAMS = tuple(
+    pytest.param(case, id=case.id) for case in PARAMETER_STYLE_CASES if case.method == "execute_many"
+)
 EXPLAIN_PARAMS = tuple(pytest.param(case, id=case.id) for case in EXPLAIN_CASES)
 EXCEPTION_VIOLATION_PARAMS = tuple(pytest.param(case, id=case.id) for case in EXCEPTION_VIOLATION_CASES)

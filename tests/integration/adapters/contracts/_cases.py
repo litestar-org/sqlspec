@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import pytest
-from _pytest.mark.structures import Mark, MarkDecorator
+from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 
 from sqlspec.config import DatabaseConfigProtocol
 from tests.integration.adapters.contracts._schema import (
@@ -17,6 +17,10 @@ from tests.integration.adapters.contracts._schema import (
     POSTGRES_CONTRACT_TABLE,
     ContractTable,
 )
+
+RowCountPolicy = Literal["exact", "unavailable", "non_negative"]
+StreamChunkPolicy = Literal["bounded", "advisory"]
+InvalidSqlErrorPolicy = Literal["raises", "emulator_retries"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,8 @@ class DriverCase:
     arrow_reader_honors_batch_size: bool = False
     supports_explain: bool = False
     supports_execute_many: bool = True
+    execute_rowcount_policy: RowCountPolicy = "exact"
+    execute_many_rowcount_policy: RowCountPolicy = "exact"
     supports_execute_script: bool = True
     supports_filtered_statement: bool = True
     supports_loader_input: bool = True
@@ -51,6 +57,7 @@ class DriverCase:
     supports_load_from_records: bool = False
     supports_transactions: bool = True
     supports_for_update: bool = False
+    supports_for_share: bool = False
     supports_returning: bool = False
     supports_json: bool = False
     supports_arrays: bool = False
@@ -72,6 +79,12 @@ class DriverCase:
     supports_data_dictionary: bool = False
     supports_native_metadata: bool = False
     supports_native_statistics: bool = False
+    supports_search_filter: bool = True
+    supports_grouped_subquery: bool = True
+    supports_stream_reopen_after_partial_iteration: bool = True
+    stream_chunk_policy: StreamChunkPolicy = "bounded"
+    invalid_sql_error_policy: InvalidSqlErrorPolicy = "raises"
+    unsupported_explain_reason: str | None = None
     config_factory_fixture: str | None = None
     deviations: tuple[str, ...] = ()
     extra_assertions: tuple[str, ...] = ()
@@ -171,7 +184,6 @@ SYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_mysqlconnector_sync",
         supports_custom_json_serializer=True,
         supports_native_row_streaming=True,
-        deviations=("no-returning", "autocommit-ddl"),
         extra_assertions=("param_codecs:mysql", "streaming_native:mysqlconnector"),
     ),
     DriverCase(
@@ -191,7 +203,6 @@ SYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_pymysql",
         supports_native_row_streaming=True,
-        deviations=("no-returning", "autocommit-ddl"),
         extra_assertions=("param_codecs:mysql", "streaming_native:pymysql"),
     ),
     DriverCase(
@@ -211,6 +222,7 @@ SYNC_DRIVER_CASES = (
         supports_native_bulk_ingest=True,
         supports_load_from_records=True,
         supports_for_update=True,
+        supports_for_share=True,
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
@@ -249,7 +261,6 @@ SYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_psycopg_sync",
         supports_native_row_streaming=True,
-        deviations=("cockroach-serializable-transactions",),
         extra_assertions=("param_codecs:cockroach_psycopg", "streaming_native:psycopg"),
     ),
     DriverCase(
@@ -268,7 +279,7 @@ SYNC_DRIVER_CASES = (
         supports_native_bulk_ingest=True,
         supports_load_from_records=True,
         supports_exception_translation=False,
-        deviations=("execute-rows-affected-unavailable",),
+        execute_rowcount_policy="unavailable",
         extra_assertions=("param_codecs:adbc_sqlite",),
     ),
     DriverCase(
@@ -287,7 +298,7 @@ SYNC_DRIVER_CASES = (
         supports_storage_bridge=True,
         supports_native_bulk_ingest=True,
         supports_load_from_records=True,
-        deviations=("execute-rows-affected-unavailable",),
+        execute_rowcount_policy="unavailable",
         extra_assertions=("param_codecs:adbc_duckdb",),
     ),
     DriverCase(
@@ -307,7 +318,9 @@ SYNC_DRIVER_CASES = (
         supports_native_bulk_ingest=True,
         supports_load_from_records=True,
         supports_for_update=True,
-        deviations=("execute-rows-affected-unavailable", "explain-copy-incompatible"),
+        supports_for_share=True,
+        execute_rowcount_policy="unavailable",
+        unsupported_explain_reason="ADBC PostgreSQL EXPLAIN is incompatible with the driver's COPY result transfer",
         extra_assertions=("param_codecs:adbc_postgres",),
     ),
     DriverCase(
@@ -332,7 +345,6 @@ SYNC_DRIVER_CASES = (
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
         supports_native_row_streaming=True,
-        deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
             "param_codecs:oracle",
@@ -357,7 +369,7 @@ SYNC_DRIVER_CASES = (
         supports_execute_many=False,
         supports_load_from_records=False,
         supports_exception_translation=False,
-        deviations=("execute-rows-affected-unavailable",),
+        execute_rowcount_policy="unavailable",
     ),
     DriverCase(
         id="bigquery-sync",
@@ -373,14 +385,12 @@ SYNC_DRIVER_CASES = (
         supports_native_row_streaming=True,
         streaming_row_count=600,
         config_factory_fixture="lifecycle_config_bigquery",
-        deviations=(
-            "execute-rows-affected-unavailable",
-            "emulator-no-grouped-subquery",
-            "emulator-no-search-filter",
-            "emulator-retries-invalid-sql",
-            "emulator-streaming-reopen-hangs",
-            "streaming-page-size-advisory",
-        ),
+        execute_rowcount_policy="unavailable",
+        supports_search_filter=False,
+        supports_grouped_subquery=False,
+        supports_stream_reopen_after_partial_iteration=False,
+        stream_chunk_policy="advisory",
+        invalid_sql_error_policy="emulator_retries",
         extra_assertions=(
             "param_codecs:bigquery",
             "driver_features:bigquery_sql_features",
@@ -428,7 +438,6 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_aiomysql",
         supports_custom_json_serializer=True,
         supports_native_row_streaming=True,
-        deviations=("no-returning", "autocommit-ddl"),
         extra_assertions=(
             "explain_modifiers:mysql",
             "arrow_specifics:mysql",
@@ -454,7 +463,6 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_asyncmy",
         supports_custom_json_serializer=True,
         supports_native_row_streaming=True,
-        deviations=("no-returning", "autocommit-ddl"),
         extra_assertions=(
             "explain_modifiers:mysql",
             "arrow_specifics:mysql",
@@ -479,7 +487,6 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_mysqlconnector_async",
         supports_custom_json_serializer=True,
         supports_native_row_streaming=True,
-        deviations=("no-returning", "autocommit-ddl"),
         extra_assertions=("param_codecs:mysql", "streaming_native:mysqlconnector"),
     ),
     DriverCase(
@@ -500,6 +507,7 @@ ASYNC_DRIVER_CASES = (
         supports_native_bulk_ingest=True,
         supports_load_from_records=True,
         supports_for_update=True,
+        supports_for_share=True,
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
@@ -539,7 +547,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_psqlpy",
         supports_native_row_streaming=True,
-        deviations=("execute-rows-affected-unavailable",),
+        execute_rowcount_policy="unavailable",
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
@@ -564,6 +572,7 @@ ASYNC_DRIVER_CASES = (
         supports_native_bulk_ingest=True,
         supports_load_from_records=True,
         supports_for_update=True,
+        supports_for_share=True,
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
@@ -601,7 +610,6 @@ ASYNC_DRIVER_CASES = (
         supports_pooling=True,
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_asyncpg",
-        deviations=("cockroach-serializable-transactions",),
         extra_assertions=("param_codecs:cockroach_asyncpg", "streaming_native:asyncpg"),
     ),
     DriverCase(
@@ -619,6 +627,7 @@ ASYNC_DRIVER_CASES = (
         supports_schema_qualified_ddl=True,
         supports_storage_bridge=True,
         supports_for_update=True,
+        supports_for_share=True,
         supports_returning=True,
         supports_json=True,
         supports_arrays=True,
@@ -626,7 +635,6 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_cockroach_psycopg_async",
         supports_native_row_streaming=True,
-        deviations=("cockroach-serializable-transactions",),
         extra_assertions=("param_codecs:cockroach_psycopg", "streaming_native:psycopg"),
     ),
     DriverCase(
@@ -651,7 +659,6 @@ ASYNC_DRIVER_CASES = (
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
         supports_native_row_streaming=True,
-        deviations=("no-for-share",),
         extra_assertions=(
             "explain_modifiers:oracle",
             "arrow_specifics:oracle",
@@ -703,9 +710,54 @@ DEFERRED_DRIVER_CASES = (
 ACTIVE_DRIVER_CASES = SYNC_DRIVER_CASES + ASYNC_DRIVER_CASES
 DRIVER_CASES = ACTIVE_DRIVER_CASES + DEFERRED_DRIVER_CASES
 DRIVER_CASE_BY_ID = {case.id: case for case in DRIVER_CASES}
-SYNC_DRIVER_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in SYNC_DRIVER_CASES)
-ASYNC_DRIVER_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in ASYNC_DRIVER_CASES)
+LIFECYCLE_CAPABILITIES = (
+    "supports_pooling",
+    "supports_connection_instance",
+    "supports_connection_hook",
+    "supports_lowercase_columns",
+    "supports_uuid_feature",
+    "supports_custom_json_serializer",
+    "supports_custom_type_adapters",
+)
+
+
+def _driver_params(cases: tuple[DriverCase, ...]) -> "tuple[ParameterSet, ...]":
+    return tuple(pytest.param(case, id=case.id, marks=case.marks) for case in cases)
+
+
+def _driver_params_where(cases: tuple[DriverCase, ...], *capability_names: str) -> "tuple[ParameterSet, ...]":
+    return _driver_params(tuple(case for case in cases if any(getattr(case, name) for name in capability_names)))
+
+
+def _driver_params_without(cases: tuple[DriverCase, ...], *capability_names: str) -> "tuple[ParameterSet, ...]":
+    return _driver_params(tuple(case for case in cases if not any(getattr(case, name) for name in capability_names)))
+
+
+def sync_driver_params_with(*capability_names: str) -> "tuple[ParameterSet, ...]":
+    """Return sync driver params that opt into at least one named capability."""
+    return _driver_params_where(SYNC_DRIVER_CASES, *capability_names)
+
+
+def async_driver_params_with(*capability_names: str) -> "tuple[ParameterSet, ...]":
+    """Return async driver params that opt into at least one named capability."""
+    return _driver_params_where(ASYNC_DRIVER_CASES, *capability_names)
+
+
+def sync_driver_params_without(*capability_names: str) -> "tuple[ParameterSet, ...]":
+    """Return sync driver params that opt out of all named capabilities."""
+    return _driver_params_without(SYNC_DRIVER_CASES, *capability_names)
+
+
+def async_driver_params_without(*capability_names: str) -> "tuple[ParameterSet, ...]":
+    """Return async driver params that opt out of all named capabilities."""
+    return _driver_params_without(ASYNC_DRIVER_CASES, *capability_names)
+
+
+SYNC_DRIVER_PARAMS = _driver_params(SYNC_DRIVER_CASES)
+ASYNC_DRIVER_PARAMS = _driver_params(ASYNC_DRIVER_CASES)
 DRIVER_PARAMS = SYNC_DRIVER_PARAMS
+SYNC_LIFECYCLE_DRIVER_PARAMS = tuple(sync_driver_params_with(*LIFECYCLE_CAPABILITIES))
+ASYNC_LIFECYCLE_DRIVER_PARAMS = tuple(async_driver_params_with(*LIFECYCLE_CAPABILITIES))
 
 
 def get_driver_case(case_id: str) -> DriverCase:

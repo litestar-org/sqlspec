@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.integration.adapters.contracts._adk_cases import AdkStoreCaseContext
+from tests.integration.adapters.contracts._adk_cases import AdkStoreCaseContext, adk_store_params_with
 from tests.integration.adapters.contracts.adk_behaviors import (
     assert_adk_append_and_get_events_contract,
     assert_adk_append_event_and_update_state_contract,
@@ -52,11 +52,13 @@ async def test_adk_append_and_get_events_contract(adk_store_case: AdkStoreCaseCo
     await assert_adk_append_and_get_events_contract(adk_store_case.make_store)
 
 
-async def test_adk_append_event_and_update_state_contract(adk_store_case: AdkStoreCaseContext) -> None:
+@pytest.mark.parametrize(
+    "adk_capability_store_case", adk_store_params_with("supports_atomic_state_update"), indirect=True
+)
+async def test_adk_append_event_and_update_state_contract(adk_capability_store_case: AdkStoreCaseContext) -> None:
     """Atomic append updates state and stores the event together."""
-    if not adk_store_case.case.supports_atomic_state_update:
-        pytest.skip("adapter cannot update a session row referenced by an event foreign key")
-    await assert_adk_append_event_and_update_state_contract(adk_store_case.make_store)
+    assert adk_capability_store_case.case.supports_atomic_state_update
+    await assert_adk_append_event_and_update_state_contract(adk_capability_store_case.make_store)
 
 
 async def test_adk_get_events_filtering_contract(adk_store_case: AdkStoreCaseContext) -> None:

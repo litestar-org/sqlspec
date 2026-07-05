@@ -14,7 +14,7 @@ only irreducible, adapter-specific behavior.
 Every contract is the cross product of three things:
 
 1. **Cases** (`_cases.py`) — a `DriverCase` per adapter/mode, carrying the fixture name, dialect,
-   marks, capability flags, deviations, and extra-assertion keys. `SYNC_DRIVER_CASES` and
+   marks, capability flags/policies, exceptional deviations, and extra-assertion keys. `SYNC_DRIVER_CASES` and
    `ASYNC_DRIVER_CASES` feed the parametrized fixtures; `DEFERRED_DRIVER_CASES` holds adapters that
    are not yet wired (each with a concrete `reason`).
 2. **Behaviors** (`behaviors.py`) — reusable `assert_*_contract` functions. Central test bodies stay
@@ -87,7 +87,10 @@ Complete flag set:
 - **Result / IO**: `supports_arrow`, `supports_arrow_streaming`, `supports_native_arrow`,
   `supports_storage_bridge`, `supports_native_bulk_ingest`, `supports_copy`
 - **Statements**: `supports_execute_many`, `supports_execute_script`, `supports_filtered_statement`,
-  `supports_loader_input`, `supports_merge`, `supports_returning`, `supports_for_update`
+  `supports_loader_input`, `supports_merge`, `supports_returning`, `supports_for_update`,
+  `supports_for_share`
+- **Statement policies**: `execute_rowcount_policy`, `execute_many_rowcount_policy`,
+  `unsupported_explain_reason`
 - **Types / codecs**: `supports_json`, `supports_json_native`, `supports_arrays`,
   `supports_native_array_codec`, `supports_vector`, `supports_lob`
 - **Schema / migrations**: `supports_migrations`, `supports_schema_qualified_ddl`,
@@ -97,6 +100,9 @@ Complete flag set:
 - **Lifecycle (config-factory)**: `supports_pooling`, `supports_connection_hook`,
   `supports_connection_instance`, `supports_lowercase_columns`, `supports_uuid_feature`,
   `supports_custom_json_serializer`, `supports_custom_type_adapters`
+- **Fixture/profile limits**: `supports_search_filter`, `supports_grouped_subquery`,
+  `supports_stream_reopen_after_partial_iteration`, `stream_chunk_policy`,
+  `invalid_sql_error_policy`
 
 ## Lifecycle Contracts & Config Factories
 
@@ -110,13 +116,12 @@ driver-feature toggles). These run through a per-adapter **config factory**.
 2. Point the case at it with `config_factory_fixture="lifecycle_config_<adapter>"`. The fixture layer
    resolves it into `DriverCaseContext.make_config`.
 3. Opt the case into the relevant `supports_*` lifecycle flag.
-4. Gate the contract on the flag and call the behavior with the factory:
+4. Parametrize the contract with cases filtered by the exact capability and call the behavior with the factory:
 
    ```python
-   def test_sync_pooling_contract(sync_driver_case: DriverCaseContext) -> None:
-       if not sync_driver_case.case.supports_pooling:
-           pytest.skip(f"{sync_driver_case.case.adapter} has no verified pooling support")
-       assert_sync_pooling_contract(_sync_factory(sync_driver_case), sync_driver_case.case)
+   @pytest.mark.parametrize("sync_lifecycle_driver_case", sync_driver_params_with("supports_pooling"), indirect=True)
+   def test_sync_pooling_contract(sync_lifecycle_driver_case: DriverCaseContext) -> None:
+       assert_sync_pooling_contract(_sync_factory(sync_lifecycle_driver_case), sync_lifecycle_driver_case.case)
    ```
 
 Lifecycle behaviors (each has a sync and async form):
@@ -136,9 +141,13 @@ protocols in `behaviors.py` (`provide_session`, `provide_pool`, `close_pool`, `c
 
 ## Deviations vs Extra Assertions
 
-`deviations` is **subtractive**: a tuple of string keys that relax or skip a generic assertion
-(`if "key" not in case.deviations: ...`). Use it when an adapter cannot satisfy part of a shared
-contract (e.g. `"no-returning"`, `"no-for-share"`, `"execute-rows-affected-unavailable"`).
+Typed `DriverCase` metadata is the default way to express adapter differences. Use capability flags
+for supported behavior, policy fields for rowcount/streaming/error-profile differences, and filtered
+param lists so unsupported cases are not collected for a behavior they cannot run.
+
+`deviations` is an exceptional **subtractive** escape hatch: a tuple of string keys that relax or skip a
+generic assertion only when the difference cannot be represented as typed capability or policy data.
+Every deviation key must be consumed by a behavior and justified by a contract metadata guard.
 
 `extra_assertions` is the **additive** counterpart: a tuple of registered proof keys that let a single
 contract run adapter-specific extra checks without a separate per-adapter file. This is how
