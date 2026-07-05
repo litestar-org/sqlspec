@@ -25,6 +25,12 @@ class SmokeImport(NamedTuple):
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("package", "sqlspec"),
     SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
+    SmokeImport(
+        "prometheus_observer",
+        "sqlspec.extensions.prometheus._observer",
+        "PrometheusStatementObserver",
+        True,
+    ),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),

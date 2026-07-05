@@ -184,10 +184,13 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         ),
     },
     "sqlspec/extensions/prometheus/__init__.py": {
-        "classification": "helper_split_first",
+        "classification": "keep_interpreted",
+        "reason": "Prometheus package init stays a thin re-export surface while the observer implementation compiles.",
+    },
+    "sqlspec/extensions/prometheus/_observer.py": {
+        "classification": "compile_now",
         "reason": (
-            "Prometheus observer implementation can move behind a compiled private module while __init__ stays a "
-            "thin optional-dependency re-export."
+            "Prometheus observer implementation stays behind ensure_prometheus() and is admitted through compiled-wheel smoke."
         ),
     },
     "sqlspec/migrations/commands.py": {

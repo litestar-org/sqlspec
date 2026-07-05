@@ -251,6 +251,7 @@ include = [
   "sqlspec/storage/_utils.py",                      # Storage optional dependency import helpers
   "sqlspec/service.py",                            # Service base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
+  "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_models.py",          # Event message value object
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators

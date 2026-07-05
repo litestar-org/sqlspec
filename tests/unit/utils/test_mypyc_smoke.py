@@ -53,6 +53,7 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
     assert {
         "package",
         "base_sqlspec",
+        "prometheus_observer",
         "async_bridge",
         "core_statement",
         "builder_select",
@@ -78,6 +79,7 @@ def test_smoke_matrix_covers_compiled_wheel_import_surfaces() -> None:
         "event_payload",
         "event_queue",
         "migration_runner",
+        "prometheus_observer",
         "sqlite_pool",
         "sqlite_type_converter",
         "storage_registry",
