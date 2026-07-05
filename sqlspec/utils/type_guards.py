@@ -10,7 +10,6 @@ from collections.abc import Set as AbstractSet
 from dataclasses import Field
 from dataclasses import fields as dataclasses_fields
 from dataclasses import is_dataclass as dataclasses_is_dataclass
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp
@@ -685,7 +684,6 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     return all(field.name != field_name for field in fields)
 
 
-@lru_cache(maxsize=500)
 def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     """Detect the rename pattern by comparing field name transformations.
 
@@ -696,15 +694,26 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     Returns:
         The detected rename pattern ("camel", "kebab", "pascal") or None
     """
+    key = (field_name, encode_name)
+    if key in _MSGSPEC_RENAME_PATTERN_CACHE:
+        return _MSGSPEC_RENAME_PATTERN_CACHE[key]
+
+    result: str | None
     if encode_name == camelize(field_name) and encode_name != field_name:
-        return "camel"
+        result = "camel"
+    elif encode_name == kebabize(field_name) and encode_name != field_name:
+        result = "kebab"
+    elif encode_name == pascalize(field_name) and encode_name != field_name:
+        result = "pascal"
+    else:
+        result = None
 
-    if encode_name == kebabize(field_name) and encode_name != field_name:
-        return "kebab"
+    _MSGSPEC_RENAME_PATTERN_CACHE[key] = result
+    return result
 
-    if encode_name == pascalize(field_name) and encode_name != field_name:
-        return "pascal"
-    return None
+
+_MSGSPEC_RENAME_CONFIG_CACHE: "dict[type[Any], str | None]" = {}
+_MSGSPEC_RENAME_PATTERN_CACHE: "dict[tuple[str, str], str | None]" = {}
 
 
 def get_msgspec_rename_config(schema_type: type) -> "str | None":
@@ -721,22 +730,27 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
         The rename configuration value ("camel", "kebab", "pascal", etc.) if detected,
         None if no rename configuration exists or if not a msgspec struct.
     """
-    if not MSGSPEC_INSTALLED:
-        return None
+    if schema_type in _MSGSPEC_RENAME_CONFIG_CACHE:
+        return _MSGSPEC_RENAME_CONFIG_CACHE[schema_type]
 
-    if not is_msgspec_struct(schema_type):
+    if not MSGSPEC_INSTALLED or not is_msgspec_struct(schema_type):
+        _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = None
         return None
 
     from msgspec import structs
 
     fields: tuple[Any, ...] = structs.fields(cast("Any", schema_type))
     if not fields:
+        _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = None
         return None
 
     for field in fields:
         if field.name != field.encode_name:
-            return _detect_rename_pattern(field.name, field.encode_name)
+            rename_config = _detect_rename_pattern(field.name, field.encode_name)
+            _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = rename_config
+            return rename_config
 
+    _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = None
     return None
 
 

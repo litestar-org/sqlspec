@@ -1,12 +1,13 @@
 """Schema dumping and cache helpers for ``sqlspec.utils.serializers``."""
 
 import os
+from dataclasses import Field, fields as dataclasses_fields
 from collections import OrderedDict
 from functools import partial
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, attrs_asdict, msgspec_fields
+from sqlspec.typing import Empty, MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, attrs_asdict, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
@@ -114,6 +115,7 @@ class SchemaSerializer:
 _SERIALIZER_LOCK: RLock = RLock()
 _SCHEMA_SERIALIZERS: "OrderedDict[tuple[type[Any] | None, bool, bool], SchemaSerializer]" = OrderedDict()
 _SERIALIZER_METRICS = _SerializerCacheMetrics()
+_DATACLASS_FIELDS_CACHE: "dict[type[Any], tuple[Field[Any], ...]]" = {}
 
 
 def _make_serializer_key(sample: Any, exclude_unset: bool, wire_format: bool) -> "tuple[type[Any] | None, bool, bool]":
@@ -124,6 +126,15 @@ def _make_serializer_key(sample: Any, exclude_unset: bool, wire_format: bool) ->
 
 def _dump_identity_dict(value: Any) -> "dict[str, Any]":
     return cast("dict[str, Any]", value)
+
+
+def _dataclass_fields(schema_type: type[Any]) -> "tuple[Field[Any], ...]":
+    cached = _DATACLASS_FIELDS_CACHE.get(schema_type)
+    if cached is not None:
+        return cached
+    fields = dataclasses_fields(schema_type)
+    _DATACLASS_FIELDS_CACHE[schema_type] = fields
+    return fields
 
 
 def _msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple[tuple[str, str], ...]":
@@ -148,8 +159,17 @@ def _dump_msgspec_struct(
     }
 
 
-def _dump_dataclass(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
-    return dataclass_to_dict(value, exclude_empty=exclude_unset)
+def _dump_dataclass(value: Any, *, dataclass_fields: "tuple[Field[Any], ...]", exclude_unset: bool) -> "dict[str, Any]":
+    result: dict[str, Any] = {}
+    for field in dataclass_fields:
+        field_value = value.__getattribute__(field.name)
+        if exclude_unset and field_value is Empty:
+            continue
+        if is_dataclass_instance(field_value):
+            result[field.name] = dataclass_to_dict(field_value, exclude_empty=exclude_unset)
+        else:
+            result[field.name] = field_value
+    return result
 
 
 def _dump_pydantic(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
@@ -176,11 +196,19 @@ def _msgspec_dump_function(sample: Any, *, exclude_unset: bool, wire_format: boo
     )
 
 
+def _dataclass_dump_function(sample: Any, *, exclude_unset: bool) -> "Callable[[Any], dict[str, Any]]":
+    field_tuple = _dataclass_fields(type(sample))
+    return cast(
+        "Callable[[Any], dict[str, Any]]",
+        partial(_dump_dataclass, dataclass_fields=field_tuple, exclude_unset=exclude_unset),
+    )
+
+
 def _dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Callable[[Any], dict[str, Any]]":
     if sample is None or isinstance(sample, dict):
         return _dump_identity_dict
     if is_dataclass_instance(sample):
-        return cast("Callable[[Any], dict[str, Any]]", partial(_dump_dataclass, exclude_unset=exclude_unset))
+        return _dataclass_dump_function(sample, exclude_unset=exclude_unset)
     if is_pydantic_model(sample):
         return cast("Callable[[Any], dict[str, Any]]", partial(_dump_pydantic, exclude_unset=exclude_unset))
     if is_msgspec_struct(sample):
@@ -248,6 +276,7 @@ def reset_serializer_cache() -> None:
     """Clear cached serializer pipelines."""
     with _SERIALIZER_LOCK:
         _SCHEMA_SERIALIZERS.clear()
+        _DATACLASS_FIELDS_CACHE.clear()
         _SERIALIZER_METRICS.reset()
 
 

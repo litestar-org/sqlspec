@@ -320,7 +320,7 @@ def test_to_schema_mixin_with_typeddict_single_record() -> None:
 
 
 def test_to_schema_mixin_with_typeddict_multiple_records() -> None:
-    """Test CommonDriverAttributesMixin.to_schema with TypedDict for multiple records."""
+    """TypedDict list conversion should preserve the original list object."""
     test_data = [
         {"name": "user1", "age": 25, "optional_field": "value1"},
         {"name": "user2", "age": 30, "optional_field": "value2"},
@@ -330,25 +330,26 @@ def test_to_schema_mixin_with_typeddict_multiple_records() -> None:
 
     assert isinstance(result, list)
     assert len(result) == 2
+    assert result is test_data
     for item in result:
         assert isinstance(item, dict)
     assert result == test_data
 
 
 def test_to_schema_mixin_with_typeddict_mixed_data() -> None:
-    """Test CommonDriverAttributesMixin.to_schema with TypedDict filters non-dict items."""
+    """TypedDict list conversion should preserve non-dict values when present."""
     test_data = [
         {"name": "user1", "age": 25, "optional_field": "value1"},
-        "not_a_dict",  # This should be filtered out
+        "not_a_dict",
         {"name": "user2", "age": 30, "optional_field": "value2"},
     ]
 
     result = CommonDriverAttributesMixin.to_schema(test_data, schema_type=SampleTypedDict)
 
     assert isinstance(result, list)
-    assert len(result) == 2  # Only dict items should be included
-    for item in result:
-        assert isinstance(item, dict)
+    assert len(result) == 3
+    assert result is test_data
+    assert result[1] == "not_a_dict"
 
 
 def test_to_schema_mixin_with_typeddict_non_dict_data() -> None:

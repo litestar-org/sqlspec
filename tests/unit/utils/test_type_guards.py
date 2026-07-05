@@ -970,6 +970,25 @@ def test_get_msgspec_rename_config_with_pascal_rename() -> None:
     assert result == "pascal"
 
 
+def test_get_msgspec_rename_config_caches_per_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated rename-config lookups for one type should hit the cache."""
+    original_fields = msgspec.structs.fields
+    call_count = 0
+
+    class CachedMsgspecStruct(msgspec.Struct, rename="camel"):
+        test_name: str = "test"
+
+    def count_fields(schema_type: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return original_fields(schema_type)
+
+    monkeypatch.setattr(msgspec.structs, "fields", count_fields)
+    assert get_msgspec_rename_config(CachedMsgspecStruct) == "camel"
+    assert get_msgspec_rename_config(CachedMsgspecStruct) == "camel"
+    assert call_count == 1
+
+
 def test_is_typed_dict_with_typeddict_class() -> None:
     """Test is_typed_dict returns True for TypedDict classes."""
     assert is_typed_dict(SampleTypedDict) is True

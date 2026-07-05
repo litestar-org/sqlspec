@@ -278,9 +278,48 @@ def test_sql_result_get_data_with_typeddict() -> None:
     users = result.get_data(schema_type=UserDict)
     assert isinstance(users, list)
     assert len(users) == 2
+    assert users is test_data
     assert isinstance(users[0], dict)
     assert users[0]["name"] == "Alice"
     assert users[1]["name"] == "Bob"
+
+
+def test_sql_result_get_data_with_schema_type_releases_materialized_dict_cache() -> None:
+    """Schema conversion should release the cached dict materialization."""
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_tuples: list[Any] = [(1, "Alice"), (2, "Bob")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple"
+    )
+    users = result.get_data(schema_type=User)
+    assert len(users) == 2
+    assert result._materialized_dicts is None
+    assert result._schema_rows_cache is not None
+    assert result._schema_rows_cache[User] is users
+
+
+@pytest.mark.skipif(not __debug__, reason="row_format assertions are disabled under optimization")
+def test_sql_result_get_data_with_mismatched_row_format_raises() -> None:
+    """The row_format hook should reject mismatched first-row shapes in debug mode."""
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    sql_stmt = SQL("SELECT id, name FROM users")
+    raw_rows: list[Any] = [(1, "Alice")]
+    result = SQLResult(
+        statement=sql_stmt, data=raw_rows, rows_affected=1, column_names=["id", "name"], row_format="dict"
+    )
+    with pytest.raises(AssertionError, match="row_format"):
+        result.get_data(schema_type=User)
 
 
 def test_stack_result_from_sql_result() -> None:
