@@ -712,7 +712,7 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     return result
 
 
-_MSGSPEC_RENAME_CONFIG_CACHE: "dict[type[Any], str | None]" = {}
+_MSGSPEC_RENAME_CONFIG_CACHE: "dict[object, str | None]" = {}
 _MSGSPEC_RENAME_PATTERN_CACHE: "dict[tuple[str, str], str | None]" = {}
 
 

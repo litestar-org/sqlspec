@@ -323,7 +323,8 @@ class SQLResult(StatementResult):
             try:
                 keys = first_row.keys
             except AttributeError as exc:
-                raise AssertionError("row_format='record' requires dict-like rows") from exc
+                msg = "row_format='record' requires dict-like rows"
+                raise AssertionError(msg) from exc
             assert callable(keys), "row_format='record' requires dict-like rows"
 
     @property

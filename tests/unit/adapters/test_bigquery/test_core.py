@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-
 from google.cloud.bigquery import QueryJobConfig
 
 from sqlspec.adapters.bigquery.core import (

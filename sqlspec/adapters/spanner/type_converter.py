@@ -84,9 +84,7 @@ class SpannerOutputConverter(BaseTypeConverter):
     __slots__ = ("_enable_uuid_conversion", "_json_deserializer")
 
     def __init__(
-        self,
-        enable_uuid_conversion: bool = True,
-        json_deserializer: "Callable[[str], Any] | None" = None,
+        self, enable_uuid_conversion: bool = True, json_deserializer: "Callable[[str], Any] | None" = None
     ) -> None:
         """Initialize converter with Spanner-specific options.
 

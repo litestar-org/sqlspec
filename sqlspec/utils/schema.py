@@ -66,8 +66,11 @@ _MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
 }
 _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
 
+MsgspecValidationError: "type[Exception]"
 if MSGSPEC_INSTALLED:
-    import msgspec
+    from msgspec import ValidationError as MsgspecValidationError
+else:
+    MsgspecValidationError = ValueError
 
 
 # =============================================================================
@@ -386,12 +389,16 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     target_type = list[schema_type] if isinstance(transformed_data, Sequence) else schema_type
 
     try:
-        return convert(obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER)
-    except msgspec.ValidationError:
+        return convert(
+            obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER
+        )
+    except MsgspecValidationError:
         if not NUMPY_INSTALLED:
             raise
         transformed_data = _convert_numpy_recursive(transformed_data)
-        return convert(obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER)
+        return convert(
+            obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER
+        )
 
 
 def _convert_pydantic(data: Any, schema_type: Any) -> Any:

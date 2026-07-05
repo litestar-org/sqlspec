@@ -1,13 +1,14 @@
 """Schema dumping and cache helpers for ``sqlspec.utils.serializers``."""
 
 import os
-from dataclasses import Field, fields as dataclasses_fields
 from collections import OrderedDict
+from dataclasses import Field
+from dataclasses import fields as dataclasses_fields
 from functools import partial
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.typing import Empty, MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, attrs_asdict, msgspec_fields
+from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, Empty, attrs_asdict, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,

@@ -1576,13 +1576,7 @@ def _schema_type_numpy_payload() -> list[dict[str, int]]:
     global _SCHEMA_TYPE_NUMPY_PAYLOAD
     if _SCHEMA_TYPE_NUMPY_PAYLOAD is None:
         _SCHEMA_TYPE_NUMPY_PAYLOAD = [
-            {
-                "field_0": index,
-                "field_1": index + 1,
-                "field_2": index + 2,
-                "field_3": index + 3,
-                "field_4": index + 4,
-            }
+            {"field_0": index, "field_1": index + 1, "field_2": index + 2, "field_3": index + 3, "field_4": index + 4}
             for index in range(SCHEMA_TYPE_NUMPY_ROW_COUNT)
         ]
     return _SCHEMA_TYPE_NUMPY_PAYLOAD

@@ -6,7 +6,7 @@ import importlib
 import inspect
 import textwrap
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 __all__ = (
     "DRIVER_FEATURE_CONSUMED_KEYS",
@@ -71,16 +71,16 @@ DRIVER_FEATURE_CONSUMED_KEYS: dict[str, tuple[str, ...]] = dict.fromkeys(DRIVER_
 
 DRIVER_FEATURE_CONTRACT_GROUPS: dict[str, DriverFeatureContractGroup] = {
     "feature_honesty": DriverFeatureContractGroup(
-        description="TypedDict keys must be consumed by the owning adapter implementation.",
+        description="TypedDict keys must be consumed by the owning adapter implementation."
     ),
     "enable_false_semantics": DriverFeatureContractGroup(
-        description="enable_*=False must be inert and not leak process-global state.",
+        description="enable_*=False must be inert and not leak process-global state."
     ),
     "parity": DriverFeatureContractGroup(
-        description="Buffered, streamed, and Arrow values must stay equal on canonical typed fixtures.",
+        description="Buffered, streamed, and Arrow values must stay equal on canonical typed fixtures."
     ),
     "row_format": DriverFeatureContractGroup(
-        description="The first materialized row shape must match the row_format tag.",
+        description="The first materialized row shape must match the row_format tag."
     ),
 }
 
@@ -226,19 +226,19 @@ class _DocstringStripper(ast.NodeTransformer):
 
     def visit_Module(self, node: ast.Module) -> ast.Module:
         node.body = self._strip_body(node.body)
-        return self.generic_visit(node)
+        return cast("ast.Module", self.generic_visit(node))
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
         node.body = self._strip_body(node.body)
-        return self.generic_visit(node)
+        return cast("ast.FunctionDef", self.generic_visit(node))
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
         node.body = self._strip_body(node.body)
-        return self.generic_visit(node)
+        return cast("ast.AsyncFunctionDef", self.generic_visit(node))
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
         node.body = self._strip_body(node.body)
-        return self.generic_visit(node)
+        return cast("ast.ClassDef", self.generic_visit(node))
 
 
 def normalize_source(source: str) -> str:

@@ -224,9 +224,7 @@ def test_msgspec_conversion_does_not_walk_numpy_for_plain_payload(monkeypatch: p
 
 
 @pytest.mark.skipif(not schema_utils.NUMPY_INSTALLED, reason="numpy is not installed")
-def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ndarray payloads should still convert through the numpy fallback path."""
     import numpy as np
 

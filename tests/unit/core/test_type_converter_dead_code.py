@@ -31,16 +31,9 @@ def test_core_type_converter_module_no_longer_exposes_cached_path() -> None:
 
 @pytest.mark.parametrize(
     ("converter_cls",),
-    [
-        (ADBCOutputConverter,),
-        (DuckDBOutputConverter,),
-        (OracleOutputConverter,),
-        (SpannerOutputConverter,),
-    ],
+    [(ADBCOutputConverter,), (DuckDBOutputConverter,), (OracleOutputConverter,), (SpannerOutputConverter,)],
 )
-def test_output_converters_inherit_base_type_converter_directly(
-    converter_cls: type[BaseTypeConverter],
-) -> None:
+def test_output_converters_inherit_base_type_converter_directly(converter_cls: type[BaseTypeConverter]) -> None:
     """Adapter output converters should be attached directly to the shared base class."""
     assert converter_cls.__mro__[1] is BaseTypeConverter
 

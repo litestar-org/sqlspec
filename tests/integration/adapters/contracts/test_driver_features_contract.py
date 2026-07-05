@@ -46,11 +46,7 @@ def test_driver_type_system_registry_module_exports_contract_groups() -> None:
     }
     assert not any(module.DRIVER_FEATURE_CONTRACT_ENABLED.values())
     assert set(module.DRIVER_FEATURE_CONSUMED_KEYS) == {case.adapter for case in DRIVER_CASES}
-    assert {case.group for case in module.SOURCE_EQUIVALENCE_CASES} == {
-        "mysql_four_way",
-        "sqlite_pair",
-        "mssql_pair",
-    }
+    assert {case.group for case in module.SOURCE_EQUIVALENCE_CASES} == {"mysql_four_way", "sqlite_pair", "mssql_pair"}
 
 
 def _disabled_first_params(group_name: str, cases: Sequence[DriverCase]) -> tuple[ParameterSet, ...]:
@@ -71,14 +67,18 @@ def _disabled_first_params(group_name: str, cases: Sequence[DriverCase]) -> tupl
     return tuple(params)
 
 
-@pytest.mark.parametrize("sync_driver_case", _disabled_first_params("feature_honesty", SYNC_DRIVER_CASES), indirect=True)
+@pytest.mark.parametrize(
+    "sync_driver_case", _disabled_first_params("feature_honesty", SYNC_DRIVER_CASES), indirect=True
+)
 def test_sync_driver_feature_honesty_contract(sync_driver_case: DriverCaseContext) -> None:
     """Sync feature-honesty scaffolding stays disabled until migrations populate the registry."""
     importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
     raise AssertionError("unreachable")
 
 
-@pytest.mark.parametrize("async_driver_case", _disabled_first_params("feature_honesty", ASYNC_DRIVER_CASES), indirect=True)
+@pytest.mark.parametrize(
+    "async_driver_case", _disabled_first_params("feature_honesty", ASYNC_DRIVER_CASES), indirect=True
+)
 async def test_async_driver_feature_honesty_contract(async_driver_case: DriverCaseContext) -> None:
     """Async feature-honesty scaffolding stays disabled until migrations populate the registry."""
     importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
