@@ -95,13 +95,7 @@ class _BaseTableEventQueue:
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
-        base = (
-            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
-            f"FROM {self._table_name} "
-            "WHERE channel = :channel AND available_at <= :available_cutoff AND ("
-            "status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))"
-            ") ORDER BY created_at ASC"
-        )
+        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC"
         locking_clause = ""
         if select_for_update:
             locking_clause = " FOR UPDATE"
@@ -112,10 +106,8 @@ class _BaseTableEventQueue:
     def _select_by_id_sql(self) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = self._row_limit_clause()
-        return (
-            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at "
-            f"FROM {self._table_name} WHERE event_id = :event_id" + limit_clause
-        )
+        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE event_id = :event_id"
+        return base + limit_clause
 
     def _uses_tsql_limit(self) -> bool:
         return self._dialect in {"mssql", "tsql"} or "sql server" in self._dialect
@@ -132,12 +124,7 @@ class _BaseTableEventQueue:
         return bool(locking_enabled) and "oracle" in self._dialect
 
     def _claim_sql(self) -> str:
-        return (
-            f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 "
-            "WHERE event_id = :event_id AND ("
-            "status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff))"
-            ")"
-        )
+        return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
 
     def _ack_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
