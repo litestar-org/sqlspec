@@ -2359,7 +2359,7 @@ def _duckdb_set_variable(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("driver_features:duckdb_set_variable", DRIVER_FEATURES_SCOPE, _duckdb_set_variable)
 
 
-_ORACLE_DROP_CODE = {"TABLE": -942, "SEQUENCE": -2289}
+_ORACLE_DROP_CODE = {"TABLE": -942, "SEQUENCE": -2289, "PROCEDURE": -4043}
 
 
 def _oracle_drop_sql(kind: str, name: str) -> str:
@@ -2468,6 +2468,109 @@ async def _oracle_batch_errors_async(driver: object, case: DriverCase) -> None:
 
 register_sync_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEATURES_SCOPE, _oracle_batch_errors)
 register_async_extra_assertion("driver_features:oracle_batch_errors", DRIVER_FEATURES_SCOPE, _oracle_batch_errors_async)
+
+
+def _lower_keys(row: dict[str, object]) -> dict[str, object]:
+    return {key.lower(): value for key, value in row.items()}
+
+
+def _oracle_plsql(driver: object, case: DriverCase) -> None:
+    """Fold Oracle PL/SQL script execution with local variables, control flow, loops, and DML."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "plsql")
+    sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    sync_driver.execute_script(
+        f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50), calculated_value NUMBER)"
+    )
+    try:
+        result = sync_driver.execute_script(
+            f"""
+            DECLARE
+                v_base_value NUMBER := 10;
+                v_multiplier NUMBER := 3;
+                v_result NUMBER;
+                v_name VARCHAR2(50) := 'plsql_test';
+            BEGIN
+                v_result := v_base_value * v_multiplier;
+
+                IF v_result > 25 THEN
+                    v_result := v_result + 100;
+                END IF;
+
+                INSERT INTO {table} (id, name, calculated_value)
+                VALUES (1, v_name, v_result);
+
+                FOR i IN 2..4 LOOP
+                    INSERT INTO {table} (id, name, calculated_value)
+                    VALUES (i, v_name || '_' || i, v_result + i);
+                END LOOP;
+
+                COMMIT;
+            END;
+            """
+        )
+        assert isinstance(result, SQLResult)
+        rows = [_lower_keys(row) for row in sync_driver.execute(f"SELECT * FROM {table} ORDER BY id").get_data()]
+        assert len(rows) == 4
+        assert rows[0]["name"] == "plsql_test"
+        assert rows[0]["calculated_value"] == 130
+    finally:
+        sync_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+async def _oracle_plsql_async(driver: object, case: DriverCase) -> None:
+    """Async mirror of _oracle_plsql with a stored procedure invocation path."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "proc")
+    procedure = _pc_table(case, "plsql_proc")
+    await async_driver.execute_script(_oracle_drop_sql("PROCEDURE", procedure))
+    await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+    await async_driver.execute_script(
+        f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, input_value NUMBER, output_value NUMBER)"
+    )
+    try:
+        await async_driver.execute_script(
+            f"""
+            CREATE OR REPLACE PROCEDURE {procedure}(
+                p_input IN NUMBER,
+                p_output OUT NUMBER
+            ) AS
+            BEGIN
+                p_output := p_input * 2 + 10;
+
+                INSERT INTO {table} (id, input_value, output_value)
+                VALUES (p_input, p_input, p_output);
+
+                COMMIT;
+            END {procedure};
+            """
+        )
+        result = await async_driver.execute_script(
+            f"""
+            DECLARE
+                v_output NUMBER;
+            BEGIN
+                {procedure}(5, v_output);
+                {procedure}(10, v_output);
+            END;
+            """
+        )
+        assert isinstance(result, SQLResult)
+        rows = [
+            _lower_keys(row) for row in (await async_driver.execute(f"SELECT * FROM {table} ORDER BY id")).get_data()
+        ]
+        assert len(rows) == 2
+        assert rows[0]["input_value"] == 5
+        assert rows[0]["output_value"] == 20
+        assert rows[1]["input_value"] == 10
+        assert rows[1]["output_value"] == 30
+    finally:
+        await async_driver.execute_script(_oracle_drop_sql("PROCEDURE", procedure))
+        await async_driver.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+register_sync_extra_assertion("driver_features:oracle_plsql", DRIVER_FEATURES_SCOPE, _oracle_plsql)
+register_async_extra_assertion("driver_features:oracle_plsql", DRIVER_FEATURES_SCOPE, _oracle_plsql_async)
 
 
 def _oracle_json_payloads() -> "list[object]":

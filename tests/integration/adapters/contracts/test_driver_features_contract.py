@@ -36,6 +36,17 @@ def test_oracle_contract_declares_batch_error_assertions() -> None:
     validate_extra_assertions(async_case)
 
 
+def test_oracle_contract_declares_plsql_assertions() -> None:
+    """Oracle keeps PL/SQL script execution covered in the shared contract matrix."""
+    sync_case = get_driver_case("oracledb-sync")
+    async_case = get_driver_case("oracledb-async")
+
+    assert "driver_features:oracle_plsql" in sync_case.extra_assertions
+    assert "driver_features:oracle_plsql" in async_case.extra_assertions
+    validate_extra_assertions(sync_case)
+    validate_extra_assertions(async_case)
+
+
 def test_spanner_contract_status_defers_session_controls_explicitly() -> None:
     """Spanner remains deferred in the shared matrix until a safe active contract is available."""
     case = get_driver_case("spanner-sync")
