@@ -66,6 +66,8 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
     "pymysql-sync",
     "sqlite-sync",
 }
+MERGE_CASE_IDS = {"asyncpg-async", "oracledb-async", "oracledb-sync", "psqlpy-async", "psycopg-async", "psycopg-sync"}
+MERGE_BULK_CASE_IDS = {"asyncpg-async", "oracledb-async", "psqlpy-async", "psycopg-async", "psycopg-sync"}
 
 
 def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
@@ -105,6 +107,8 @@ def test_capability_params_match_requested_capability() -> None:
         "supports_grouped_subquery",
         "supports_data_dictionary",
         "supports_data_dictionary_topology",
+        "supports_merge",
+        "supports_merge_bulk",
         "supports_native_bulk_ingest",
         "supports_native_metadata",
         "supports_schema_qualified_data_dictionary",
@@ -142,6 +146,20 @@ def test_migration_lifecycle_cases_are_contract_owned() -> None:
     """Migration lifecycle behavior belongs to the shared migration contract."""
     cases = {case.id: case for case in ACTIVE_MIGRATION_CASES}
     assert set(cases) == MIGRATION_LIFECYCLE_CASE_IDS
+
+
+def test_merge_cases_are_contract_owned() -> None:
+    """MERGE builder runtime behavior belongs to the shared driver contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in MERGE_CASE_IDS}
+    assert set(cases) == MERGE_CASE_IDS
+    assert all(case.supports_merge for case in cases.values())
+
+
+def test_merge_bulk_cases_are_contract_owned() -> None:
+    """Bulk MERGE strategy behavior belongs to the shared driver contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in MERGE_BULK_CASE_IDS}
+    assert set(cases) == MERGE_BULK_CASE_IDS
+    assert all(case.supports_merge_bulk for case in cases.values())
 
 
 def test_adk_capability_params_match_requested_capability() -> None:

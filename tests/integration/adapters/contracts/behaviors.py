@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import json
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
 
@@ -1245,6 +1246,415 @@ PARAM_CODECS_SCOPE = "param_codecs"
 
 def _pc_table(case: DriverCase, suffix: str) -> str:
     return f"pc_{suffix}_{case.adapter}_{case.mode}"
+
+
+def _merge_dialect(case: DriverCase) -> str:
+    return "oracle" if case.dialect == "oracle" else "postgres"
+
+
+def _merge_table_sql(case: DriverCase, table: str) -> str:
+    if case.dialect == "oracle":
+        return (
+            f"CREATE TABLE {table} ("
+            "id NUMBER PRIMARY KEY, "
+            "name VARCHAR2(100) NOT NULL, "
+            "price NUMBER(10, 2), "
+            "stock NUMBER DEFAULT 0, "
+            "category VARCHAR2(50)"
+            ")"
+        )
+    return (
+        f"CREATE TABLE {table} ("
+        "id INTEGER PRIMARY KEY, "
+        "name TEXT NOT NULL, "
+        "price NUMERIC(10, 2), "
+        "stock INTEGER DEFAULT 0, "
+        "category TEXT"
+        ")"
+    )
+
+
+def _drop_merge_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        driver.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        driver.commit()
+
+
+async def _drop_merge_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    if case.dialect == "oracle":
+        await driver.execute_script(_oracle_drop_sql("TABLE", table))
+    else:
+        await driver.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        await driver.commit()
+
+
+def _merge_source(rows: list[dict[str, object]], case: DriverCase) -> object:
+    return rows[0] if case.dialect == "oracle" and len(rows) == 1 else rows
+
+
+def _merge_upsert_query(table: str, rows: list[dict[str, object]], case: DriverCase) -> object:
+    return (
+        sql
+        .merge(dialect=_merge_dialect(case))
+        .into(table, alias="t")
+        .using(_merge_source(rows, case), alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
+        .when_not_matched_then_insert(
+            id="src.id", name="src.name", price="src.price", stock="src.stock", category="src.category"
+        )
+    )
+
+
+def _merge_price(value: object) -> float | None:
+    return None if value is None else float(value)
+
+
+def assert_sync_merge_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync MERGE updates, inserts, expressions, conditions, NULLs, and table sources."""
+    if not case.supports_merge:
+        pytest.skip(f"{case.id} does not support MERGE")
+    sync_driver = cast("SyncContractDriver", driver)
+    target = _pc_table(case, "merge")
+    source = _pc_table(case, "merge_src")
+    _drop_merge_table_sync(sync_driver, case, source)
+    _drop_merge_table_sync(sync_driver, case, target)
+    sync_driver.execute(_merge_table_sql(case, target))
+    sync_driver.execute(_merge_table_sql(case, source))
+    sync_driver.execute(
+        f"INSERT INTO {target} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+        id=1,
+        name="Existing Product",
+        price=Decimal("19.99"),
+        stock=10,
+        category="old",
+    )
+    sync_driver.commit()
+    try:
+        result = sync_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 1, "name": "Updated Product", "price": Decimal("24.99"), "stock": 11, "category": "new"}],
+                case,
+            )
+        )
+        assert isinstance(result, SQLResult)
+        row = _lower_keys(sync_driver.execute(f"SELECT name, price FROM {target} WHERE id = 1").get_data()[0])
+        assert row["name"] == "Updated Product"
+        assert _merge_price(row["price"]) == 24.99
+
+        sync_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 2, "name": "Inserted Product", "price": Decimal("39.99"), "stock": 5, "category": "new"}],
+                case,
+            )
+        )
+        inserted = _lower_keys(sync_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 2").get_data()[0])
+        assert inserted["name"] == "Inserted Product"
+        assert inserted["stock"] == 5
+
+        sync_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(_merge_source([{"id": 1, "additional": 5, "new_price": Decimal("5.00")}], case), alias="src")
+            .on("t.id = src.id")
+            .when_matched_then_update({"stock": "t.stock + src.additional", "price": "src.new_price"})
+        )
+        expression = _lower_keys(sync_driver.execute(f"SELECT price, stock FROM {target} WHERE id = 1").get_data()[0])
+        assert _merge_price(expression["price"]) == 5.0
+        assert expression["stock"] == 16
+
+        sync_driver.execute(
+            _merge_upsert_query(
+                target, [{"id": 1, "name": "Null Product", "price": None, "stock": None, "category": None}], case
+            )
+        )
+        null_row = _lower_keys(
+            sync_driver.execute(f"SELECT price, stock, category FROM {target} WHERE id = 1").get_data()[0]
+        )
+        assert null_row["price"] is None
+        assert null_row["stock"] is None
+        assert null_row["category"] is None
+
+        sync_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=1,
+            name="Staged Update",
+            price=Decimal("99.99"),
+            stock=100,
+            category="staged",
+        )
+        sync_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=3,
+            name="Staged Insert",
+            price=Decimal("149.99"),
+            stock=50,
+            category="staged",
+        )
+        sync_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(source, alias="s")
+            .on("t.id = s.id")
+            .when_matched_then_update(name="s.name", price="s.price", stock="s.stock", category="s.category")
+            .when_not_matched_then_insert(columns=["id", "name", "price", "stock", "category"])
+        )
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {target}") == 3
+        staged = _lower_keys(sync_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 3").get_data()[0])
+        assert staged["name"] == "Staged Insert"
+        assert staged["stock"] == 50
+    finally:
+        _drop_merge_table_sync(sync_driver, case, source)
+        _drop_merge_table_sync(sync_driver, case, target)
+
+
+async def assert_async_merge_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of assert_sync_merge_contract."""
+    if not case.supports_merge:
+        pytest.skip(f"{case.id} does not support MERGE")
+    async_driver = cast("AsyncContractDriver", driver)
+    target = _pc_table(case, "merge")
+    source = _pc_table(case, "merge_src")
+    await _drop_merge_table_async(async_driver, case, source)
+    await _drop_merge_table_async(async_driver, case, target)
+    await async_driver.execute(_merge_table_sql(case, target))
+    await async_driver.execute(_merge_table_sql(case, source))
+    await async_driver.execute(
+        f"INSERT INTO {target} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+        id=1,
+        name="Existing Product",
+        price=Decimal("19.99"),
+        stock=10,
+        category="old",
+    )
+    await async_driver.commit()
+    try:
+        result = await async_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 1, "name": "Updated Product", "price": Decimal("24.99"), "stock": 11, "category": "new"}],
+                case,
+            )
+        )
+        assert isinstance(result, SQLResult)
+        row = _lower_keys((await async_driver.execute(f"SELECT name, price FROM {target} WHERE id = 1")).get_data()[0])
+        assert row["name"] == "Updated Product"
+        assert _merge_price(row["price"]) == 24.99
+
+        await async_driver.execute(
+            _merge_upsert_query(
+                target,
+                [{"id": 2, "name": "Inserted Product", "price": Decimal("39.99"), "stock": 5, "category": "new"}],
+                case,
+            )
+        )
+        inserted = _lower_keys(
+            (await async_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 2")).get_data()[0]
+        )
+        assert inserted["name"] == "Inserted Product"
+        assert inserted["stock"] == 5
+
+        await async_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(_merge_source([{"id": 1, "additional": 5, "new_price": Decimal("5.00")}], case), alias="src")
+            .on("t.id = src.id")
+            .when_matched_then_update({"stock": "t.stock + src.additional", "price": "src.new_price"})
+        )
+        expression = _lower_keys(
+            (await async_driver.execute(f"SELECT price, stock FROM {target} WHERE id = 1")).get_data()[0]
+        )
+        assert _merge_price(expression["price"]) == 5.0
+        assert expression["stock"] == 16
+
+        await async_driver.execute(
+            _merge_upsert_query(
+                target, [{"id": 1, "name": "Null Product", "price": None, "stock": None, "category": None}], case
+            )
+        )
+        null_row = _lower_keys(
+            (await async_driver.execute(f"SELECT price, stock, category FROM {target} WHERE id = 1")).get_data()[0]
+        )
+        assert null_row["price"] is None
+        assert null_row["stock"] is None
+        assert null_row["category"] is None
+
+        await async_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=1,
+            name="Staged Update",
+            price=Decimal("99.99"),
+            stock=100,
+            category="staged",
+        )
+        await async_driver.execute(
+            f"INSERT INTO {source} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=3,
+            name="Staged Insert",
+            price=Decimal("149.99"),
+            stock=50,
+            category="staged",
+        )
+        await async_driver.execute(
+            sql
+            .merge(dialect=_merge_dialect(case))
+            .into(target, alias="t")
+            .using(source, alias="s")
+            .on("t.id = s.id")
+            .when_matched_then_update(name="s.name", price="s.price", stock="s.stock", category="s.category")
+            .when_not_matched_then_insert(columns=["id", "name", "price", "stock", "category"])
+        )
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {target}") == 3
+        staged = _lower_keys(
+            (await async_driver.execute(f"SELECT name, stock FROM {target} WHERE id = 3")).get_data()[0]
+        )
+        assert staged["name"] == "Staged Insert"
+        assert staged["stock"] == 50
+    finally:
+        await _drop_merge_table_async(async_driver, case, source)
+        await _drop_merge_table_async(async_driver, case, target)
+
+
+def _merge_bulk_rows(count: int, *, include_nulls: bool = False) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = [
+        {
+            "id": i,
+            "name": f"Product {i}",
+            "price": Decimal(f"{10 + i}.99"),
+            "stock": i * 10,
+            "category": "bulk" if i % 2 == 0 else "regular",
+        }
+        for i in range(1, count + 1)
+    ]
+    if include_nulls:
+        rows.extend([
+            {"id": count + 1, "name": "Null Price", "price": None, "stock": 10, "category": None},
+            {"id": count + 2, "name": "Null Stock", "price": Decimal("30.99"), "stock": None, "category": "books"},
+        ])
+    return rows
+
+
+def assert_sync_merge_bulk_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync bulk MERGE handles JSON/recordset source expansion, updates, inserts, and NULL values."""
+    if not case.supports_merge_bulk:
+        pytest.skip(f"{case.id} does not support bulk MERGE")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _pc_table(case, "mergebulk")
+    _drop_merge_table_sync(sync_driver, case, table)
+    sync_driver.execute(_merge_table_sql(case, table))
+    sync_driver.commit()
+    try:
+        sync_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(100), case))
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {table}") == 100
+        assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {table} WHERE category = 'bulk'") == 50
+
+        sync_driver.execute(
+            f"INSERT INTO {table} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=200,
+            name="Old Product",
+            price=Decimal("5.00"),
+            stock=100,
+            category="old",
+        )
+        sync_driver.execute(
+            _merge_upsert_query(
+                table,
+                [
+                    {
+                        "id": 200,
+                        "name": "Updated Product",
+                        "price": Decimal("15.00"),
+                        "stock": 50,
+                        "category": "updated",
+                    },
+                    {
+                        "id": 201,
+                        "name": "Inserted Product",
+                        "price": Decimal("30.00"),
+                        "stock": 10,
+                        "category": "inserted",
+                    },
+                ],
+                case,
+            )
+        )
+        updated = _lower_keys(sync_driver.execute(f"SELECT name, category FROM {table} WHERE id = 200").get_data()[0])
+        assert updated["name"] == "Updated Product"
+        assert updated["category"] == "updated"
+
+        sync_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(10, include_nulls=True), case))
+        null_row = _lower_keys(sync_driver.execute(f"SELECT price, category FROM {table} WHERE id = 11").get_data()[0])
+        assert null_row["price"] is None
+        assert null_row["category"] is None
+    finally:
+        _drop_merge_table_sync(sync_driver, case, table)
+
+
+async def assert_async_merge_bulk_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of assert_sync_merge_bulk_contract."""
+    if not case.supports_merge_bulk:
+        pytest.skip(f"{case.id} does not support bulk MERGE")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "mergebulk")
+    await _drop_merge_table_async(async_driver, case, table)
+    await async_driver.execute(_merge_table_sql(case, table))
+    await async_driver.commit()
+    try:
+        await async_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(100), case))
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {table}") == 100
+        assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {table} WHERE category = 'bulk'") == 50
+
+        await async_driver.execute(
+            f"INSERT INTO {table} (id, name, price, stock, category) VALUES (:id, :name, :price, :stock, :category)",
+            id=200,
+            name="Old Product",
+            price=Decimal("5.00"),
+            stock=100,
+            category="old",
+        )
+        await async_driver.execute(
+            _merge_upsert_query(
+                table,
+                [
+                    {
+                        "id": 200,
+                        "name": "Updated Product",
+                        "price": Decimal("15.00"),
+                        "stock": 50,
+                        "category": "updated",
+                    },
+                    {
+                        "id": 201,
+                        "name": "Inserted Product",
+                        "price": Decimal("30.00"),
+                        "stock": 10,
+                        "category": "inserted",
+                    },
+                ],
+                case,
+            )
+        )
+        updated = _lower_keys(
+            (await async_driver.execute(f"SELECT name, category FROM {table} WHERE id = 200")).get_data()[0]
+        )
+        assert updated["name"] == "Updated Product"
+        assert updated["category"] == "updated"
+
+        await async_driver.execute(_merge_upsert_query(table, _merge_bulk_rows(10, include_nulls=True), case))
+        null_row = _lower_keys(
+            (await async_driver.execute(f"SELECT price, category FROM {table} WHERE id = 11")).get_data()[0]
+        )
+        assert null_row["price"] is None
+        assert null_row["category"] is None
+    finally:
+        await _drop_merge_table_async(async_driver, case, table)
 
 
 async def _asyncpg_param_codecs(driver: object, case: DriverCase) -> None:
