@@ -33,6 +33,7 @@ from sqlspec.utils.text import camelize
 __all__ = (
     "main",
     "print_benchmark_table",
+    "raw_aiosqlite_worker_hops",
     "raw_asyncpg_initialization",
     "raw_asyncpg_read_heavy",
     "raw_asyncpg_write_heavy",
@@ -68,6 +69,7 @@ __all__ = (
     "sqlalchemy_sqlite_read_heavy",
     "sqlalchemy_sqlite_repeated_queries",
     "sqlalchemy_sqlite_write_heavy",
+    "sqlspec_aiosqlite_worker_hops",
     "sqlspec_asyncpg_initialization",
     "sqlspec_asyncpg_read_heavy",
     "sqlspec_asyncpg_write_heavy",
@@ -153,7 +155,12 @@ ORACLE_EXTENDED_SCENARIOS = (
     ("sqlspec_async", "lob_fetch_100k"),
     ("sqlspec_async_fetch_lobs_true", "lob_fetch_100k"),
 )
-EXTENDED_SCENARIOS_BY_DRIVER = {"sqlite": SQLITE_EXTENDED_SCENARIOS, "oracle": ORACLE_EXTENDED_SCENARIOS}
+AIOSQLITE_EXTENDED_SCENARIOS = (("raw", "worker_hops"), ("sqlspec", "worker_hops"))
+EXTENDED_SCENARIOS_BY_DRIVER = {
+    "sqlite": SQLITE_EXTENDED_SCENARIOS,
+    "aiosqlite": AIOSQLITE_EXTENDED_SCENARIOS,
+    "oracle": ORACLE_EXTENDED_SCENARIOS,
+}
 
 
 @click.command()
@@ -1328,6 +1335,35 @@ async def sqlspec_aiosqlite_repeated_queries() -> None:
             await anyio.Path(tmp_path).unlink()
 
 
+async def raw_aiosqlite_worker_hops() -> None:
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    async with aiosqlite.connect(":memory:") as conn:
+        for i in range(ROWS_TO_INSERT):
+            cursor = await conn.execute("SELECT ?", (i,))
+            row = await cursor.fetchone()
+            assert row[0] == i
+
+
+async def sqlspec_aiosqlite_worker_hops() -> None:
+    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
+    if AiosqliteConfig is None:
+        return
+    spec = SQLSpec()
+    config = AiosqliteConfig(database=":memory:", pool_size=1)
+    try:
+        async with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                value = await session.select_value("SELECT ?", i)
+                assert value == i
+        _check_pool_leak(config.connection_instance, "aiosqlite/worker_hops")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
 async def sqlalchemy_aiosqlite_initialization() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
@@ -2138,6 +2174,8 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "aiosqlite", "read_heavy"): sqlalchemy_aiosqlite_read_heavy,
     ("sqlalchemy", "aiosqlite", "iterative_inserts"): sqlalchemy_aiosqlite_iterative_inserts,
     ("sqlalchemy", "aiosqlite", "repeated_queries"): sqlalchemy_aiosqlite_repeated_queries,
+    ("raw", "aiosqlite", "worker_hops"): raw_aiosqlite_worker_hops,
+    ("sqlspec", "aiosqlite", "worker_hops"): sqlspec_aiosqlite_worker_hops,
     # Asyncpg scenarios
     ("raw", "asyncpg", "initialization"): raw_asyncpg_initialization,
     ("raw", "asyncpg", "write_heavy"): raw_asyncpg_write_heavy,
