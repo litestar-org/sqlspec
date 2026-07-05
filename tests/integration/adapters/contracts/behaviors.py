@@ -5003,8 +5003,19 @@ async def _oracle_arrow_specifics(driver: object, case: DriverCase) -> None:
         await _async_drop_table(async_driver, json_table)
 
 
+def _adbc_select_to_arrow_error(driver: object, case: DriverCase) -> None:
+    """Fold ADBC select_to_arrow mapped-error coverage."""
+    sync_driver = cast("SyncContractDriver", driver)
+    missing_table = _pc_table(case, "missing_arrow")
+    with pytest.raises(SQLParsingError):
+        sync_driver.select_to_arrow(f"SELECT * FROM {missing_table}")
+
+
 register_sync_extra_assertion("arrow_specifics:duckdb", ARROW_SPECIFICS_SCOPE, _duckdb_arrow_specifics)
 register_sync_extra_assertion("arrow_specifics:postgres", ARROW_SPECIFICS_SCOPE, _postgres_arrow_specifics)
+register_sync_extra_assertion(
+    "arrow_specifics:adbc_select_to_arrow_error", ARROW_SPECIFICS_SCOPE, _adbc_select_to_arrow_error
+)
 register_async_extra_assertion("arrow_specifics:sqlite", ARROW_SPECIFICS_SCOPE, _sqlite_arrow_specifics)
 register_async_extra_assertion("arrow_specifics:mysql", ARROW_SPECIFICS_SCOPE, _mysql_arrow_specifics)
 register_async_extra_assertion("arrow_specifics:postgres", ARROW_SPECIFICS_SCOPE, _postgres_arrow_specifics_async)
@@ -5029,6 +5040,7 @@ _STORAGE_BRIDGE_EXPECTED = (
     {"name": "alpha", "value": 1, "note": "first"},
     {"name": "beta", "value": 2, "note": "second"},
 )
+STORAGE_BRIDGE_SCOPE = "storage_bridge"
 
 
 def _storage_bridge_arrow_table() -> Any:
@@ -5055,6 +5067,7 @@ def assert_sync_storage_bridge_local_contract(driver: object, case: DriverCase, 
     load_job = sync_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
     assert load_job.telemetry["rows_processed"] == 2
     assert_result_data(sync_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+    dispatch_sync_extra_assertions(driver, case, STORAGE_BRIDGE_SCOPE)
 
 
 async def assert_async_storage_bridge_local_contract(driver: object, case: DriverCase, tmp_path: Any) -> None:
@@ -5075,6 +5088,42 @@ async def assert_async_storage_bridge_local_contract(driver: object, case: Drive
     load_job = await async_driver.load_from_storage(table.name, destination, file_format="parquet", overwrite=True)
     assert load_job.telemetry["rows_processed"] == 2
     assert_result_data(await async_driver.execute(table.select_ordered_sql), _STORAGE_BRIDGE_EXPECTED)
+    await dispatch_async_extra_assertions(driver, case, STORAGE_BRIDGE_SCOPE)
+
+
+async def _mysql_decimal_storage_bridge(driver: object, case: DriverCase) -> None:
+    """Fold MySQL DECIMAL fidelity for parquet load_from_storage."""
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _pc_table(case, "storage_scores")
+    await _async_drop_table(async_driver, table)
+    await async_driver.execute(f"CREATE TABLE {table} (id INT PRIMARY KEY, score DECIMAL(5,2))")
+    try:
+        with TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "scores.parquet"
+            pq.write_table(pa.table({"id": [5, 6], "score": [12.5, 99.1]}), destination)
+
+            job = await async_driver.load_from_storage(table, str(destination), file_format="parquet", overwrite=True)
+            assert job.telemetry["destination"] == table
+            assert job.telemetry["extra"]["source"]["destination"].endswith("scores.parquet")  # type: ignore[index]
+            assert job.telemetry["extra"]["source"]["backend"]  # type: ignore[index]
+
+        rows = (await async_driver.execute(f"SELECT id, score FROM {table} ORDER BY id")).get_data()
+        assert len(rows) == 2
+        assert rows[0]["id"] == 5
+        assert float(rows[0]["score"]) == pytest.approx(12.5)
+        assert rows[1]["id"] == 6
+        assert float(rows[1]["score"]) == pytest.approx(99.1)
+    finally:
+        await _async_drop_table(async_driver, table)
+
+
+register_async_extra_assertion("storage_bridge:mysql_decimal", STORAGE_BRIDGE_SCOPE, _mysql_decimal_storage_bridge)
 
 
 def _bulk_ingest_arrow(row_count: int) -> Any:

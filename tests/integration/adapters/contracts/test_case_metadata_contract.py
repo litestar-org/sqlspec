@@ -73,6 +73,8 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
 MERGE_CASE_IDS = {"asyncpg-async", "oracledb-async", "oracledb-sync", "psqlpy-async", "psycopg-async", "psycopg-sync"}
 MERGE_BULK_CASE_IDS = {"asyncpg-async", "oracledb-async", "psqlpy-async", "psycopg-async", "psycopg-sync"}
 VECTOR_CASE_IDS = {"adbc-duckdb-sync", "duckdb-sync", "oracledb-async", "oracledb-sync"}
+STORAGE_BRIDGE_DECIMAL_CASE_IDS = {"aiomysql-async", "asyncmy-async"}
+UNSUPPORTED_EXCEPTION_TRANSLATION_CASE_IDS = {"adbc-sqlite-sync", "arrow-odbc-sync", "bigquery-sync"}
 POSTGRES_EXTENSION_CASE_IDS = {
     "adbc-paradedb-sync",
     "adbc-pgvector-sync",
@@ -183,6 +185,19 @@ def test_plain_vector_cases_are_contract_owned() -> None:
     cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in VECTOR_CASE_IDS}
     assert set(cases) == VECTOR_CASE_IDS
     assert all(case.supports_vector for case in cases.values())
+
+
+def test_storage_bridge_decimal_cases_are_contract_owned() -> None:
+    """MySQL DECIMAL storage-bridge behavior belongs to the shared driver contract."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if "storage_bridge:mysql_decimal" in case.extra_assertions}
+    assert set(cases) == STORAGE_BRIDGE_DECIMAL_CASE_IDS
+    assert all(case.supports_storage_bridge for case in cases.values())
+
+
+def test_exception_translation_gated_cases_are_explicit() -> None:
+    """Cases excluded from the exception contract are explicit capability decisions."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if not case.supports_exception_translation}
+    assert set(cases) == UNSUPPORTED_EXCEPTION_TRANSLATION_CASE_IDS
 
 
 def test_postgres_extension_cases_are_contract_owned() -> None:
