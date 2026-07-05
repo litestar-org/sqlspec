@@ -470,7 +470,7 @@ class WhereClauseMixin:
         placeholder = exp.Placeholder(this=param_name)
         return condition_factory(col_expr, placeholder)
 
-    def _get_existing_where_clause(self) -> exp.Where | None:
+    def _current_where_clause(self) -> exp.Where | None:
         builder = cast("SQLBuilderProtocol", self)
         expression = builder.get_expression()
         if isinstance(expression, (exp.Select, exp.Update, exp.Delete)):
@@ -486,7 +486,7 @@ class WhereClauseMixin:
             msg = "OR WHERE clause not supported for current expression. Use where() first."
             raise SQLBuilderError(msg)
 
-        where_clause = self._get_existing_where_clause()
+        where_clause = self._current_where_clause()
         if where_clause is None or where_clause.this is None:
             msg = "Cannot add OR WHERE clause: no existing WHERE clause found. Use where() before or_where()."
             raise SQLBuilderError(msg)
@@ -570,9 +570,7 @@ class WhereClauseMixin:
         msg = f"NOT BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
 
-    def _create_any_condition_impl(
-        self, column_expr: exp.Expr, values: Any, column_name: str, *, negate: bool
-    ) -> exp.Expr:
+    def _any_comparison(self, column_expr: exp.Expr, values: Any, column_name: str, *, negate: bool) -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         comparison = exp.NEQ if negate else exp.EQ
         error_context = "WHERE NOT ANY" if negate else "WHERE ANY"
@@ -620,10 +618,10 @@ class WhereClauseMixin:
         return comparison(this=column_expr, expression=exp.Any(this=tuple_expr))
 
     def _create_any_condition(self, column_expr: exp.Expr, values: Any, column_name: str) -> exp.Expr:
-        return self._create_any_condition_impl(column_expr, values, column_name, negate=False)
+        return self._any_comparison(column_expr, values, column_name, negate=False)
 
     def _create_not_any_condition(self, column_expr: exp.Expr, values: Any, column_name: str) -> exp.Expr:
-        return self._create_any_condition_impl(column_expr, values, column_name, negate=True)
+        return self._any_comparison(column_expr, values, column_name, negate=True)
 
     def _normalize_subquery_expression(self, subquery: Any, builder: "SQLBuilderProtocol") -> exp.Expr:
         if has_parameter_builder(subquery):
@@ -1349,7 +1347,7 @@ class Select(
             **kwargs: Additional QueryBuilder arguments (dialect, schema, etc.)
         """
         (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_query_builder_kwargs(kwargs)
+            self._parse_init_options(kwargs)
         )
         super().__init__(
             dialect=dialect,

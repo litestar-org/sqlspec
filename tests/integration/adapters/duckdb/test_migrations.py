@@ -24,7 +24,7 @@ def _duckdb_identifier(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
-def _write_duckdb_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
+def _write_unqualified_table_migration(migration_dir: Path, table_name: str) -> None:
     migration_content = f'''"""Create an unqualified DuckDB table."""
 
 
@@ -75,7 +75,7 @@ def test_duckdb_migration_default_schema_applies_to_ddl(tmp_path: Path) -> None:
             driver.execute(f"CREATE SCHEMA {schema}")
 
         commands.init(str(migration_dir), package=True)
-        _write_duckdb_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
         commands.upgrade()
 
         with config.provide_session() as driver:
@@ -112,7 +112,7 @@ def test_duckdb_migration_separable_tracker_and_default_schema(tmp_path: Path) -
             driver.execute(f"CREATE SCHEMA {tracker_schema}")
 
         commands.init(str(migration_dir), package=True)
-        _write_duckdb_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
         commands.upgrade()
 
         with config.provide_session() as driver:
@@ -147,7 +147,7 @@ def test_duckdb_migration_tracker_lives_in_configured_schema(tmp_path: Path) -> 
             driver.execute(f"CREATE SCHEMA {tracker_schema}")
 
         commands.init(str(migration_dir), package=True)
-        _write_duckdb_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
         commands.upgrade()
 
         with config.provide_session() as driver:
@@ -179,7 +179,7 @@ def test_duckdb_migration_missing_schema_fails_fast(tmp_path: Path) -> None:
 
     try:
         commands.init(str(migration_dir), package=True)
-        _write_duckdb_unqualified_table_migration(migration_dir, table_name)
+        _write_unqualified_table_migration(migration_dir, table_name)
 
         with pytest.raises(MigrationError, match=f"Configured schema '{schema}' does not exist"):
             commands.upgrade()

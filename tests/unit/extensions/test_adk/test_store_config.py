@@ -338,7 +338,7 @@ def test_adk_base_stores_keep_original_config(store_cls: type[Any]) -> None:
 def test_adk_base_stores_do_not_keep_dead_private_helpers() -> None:
     assert "_value_to_bytes" not in BaseAsyncADKStore.__dict__
     assert "_value_to_bytes" not in BaseSyncADKStore.__dict__
-    assert "_get_adk_config" not in BaseSyncADKArtifactStore.__dict__
+    assert "_adk_config" not in BaseSyncADKArtifactStore.__dict__
 
 
 def test_adk_table_helpers_have_one_private_owner() -> None:

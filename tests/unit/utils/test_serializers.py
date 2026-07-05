@@ -687,7 +687,7 @@ def test_schema_serializer_cache_handles_concurrent_registration() -> None:
 
 
 @pytest.fixture(autouse=True)
-def schema_dump_wire_format_opt_out__reset_cache() -> "Any":
+def _reset_wire_format_serializer_cache() -> "Any":
     reset_serializer_cache()
     yield
     reset_serializer_cache()
@@ -822,7 +822,7 @@ def test_schema_dump_wire_format_opt_out_attrs_unaffected_by_wire_format() -> No
 
 
 @pytest.fixture(autouse=True)
-def schema_dump_rename__reset_cache() -> "Any":
+def _reset_rename_serializer_cache() -> "Any":
     reset_serializer_cache()
     yield
     reset_serializer_cache()
@@ -899,7 +899,7 @@ def test_schema_dump_rename_exclude_unset_with_rename() -> None:
 
 
 @pytest.fixture(autouse=True)
-def schema_dump_default_is_python_names__reset_cache() -> "Any":
+def _reset_default_names_serializer_cache() -> "Any":
     reset_serializer_cache()
     yield
     reset_serializer_cache()

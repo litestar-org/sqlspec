@@ -109,7 +109,7 @@ def _convert_time_param(value: Any) -> Any:
     return value
 
 
-def _build_asyncpg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for AsyncPG."""
 
     return {
@@ -147,7 +147,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="driver",
-        custom_type_coercions=_build_asyncpg_custom_type_coercions(),
+        custom_type_coercions=_custom_type_coercions(),
         default_dialect="postgres",
     )
 

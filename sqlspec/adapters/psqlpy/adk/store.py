@@ -469,7 +469,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
     async def _get_create_events_table_sql(self) -> str:
-        adk_config = _get_psqlpy_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
             adk_config, self._events_table
         )
@@ -842,7 +842,7 @@ def _is_table_missing_error(exc: Exception) -> bool:
     return "does not exist" in error_msg or "relation" in error_msg
 
 
-def _get_psqlpy_adk_config(config: Any) -> PsqlpyADKConfig:
+def _adk_config(config: Any) -> PsqlpyADKConfig:
     """Return psqlpy ADK extension settings from ``extension_config["adk"]``."""
 
     extension_config = getattr(config, "extension_config", {})

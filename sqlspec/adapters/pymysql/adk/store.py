@@ -62,35 +62,35 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
 
     def create_tables(self) -> None:
         """Create all ADK session tables if they don't exist."""
-        _pymysql_create_tables(self)
+        _create_tables(self)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session."""
-        return _pymysql_create_session(self, session_id, app_name, user_id, state, owner_id)
+        return _create_session(self, session_id, app_name, user_id, state, owner_id)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by scoped identifiers."""
-        return _pymysql_get_session(self, app_name, user_id, session_id, renew_for=renew_for)
+        return _select_session(self, app_name, user_id, session_id, renew_for=renew_for)
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        _pymysql_update_session_state(self, app_name, user_id, session_id, state)
+        _update_session_state(self, app_name, user_id, session_id, state)
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
-        return _pymysql_list_sessions(self, app_name, user_id)
+        return _list_sessions(self, app_name, user_id)
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        _pymysql_delete_session(self, app_name, user_id, session_id)
+        _delete_session(self, app_name, user_id, session_id)
 
     def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
-        _pymysql_append_event(self, event_record)
+        _append_event(self, event_record)
 
     def append_event_and_update_state(
         self,
@@ -104,7 +104,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
-        return _pymysql_append_event_and_update_state(
+        return _append_event_and_update_state(
             self, event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
 
@@ -117,59 +117,59 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return _pymysql_get_events(self, app_name, user_id, session_id, after_timestamp, limit)
+        return _select_events(self, app_name, user_id, session_id, after_timestamp, limit)
 
     def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
-        return _pymysql_delete_expired_events(self, before)
+        return _delete_expired_events(self, before)
 
     def delete_idle_sessions(self, updated_before: "datetime") -> int:
         """Delete sessions whose update_time predates the threshold."""
-        return _pymysql_delete_idle_sessions(self, updated_before)
+        return _delete_idle_sessions(self, updated_before)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        return _pymysql_get_app_state(self, app_name)
+        return _app_state(self, app_name)
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return _pymysql_get_user_state(self, app_name, user_id)
+        return _user_state(self, app_name, user_id)
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        _pymysql_upsert_app_state(self, app_name, state)
+        _upsert_app_state(self, app_name, state)
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        _pymysql_upsert_user_state(self, app_name, user_id, state)
+        _upsert_user_state(self, app_name, user_id, state)
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        return _pymysql_get_metadata(self, key)
+        return _metadata(self, key)
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        _pymysql_set_metadata(self, key, value)
+        _set_metadata(self, key, value)
 
     def _get_create_sessions_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for sessions."""
-        adk_config = _get_pymysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "session_table_options")
         return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
     def _get_create_events_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for events."""
-        return _mysql_events_ddl(self._events_table, self._session_table, _get_pymysql_adk_config(self._config))
+        return _mysql_events_ddl(self._events_table, self._session_table, _adk_config(self._config))
 
     def _get_create_app_states_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for app-scoped state."""
-        adk_config = _get_pymysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "app_state_table_options")
         return _mysql_app_state_ddl(self._app_state_table, table_options)
 
     def _get_create_user_states_table_sql(self) -> str:
         """Get MySQL CREATE TABLE SQL for user-scoped state."""
-        adk_config = _get_pymysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "user_state_table_options")
         return _mysql_user_state_ddl(self._user_state_table, table_options)
 
@@ -235,7 +235,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         return self._delete_entries_older_than(days)
 
     def _get_create_memory_table_sql(self) -> str:
-        adk_config = _get_pymysql_adk_config(self._config)
+        adk_config = _adk_config(self._config)
         owner_id_line = ""
         fk_constraint = ""
         if self._owner_id_column_ddl:
@@ -417,7 +417,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                 cursor.close()
 
 
-def _pymysql_create_tables(store: PyMysqlADKStore) -> None:
+def _create_tables(store: PyMysqlADKStore) -> None:
     with store._config.provide_session() as driver:
         driver.execute_script(store._get_create_sessions_table_sql())
         driver.execute_script(store._get_create_events_table_sql())
@@ -427,7 +427,7 @@ def _pymysql_create_tables(store: PyMysqlADKStore) -> None:
         driver.execute_script(store._get_seed_metadata_sql())
 
 
-def _pymysql_create_session(
+def _create_session(
     store: PyMysqlADKStore,
     session_id: str,
     app_name: str,
@@ -457,14 +457,14 @@ def _pymysql_create_session(
             cursor.close()
         conn.commit()
 
-    result = _pymysql_get_session(store, app_name, user_id, session_id)
+    result = _select_session(store, app_name, user_id, session_id)
     if result is None:
         msg = "Failed to fetch created session"
         raise RuntimeError(msg)
     return result
 
 
-def _pymysql_get_session(
+def _select_session(
     store: PyMysqlADKStore, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
 ) -> "SessionRecord | None":
     try:
@@ -500,7 +500,7 @@ def _pymysql_get_session(
         raise
 
 
-def _pymysql_update_session_state(
+def _update_session_state(
     store: PyMysqlADKStore, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]"
 ) -> None:
     sql = f"""
@@ -517,7 +517,7 @@ def _pymysql_update_session_state(
         conn.commit()
 
 
-def _pymysql_list_sessions(store: PyMysqlADKStore, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+def _list_sessions(store: PyMysqlADKStore, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
     if user_id is None:
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -550,7 +550,7 @@ def _pymysql_list_sessions(store: PyMysqlADKStore, app_name: str, user_id: str |
         raise
 
 
-def _pymysql_delete_session(store: PyMysqlADKStore, app_name: str, user_id: str, session_id: str) -> None:
+def _delete_session(store: PyMysqlADKStore, app_name: str, user_id: str, session_id: str) -> None:
     sql = f"DELETE FROM {store._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
     with store._config.provide_connection() as conn:
         cursor = conn.cursor()
@@ -561,7 +561,7 @@ def _pymysql_delete_session(store: PyMysqlADKStore, app_name: str, user_id: str,
         conn.commit()
 
 
-def _pymysql_append_event(store: PyMysqlADKStore, event_record: EventRecord) -> None:
+def _append_event(store: PyMysqlADKStore, event_record: EventRecord) -> None:
     sql = f"""
     INSERT INTO {store._events_table} (
         id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -576,7 +576,7 @@ def _pymysql_append_event(store: PyMysqlADKStore, event_record: EventRecord) -> 
         conn.commit()
 
 
-def _pymysql_append_event_and_update_state(
+def _append_event_and_update_state(
     store: PyMysqlADKStore,
     event_record: EventRecord,
     app_name: str,
@@ -639,7 +639,7 @@ def _pymysql_append_event_and_update_state(
     return _session_record_from_row(row)
 
 
-def _pymysql_get_events(
+def _select_events(
     store: PyMysqlADKStore,
     app_name: str,
     user_id: str,
@@ -682,17 +682,15 @@ def _pymysql_get_events(
         raise
 
 
-def _pymysql_delete_expired_events(store: PyMysqlADKStore, before: "datetime") -> int:
-    return _pymysql_delete_by_timestamp(store, store._events_table, "timestamp", before)
+def _delete_expired_events(store: PyMysqlADKStore, before: "datetime") -> int:
+    return _delete_before(store, store._events_table, "timestamp", before)
 
 
-def _pymysql_delete_idle_sessions(store: PyMysqlADKStore, updated_before: "datetime") -> int:
-    return _pymysql_delete_by_timestamp(store, store._session_table, "update_time", updated_before)
+def _delete_idle_sessions(store: PyMysqlADKStore, updated_before: "datetime") -> int:
+    return _delete_before(store, store._session_table, "update_time", updated_before)
 
 
-def _pymysql_delete_by_timestamp(
-    store: PyMysqlADKStore, table_name: str, column_name: str, threshold: "datetime"
-) -> int:
+def _delete_before(store: PyMysqlADKStore, table_name: str, column_name: str, threshold: "datetime") -> int:
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     try:
         with store._config.provide_connection() as conn:
@@ -709,15 +707,15 @@ def _pymysql_delete_by_timestamp(
         raise
 
 
-def _pymysql_get_app_state(store: PyMysqlADKStore, app_name: str) -> "dict[str, Any] | None":
-    return _pymysql_get_state(store, store._app_state_table, "app_name = %s", (app_name,))
+def _app_state(store: PyMysqlADKStore, app_name: str) -> "dict[str, Any] | None":
+    return _state(store, store._app_state_table, "app_name = %s", (app_name,))
 
 
-def _pymysql_get_user_state(store: PyMysqlADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
-    return _pymysql_get_state(store, store._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id))
+def _user_state(store: PyMysqlADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    return _state(store, store._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id))
 
 
-def _pymysql_get_state(
+def _state(
     store: PyMysqlADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
     sql = f"SELECT state FROM {table_name} WHERE {where_clause}"
@@ -736,17 +734,15 @@ def _pymysql_get_state(
         raise
 
 
-def _pymysql_upsert_app_state(store: PyMysqlADKStore, app_name: str, state: "dict[str, Any]") -> None:
-    _pymysql_execute_commit(store, _mysql_upsert_app_state_sql(store._app_state_table), (app_name, to_json(state)))
+def _upsert_app_state(store: PyMysqlADKStore, app_name: str, state: "dict[str, Any]") -> None:
+    _execute_commit(store, _mysql_upsert_app_state_sql(store._app_state_table), (app_name, to_json(state)))
 
 
-def _pymysql_upsert_user_state(store: PyMysqlADKStore, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-    _pymysql_execute_commit(
-        store, _mysql_upsert_user_state_sql(store._user_state_table), (app_name, user_id, to_json(state))
-    )
+def _upsert_user_state(store: PyMysqlADKStore, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+    _execute_commit(store, _mysql_upsert_user_state_sql(store._user_state_table), (app_name, user_id, to_json(state)))
 
 
-def _pymysql_get_metadata(store: PyMysqlADKStore, key: str) -> "str | None":
+def _metadata(store: PyMysqlADKStore, key: str) -> "str | None":
     sql = f"SELECT value FROM {store._metadata_table} WHERE `key` = %s"
     try:
         with store._config.provide_connection() as conn:
@@ -763,11 +759,11 @@ def _pymysql_get_metadata(store: PyMysqlADKStore, key: str) -> "str | None":
         raise
 
 
-def _pymysql_set_metadata(store: PyMysqlADKStore, key: str, value: str) -> None:
-    _pymysql_execute_commit(store, _mysql_upsert_metadata_sql(store._metadata_table), (key, value))
+def _set_metadata(store: PyMysqlADKStore, key: str, value: str) -> None:
+    _execute_commit(store, _mysql_upsert_metadata_sql(store._metadata_table), (key, value))
 
 
-def _pymysql_execute_commit(store: PyMysqlADKStore, sql: str, params: "tuple[Any, ...]") -> None:
+def _execute_commit(store: PyMysqlADKStore, sql: str, params: "tuple[Any, ...]") -> None:
     with store._config.provide_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -789,7 +785,7 @@ def _mysql_owner_id_column_parts(column_ddl: str) -> "tuple[str, str]":
     return (col_def, fk_constraint)
 
 
-def _get_pymysql_adk_config(config: Any) -> PyMysqlADKConfig:
+def _adk_config(config: Any) -> PyMysqlADKConfig:
     """Return PyMySQL ADK extension settings from ``extension_config["adk"]``."""
 
     extension_config = getattr(config, "extension_config", {})

@@ -300,12 +300,12 @@ def _create_statement_filters(
             )
 
     if filters:
-        filters[dep_defaults.FILTERS_DEPENDENCY_KEY] = _create_provide(_create_filter_aggregate_function(config))
+        filters[dep_defaults.FILTERS_DEPENDENCY_KEY] = _create_provide(_configured_filter_aggregator(config))
 
     return filters
 
 
-def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., list[FilterTypes]]:
+def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[FilterTypes]]:
     """Create filter aggregation function based on configuration.
 
     Args:

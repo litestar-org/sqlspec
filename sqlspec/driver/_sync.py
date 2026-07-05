@@ -1466,7 +1466,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                             started_transaction = False
 
                         if continue_on_error:
-                            self._rollback_after_stack_error()
+                            self._rollback_failed_stack()
                             observer.record_operation_error(stack_error)
                             results.append(StackResult.from_error(stack_error))
                             continue
@@ -1476,7 +1476,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                     results.append(StackResult(result=result))
 
                     if continue_on_error:
-                        self._commit_after_stack_operation()
+                        self._commit_stack_success()
 
                 if started_transaction:
                     self.commit()
@@ -1686,14 +1686,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = f"Unsupported stack operation method: {operation.method}"
         raise ValueError(msg)
 
-    def _rollback_after_stack_error(self) -> None:
+    def _rollback_failed_stack(self) -> None:
         """Attempt to rollback after a stack operation error to clear connection state."""
         try:
             self.rollback()
         except Exception as rollback_error:  # pragma: no cover
             logger.debug("Rollback after stack error failed: %s", rollback_error)
 
-    def _commit_after_stack_operation(self) -> None:
+    def _commit_stack_success(self) -> None:
         """Attempt to commit after a successful stack operation when not batching."""
         try:
             self.commit()
@@ -1711,7 +1711,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             return SyncStoragePipeline()
         return cast("SyncStoragePipeline", factory())
 
-    def _write_result_to_storage_sync(
+    def _write_storage_result(
         self,
         result: "ArrowResult",
         destination: "StorageDestination",
@@ -1747,7 +1747,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         runtime.end_storage_span(span, telemetry=telemetry)
         return telemetry
 
-    def _read_arrow_from_storage_sync(
+    def _read_storage_arrow(
         self,
         source: "StorageDestination",
         *,

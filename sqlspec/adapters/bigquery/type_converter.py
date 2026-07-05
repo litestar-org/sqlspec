@@ -9,7 +9,7 @@ from uuid import UUID
 
 from typing_extensions import final
 
-from sqlspec.adapters.bigquery.core import _get_bq_param_type
+from sqlspec.adapters.bigquery.core import _query_parameter_type
 from sqlspec.core.type_converter import CachedOutputConverter, convert_uuid
 
 __all__ = ("BIGQUERY_SPECIAL_CHARS", "BigQueryOutputConverter")
@@ -77,7 +77,7 @@ class BigQueryOutputConverter(CachedOutputConverter):
                     uuid_obj = convert_uuid(value)
                     return ScalarQueryParameter(name, "STRING", str(uuid_obj))
 
-        param_type, _ = _get_bq_param_type(value)
+        param_type, _ = _query_parameter_type(value)
         param_type = param_type or "STRING"
         return ScalarQueryParameter(name, param_type, value)
 

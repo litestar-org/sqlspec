@@ -51,7 +51,7 @@ class Update(
             **kwargs: Additional QueryBuilder arguments
         """
         (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_query_builder_kwargs(kwargs)
+            self._parse_init_options(kwargs)
         )
         super().__init__(
             dialect=dialect,

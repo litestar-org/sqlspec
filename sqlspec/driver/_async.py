@@ -1524,7 +1524,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             started_transaction = False
 
                         if continue_on_error:
-                            await self._rollback_after_stack_error_async()
+                            await self._rollback_failed_stack()
                             observer.record_operation_error(stack_error)
                             results.append(StackResult.from_error(stack_error))
                             continue
@@ -1534,7 +1534,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                     results.append(StackResult(result=result))
 
                     if continue_on_error:
-                        await self._commit_after_stack_operation_async()
+                        await self._commit_stack_success()
 
                 if started_transaction:
                     await self.commit()
@@ -1747,14 +1747,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = f"Unsupported stack operation method: {operation.method}"
         raise ValueError(msg)
 
-    async def _rollback_after_stack_error_async(self) -> None:
+    async def _rollback_failed_stack(self) -> None:
         """Attempt to rollback after a stack operation error (async)."""
         try:
             await self.rollback()
         except Exception as rollback_error:  # pragma: no cover
             logger.debug("Rollback after stack error failed: %s", rollback_error)
 
-    async def _commit_after_stack_operation_async(self) -> None:
+    async def _commit_stack_success(self) -> None:
         """Attempt to commit after a successful stack operation when not batching (async)."""
         try:
             await self.commit()
@@ -1772,7 +1772,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             return AsyncStoragePipeline()
         return cast("AsyncStoragePipeline", factory())
 
-    async def _write_result_to_storage_async(
+    async def _write_storage_result(
         self,
         result: "ArrowResult",
         destination: "StorageDestination",
@@ -1808,7 +1808,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         runtime.end_storage_span(span, telemetry=telemetry)
         return telemetry
 
-    async def _read_arrow_from_storage_async(
+    async def _read_storage_arrow(
         self,
         source: "StorageDestination",
         *,

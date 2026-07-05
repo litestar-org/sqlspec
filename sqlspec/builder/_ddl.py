@@ -213,10 +213,10 @@ class DDLBuilder(QueryBuilder):
         elif isinstance(query, exp.Expr):
             select_expr = query
         else:
-            self._raise_sql_builder_error(f"Unsupported type for SELECT query in {context}.")
+            self._raise_builder_error(f"Unsupported type for SELECT query in {context}.")
 
         if select_expr is None or (require_select_type and not isinstance(select_expr, exp.Select)):
-            self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
+            self._raise_builder_error("SELECT query must be a valid SELECT expression.")
 
         if select_parameters:
             for p_name, p_value in select_parameters.items():
@@ -429,13 +429,13 @@ class CreateTable(DDLBuilder):
     ) -> "Self":
         """Add a column definition to the table."""
         if not name:
-            self._raise_sql_builder_error("Column name must be a non-empty string")
+            self._raise_builder_error("Column name must be a non-empty string")
 
         if not dtype:
-            self._raise_sql_builder_error("Column type must be a non-empty string")
+            self._raise_builder_error("Column type must be a non-empty string")
 
         if any(col.name == name for col in self._columns):
-            self._raise_sql_builder_error(f"Column '{name}' already defined")
+            self._raise_builder_error(f"Column '{name}' already defined")
 
         column_def = ColumnDefinition(
             name=name,
@@ -463,7 +463,7 @@ class CreateTable(DDLBuilder):
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
         if not col_list:
-            self._raise_sql_builder_error("Primary key must include at least one column")
+            self._raise_builder_error("Primary key must include at least one column")
 
         existing_pk = self._find_primary_key_constraint()
         if existing_pk:
@@ -493,7 +493,7 @@ class CreateTable(DDLBuilder):
         ref_col_list = [references_columns] if isinstance(references_columns, str) else list(references_columns)
 
         if len(col_list) != len(ref_col_list):
-            self._raise_sql_builder_error("Foreign key columns and referenced columns must have same length")
+            self._raise_builder_error("Foreign key columns and referenced columns must have same length")
 
         self._validate_foreign_key_action(on_delete, "ON DELETE")
         self._validate_foreign_key_action(on_update, "ON UPDATE")
@@ -518,7 +518,7 @@ class CreateTable(DDLBuilder):
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
         if not col_list:
-            self._raise_sql_builder_error("Unique constraint must include at least one column")
+            self._raise_builder_error("Unique constraint must include at least one column")
 
         constraint = ConstraintDefinition(constraint_type=CONSTRAINT_TYPE_UNIQUE, name=name, columns=col_list)
 
@@ -528,7 +528,7 @@ class CreateTable(DDLBuilder):
     def check_constraint(self, condition: "str | ColumnExpression", name: "str | None" = None) -> "Self":
         """Add a check constraint."""
         if condition is None or (isinstance(condition, str) and not condition):
-            self._raise_sql_builder_error("Check constraint must have a condition")
+            self._raise_builder_error("Check constraint must have a condition")
 
         condition_expr: exp.Expr | None = None
         condition_str: str | None = None
@@ -573,7 +573,7 @@ class CreateTable(DDLBuilder):
     def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for CREATE TABLE."""
         if not self._columns and not self._like_table:
-            self._raise_sql_builder_error("Table must have at least one column or use LIKE clause")
+            self._raise_builder_error("Table must have at least one column or use LIKE clause")
 
         column_defs: list[exp.Expr] = []
         for col in self._columns:
@@ -637,7 +637,7 @@ class CreateTable(DDLBuilder):
     def _validate_foreign_key_action(self, action: "str | None", action_type: str) -> None:
         """Validate foreign key action (ON DELETE or ON UPDATE)."""
         if action and action.upper() not in VALID_FOREIGN_KEY_ACTIONS:
-            self._raise_sql_builder_error(f"Invalid {action_type} action: {action}")
+            self._raise_builder_error(f"Invalid {action_type} action: {action}")
 
     def _is_redundant_single_column_primary_key(self, constraint: "ConstraintDefinition") -> bool:
         """Check if constraint is a redundant single-column primary key."""
@@ -671,7 +671,7 @@ class DropTable(DDLBuilder, _DropDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
-            self._raise_sql_builder_error("Table name must be set for DROP TABLE.")
+            self._raise_builder_error("Table name must be set for DROP TABLE.")
         return exp.Drop(
             kind="TABLE", this=exp.to_table(self._table_name), exists=self._if_exists, cascade=self._cascade
         )
@@ -705,7 +705,7 @@ class DropIndex(DDLBuilder, _DropDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._index_name:
-            self._raise_sql_builder_error("Index name must be set for DROP INDEX.")
+            self._raise_builder_error("Index name must be set for DROP INDEX.")
         return exp.Drop(
             kind="INDEX",
             this=exp.to_identifier(self._index_name),
@@ -738,7 +738,7 @@ class DropView(DDLBuilder, _DropDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
-            self._raise_sql_builder_error("View name must be set for DROP VIEW.")
+            self._raise_builder_error("View name must be set for DROP VIEW.")
         return exp.Drop(
             kind="VIEW", this=exp.to_identifier(self._view_name), exists=self._if_exists, cascade=self._cascade
         )
@@ -767,7 +767,7 @@ class DropSchema(DDLBuilder, _DropDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._schema_name:
-            self._raise_sql_builder_error("Schema name must be set for DROP SCHEMA.")
+            self._raise_builder_error("Schema name must be set for DROP SCHEMA.")
         return exp.Drop(
             kind="SCHEMA", this=exp.to_identifier(self._schema_name), exists=self._if_exists, cascade=self._cascade
         )
@@ -797,7 +797,7 @@ class DropMaterializedView(DDLBuilder, _DropDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
-            self._raise_sql_builder_error("View name must be set for DROP MATERIALIZED VIEW.")
+            self._raise_builder_error("View name must be set for DROP MATERIALIZED VIEW.")
         return exp.Drop(
             kind="MATERIALIZED VIEW",
             this=exp.to_identifier(self._view_name),
@@ -866,7 +866,7 @@ class CreateIndex(DDLBuilder):
         string ``where`` clauses become expressions, and the final ``exp.Index`` is wrapped in an ``exp.Create`` with the configured flags.
         """
         if not self._index_name or not self._table_name:
-            self._raise_sql_builder_error("Index name and table name must be set for CREATE INDEX.")
+            self._raise_builder_error("Index name and table name must be set for CREATE INDEX.")
 
         cols: list[exp.Expr] = []
         for col in self._columns:
@@ -935,7 +935,7 @@ class Truncate(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
-            self._raise_sql_builder_error("Table name must be set for TRUNCATE TABLE.")
+            self._raise_builder_error("Table name must be set for TRUNCATE TABLE.")
         identity_expr = exp.Var(this=self._identity) if self._identity else None
         return exp.TruncateTable(this=exp.to_table(self._table_name), cascade=self._cascade, identity=identity_expr)
 
@@ -1012,7 +1012,7 @@ class CreateSchema(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._schema_name:
-            self._raise_sql_builder_error("Schema name must be set for CREATE SCHEMA.")
+            self._raise_builder_error("Schema name must be set for CREATE SCHEMA.")
         props: list[exp.Property] = []
         if self._authorization:
             props.append(
@@ -1064,9 +1064,9 @@ class CreateTableAsSelect(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._table_name:
-            self._raise_sql_builder_error("Table name must be set for CREATE TABLE AS SELECT.")
+            self._raise_builder_error("Table name must be set for CREATE TABLE AS SELECT.")
         if self._select_query is None:
-            self._raise_sql_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
+            self._raise_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
 
         select_expr = self._resolve_select_query(self._select_query, "CTAS", require_select_type=False)
         if isinstance(self._select_query, Select):
@@ -1170,9 +1170,9 @@ class CreateMaterializedView(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
-            self._raise_sql_builder_error("View name must be set for CREATE MATERIALIZED VIEW.")
+            self._raise_builder_error("View name must be set for CREATE MATERIALIZED VIEW.")
         if self._select_query is None:
-            self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
+            self._raise_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
         select_expr = self._resolve_select_query(self._select_query, "materialized view")
 
@@ -1247,9 +1247,9 @@ class CreateView(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._view_name:
-            self._raise_sql_builder_error("View name must be set for CREATE VIEW.")
+            self._raise_builder_error("View name must be set for CREATE VIEW.")
         if self._select_query is None:
-            self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
+            self._raise_builder_error("SELECT query must be set for CREATE VIEW.")
 
         select_expr = self._resolve_select_query(self._select_query, "view")
 
@@ -1302,10 +1302,10 @@ class AlterTable(DDLBuilder):
     ) -> "Self":
         """Add a new column to the table."""
         if not name:
-            self._raise_sql_builder_error("Column name must be a non-empty string")
+            self._raise_builder_error("Column name must be a non-empty string")
 
         if not dtype:
-            self._raise_sql_builder_error("Column type must be a non-empty string")
+            self._raise_builder_error("Column type must be a non-empty string")
 
         column_def = ColumnDefinition(
             name=name, dtype=dtype, default=default, not_null=not_null, unique=unique, comment=comment
@@ -1321,7 +1321,7 @@ class AlterTable(DDLBuilder):
     def drop_column(self, name: str, cascade: bool = False) -> "Self":
         """Drop a column from the table."""
         if not name:
-            self._raise_sql_builder_error("Column name must be a non-empty string")
+            self._raise_builder_error("Column name must be a non-empty string")
 
         operation = AlterOperation(operation_type="DROP COLUMN CASCADE" if cascade else "DROP COLUMN", column_name=name)
 
@@ -1331,10 +1331,10 @@ class AlterTable(DDLBuilder):
     def alter_column_type(self, name: str, new_type: str, using: "str | None" = None) -> "Self":
         """Change the type of an existing column."""
         if not name:
-            self._raise_sql_builder_error("Column name must be a non-empty string")
+            self._raise_builder_error("Column name must be a non-empty string")
 
         if not new_type:
-            self._raise_sql_builder_error("New type must be a non-empty string")
+            self._raise_builder_error("New type must be a non-empty string")
 
         operation = AlterOperation(
             operation_type="ALTER COLUMN TYPE", column_name=name, new_type=new_type, using_expression=using
@@ -1346,10 +1346,10 @@ class AlterTable(DDLBuilder):
     def rename_column(self, old_name: str, new_name: str) -> "Self":
         """Rename a column."""
         if not old_name:
-            self._raise_sql_builder_error("Old column name must be a non-empty string")
+            self._raise_builder_error("Old column name must be a non-empty string")
 
         if not new_name:
-            self._raise_sql_builder_error("New column name must be a non-empty string")
+            self._raise_builder_error("New column name must be a non-empty string")
 
         operation = AlterOperation(operation_type="RENAME COLUMN", column_name=old_name, new_name=new_name)
 
@@ -1380,7 +1380,7 @@ class AlterTable(DDLBuilder):
             on_update: Foreign key ON UPDATE action
         """
         if constraint_type.upper() not in VALID_CONSTRAINT_TYPES:
-            self._raise_sql_builder_error(f"Invalid constraint type: {constraint_type}")
+            self._raise_builder_error(f"Invalid constraint type: {constraint_type}")
 
         col_list = None
         if columns is not None:
@@ -1417,7 +1417,7 @@ class AlterTable(DDLBuilder):
     def drop_constraint(self, name: str, cascade: bool = False) -> "Self":
         """Drop a constraint from the table."""
         if not name:
-            self._raise_sql_builder_error("Constraint name must be a non-empty string")
+            self._raise_builder_error("Constraint name must be a non-empty string")
 
         operation = AlterOperation(
             operation_type="DROP CONSTRAINT CASCADE" if cascade else "DROP CONSTRAINT", constraint_name=name
@@ -1448,7 +1448,7 @@ class AlterTable(DDLBuilder):
     def set_column_default(self, column: str, value: "Any") -> "Self":
         """Set the default value for a column."""
         if not column:
-            self._raise_sql_builder_error("Column name must be a non-empty string")
+            self._raise_builder_error("Column name must be a non-empty string")
 
         column_def = ColumnDefinition(name=column, dtype="", default=value)
         operation = AlterOperation(
@@ -1460,7 +1460,7 @@ class AlterTable(DDLBuilder):
     def drop_column_default(self, column: str) -> "Self":
         """Remove the default value from a column."""
         if not column:
-            self._raise_sql_builder_error("Column name must be a non-empty string")
+            self._raise_builder_error("Column name must be a non-empty string")
 
         operation = AlterOperation(operation_type="ALTER COLUMN DROP DEFAULT", column_name=column)
         self._operations.append(operation)
@@ -1469,7 +1469,7 @@ class AlterTable(DDLBuilder):
     def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for ALTER TABLE."""
         if not self._operations:
-            self._raise_sql_builder_error("At least one operation must be specified for ALTER TABLE")
+            self._raise_builder_error("At least one operation must be specified for ALTER TABLE")
 
         if self._schema:
             table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
@@ -1486,7 +1486,7 @@ class AlterTable(DDLBuilder):
 
         if op_type == "ADD COLUMN":
             if not op.column_definition:
-                self._raise_sql_builder_error("Column definition required for ADD COLUMN")
+                self._raise_builder_error("Column definition required for ADD COLUMN")
             return build_column_expression(op.column_definition)
 
         if op_type == "DROP COLUMN":
@@ -1497,7 +1497,7 @@ class AlterTable(DDLBuilder):
 
         if op_type == "ALTER COLUMN TYPE":
             if not op.new_type:
-                self._raise_sql_builder_error("New type required for ALTER COLUMN TYPE")
+                self._raise_builder_error("New type required for ALTER COLUMN TYPE")
             return exp.AlterColumn(
                 this=exp.to_identifier(op.column_name),
                 dtype=exp.DataType.build(op.new_type),
@@ -1509,7 +1509,7 @@ class AlterTable(DDLBuilder):
 
         if op_type == "ADD CONSTRAINT":
             if not op.constraint_definition:
-                self._raise_sql_builder_error("Constraint definition required for ADD CONSTRAINT")
+                self._raise_builder_error("Constraint definition required for ADD CONSTRAINT")
             constraint_expr = build_constraint_expression(op.constraint_definition)
             return exp.AddConstraint(this=constraint_expr)
 
@@ -1527,7 +1527,7 @@ class AlterTable(DDLBuilder):
 
         if op_type == "ALTER COLUMN SET DEFAULT":
             if not op.column_definition or op.column_definition.default is None:
-                self._raise_sql_builder_error("Default value required for SET DEFAULT")
+                self._raise_builder_error("Default value required for SET DEFAULT")
             default_val = op.column_definition.default
             default_expr: exp.Expr | None
             if isinstance(default_val, str):
@@ -1548,7 +1548,7 @@ class AlterTable(DDLBuilder):
         if op_type == "ALTER COLUMN DROP DEFAULT":
             return exp.AlterColumn(this=exp.to_identifier(op.column_name), kind="DROP DEFAULT")
 
-        self._raise_sql_builder_error(f"Unknown operation type: {op.operation_type}")
+        self._raise_builder_error(f"Unknown operation type: {op.operation_type}")
         raise AssertionError
 
     def _is_sql_function_default(self, default_val: str) -> bool:
@@ -1602,7 +1602,7 @@ class CommentOn(DDLBuilder):
                 kind="COLUMN",
                 expression=exp.convert(self._comment),
             )
-        self._raise_sql_builder_error("Must specify target and comment for COMMENT ON statement.")
+        self._raise_builder_error("Must specify target and comment for COMMENT ON statement.")
         raise AssertionError
 
 
@@ -1632,7 +1632,7 @@ class RenameTable(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         if not self._old_name or not self._new_name:
-            self._raise_sql_builder_error("Both old and new table names must be set for RENAME TABLE.")
+            self._raise_builder_error("Both old and new table names must be set for RENAME TABLE.")
         return exp.Alter(
             this=exp.to_table(self._old_name),
             kind="TABLE",

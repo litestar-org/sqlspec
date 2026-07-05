@@ -141,7 +141,7 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _build_psycopg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for psycopg."""
 
     return {
@@ -152,9 +152,7 @@ def _build_psycopg_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]"
     }
 
 
-def _build_psycopg_parameter_config(
-    profile: "DriverParameterProfile", serializer: "Callable[[Any], str]"
-) -> "ParameterStyleConfig":
+def _parameter_config(profile: "DriverParameterProfile", serializer: "Callable[[Any], str]") -> "ParameterStyleConfig":
     """Construct parameter configuration with shared JSON serializer support.
 
     Args:
@@ -189,7 +187,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions=_build_psycopg_custom_type_coercions(),
+        custom_type_coercions=_custom_type_coercions(),
         default_dialect="postgres",
     )
 
@@ -201,7 +199,7 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     """Construct the psycopg statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
     profile = driver_profile
-    parameter_config = _build_psycopg_parameter_config(profile, serializer)
+    parameter_config = _parameter_config(profile, serializer)
     base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
     return base_config.replace(parameter_config=parameter_config)
 
@@ -219,7 +217,7 @@ def apply_driver_features(
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
 
-    parameter_config = _build_psycopg_parameter_config(driver_profile, serializer)
+    parameter_config = _parameter_config(driver_profile, serializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features

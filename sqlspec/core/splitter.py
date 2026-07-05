@@ -79,7 +79,7 @@ _STRING_WRITER_TYPE: "type[Any] | None" = None
 _STRING_WRITER_RESOLVED = False
 
 
-def _get_librt_string_writer() -> "type[Any] | None":
+def _librt_string_writer_type() -> "type[Any] | None":
     """Return librt's StringWriter when the optional performance helper exists."""
     global _STRING_WRITER_RESOLVED, _STRING_WRITER_TYPE
     if _STRING_WRITER_RESOLVED:
@@ -755,7 +755,7 @@ class StatementSplitter:
         """
         statements = []
         current_statement_tokens = []
-        string_writer_type = _get_librt_string_writer()
+        string_writer_type = _librt_string_writer_type()
         current_statement_writer = string_writer_type() if string_writer_type is not None else None
         current_statement_chars: list[str] = []
         current_statement_fragment_count = 0

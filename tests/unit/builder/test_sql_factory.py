@@ -1863,9 +1863,7 @@ def test_lag_lead_in_select() -> None:
     assert "next_price" in stmt.sql.lower()
 
 
-def test_builder_cache_key_generate_builder_cache_key_does_not_render_expression_sql(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_builder_cache_key_cache_key_does_not_render_expression_sql(monkeypatch: pytest.MonkeyPatch) -> None:
     query = sql.select("*").from_("users").where_eq("id", 1)
 
     def fail_sql_render(*args: object, **kwargs: object) -> str:
@@ -1873,7 +1871,7 @@ def test_builder_cache_key_generate_builder_cache_key_does_not_render_expression
         raise AssertionError(msg)
 
     monkeypatch.setattr(exp.Expression, "sql", fail_sql_render)
-    cache_key = query._generate_builder_cache_key()
+    cache_key = query._cache_key()
     assert cache_key.startswith("builder:")
 
 

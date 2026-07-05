@@ -276,7 +276,7 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
         statement_config=aiosqlite_statement_config,
         driver_features={"storage_capabilities": CAPABILITIES},
     )
-    monkeypatch.setattr(AsyncpgDriver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(AsyncpgDriver, "_read_storage_arrow", _fake_read)
 
     job = await driver.load_from_storage("public.ingest_target", "file://tmp/part-0.parquet", file_format="parquet")
 
@@ -301,7 +301,7 @@ def test_duckdb_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
         driver_features={"storage_capabilities": CAPABILITIES},
     )
 
-    monkeypatch.setattr(DuckDBDriver, "_read_arrow_from_storage_sync", _fake_read)
+    monkeypatch.setattr(DuckDBDriver, "_read_storage_arrow", _fake_read)
 
     job = driver.load_from_storage("ingest_target", "file://tmp/part-1.parquet", file_format="parquet", overwrite=True)
 
@@ -364,7 +364,7 @@ async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.Mon
     async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
         return arrow_table, {"destination": "s3://bucket/part-2.parquet", "bytes_processed": 512}
 
-    monkeypatch.setattr(PsqlpyDriver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(PsqlpyDriver, "_read_storage_arrow", _fake_read)
 
     job = await driver.load_from_storage("public.delta_load", "s3://bucket/part-2.parquet", file_format="parquet")
 
@@ -440,7 +440,7 @@ async def test_aiosqlite_load_from_storage_includes_source(monkeypatch: pytest.M
         async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
             return arrow_table, {"destination": "file:///tmp/chunk.parquet", "bytes_processed": 64}
 
-        monkeypatch.setattr(AiosqliteDriver, "_read_arrow_from_storage_async", _fake_read)
+        monkeypatch.setattr(AiosqliteDriver, "_read_storage_arrow", _fake_read)
 
         job = await driver.load_from_storage("raw_data", "file:///tmp/chunk.parquet", file_format="parquet")
 
@@ -513,7 +513,7 @@ def test_sqlite_load_from_storage_merges_source(monkeypatch: pytest.MonkeyPatch)
         def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
             return arrow_table, {"destination": "s3://bucket/segment.parquet", "bytes_processed": 32}
 
-        monkeypatch.setattr(SqliteDriver, "_read_arrow_from_storage_sync", _fake_read)
+        monkeypatch.setattr(SqliteDriver, "_read_storage_arrow", _fake_read)
 
         job = driver.load_from_storage("metrics", "s3://bucket/segment.parquet", file_format="parquet")
 
@@ -651,7 +651,7 @@ async def test_asyncmy_load_from_storage_merges_source(monkeypatch: pytest.Monke
     async def _fake_read(self, *_: object, **__: object) -> tuple[pa.Table, dict[str, object]]:
         return arrow_table, {"destination": "s3://bucket/segment.parquet", "bytes_processed": 48, "backend": "fsspec"}
 
-    monkeypatch.setattr(AsyncmyDriver, "_read_arrow_from_storage_async", _fake_read)
+    monkeypatch.setattr(AsyncmyDriver, "_read_storage_arrow", _fake_read)
 
     job = await driver.load_from_storage("analytics.scores", "s3://bucket/segment.parquet", file_format="parquet")
 

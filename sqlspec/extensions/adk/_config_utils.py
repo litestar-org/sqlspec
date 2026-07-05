@@ -129,7 +129,7 @@ def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
     try:
         return import_string(store_path)
     except ImportError as e:
-        store_class = _get_adk_exported_store_class(config, store_suffix)
+        store_class = _adk_exported_store_class(config, store_suffix)
         if store_class is not None:
             return store_class
         _raise_store_import_failed(store_path, e)
@@ -142,10 +142,10 @@ def _adk_memory_migration_store_class(config: Any) -> Any | None:
     try:
         return import_string(store_path)
     except ImportError:
-        return _get_adk_exported_store_class(config, "ADKMemoryStore")
+        return _adk_exported_store_class(config, "ADKMemoryStore")
 
 
-def _get_adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
+def _adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
     """Return an ADK store export that matches a config name case-insensitively."""
 
     config_class = type(config)

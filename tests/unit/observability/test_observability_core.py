@@ -587,7 +587,7 @@ def test_write_storage_helper_emits_span() -> None:
     result_stub = _ArrowResultStub()
 
     with CorrelationContext.context("test-correlation"):
-        telemetry = driver._write_result_to_storage_sync(  # pyright: ignore[reportPrivateUsage]
+        telemetry = driver._write_storage_result(  # pyright: ignore[reportPrivateUsage]
             cast(ArrowResult, result_stub), "alias://bucket/object"
         )
 
@@ -609,7 +609,7 @@ def test_read_storage_helper_emits_span() -> None:
     driver.storage_pipeline_factory = lambda: pipeline  # type: ignore[misc,assignment]
 
     with CorrelationContext.context("read-correlation"):
-        _table, telemetry = driver._read_arrow_from_storage_sync(  # pyright: ignore[reportPrivateUsage]
+        _table, telemetry = driver._read_storage_arrow(  # pyright: ignore[reportPrivateUsage]
             "alias://bucket/data", file_format="parquet"
         )
 

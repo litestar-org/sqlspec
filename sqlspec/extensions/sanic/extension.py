@@ -56,7 +56,7 @@ class SQLSpecPlugin:
         self._request_middleware_added = False
 
         for cfg in self._sqlspec.configs.values():
-            settings = self._extract_sanic_settings(cfg)
+            settings = self._extract_extension_settings(cfg)
             state = self._config_state(cfg, settings)
             self._config_states.append(state)
 
@@ -83,7 +83,7 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
-    def _extract_sanic_settings(self, config: Any) -> "dict[str, Any]":
+    def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Sanic settings from config.extension_config.
 
         Args:

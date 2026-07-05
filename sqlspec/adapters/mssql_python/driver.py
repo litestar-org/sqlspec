@@ -354,7 +354,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into SQL Server via BulkCopy."""
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
 
@@ -616,7 +616,7 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into SQL Server via BulkCopy."""
-        arrow_table, inbound = await self._read_arrow_from_storage_async(source, file_format=file_format)
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )

@@ -90,7 +90,7 @@ def test_pool_key_defaults_handle_pooled_and_non_pooled_configs(
     config = MagicMock()
     config.supports_connection_pooling = supports_connection_pooling
     config.extension_config = {"sanic": {}}
-    settings = plugin._extract_sanic_settings(config)
+    settings = plugin._extract_extension_settings(config)
     assert settings["pool_key"].startswith(expected_pool_key_prefix)
 
 

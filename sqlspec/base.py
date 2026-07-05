@@ -159,7 +159,7 @@ class SQLSpec:
             async_config = cast(
                 "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]", config
             )
-            return self._driver_async(async_config, connection_obj)  # pyright: ignore
+            return self._driver_from_async_connection(async_config, connection_obj)  # pyright: ignore
 
         driver = config.driver_type(  # pyright: ignore
             connection=connection_obj, statement_config=config.statement_config, driver_features=config.driver_features
@@ -618,7 +618,7 @@ class SQLSpec:
             self._loader.set_observability_runtime(self._loader_runtime)
         return self._loader
 
-    async def _driver_async(
+    async def _driver_from_async_connection(
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         connection_obj: "Awaitable[ConnectionT]",

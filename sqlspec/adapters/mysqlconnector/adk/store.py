@@ -323,26 +323,24 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def delete_expired_events(self, before: "datetime") -> int:
-        return await _mysqlconnector_async_delete_by_timestamp(self, self._events_table, "timestamp", before)
+        return await _async_delete_before(self, self._events_table, "timestamp", before)
 
     async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        return await _mysqlconnector_async_delete_by_timestamp(self, self._session_table, "update_time", updated_before)
+        return await _async_delete_before(self, self._session_table, "update_time", updated_before)
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        return await _mysqlconnector_async_get_state(self, self._app_state_table, "app_name = %s", (app_name,))
+        return await _async_state(self, self._app_state_table, "app_name = %s", (app_name,))
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return await _mysqlconnector_async_get_state(
-            self, self._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id)
-        )
+        return await _async_state(self, self._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id))
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        await _mysqlconnector_async_execute_commit(
+        await _async_execute_commit(
             self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state))
         )
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        await _mysqlconnector_async_execute_commit(
+        await _async_execute_commit(
             self, _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(state))
         )
 
@@ -365,7 +363,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def set_metadata(self, key: str, value: str) -> None:
-        await _mysqlconnector_async_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
+        await _async_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
 
     async def _get_create_sessions_table_sql(self) -> str:
         adk_config = _adk_config(self._config)
@@ -765,26 +763,22 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             raise
 
     def _delete_expired_events(self, before: "datetime") -> int:
-        return _mysqlconnector_sync_delete_by_timestamp(self, self._events_table, "timestamp", before)
+        return _sync_delete_before(self, self._events_table, "timestamp", before)
 
     def _delete_idle_sessions(self, updated_before: "datetime") -> int:
-        return _mysqlconnector_sync_delete_by_timestamp(self, self._session_table, "update_time", updated_before)
+        return _sync_delete_before(self, self._session_table, "update_time", updated_before)
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        return _mysqlconnector_sync_get_state(self, self._app_state_table, "app_name = %s", (app_name,))
+        return _sync_state(self, self._app_state_table, "app_name = %s", (app_name,))
 
     def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return _mysqlconnector_sync_get_state(
-            self, self._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id)
-        )
+        return _sync_state(self, self._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id))
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        _mysqlconnector_sync_execute_commit(
-            self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state))
-        )
+        _sync_execute_commit(self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state)))
 
     def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        _mysqlconnector_sync_execute_commit(
+        _sync_execute_commit(
             self, _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(state))
         )
 
@@ -807,7 +801,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             raise
 
     def _set_metadata(self, key: str, value: str) -> None:
-        _mysqlconnector_sync_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
+        _sync_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
 
     def _get_create_sessions_table_sql(self) -> str:
         adk_config = _adk_config(self._config)
@@ -1345,7 +1339,7 @@ def _raise_session_not_found(session_id: str) -> None:
     raise ValueError(msg)
 
 
-async def _mysqlconnector_async_delete_by_timestamp(
+async def _async_delete_before(
     store: MysqlConnectorAsyncADKStore, table_name: str, column_name: str, threshold: "datetime"
 ) -> int:
     import mysql.connector
@@ -1368,7 +1362,7 @@ async def _mysqlconnector_async_delete_by_timestamp(
         return rowcount if rowcount and rowcount > 0 else 0
 
 
-async def _mysqlconnector_async_get_state(
+async def _async_state(
     store: MysqlConnectorAsyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
     import mysql.connector
@@ -1389,9 +1383,7 @@ async def _mysqlconnector_async_get_state(
         raise
 
 
-async def _mysqlconnector_async_execute_commit(
-    store: MysqlConnectorAsyncADKStore, sql: str, params: "tuple[Any, ...]"
-) -> None:
+async def _async_execute_commit(store: MysqlConnectorAsyncADKStore, sql: str, params: "tuple[Any, ...]") -> None:
     async with store._config.provide_connection() as conn:
         cursor = await conn.cursor()
         try:
@@ -1401,7 +1393,7 @@ async def _mysqlconnector_async_execute_commit(
         await conn.commit()
 
 
-def _mysqlconnector_sync_delete_by_timestamp(
+def _sync_delete_before(
     store: MysqlConnectorSyncADKStore, table_name: str, column_name: str, threshold: "datetime"
 ) -> int:
     import mysql.connector
@@ -1424,7 +1416,7 @@ def _mysqlconnector_sync_delete_by_timestamp(
         return rowcount if rowcount and rowcount > 0 else 0
 
 
-def _mysqlconnector_sync_get_state(
+def _sync_state(
     store: MysqlConnectorSyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
     import mysql.connector
@@ -1445,7 +1437,7 @@ def _mysqlconnector_sync_get_state(
         raise
 
 
-def _mysqlconnector_sync_execute_commit(store: MysqlConnectorSyncADKStore, sql: str, params: "tuple[Any, ...]") -> None:
+def _sync_execute_commit(store: MysqlConnectorSyncADKStore, sql: str, params: "tuple[Any, ...]") -> None:
     with store._config.provide_connection() as conn:
         cursor = conn.cursor()
         try:

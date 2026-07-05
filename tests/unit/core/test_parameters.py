@@ -2139,14 +2139,14 @@ def test_config_driven_parse_normalization_process_reuses_extracted_metadata_for
     assert result.parameter_profile.named_parameters == ("1", "2")
 
 
-def _driver_profile_validation__get_all_driver_profiles() -> dict[str, DriverParameterProfile]:
+def _collect_driver_profiles() -> dict[str, DriverParameterProfile]:
     """Collect all driver profiles."""
     return {key: get_driver_profile(key) for key in _ADAPTER_PROFILE_KEYS if key in DRIVER_PARAMETER_PROFILES}
 
 
 def test_driver_profile_validation_default_style_in_supported_styles() -> None:
     """default_style must be in supported_styles for all drivers."""
-    profiles = _driver_profile_validation__get_all_driver_profiles()
+    profiles = _collect_driver_profiles()
     for name, profile in profiles.items():
         assert profile.default_style in profile.supported_styles, (
             f"{name}: default_style {profile.default_style} not in supported_styles {profile.supported_styles}"
@@ -2155,7 +2155,7 @@ def test_driver_profile_validation_default_style_in_supported_styles() -> None:
 
 def test_driver_profile_validation_default_execution_style_in_supported_execution_styles() -> None:
     """default_execution_style must be in supported_execution_styles for all drivers."""
-    profiles = _driver_profile_validation__get_all_driver_profiles()
+    profiles = _collect_driver_profiles()
     for name, profile in profiles.items():
         assert (
             profile.supported_execution_styles and profile.default_execution_style in profile.supported_execution_styles
@@ -2166,7 +2166,7 @@ def test_driver_profile_validation_default_execution_style_in_supported_executio
 
 def test_driver_profile_validation_no_pyformat_in_supported_styles() -> None:
     """Pyformat styles should NOT be in supported_styles (sqlglot can't parse %)."""
-    profiles = _driver_profile_validation__get_all_driver_profiles()
+    profiles = _collect_driver_profiles()
     pyformat_styles = {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
     for name, profile in profiles.items():
         incompatible = profile.supported_styles & pyformat_styles
@@ -2554,8 +2554,8 @@ def test_parameter_internal_consolidation_source_shapes() -> None:
     payload_body = processor_source.split("def _coerce_parameters_payload", 1)[1].split("def _make_cache_key_tuple", 1)[
         0
     ]
-    assert "_coerce_sequence_preserving_identity(seq_params" in payload_body
-    assert "_coerce_mapping_preserving_identity(dict_params" in payload_body
+    assert "_coerce_sequence_if_needed(seq_params" in payload_body
+    assert "_coerce_mapping_if_needed(dict_params" in payload_body
     assert "updated_seq:" not in payload_body
     assert "updated_mapping:" not in payload_body
 

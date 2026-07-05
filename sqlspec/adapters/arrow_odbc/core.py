@@ -123,7 +123,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     return ";".join(parts) + ";", connect_kwargs
 
 
-def _build_arrow_odbc_custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for arrow-odbc."""
     return {
         bool: _identity,
@@ -149,7 +149,7 @@ def build_profile() -> "DriverParameterProfile":
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions=_build_arrow_odbc_custom_type_coercions(),
+        custom_type_coercions=_custom_type_coercions(),
         default_dialect="sqlite",
     )
 

@@ -329,7 +329,7 @@ def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQuery
     Returns:
         ArrayQueryParameter instance.
     """
-    bigquery = _get_bigquery_module()
+    bigquery = _load_bigquery_module()
     return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
 
 
@@ -344,7 +344,7 @@ def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[An
     Returns:
         ScalarQueryParameter with STRING type.
     """
-    bigquery = _get_bigquery_module()
+    bigquery = _load_bigquery_module()
     return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value)))
 
 
@@ -359,11 +359,11 @@ def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQuer
     Returns:
         ScalarQueryParameter instance.
     """
-    bigquery = _get_bigquery_module()
+    bigquery = _load_bigquery_module()
     return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, param_type, value))
 
 
-def _get_bigquery_module() -> Any:
+def _load_bigquery_module() -> Any:
     global _BIGQUERY_MODULE
     if _BIGQUERY_MODULE is None:
         from google.cloud import bigquery
@@ -375,7 +375,7 @@ def _get_bigquery_module() -> Any:
 logger = get_logger("sqlspec.adapters.bigquery.core")
 
 
-def _get_bq_param_type(value: Any) -> "tuple[str | None, str | None]":
+def _query_parameter_type(value: Any) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:
@@ -399,7 +399,7 @@ def _get_bq_param_type(value: Any) -> "tuple[str | None, str | None]":
         if not value:
             msg = "Cannot determine BigQuery ARRAY type for empty sequence."
             raise SQLSpecError(msg)
-        element_type, _ = _get_bq_param_type(value[0])
+        element_type, _ = _query_parameter_type(value[0])
         if element_type is None:
             msg = f"Unsupported element type in ARRAY: {type(value[0])}"
             raise SQLSpecError(msg)
@@ -427,7 +427,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
         for name, value in parameters.items():
             param_name_for_bq = name.lstrip("@")
             actual_value = value.value if has_value_attribute(value) else value
-            param_type, array_element_type = _get_bq_param_type(actual_value)
+            param_type, array_element_type = _query_parameter_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
                 bq_parameters.append(_create_array_parameter(param_name_for_bq, actual_value, array_element_type))

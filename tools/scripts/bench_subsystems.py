@@ -52,7 +52,7 @@ def _setup_test_table(db_path: Path) -> None:
     conn.close()
 
 
-def _get_librt_string_writer() -> "type[Any] | None":
+def _librt_string_writer_type() -> "type[Any] | None":
     """Return librt's StringWriter when the mypy 2 runtime helper is installed."""
     try:
         from librt.strings import StringWriter
@@ -83,7 +83,7 @@ class SubsystemBenchmark:
 
 def _build_librt_candidate_benchmarks(iterations: int) -> list[SubsystemBenchmark]:
     """Build optional benchmarks for candidate librt.strings replacements."""
-    string_writer_type = _get_librt_string_writer()
+    string_writer_type = _librt_string_writer_type()
     if string_writer_type is None:
         return []
 

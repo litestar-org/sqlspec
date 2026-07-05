@@ -302,7 +302,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into a table via arrow-odbc bulk insert."""
-        arrow_table, inbound = self._read_arrow_from_storage_sync(source, file_format=file_format)
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     def _read_arrow_batches(self, sql: str, parameters: "list[str | None] | None", batch_size: int) -> Any:

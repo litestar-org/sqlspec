@@ -189,7 +189,7 @@ def test_adk_store_registration_validator_fails_fast_for_broken_store_mapping(mo
         return importlib.import_module(path.rsplit(".", 1)[0])
 
     monkeypatch.setattr(_config_utils, "import_string", import_missing_store)
-    monkeypatch.setattr(_config_utils, "_get_adk_exported_store_class", lambda _config, _suffix: None)
+    monkeypatch.setattr(_config_utils, "_adk_exported_store_class", lambda _config, _suffix: None)
 
     with pytest.raises(SQLSpecError, match="Failed to import ADK store class"):
         SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})

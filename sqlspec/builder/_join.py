@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 __all__ = ("JoinBuilder", "JoinClauseMixin", "create_join_builder")
 
 
-def _handle_sql_object_condition(on: Any, builder: "SQLBuilderProtocol") -> exp.Expr:
+def _condition_from_sql_object(on: Any, builder: "SQLBuilderProtocol") -> exp.Expr:
     if has_expression_and_parameters(on) and on.expression is not None:
         for param_name, param_value in on.parameters.items():
             builder.add_parameter(param_value, name=param_name)
@@ -44,13 +44,13 @@ def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr
     if isinstance(on, str):
         return exp.condition(on)
     if has_expression_and_sql(on):
-        return _handle_sql_object_condition(on, builder)
+        return _condition_from_sql_object(on, builder)
     if isinstance(on, exp.Expr):
         return on
     return exp.condition(str(on))
 
 
-def _handle_query_builder_table(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:
+def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:
     subquery_expression: exp.Expr
     builder_table = cast("HasParameterBuilderProtocol", table)
     parameters = builder_table.parameters
@@ -74,13 +74,13 @@ def _parse_join_table(builder: "SQLBuilderProtocol", table: str | exp.Expr | Any
     if isinstance(table, str):
         return parse_table_expression(table, alias, dialect=builder.dialect)
     if has_parameter_builder(table):
-        return _handle_query_builder_table(table, alias, builder)
+        return _table_from_builder(table, alias, builder)
     if isinstance(table, exp.Expr):
         return table
     return cast("exp.Expr", table)
 
 
-def _create_join_expression(table_expr: exp.Expr, on_expr: exp.Expr | None, join_type: str) -> exp.Join:
+def _join_for_type(table_expr: exp.Expr, on_expr: exp.Expr | None, join_type: str) -> exp.Join:
     join_type_upper = join_type.upper()
     if join_type_upper == "INNER":
         return exp.Join(this=table_expr, on=on_expr)
@@ -145,7 +145,7 @@ def build_join_clause(
 ) -> exp.Join:
     table_expr = _parse_join_table(builder, table, alias)
     on_expr = _parse_join_condition(builder, on)
-    join_expr = _create_join_expression(table_expr, on_expr, join_type)
+    join_expr = _join_for_type(table_expr, on_expr, join_type)
     if lateral:
         _apply_lateral_modifier(join_expr)
     return join_expr

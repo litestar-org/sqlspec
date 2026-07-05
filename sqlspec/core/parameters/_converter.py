@@ -284,7 +284,7 @@ class ParameterConverter:
             return dict(parameters)
         return self._convert_sequence_to_dict(list(parameters.values()), param_info)
 
-    def _extract_param_value_mixed_styles(
+    def _lookup_parameter_value(
         self, param: "ParameterInfo", parameters: "ParameterMapping", param_keys: "list[str]"
     ) -> "tuple[object | None, bool]":
         if param.name and param.name in parameters:
@@ -414,7 +414,7 @@ class ParameterConverter:
                 for param in param_info:
                     param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
                     if param_key not in unique_params:
-                        value, found = self._extract_param_value_mixed_styles(param, parameters, param_keys)
+                        value, found = self._lookup_parameter_value(param, parameters, param_keys)
                         if found:
                             unique_params[param_key] = value
                             param_order.append(param_key)
@@ -422,7 +422,7 @@ class ParameterConverter:
                 for param in param_info:
                     param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
                     if param_key not in unique_params:
-                        value, found = self._extract_param_value_mixed_styles(param, parameters, [])
+                        value, found = self._lookup_parameter_value(param, parameters, [])
                         if found:
                             unique_params[param_key] = value
                             param_order.append(param_key)
