@@ -30,7 +30,7 @@ from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_co
 from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 
@@ -47,6 +47,8 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_and_resolve_rowcount",
+    "execute_fetchall_with_description",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -85,6 +87,32 @@ async def run_on_worker_thread(
     return await execute(function, *args, **kwargs)
 
 
+def execute_fetchall_with_description(
+    connection: "AiosqliteConnection", sql: str, parameters: Any
+) -> "tuple[list[Any], Any]":
+    """Execute a query and return raw rows plus description on the worker thread."""
+    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
+    try:
+        return cursor.fetchall(), cursor.description
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+
+
+def execute_and_resolve_rowcount(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
+    """Execute a statement and resolve rowcount on the worker thread."""
+    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
+    try:
+        if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0:
+            return cursor.rowcount
+        return 0
+    finally:
+        with contextlib.suppress(Exception):
+            cast("Any", cursor).close()
+
+
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if not cleaned:
@@ -100,9 +128,7 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def collect_rows(
-    fetched_data: "Iterable[Any]", description: "Sequence[Any] | None"
-) -> "tuple[list[Any], list[str], int]":
+def collect_rows(fetched_data: "list[Any]", description: "Sequence[Any] | None") -> "tuple[list[Any], list[str], int]":
     """Collect aiosqlite result rows as raw tuples.
 
     Returns raw driver-native rows without dict conversion for lazy materialization.
@@ -118,8 +144,7 @@ def collect_rows(
         return [], [], 0
 
     column_names = [col[0] for col in description]
-    data = list(fetched_data)
-    return data, column_names, len(data)
+    return fetched_data, column_names, len(fetched_data)
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -406,7 +431,7 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply AIOSQLite driver feature defaults to statement config."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    features.setdefault("enable_custom_adapters", True)
+    features.setdefault("enable_custom_adapters", False)
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 

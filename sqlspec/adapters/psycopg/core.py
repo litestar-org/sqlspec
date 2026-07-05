@@ -38,10 +38,10 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
+from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
 
 # Module-level lazy import for psycopg errors (mypyc optimization)
 try:
@@ -152,18 +152,23 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     }
 
 
-def _parameter_config(profile: "DriverParameterProfile", serializer: "Callable[[Any], str]") -> "ParameterStyleConfig":
+def _parameter_config(
+    profile: "DriverParameterProfile", serializer: "Callable[[Any], str]", deserializer: "Callable[[str], Any]"
+) -> "ParameterStyleConfig":
     """Construct parameter configuration with shared JSON serializer support.
 
     Args:
         profile: Driver parameter profile to extend.
         serializer: JSON serializer for parameter coercion.
+        deserializer: JSON deserializer for result coercion.
 
     Returns:
         ParameterStyleConfig with updated type coercions.
     """
 
-    base_config = build_statement_config_from_profile(profile, json_serializer=serializer).parameter_config
+    base_config = build_statement_config_from_profile(
+        profile, json_serializer=serializer, json_deserializer=deserializer
+    ).parameter_config
 
     updated_type_map = dict(base_config.type_coercion_map)
     updated_type_map[list] = build_json_list_converter(serializer)
@@ -195,12 +200,17 @@ def build_profile() -> "DriverParameterProfile":
 driver_profile = build_profile()
 
 
-def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
+def build_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
     """Construct the psycopg statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
+    deserializer = json_deserializer or from_json
     profile = driver_profile
-    parameter_config = _parameter_config(profile, serializer)
-    base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
+    parameter_config = _parameter_config(profile, serializer, deserializer)
+    base_config = build_statement_config_from_profile(
+        profile, json_serializer=serializer, json_deserializer=deserializer
+    )
     return base_config.replace(parameter_config=parameter_config)
 
 
@@ -213,11 +223,13 @@ def apply_driver_features(
     """Apply psycopg driver feature defaults to statement config."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     serializer = features.get("json_serializer", to_json)
+    deserializer = features.get("json_deserializer", from_json)
     features.setdefault("json_serializer", serializer)
+    features.setdefault("json_deserializer", deserializer)
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
 
-    parameter_config = _parameter_config(driver_profile, serializer)
+    parameter_config = _parameter_config(driver_profile, serializer, deserializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
@@ -455,6 +467,7 @@ def build_pipeline_execution_result(
             fetched_data, column_names = collect_rows(fetched_data, cursor.description)
         else:
             column_names = column_name_resolver(cursor.description)
+        row_format = resolve_row_format(fetched_data)
         return ExecutionResult(
             cursor_result=cursor,
             rowcount_override=None,
@@ -467,7 +480,7 @@ def build_pipeline_execution_result(
             is_script_result=False,
             is_select_result=True,
             is_many_result=False,
-            row_format="tuple",
+            row_format=row_format,
             last_inserted_id=None,
         )
 
@@ -508,6 +521,7 @@ async def build_async_pipeline_execution_result(
             fetched_data, column_names = collect_rows(fetched_data, cursor.description)
         else:
             column_names = column_name_resolver(cursor.description)
+        row_format = resolve_row_format(fetched_data)
         return ExecutionResult(
             cursor_result=cursor,
             rowcount_override=None,
@@ -520,7 +534,7 @@ async def build_async_pipeline_execution_result(
             is_script_result=False,
             is_select_result=True,
             is_many_result=False,
-            row_format="tuple",
+            row_format=row_format,
             last_inserted_id=None,
         )
 

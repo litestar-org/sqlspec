@@ -173,8 +173,6 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply DuckDB-specific driver features to statement configuration."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    if not features:
-        return statement_config, features
 
     param_config = statement_config.parameter_config
     json_serializer = features.get("json_serializer")
@@ -184,11 +182,10 @@ def apply_driver_features(
         )
 
     enable_uuid_conversion = features.get("enable_uuid_conversion", True)
-    if not enable_uuid_conversion:
-        type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
-        type_coercion_map = dict(param_config.type_coercion_map)
-        type_coercion_map[str] = type_converter.convert_if_detected
-        param_config = param_config.replace(type_coercion_map=type_coercion_map)
+    type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
+    type_coercion_map = dict(param_config.type_coercion_map)
+    type_coercion_map[str] = type_converter.convert_if_detected
+    param_config = param_config.replace(type_coercion_map=type_coercion_map)
 
     if param_config is statement_config.parameter_config:
         return statement_config, features

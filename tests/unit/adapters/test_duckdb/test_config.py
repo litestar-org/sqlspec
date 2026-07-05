@@ -2,6 +2,7 @@
 
 from typing import Any, get_type_hints
 from unittest.mock import patch
+from uuid import UUID
 
 import duckdb
 from typing_extensions import NotRequired
@@ -42,6 +43,21 @@ def test_duckdb_config_applies_driver_feature_serializer() -> None:
     config = DuckDBConfig(driver_features={"json_serializer": serializer})
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
+
+
+def test_duckdb_config_honors_uuid_conversion_flag() -> None:
+    """Driver features should control UUID string conversion."""
+
+    uuid_str = "550e8400-e29b-41d4-a716-446655440000"
+
+    enabled_config = DuckDBConfig(driver_features={"enable_uuid_conversion": True})
+    disabled_config = DuckDBConfig(driver_features={"enable_uuid_conversion": False})
+
+    enabled_converter = enabled_config.statement_config.parameter_config.type_coercion_map[str]
+    disabled_converter = disabled_config.statement_config.parameter_config.type_coercion_map[str]
+
+    assert isinstance(enabled_converter(uuid_str), UUID)
+    assert disabled_converter(uuid_str) == uuid_str
 
 
 def test_connection_param_types_match_current_duckdb_settings() -> None:

@@ -105,7 +105,7 @@ def test_build_pipeline_execution_result_uses_column_resolver_fast_path() -> Non
 
     class _Cursor:
         def __init__(self) -> None:
-            self.description = [SimpleNamespace()]
+            self.description = [SimpleNamespace(name="id"), SimpleNamespace(name="name")]
 
         def fetchall(self) -> list[tuple[int, str]]:
             return [(1, "alice"), (2, "bob")]
@@ -119,6 +119,37 @@ def test_build_pipeline_execution_result_uses_column_resolver_fast_path() -> Non
     assert result.data_row_count == 2
 
 
+def test_build_pipeline_execution_result_detects_record_row_format() -> None:
+
+    class _Statement:
+        def returns_rows(self) -> bool:
+            return True
+
+    class _Row:
+        def __init__(self, data: dict[str, Any]) -> None:
+            self._data = data
+
+        def keys(self) -> Any:
+            return self._data.keys()
+
+        def __getitem__(self, key: str) -> Any:
+            return self._data[key]
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.description = [SimpleNamespace(name="id"), SimpleNamespace(name="name")]
+
+        def fetchall(self) -> list[_Row]:
+            return [_Row({"id": 1, "name": "alice"})]
+
+    cursor = _Cursor()
+    result = build_pipeline_execution_result(cast("Any", _Statement()), cursor)
+    assert result.row_format == "record"
+    selected_data = result.selected_data
+    assert selected_data is not None
+    assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
+
+
 def test_build_async_pipeline_execution_result_uses_column_resolver_fast_path() -> None:
 
     class _Statement:
@@ -127,7 +158,7 @@ def test_build_async_pipeline_execution_result_uses_column_resolver_fast_path() 
 
     class _Cursor:
         def __init__(self) -> None:
-            self.description = [SimpleNamespace()]
+            self.description = [SimpleNamespace(name="id"), SimpleNamespace(name="name")]
 
         async def fetchall(self) -> list[tuple[int, str]]:
             return [(1, "alice"), (2, "bob")]
@@ -140,6 +171,40 @@ def test_build_async_pipeline_execution_result_uses_column_resolver_fast_path() 
         assert result.selected_data == [(1, "alice"), (2, "bob")]
         assert result.column_names == ["id", "name"]
         assert result.data_row_count == 2
+
+    asyncio.run(_run())
+
+
+def test_build_async_pipeline_execution_result_detects_record_row_format() -> None:
+
+    class _Statement:
+        def returns_rows(self) -> bool:
+            return True
+
+    class _Row:
+        def __init__(self, data: dict[str, Any]) -> None:
+            self._data = data
+
+        def keys(self) -> Any:
+            return self._data.keys()
+
+        def __getitem__(self, key: str) -> Any:
+            return self._data[key]
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.description = [SimpleNamespace(name="id"), SimpleNamespace(name="name")]
+
+        async def fetchall(self) -> list[_Row]:
+            return [_Row({"id": 1, "name": "alice"})]
+
+    async def _run() -> None:
+        cursor = _Cursor()
+        result = await build_async_pipeline_execution_result(cast("Any", _Statement()), cursor)
+        assert result.row_format == "record"
+        selected_data = result.selected_data
+        assert selected_data is not None
+        assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
 
     asyncio.run(_run())
 

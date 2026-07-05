@@ -182,6 +182,7 @@ __all__ = (
     "is_string_literal",
     "is_typed_dict",
     "is_typed_parameter",
+    "resolve_row_format",
     "supports_arrow_results",
     "supports_async_delete",
     "supports_async_read_bytes",
@@ -465,6 +466,19 @@ def is_mapping_like(obj: Any) -> "TypeGuard[MappingLikeProtocol]":
         return callable(obj.keys)
     except AttributeError:
         return False
+
+
+def resolve_row_format(rows: "Sequence[Any] | None", *, default: str = "tuple") -> str:
+    """Resolve the raw row format from the first row in a result set."""
+    if not rows:
+        return default
+
+    first_row = rows[0]
+    if is_dict_row(first_row):
+        return "dict"
+    if is_mapping_like(first_row):
+        return "record"
+    return default
 
 
 def has_asdict_method(obj: Any) -> "TypeGuard[HasAsDictProtocol]":

@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def test_import_is_from_aiosqlite_not_sqlite() -> None:
     from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
@@ -89,6 +91,18 @@ def test_unregister_type_handlers_is_noop() -> None:
     from sqlspec.adapters.aiosqlite.type_converter import unregister_type_handlers
 
     unregister_type_handlers()
+
+
+@pytest.mark.anyio
+async def test_aiosqlite_config_does_not_register_type_handlers_by_default() -> None:
+    import sqlspec.adapters.aiosqlite.config as config_mod
+
+    with patch.object(config_mod, "register_type_handlers") as mock_register:
+        config = config_mod.AiosqliteConfig(connection_config={"database": ":memory:"})
+        pool = await config._create_pool()  # pyright: ignore[reportPrivateUsage]
+        await pool.close()
+
+    mock_register.assert_not_called()
 
 
 def test_aiosqlite_config_uses_aiosqlite_type_converter() -> None:

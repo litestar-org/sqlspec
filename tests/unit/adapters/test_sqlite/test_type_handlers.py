@@ -42,3 +42,14 @@ def test_unregister_type_handlers_is_noop() -> None:
     from sqlspec.adapters.sqlite.type_converter import unregister_type_handlers
 
     unregister_type_handlers()
+
+
+def test_sqlite_config_does_not_register_type_handlers_by_default() -> None:
+    import sqlspec.adapters.sqlite.config as config_mod
+
+    register_mock = patch.object(config_mod, "register_type_handlers")
+    with register_mock as mock_register:
+        config = config_mod.SqliteConfig(connection_config={"database": ":memory:"})
+        config._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    mock_register.assert_not_called()

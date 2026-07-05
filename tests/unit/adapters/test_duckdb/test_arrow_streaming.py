@@ -8,6 +8,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.core.result import DMLResult
 from sqlspec.exceptions import MissingDependencyError
 
 
@@ -55,7 +56,22 @@ def test_load_from_arrow_registers_record_batch_reader() -> None:
 
         assert job.telemetry["rows_processed"] == 2
         result = driver.execute("SELECT id, name FROM reader_target ORDER BY id")
-        assert result.data == [(10, "ten"), (11, "eleven")]
+        assert result.get_data() == [{"id": 10, "name": "ten"}, {"id": 11, "name": "eleven"}]
+
+
+def test_execute_many_uses_bulk_insert_fast_path() -> None:
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE bulk_target (id INTEGER, name VARCHAR)")
+
+        result = driver.execute_many("INSERT INTO bulk_target (id, name) VALUES (?, ?)", [(1, "one"), (2, "two")])
+
+        assert isinstance(result, DMLResult)
+        assert result.operation_type == "INSERT"
+        assert result.rows_affected == 2
+        assert driver.execute("SELECT id, name FROM bulk_target ORDER BY id").get_data() == [
+            {"id": 1, "name": "one"},
+            {"id": 2, "name": "two"},
+        ]
 
 
 def test_missing_pyarrow_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:

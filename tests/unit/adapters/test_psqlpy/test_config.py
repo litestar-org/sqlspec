@@ -45,6 +45,18 @@ def test_build_default_statement_config_custom_serializer() -> None:
     assert parameter_config.json_serializer is serializer
 
 
+def test_build_default_statement_config_custom_deserializer() -> None:
+    """Custom deserializer should propagate into the parameter configuration."""
+
+    def deserializer(_: str) -> object:
+        return {"deserialized": True}
+
+    statement_config = build_statement_config(json_deserializer=deserializer)
+
+    parameter_config = statement_config.parameter_config
+    assert parameter_config.json_deserializer is deserializer
+
+
 def test_psqlpy_config_applies_driver_feature_serializer() -> None:
     """Driver features should mutate the Psqlpy statement configuration."""
 
@@ -55,6 +67,18 @@ def test_psqlpy_config_applies_driver_feature_serializer() -> None:
 
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
+
+
+def test_psqlpy_config_applies_driver_feature_deserializer() -> None:
+    """Driver features should mutate the Psqlpy JSON deserializer."""
+
+    def deserializer(_: str) -> object:
+        return {"feature": True}
+
+    config = PsqlpyConfig(driver_features={"json_deserializer": deserializer})
+
+    parameter_config = config.statement_config.parameter_config
+    assert parameter_config.json_deserializer is deserializer
 
 
 def test_psqlpy_driver_features_declares_cast_detection() -> None:

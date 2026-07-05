@@ -216,4 +216,4 @@ def test_runtime_keys_removed_from_driver_features() -> None:
     assert "row_factory" not in config.driver_features
     assert "pragmas" not in config.driver_features
     assert "extensions" not in config.driver_features
-    assert config.driver_features["enable_custom_adapters"] is True
+    assert config.driver_features["enable_custom_adapters"] is False

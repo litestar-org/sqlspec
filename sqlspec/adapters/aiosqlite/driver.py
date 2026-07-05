@@ -15,21 +15,31 @@ from sqlspec.adapters.aiosqlite.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_and_resolve_rowcount,
+    execute_fetchall_with_description,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     resolve_rowcount,
+    run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
+from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
+from sqlspec.core.result import DMLResult
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
-    from sqlspec.core import SQL, StatementConfig
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core.compiler import OperationType
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
 
 __all__ = (
     "AiosqliteCursor",
@@ -88,14 +98,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
+        normalized_parameters = normalize_execute_parameters(prepared_parameters)
 
         if statement.returns_rows():
-            fetched_data = await cursor.fetchall()
-
-            # aiosqlite returns Iterable[Row], core helper expects Iterable[Any]
-            # Use cast to satisfy mypy and pyright
-            data, column_names, row_count = collect_rows(cast("list[Any]", fetched_data), cursor.description)
+            fetched_data, description = await run_on_worker_thread(
+                self.connection, execute_fetchall_with_description, self.connection, sql, normalized_parameters
+            )
+            data, column_names, row_count = collect_rows(fetched_data, description)
+            row_format = resolve_row_format(data)
 
             return self.create_execution_result(
                 cursor,
@@ -103,10 +113,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=row_count,
                 is_select_result=True,
-                row_format="tuple",
+                row_format=row_format,
             )
 
-        affected_rows = resolve_rowcount(cursor)
+        affected_rows = await run_on_worker_thread(
+            self.connection, execute_and_resolve_rowcount, self.connection, sql, normalized_parameters
+        )
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def dispatch_execute_many(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
@@ -134,6 +146,157 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
+    ) -> "SQLResult":
+        """Execute cached queries without an extra worker-thread cursor hop."""
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
+        direct_statement = self._cached_statement(
+            sql,
+            params,
+            cached,
+            cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
+            params_are_simple=True,
+            compiled_sql=cached.compiled_sql,
+        )
+        return await self._execute_cached_statement(direct_statement)
+
+    async def execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute many with an AIOSQLite thin path for simple qmark batches."""
+        config = statement_config or self.statement_config
+        if (
+            isinstance(statement, str)
+            and not filters
+            and not kwargs
+            and config is self.statement_config
+            and self.observability.is_idle
+            and self._can_use_execute_many_thin_path(statement, parameters, config)
+        ):
+            try:
+                cursor = await self.connection.executemany(statement, parameters)
+            except (aiosqlite.Error, sqlite3.Error) as exc:
+                raise create_mapped_exception(exc) from exc
+
+            rowcount = cursor.rowcount
+            affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+            operation = self._resolve_dml_operation_type(statement)
+            return DMLResult(operation, affected_rows)
+        return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+
+    def _can_use_execute_many_thin_path(
+        self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"
+    ) -> bool:
+        if type(parameters) is not list:
+            return False
+        if not parameters:
+            return False
+        if "?" not in statement:
+            return False
+
+        parameter_config = config.parameter_config
+        if parameter_config.default_parameter_style is not ParameterStyle.QMARK:
+            return False
+        if (
+            parameter_config.default_execution_parameter_style is not None
+            and parameter_config.default_execution_parameter_style is not ParameterStyle.QMARK
+        ):
+            return False
+        if parameter_config.ast_transformer is not None or parameter_config.output_transformer is not None:
+            return False
+        if parameter_config.needs_static_script_compilation:
+            return False
+        if config.output_transformer is not None or config.statement_transformers:
+            return False
+
+        return self._thin_path_parameters_are_eligible(parameters, parameter_config.type_coercion_map)
+
+    @staticmethod
+    def _thin_path_parameters_are_eligible(
+        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
+    ) -> bool:
+        first_sequence = AiosqliteDriver._as_sequence_parameter_set(parameters[0])
+        if first_sequence is None:
+            return False
+
+        first_type = type(first_sequence)
+        row_len = len(first_sequence)
+        coercion_map = type_coercion_map
+        has_type_coercion = bool(coercion_map)
+
+        if row_len == 1:
+            if has_type_coercion and coercion_map is not None:
+                for param_set in parameters:
+                    sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+                    if sequence is None or type(sequence) is not first_type:
+                        return False
+                    if len(sequence) != 1:
+                        return False
+                    value_type = type(sequence[0])
+                    if value_type is TypedParameter or value_type in coercion_map:
+                        return False
+                return True
+
+            for param_set in parameters:
+                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
+                    return False
+                if len(sequence) != 1:
+                    return False
+                if type(sequence[0]) is TypedParameter:
+                    return False
+            return True
+
+        if has_type_coercion and coercion_map is not None:
+            for param_set in parameters:
+                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
+                    return False
+                if len(sequence) != row_len:
+                    return False
+                for value in sequence:
+                    value_type = type(value)
+                    if value_type is TypedParameter or value_type in coercion_map:
+                        return False
+            return True
+
+        for param_set in parameters:
+            sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+            if sequence is None or type(sequence) is not first_type:
+                return False
+            if len(sequence) != row_len:
+                return False
+            for value in sequence:
+                if type(value) is TypedParameter:
+                    return False
+        return True
+
+    @staticmethod
+    def _as_sequence_parameter_set(param_set: "StatementParameters") -> "list[Any] | tuple[Any, ...] | None":
+        if isinstance(param_set, list):
+            return param_set
+        if isinstance(param_set, tuple):
+            return param_set
+        return None
+
+    @staticmethod
+    def _resolve_dml_operation_type(statement: str) -> "OperationType":
+        command_keyword = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
+        if command_keyword == "INSERT":
+            return "INSERT"
+        if command_keyword == "UPDATE":
+            return "UPDATE"
+        if command_keyword == "DELETE":
+            return "DELETE"
+        return "COMMAND"
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT

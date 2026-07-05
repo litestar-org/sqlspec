@@ -17,6 +17,7 @@ from sqlspec.adapters.psqlpy.core import (
     default_statement_config,
     encode_records_for_binary_copy,
     format_execute_many_parameters,
+    get_parameter_casts,
     prepare_parameters_with_casts,
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
@@ -102,6 +103,17 @@ def test_build_statement_config_builds_base_profile_once(monkeypatch) -> None:
     monkeypatch.setattr(psqlpy_core, "build_statement_config_from_profile", wrapped)
     build_statement_config()
     assert calls == 1
+
+
+def test_get_parameter_casts_reads_processed_state_from_cached_statement() -> None:
+    class _ProcessedState:
+        parameter_casts = {1: "JSONB"}
+
+    class _Statement:
+        def get_processed_state(self) -> _ProcessedState:
+            return _ProcessedState()
+
+    assert get_parameter_casts(_Statement()) == {1: "JSONB"}
 
 
 def test_format_execute_many_parameters_handles_scalar_input() -> None:
