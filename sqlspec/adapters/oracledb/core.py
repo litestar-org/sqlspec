@@ -219,6 +219,9 @@ def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]"
 def build_arrow_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
     """Build Oracle Arrow/DataFrame fetch keyword arguments."""
     fetch_kwargs: dict[str, object] = {}
+    fetch_lobs = driver_features.get("fetch_lobs")
+    if fetch_lobs is not None:
+        fetch_kwargs["fetch_lobs"] = fetch_lobs
     fetch_decimals = driver_features.get("fetch_decimals")
     if fetch_decimals is not None:
         fetch_kwargs["fetch_decimals"] = fetch_decimals
@@ -646,7 +649,7 @@ def resolve_row_metadata(
 class OracleSyncStreamSource:
     """Compiled chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_fetch_lobs", "_parameters", "_sql")
 
     def __init__(
         self,
@@ -654,11 +657,13 @@ class OracleSyncStreamSource:
         sql: str,
         parameters: "list[object] | tuple[object, ...] | dict[object, object] | None",
         chunk_size: int,
+        fetch_lobs: bool | None = None,
     ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._fetch_lobs = fetch_lobs
         self._cursor: OracleSyncRawCursor | None = None
         self._column_names: list[str] | None = None
 
@@ -668,7 +673,10 @@ class OracleSyncStreamSource:
             cursor = self._driver.connection.cursor()
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
-            cursor.execute(self._sql, self._parameters or {})
+            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            if self._fetch_lobs is not None:
+                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+            cursor.execute(self._sql, self._parameters or {}, **fetch_kwargs)
             self._cursor = cursor
         self._driver._check_pending_exception(handler)
 
@@ -700,7 +708,7 @@ class OracleSyncStreamSource:
 class OracleAsyncStreamSource:
     """Compiled async chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_fetch_lobs", "_parameters", "_sql")
 
     def __init__(
         self,
@@ -708,11 +716,13 @@ class OracleAsyncStreamSource:
         sql: str,
         parameters: "list[object] | tuple[object, ...] | dict[object, object] | None",
         chunk_size: int,
+        fetch_lobs: bool | None = None,
     ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._fetch_lobs = fetch_lobs
         self._cursor: OracleAsyncRawCursor | None = None
         self._column_names: list[str] | None = None
 
@@ -722,7 +732,10 @@ class OracleAsyncStreamSource:
             cursor = self._driver.connection.cursor()
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
-            await cursor.execute(self._sql, self._parameters or {})
+            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            if self._fetch_lobs is not None:
+                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+            await cursor.execute(self._sql, self._parameters or {}, **fetch_kwargs)
             self._cursor = cursor
         self._driver._check_pending_exception(handler)
 
