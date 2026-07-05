@@ -93,7 +93,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     ) -> Any:
         """Mock execute upgrade."""
         _ = driver, use_transaction, on_success
-        sql = self._migration_sql(migration, "up")
+        sql = self._migration_sql_sync(migration, "up")
         if sql:
             self._executed_migrations.append({"version": migration["version"], "direction": "up", "sql": sql})
             return Mock(spec=ExecutionResult)
@@ -109,7 +109,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     ) -> Any:
         """Mock execute downgrade."""
         _ = driver, use_transaction, on_success
-        sql = self._migration_sql(migration, "down")
+        sql = self._migration_sql_sync(migration, "down")
         if sql:
             self._executed_migrations.append({"version": migration["version"], "direction": "down", "sql": sql})
             return Mock(spec=ExecutionResult)

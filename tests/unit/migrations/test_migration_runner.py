@@ -703,7 +703,7 @@ def test_migration_sql_upgrade_success() -> None:
         "loader": Mock(get_up_sql=Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql_sync(migration, "up")
 
     assert result is not None
     assert isinstance(result, list)
@@ -722,7 +722,7 @@ def test_migration_sql_downgrade_success() -> None:
         "loader": Mock(get_down_sql=Mock(return_value=["DROP TABLE test;"])),
     }
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql_sync(migration, "down")
 
     assert result is not None
     assert isinstance(result, list)
@@ -743,7 +743,7 @@ def test_migration_sql_no_downgrade_warning() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql_sync(migration, "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
@@ -762,7 +762,7 @@ def test_migration_sql_no_upgrade_error() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._migration_sql(migration, "up")
+        runner._migration_sql_sync(migration, "up")
 
     assert "Migration 0001 has no upgrade query" in str(exc_info.value)
 
@@ -782,7 +782,7 @@ def test_migration_sql_loader_exception_upgrade() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._migration_sql(migration, "up")
+        runner._migration_sql_sync(migration, "up")
 
     assert "Failed to load upgrade for migration 0001" in str(exc_info.value)
 
@@ -803,7 +803,7 @@ def test_migration_sql_loader_exception_downgrade() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql_sync(migration, "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
@@ -821,7 +821,7 @@ def test_migration_sql_empty_statements() -> None:
         "loader": Mock(get_up_sql=Mock(return_value=[])),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql_sync(migration, "up")
 
     assert result is None
 
@@ -838,7 +838,7 @@ def test_migration_sql_none_statements() -> None:
         "loader": Mock(get_up_sql=Mock(return_value=None)),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql_sync(migration, "up")
 
     assert result is None
 
