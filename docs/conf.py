@@ -62,6 +62,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "tools.sphinx_ext.missing_references",
     "tools.sphinx_ext.changelog",
+    "tools.sphinx_ext.guarded_imports",
     "sphinx_autodoc_typehints",
     "myst_parser",
     "auto_pytabs.sphinx_ext",

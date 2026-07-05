@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.53.0 - SQL processing correctness fixes
+v0.53.0 - SQL processing correctness and cleanup
 ------------------------------------------------------------------------------
 
 **Changed:**
@@ -26,6 +26,9 @@ v0.53.0 - SQL processing correctness fixes
   processing state.
 * MySQL local-infile support now requires explicit opt-in consent before
   enabling client-side file reads.
+* Removed unused private builder, driver, compiler, cache, parameter,
+  SQL-file loader, storage, ADK, migration, and adapter internals while
+  preserving public imports and compatibility surfaces.
 
 **Fixed:**
 
@@ -74,6 +77,9 @@ v0.53.0 - SQL processing correctness fixes
   optimization disabled.
 * ``where_in()`` now binds plain string values as scalar parameters, matching
   ``where_not_in()`` and the OR helper variants.
+* Documentation builds now filter the known ``pymssql`` stub-only
+  ``QueryParams`` guarded-import warning through the custom Sphinx tooling
+  instead of changing adapter runtime code.
 
 v0.52.0 - SQL Server adapters, ADK profiles, and cloud connectors
 ------------------------------------------------------------------------------
