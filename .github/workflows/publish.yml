@@ -116,8 +116,12 @@ jobs:
         run: |
           # Defender's real-time scan on the freshly-extracted nuget-cpython
           # python.exe blocks virtualenv discovery past its 10s timeout.
+          # Keep mypyc's build root short enough for MSVC linker command lines.
+          Remove-Item -Recurse -Force "C:\b" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "C:\b" | Out-Null
           Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pypa\cibuildwheel" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "C:\b" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE\wheelhouse" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionProcess "python.exe" -ErrorAction SilentlyContinue
@@ -187,6 +191,7 @@ jobs:
           # ── Windows (MSVC): plain mypyc, no PGO ──
           CIBW_ENVIRONMENT_WINDOWS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
+            HATCH_MYPYC_BUILD_DIR=C:/b
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
 
       - name: Upload wheel artifacts
