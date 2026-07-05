@@ -203,6 +203,22 @@ deliberately leaves **irreducible** per-adapter tests in place. Do not fold thes
 - Deferred adapters (spanner, mssql_python) until their cases move from
   `DEFERRED_DRIVER_CASES` to active rows.
 
+Current residual inventory:
+
+| Area | Local files | Why they stay local |
+| --- | --- | --- |
+| Oracle type handlers | `oracledb/test_msgspec_clob.py`, `test_numpy_vectors.py`, `test_smart_lob_coercion.py`, `test_sparse_vectors.py`, `test_uuid_binary.py` | Oracle-specific LOB/CLOB/BLOB hydration, NumPy/vector type handlers, sparse vector passthrough, and RAW/VARCHAR UUID coexistence. Portable vector, UUID, result, JSON, PL/SQL, and StatementStack behavior is contract-owned. |
+| Oracle direct/load/driver specifics | `oracledb/test_direct_path_load.py`, `test_driver_sync.py`, `test_driver_async.py`, `test_execute_many.py`, `test_features.py`, `test_migrations.py` | Direct-path loading, Oracle statement/session details, and Oracle-specific migration/feature surfaces that do not generalize without adapter-name conditionals. |
+| ADBC connection/backend internals | `adbc/test_adbc_connection.py`, `test_adbc_backends.py`, `test_sqlite_session.py`, `test_transactions.py` | Raw ADBC `create_connection()`, `adbc_get_info`, backend-native SQL features, SQLite dialect fallback, and ADBC transaction plumbing. Portable driver/result/parameter/Arrow behavior is contract-owned through active ADBC cases. |
+| ADBC execution edge cases | `adbc/test_adbc_driver.py`, `test_adbc_edge_cases.py`, `test_arrow_features.py` | ADBC PostgreSQL `continue_on_error` recovery, exact SQLite lock SQL generation, script parsing around comments/empty statements, post-error connection recovery, and DuckDB analytical/window SQL. |
+| GizmoSQL ADBC | `adbc/test_gizmosql.py`, `test_gizmosql_arrow.py`, `test_gizmosql_data_dictionary.py` | GizmoSQL FlightSQL backend behavior is not a `DriverCase`; these tests cover service-specific result streams, xfails, storage, migration, and dictionary behavior. |
+| BigQuery cloud/analytics specifics | `bigquery/test_arrow.py`, `test_config.py`, `test_driver.py`, `test_parameter_variants.py`, `test_vector_functions.py` | Emulator/native BigQuery project-dataset setup, job controls, parameter forms, and vector/analytics behavior beyond the active BigQuery contract case. |
+| Spanner GoogleSQL | `spanner/test_arrow.py`, `test_batch_write_api.py`, `test_bytes_direct.py`, `test_crud_operations.py`, `test_driver.py`, `test_exceptions.py`, `test_execute_many.py`, `test_explain.py`, `test_load_from_arrow_mutations.py`, `test_parameter_variants.py`, `test_session_defaults.py` | Spanner needs admin-API DDL, separate read/write sessions, SDK BYTES encoding, mutation transports, and `query_mode=PLAN`; it remains deferred until the contract table fixture can preserve those semantics safely. |
+| Spangres placeholders | `spanner/test_spangres_driver.py`, `test_spangres_parameter_styles.py` | Runtime Spangres coverage needs PostgreSQL-dialect Spanner fixtures that do not exist yet. The files keep only executable dialect/default-style documentation assertions. |
+| Google Cloud asyncpg connectors | `asyncpg/test_cloud_connectors.py` | Cloud SQL and AlloyDB connector authentication, IAM, private-IP, and instance URI setup require real Google Cloud instances; shared contracts cover PostgreSQL behavior after a pool exists. |
+| PostgreSQL-family driver quirks | `asyncpg/test_driver.py`, `psqlpy/test_driver.py`, `psycopg/test_driver.py`, `psycopg/test_async_copy.py`, `*/extensions/events/test_listen_notify.py` | Driver-specific cursor/prepared statement/COPY/LISTEN-NOTIFY behavior that is not portable across PostgreSQL-family adapters. |
+| Adapter extension storage details | `*/extensions/adk/test_owner_id_column.py`, `*/extensions/adk/test_memory_store.py`, `*/extensions/litestar/test_numpy_serialization.py` | Extension storage/serialization details that are not the generic ADK/events/Litestar store lifecycle; generic extension behavior is handled by the extension contracts. |
+
 ## Adding A Case
 
 1. Add or update the `DriverCase` in `_cases.py` (fixture name, dialect, mode, marks, capability flags).
