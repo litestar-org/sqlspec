@@ -19,6 +19,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.protocols import SupportsCloseProtocol
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,6 +69,18 @@ class ArrowOdbcDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
+
+
+def _apply_json_serializer_override(statement_config: Any, features: dict[str, Any]) -> Any:
+    serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
+    deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
+    if serializer is to_json and deserializer is from_json:
+        return statement_config
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.with_json_serializers(
+            serializer or to_json, deserializer=deserializer
+        )
+    )
 
 
 class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
@@ -230,7 +243,7 @@ def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
 def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":
     dialect = resolve_dialect_from_dbms_name(str(features.get("dbms_name") or features.get("connection_string") or ""))
     if dialect == "sqlite":
-        return default_statement_config
+        return _apply_json_serializer_override(default_statement_config, features)
     if dialect == "mssql":
-        return build_statement_config(dialect="tsql")
-    return build_statement_config(dialect=dialect)
+        return _apply_json_serializer_override(build_statement_config(dialect="tsql"), features)
+    return _apply_json_serializer_override(build_statement_config(dialect=dialect), features)

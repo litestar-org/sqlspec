@@ -18,6 +18,7 @@ from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseCo
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -94,6 +95,20 @@ class MssqlPythonPoolParams(MssqlPythonConnectionParams):
     pool_size: NotRequired[int]
     pool_idle_timeout: NotRequired[int]
     pool_enabled: NotRequired[bool]
+
+
+def _apply_json_serializer_override(statement_config: Any, features_dict: dict[str, Any]) -> Any:
+    serializer = cast("Callable[[Any], str] | None", features_dict.get("json_serializer"))
+    deserializer = cast("Callable[[str], Any] | None", features_dict.get("json_deserializer"))
+    if statement_config is not default_statement_config:
+        return statement_config
+    if serializer is to_json and deserializer is from_json:
+        return statement_config
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.with_json_serializers(
+            serializer or to_json, deserializer=deserializer
+        )
+    )
 
 
 class MssqlPythonDriverFeatures(TypedDict):
@@ -234,12 +249,13 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
             connection_config, driver_features
         )
         self._user_connection_hook = user_connection_hook
+        statement_config = _apply_json_serializer_override(statement_config or default_statement_config, features_dict)
         super().__init__(
             bind_key=bind_key,
             connection_config=normalized,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or default_statement_config,
+            statement_config=statement_config,
             driver_features=features_dict,
             extension_config=extension_config,
             observability_config=observability_config,
@@ -313,12 +329,13 @@ class MssqlPythonAsyncConfig(
             connection_config, driver_features
         )
         self._user_connection_hook = user_connection_hook
+        statement_config = _apply_json_serializer_override(statement_config or default_statement_config, features_dict)
         super().__init__(
             bind_key=bind_key,
             connection_config=normalized,
             connection_instance=connection_instance,
             migration_config=migration_config,
-            statement_config=statement_config or default_statement_config,
+            statement_config=statement_config,
             driver_features=features_dict,
             extension_config=extension_config,
             observability_config=observability_config,

@@ -864,7 +864,7 @@ class BigQueryStreamSource:
             self._driver._check_pending_exception(handler)
             if page is None:
                 return []
-            rows = [dict(row.items()) for row in page]
+            rows = [dict(row) for row in page]
             if rows:
                 return rows
 

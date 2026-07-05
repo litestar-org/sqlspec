@@ -81,6 +81,21 @@ class _RecordingRow:
         return self._values.items()
 
 
+class _MappingRow:
+    def __init__(self, values: dict[str, object]) -> None:
+        self._values = values
+
+    def keys(self) -> Iterable[str]:
+        return self._values.keys()
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
+
+    def items(self) -> Iterable[tuple[str, object]]:
+        msg = "fetch_chunk should use dict(row), not row.items()"
+        raise AssertionError(msg)
+
+
 def _schema_field(name: str) -> SimpleNamespace:
     return SimpleNamespace(name=name)
 
@@ -374,6 +389,14 @@ def test_stream_source_skips_empty_pages_before_rows() -> None:
 
     assert source.fetch_chunk() == [{"value": 1}]
     assert source.fetch_chunk() == []
+
+
+def test_stream_source_converts_rows_without_items_copying() -> None:
+    driver = _RecordingStreamDriver("https://bigquery.googleapis.com", pages=((_MappingRow({"value": 1}),),))
+    source = BigQueryStreamSource(cast(Any, driver), "SELECT 1", None, 100)
+    source.start()
+
+    assert source.fetch_chunk() == [{"value": 1}]
 
 
 def test_bigquery_type_converter_module_is_gone() -> None:

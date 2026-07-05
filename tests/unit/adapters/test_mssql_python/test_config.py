@@ -15,6 +15,20 @@ from sqlspec.adapters.mssql_python.config import (
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 
 
+def test_config_applies_driver_feature_json_serializer_to_statement_config() -> None:
+    """Custom JSON serializers should reach the statement parameter config."""
+
+    def serializer(value: object) -> str:
+        return f"json:{value!r}"
+
+    config = MssqlPythonConfig(connection_config={"server": "localhost"}, driver_features={"json_serializer": serializer})
+
+    parameter_config = config.statement_config.parameter_config
+    assert parameter_config.json_serializer is serializer
+    assert parameter_config.type_coercion_map[dict] is serializer
+    assert parameter_config.type_coercion_map[list] is serializer
+
+
 class DummyConnection:
     """Minimal connection object for pool lifecycle assertions."""
 
