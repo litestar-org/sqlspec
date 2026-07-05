@@ -19,6 +19,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.adbc.adk import AdbcADKStore
+from sqlspec.adapters.adbc.litestar import ADBCStore
 from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
 from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
@@ -70,6 +71,7 @@ from sqlspec.adapters.oracledb import (
     OracleSyncDriver,
 )
 from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
+from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures, PsqlpyPoolParams
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
 from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
@@ -1836,6 +1838,53 @@ async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenera
     with contextlib.suppress(Exception):
         await store.delete_all()
     config.close_pool()
+
+
+@pytest.fixture
+async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenerator[ADBCStore, None]":
+    """Provide a ready PostgreSQL-backed ADBC Litestar store for contract tests."""
+    config = AdbcConfig(
+        connection_config={"uri": _adbc_postgres_uri(postgres_service), "driver_name": "adbc_driver_postgresql"},
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = ADBCStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_oracle_async_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncStore, None]":
+    """Provide a ready Oracle async Litestar store for contract tests."""
+    config = OracleAsyncConfig(
+        connection_config=_oracle_pool_params(oracle_23ai_service),
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = OracleAsyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    if config.connection_instance:
+        await config.close_pool()
+
+
+@pytest.fixture
+async def contract_oracle_sync_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleSyncStore, None]":
+    """Provide a ready Oracle sync Litestar store for contract tests."""
+    config = OracleSyncConfig(
+        connection_config=_oracle_pool_params(oracle_23ai_service),
+        extension_config=_STORE_EXTENSION_CONFIG,
+    )
+    store = OracleSyncStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    if config.connection_instance:
+        config.close_pool()
 
 
 def _adk_extension_config(suffix: str) -> dict[str, Any]:
