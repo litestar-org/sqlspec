@@ -55,6 +55,11 @@ v0.53.0 - SQL processing correctness and cleanup
   errors do not mask an in-flight database exception.
 * The ``mssql-python`` connection pool implementation now lives in its adapter
   pool module while preserving the existing public import.
+* ``mssql_python`` stack execution no longer raises the base
+  ``_connection_in_transaction()`` error before applying batched statements.
+* ``arrow-odbc`` SQL Server transactions now rely on the connection
+  commit/rollback API instead of sending a raw ``BEGIN TRANSACTION`` statement,
+  so committed DML remains visible to later sessions.
 * Spanner adapter modules no longer expose module-level proxy lookup hooks.
 * Async migration squash now builds its internal migration runner with a real
   migration context, matching the synchronous command path.

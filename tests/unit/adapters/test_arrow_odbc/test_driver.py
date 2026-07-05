@@ -473,6 +473,18 @@ def test_arrow_odbc_connection_in_transaction_uses_explicit_management_fallback(
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
+def test_arrow_odbc_mssql_begin_uses_driver_transaction_api() -> None:
+    """SQL Server ODBC transactions should rely on the connection commit API."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    driver.begin()
+
+    assert connection.executed == []
+
+
 def test_arrow_odbc_execute_marks_dml_rowcount_unknown() -> None:
     """arrow-odbc does not expose portable rows-affected metadata for DML."""
     connection = FakeConnection()

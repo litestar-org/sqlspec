@@ -161,8 +161,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return False
 
     def begin(self) -> None:
-        statement = "BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN"
-        self.connection.execute(statement)
+        if self._dialect == "mssql":
+            return
+        self.connection.execute("BEGIN")
 
     def commit(self) -> None:
         try:
