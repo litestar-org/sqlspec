@@ -1223,13 +1223,21 @@ def lifecycle_config_asyncpg(postgres_service: PostgresService) -> "Callable[...
 def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[..., PsqlpyConfig]":
     """Build fresh psqlpy configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "PsqlpyDriverFeatures | None" = None) -> PsqlpyConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PsqlpyDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PsqlpyConfig:
         connection_config: dict[str, Any] = {"dsn": _psqlpy_dsn(postgres_service)}
         if pooled:
             connection_config["max_db_pool_size"] = 5
-        if driver_features is None:
-            return PsqlpyConfig(connection_config=connection_config)
-        return PsqlpyConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PsqlpyConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1238,13 +1246,21 @@ def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[...,
 def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., PsycopgSyncConfig]":
     """Build fresh psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "PsycopgDriverFeatures | None" = None) -> PsycopgSyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PsycopgSyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return PsycopgSyncConfig(connection_config=connection_config)
-        return PsycopgSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PsycopgSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1253,13 +1269,21 @@ def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callabl
 def lifecycle_config_psycopg_async(postgres_service: PostgresService) -> "Callable[..., PsycopgAsyncConfig]":
     """Build fresh psycopg async configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "PsycopgDriverFeatures | None" = None) -> PsycopgAsyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PsycopgAsyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return PsycopgAsyncConfig(connection_config=connection_config)
-        return PsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PsycopgAsyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1271,7 +1295,10 @@ def lifecycle_config_cockroach_asyncpg(
     """Build fresh CockroachDB asyncpg configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "CockroachAsyncpgDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "CockroachAsyncpgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> CockroachAsyncpgConfig:
         connection_config: dict[str, Any] = {
             "host": cockroachdb_service.host,
@@ -1283,9 +1310,12 @@ def lifecycle_config_cockroach_asyncpg(
         }
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return CockroachAsyncpgConfig(connection_config=connection_config)
-        return CockroachAsyncpgConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return CockroachAsyncpgConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1297,14 +1327,20 @@ def lifecycle_config_cockroach_psycopg_sync(
     """Build fresh CockroachDB psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "CockroachPsycopgDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "CockroachPsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> CockroachPsycopgSyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return CockroachPsycopgSyncConfig(connection_config=connection_config)
-        return CockroachPsycopgSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return CockroachPsycopgSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1316,14 +1352,20 @@ def lifecycle_config_cockroach_psycopg_async(
     """Build fresh CockroachDB psycopg async configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "CockroachPsycopgDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "CockroachPsycopgDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> CockroachPsycopgAsyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
-        if driver_features is None:
-            return CockroachPsycopgAsyncConfig(connection_config=connection_config)
-        return CockroachPsycopgAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return CockroachPsycopgAsyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1332,13 +1374,21 @@ def lifecycle_config_cockroach_psycopg_async(
 def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., AiomysqlConfig]":
     """Build fresh aiomysql configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "AiomysqlDriverFeatures | None" = None) -> AiomysqlConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "AiomysqlDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> AiomysqlConfig:
         connection_config = _mysql_connection_config(mysql_service, database_key="db")
         if pooled:
             connection_config.update({"minsize": 2, "maxsize": 5})
-        if driver_features is None:
-            return AiomysqlConfig(connection_config=connection_config)
-        return AiomysqlConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return AiomysqlConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1347,13 +1397,21 @@ def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., Aio
 def lifecycle_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., AsyncmyConfig]":
     """Build fresh asyncmy configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "AsyncmyDriverFeatures | None" = None) -> AsyncmyConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "AsyncmyDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> AsyncmyConfig:
         connection_config = _mysql_connection_config(mysql_service)
         if pooled:
             connection_config.update({"minsize": 2, "maxsize": 5})
-        if driver_features is None:
-            return AsyncmyConfig(connection_config=connection_config)
-        return AsyncmyConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return AsyncmyConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1363,15 +1421,21 @@ def lifecycle_config_mysqlconnector_sync(mysql_service: MySQLService) -> "Callab
     """Build fresh mysql-connector sync configs for the pooling/connection-hook lifecycle contracts."""
 
     def make(
-        *, pooled: bool = False, driver_features: "MysqlConnectorDriverFeatures | None" = None
+        *,
+        pooled: bool = False,
+        driver_features: "MysqlConnectorDriverFeatures | None" = None,
+        connection_instance: object | None = None,
     ) -> MysqlConnectorSyncConfig:
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
         if pooled:
             connection_config["pool_size"] = 5
-        if driver_features is None:
-            return MysqlConnectorSyncConfig(connection_config=connection_config)
-        return MysqlConnectorSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return MysqlConnectorSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1396,11 +1460,19 @@ def lifecycle_config_mysqlconnector_async(mysql_service: MySQLService) -> "Calla
 def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMysqlConfig]":
     """Build fresh PyMySQL configs for the pooling/connection-hook lifecycle contracts (thread-local pool)."""
 
-    def make(*, pooled: bool = False, driver_features: "PyMysqlDriverFeatures | None" = None) -> PyMysqlConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "PyMysqlDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> PyMysqlConfig:
         connection_config = _mysql_connection_config(mysql_service)
-        if driver_features is None:
-            return PyMysqlConfig(connection_config=connection_config)
-        return PyMysqlConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return PyMysqlConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1427,11 +1499,19 @@ def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..
 def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callable[..., OracleSyncConfig]":
     """Build fresh Oracle sync configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "OracleDriverFeatures | None" = None) -> OracleSyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "OracleDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> OracleSyncConfig:
         connection_config = _oracle_pool_params(oracle_23ai_service)
-        if driver_features is None:
-            return OracleSyncConfig(connection_config=connection_config)
-        return OracleSyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return OracleSyncConfig(connection_config=connection_config, **extra)
 
     return make
 
@@ -1440,11 +1520,19 @@ def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callabl
 def lifecycle_config_oracle_async(oracle_23ai_service: OracleService) -> "Callable[..., OracleAsyncConfig]":
     """Build fresh Oracle async configs for the pooling/connection-hook lifecycle contracts."""
 
-    def make(*, pooled: bool = False, driver_features: "OracleDriverFeatures | None" = None) -> OracleAsyncConfig:
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "OracleDriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> OracleAsyncConfig:
         connection_config = _oracle_pool_params(oracle_23ai_service)
-        if driver_features is None:
-            return OracleAsyncConfig(connection_config=connection_config)
-        return OracleAsyncConfig(connection_config=connection_config, driver_features=driver_features)
+        extra: dict[str, Any] = {}
+        if driver_features is not None:
+            extra["driver_features"] = driver_features
+        if connection_instance is not None:
+            extra["connection_instance"] = connection_instance
+        return OracleAsyncConfig(connection_config=connection_config, **extra)
 
     return make
 

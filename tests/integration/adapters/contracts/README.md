@@ -244,3 +244,16 @@ uv run pytest tests/integration/adapters/contracts
 Service-backed adapters keep their opt-in marks and xdist groups when they move from deferred to
 active rows. BigQuery integration runs in CI by default; local runs require
 `SQLSPEC_ENABLE_BIGQUERY_TESTS=1` and `--run-bigquery-tests`.
+
+## Reconciliation Snapshot
+
+The consolidation moved repeated adapter behavior into the contract package and left only documented
+residuals in adapter-local folders. Measured against `main` before this branch:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Adapter integration `test_*.py` files | 176 | 142 |
+| Adapter integration test lines | 32,318 | 22,209 |
+
+`test_case_metadata_contract.py` includes a no-orphan guard for files removed by the consolidation, so
+contract-owned adapter-local files fail collection if they are accidentally reintroduced.
