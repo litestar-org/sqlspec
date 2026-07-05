@@ -895,7 +895,8 @@ async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> No
         self: object, stack: StatementStack, *, continue_on_error: bool
     ) -> tuple[Any, ...]:
         call_counter["count"] += 1
-        return await original_execute_stack_native(self, stack, continue_on_error=continue_on_error)
+        result = await original_execute_stack_native(self, stack, continue_on_error=continue_on_error)
+        return cast("tuple[Any, ...]", result)
 
     setattr(driver_type, "_execute_stack_native", tracking_execute_stack_native)
     try:

@@ -91,7 +91,9 @@ def test_bigquery_streaming_deviation_avoids_emulator_reopen_paths() -> None:
         mode="sync",
         supports_native_row_streaming=True,
         streaming_row_count=60,
-        deviations=("emulator-retries-invalid-sql", "emulator-streaming-reopen-hangs", "streaming-page-size-advisory"),
+        supports_stream_reopen_after_partial_iteration=False,
+        stream_chunk_policy="advisory",
+        invalid_sql_error_policy="emulator_retries",
     )
 
     assert_sync_streaming_contract(driver, case)

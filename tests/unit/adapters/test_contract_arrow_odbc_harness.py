@@ -55,7 +55,7 @@ def test_arrow_odbc_sync_case_is_active_sql_server_bulk_only() -> None:
     assert case.supports_native_bulk_ingest
     assert not case.supports_execute_many
     assert not case.supports_load_from_records
-    assert "execute-rows-affected-unavailable" in case.deviations
+    assert case.execute_rowcount_policy == "unavailable"
 
 
 def test_seed_sync_uses_arrow_bulk_ingest_when_execute_many_is_disabled() -> None:
