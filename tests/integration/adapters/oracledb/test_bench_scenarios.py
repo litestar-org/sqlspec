@@ -20,11 +20,7 @@ ORACLE_LOB_SCENARIOS = {
     ("sqlspec_fetch_lobs_true", "oracle", "lob_fetch_100k"): "sqlspec_oracle_lob_fetch_fetch_lobs_true_100k",
     ("sqlspec_async", "oracle", "lob_fetch_1k"): "sqlspec_oracle_lob_fetch_async_1k",
     ("sqlspec_async", "oracle", "lob_fetch_100k"): "sqlspec_oracle_lob_fetch_async_100k",
-    (
-        "sqlspec_async_fetch_lobs_true",
-        "oracle",
-        "lob_fetch_1k",
-    ): "sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k",
+    ("sqlspec_async_fetch_lobs_true", "oracle", "lob_fetch_1k"): "sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k",
     (
         "sqlspec_async_fetch_lobs_true",
         "oracle",
@@ -73,17 +69,7 @@ def test_oracle_extended_cli_runs_without_core_missing_scenario_errors(
 
     result = CliRunner().invoke(
         bench.main,
-        [
-            "--driver",
-            "oracle",
-            "--extended",
-            "--iterations",
-            "1",
-            "--warmup",
-            "0",
-            "--json-output",
-            str(json_output),
-        ],
+        ["--driver", "oracle", "--extended", "--iterations", "1", "--warmup", "0", "--json-output", str(json_output)],
     )
 
     assert result.exit_code == 0
@@ -92,9 +78,7 @@ def test_oracle_extended_cli_runs_without_core_missing_scenario_errors(
     assert {result["scenario"] for result in payload["results"]} == {"lob_fetch_1k", "lob_fetch_100k"}
 
 
-def test_oracle_lob_benchmark_connection_config_requires_service_safe_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_oracle_lob_benchmark_connection_config_requires_service_safe_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "SQLSPEC_BENCH_ORACLE_HOST",
         "SQLSPEC_BENCH_ORACLE_PORT",

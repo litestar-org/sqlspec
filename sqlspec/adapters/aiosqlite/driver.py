@@ -150,17 +150,45 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
     ) -> "SQLResult":
-        """Execute cached queries without an extra worker-thread cursor hop."""
+        """Execute cached queries through the async cursor fast path."""
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
-        direct_statement = self._cached_statement(
-            sql,
-            params,
-            cached,
-            cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
-            params_are_simple=True,
-            compiled_sql=cached.compiled_sql,
-        )
-        return await self._execute_cached_statement(direct_statement)
+        normalized_parameters = normalize_execute_parameters(prepared_params)
+        direct_statement: SQL | None = None
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        try:
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                await cursor.execute(cached.compiled_sql, normalized_parameters)
+                if cached.operation_profile.returns_rows:
+                    fetched_data = cast("list[Any]", await cursor.fetchall())
+                    data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                    execution_result = self.create_execution_result(
+                        cursor,
+                        selected_data=data,
+                        column_names=column_names,
+                        data_row_count=row_count,
+                        is_select_result=True,
+                        row_format=resolve_row_format(data),
+                    )
+                    direct_statement = self._cached_statement(
+                        sql,
+                        params,
+                        cached,
+                        cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
+                        params_are_simple=True,
+                        compiled_sql=cached.compiled_sql,
+                    )
+                    result = self.build_statement_result(direct_statement, execution_result)
+                else:
+                    affected_rows = self.resolve_rowcount(cursor)
+                    result = DMLResult(cached.operation_type, affected_rows)
+
+            self._check_pending_exception(exc_handler)
+            assert result is not None
+            return result
+        finally:
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
 
     async def execute_many(
         self,
