@@ -8,12 +8,13 @@ import cProfile
 import gc
 import inspect
 import json
+import os
 import pstats
 import sqlite3
 import statistics
 import tempfile
 import time
-from collections.abc import Sequence  # noqa: TC003
+from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, TypedDict
@@ -40,6 +41,8 @@ __all__ = (
     "raw_duckdb_read_heavy",
     "raw_duckdb_repeated_queries",
     "raw_duckdb_write_heavy",
+    "raw_oracle_lob_fetch_1k",
+    "raw_oracle_lob_fetch_100k",
     "raw_sqlite_complex_parameters",
     "raw_sqlite_dict_key_transform",
     "raw_sqlite_initialization",
@@ -73,6 +76,14 @@ __all__ = (
     "sqlspec_duckdb_read_heavy",
     "sqlspec_duckdb_repeated_queries",
     "sqlspec_duckdb_write_heavy",
+    "sqlspec_oracle_lob_fetch_1k",
+    "sqlspec_oracle_lob_fetch_100k",
+    "sqlspec_oracle_lob_fetch_async_1k",
+    "sqlspec_oracle_lob_fetch_async_100k",
+    "sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k",
+    "sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k",
+    "sqlspec_oracle_lob_fetch_fetch_lobs_true_1k",
+    "sqlspec_oracle_lob_fetch_fetch_lobs_true_100k",
     "sqlspec_sqlite_complex_parameters",
     "sqlspec_sqlite_dict_key_transform",
     "sqlspec_sqlite_initialization",
@@ -107,6 +118,45 @@ POOL_SIZE = 5  # Default pool size for async adapters
 DEFAULT_BENCH_ITERATIONS = 7
 DEFAULT_BENCH_WARMUP = 3
 NOISY_STDDEV_RATIO = 0.10
+CORE_LIBRARIES = ("raw", "sqlspec", "sqlalchemy")
+CORE_SCENARIOS = ("initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries")
+ORACLE_LOB_ROWS = 100
+ORACLE_LOB_PAYLOAD_SIZES = {"1k": 1024, "100k": 100 * 1024}
+ORACLE_LOB_ENV_VARS = (
+    "SQLSPEC_BENCH_ORACLE_HOST",
+    "SQLSPEC_BENCH_ORACLE_PORT",
+    "SQLSPEC_BENCH_ORACLE_SERVICE_NAME",
+    "SQLSPEC_BENCH_ORACLE_USER",
+    "SQLSPEC_BENCH_ORACLE_PASSWORD",
+)
+SQLITE_EXTENDED_SCENARIOS = (
+    ("raw", "dict_key_transform"),
+    ("sqlspec", "dict_key_transform"),
+    ("raw", "schema_mapping"),
+    ("sqlspec", "schema_mapping"),
+    ("raw", "complex_parameters"),
+    ("sqlspec", "complex_parameters"),
+    ("raw", "thin_path_stress"),
+    ("sqlspec", "thin_path_stress"),
+    ("raw", "schema_type_numpy"),
+    ("sqlspec", "schema_type_numpy"),
+)
+ORACLE_EXTENDED_SCENARIOS = (
+    ("raw", "lob_fetch_1k"),
+    ("sqlspec", "lob_fetch_1k"),
+    ("sqlspec_fetch_lobs_true", "lob_fetch_1k"),
+    ("sqlspec_async", "lob_fetch_1k"),
+    ("sqlspec_async_fetch_lobs_true", "lob_fetch_1k"),
+    ("raw", "lob_fetch_100k"),
+    ("sqlspec", "lob_fetch_100k"),
+    ("sqlspec_fetch_lobs_true", "lob_fetch_100k"),
+    ("sqlspec_async", "lob_fetch_100k"),
+    ("sqlspec_async_fetch_lobs_true", "lob_fetch_100k"),
+)
+EXTENDED_SCENARIOS_BY_DRIVER = {
+    "sqlite": SQLITE_EXTENDED_SCENARIOS,
+    "oracle": ORACLE_EXTENDED_SCENARIOS,
+}
 
 
 @click.command()
@@ -169,13 +219,14 @@ def main(
             f"Running benchmark for driver: {drv} "
             f"(rows={rows}, pool_size={pool_size}, iterations={iterations}, warmup={warmup})"
         )
-        if profile:
+        has_core_scenarios = _driver_has_core_scenarios(drv)
+        if profile and has_core_scenarios:
             results.extend(
                 run_benchmark_profiled(
                     drv, errors, iterations=iterations, warmup=warmup, profile_scenario=profile_scenario
                 )
             )
-        else:
+        elif has_core_scenarios or not extended:
             results.extend(run_benchmark(drv, errors, iterations=iterations, warmup=warmup))
         if extended:
             click.echo(f"Running extended benchmarks for driver: {drv}")
@@ -267,6 +318,24 @@ def _summarize_times(times: list[float]) -> dict[str, float | bool]:
     }
 
 
+def _benchmark_library_label(library: str) -> str:
+    """Return a display label for a benchmark library key."""
+    if library == "sqlspec":
+        return SQLSPEC_LABEL
+    if library == "sqlspec_fetch_lobs_true":
+        return f"{SQLSPEC_LABEL} fetch_lobs=True"
+    if library == "sqlspec_async":
+        return f"{SQLSPEC_LABEL} async"
+    if library == "sqlspec_async_fetch_lobs_true":
+        return f"{SQLSPEC_LABEL} async fetch_lobs=True"
+    return library
+
+
+def _driver_has_core_scenarios(driver: str) -> bool:
+    """Return True when a driver has any core benchmark scenario registered."""
+    return any((library, driver, scenario) in SCENARIO_REGISTRY for scenario in CORE_SCENARIOS for library in CORE_LIBRARIES)
+
+
 def run_benchmark(
     driver: str, errors: list[str], *, iterations: int = DEFAULT_BENCH_ITERATIONS, warmup: int = DEFAULT_BENCH_WARMUP
 ) -> list[dict[str, Any]]:
@@ -281,12 +350,10 @@ def run_benchmark(
     Returns:
         List of benchmark result dictionaries
     """
-    libraries = ["raw", "sqlspec", "sqlalchemy"]
-    scenarios = ["initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries"]
     results: list[dict[str, Any]] = []
 
-    for scenario in scenarios:
-        for lib in libraries:
+    for scenario in CORE_SCENARIOS:
+        for lib in CORE_LIBRARIES:
             func = SCENARIO_REGISTRY.get((lib, driver, scenario))
             if func is None:
                 errors.append(f"No implementation for library={lib}, driver={driver}, scenario={scenario}")
@@ -297,7 +364,7 @@ def run_benchmark(
             try:
                 times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
                 stats = _summarize_times(times)
-                label = SQLSPEC_LABEL if lib == "sqlspec" else lib
+                label = _benchmark_library_label(lib)
                 results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
@@ -331,13 +398,11 @@ def run_benchmark_profiled(
     profiles_dir = Path(__file__).parent / "profiles"
     profiles_dir.mkdir(exist_ok=True)
 
-    libraries = ["raw", "sqlspec", "sqlalchemy"]
-    scenarios = ["initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries"]
     results: list[dict[str, Any]] = []
     console = Console()
 
-    for scenario in scenarios:
-        for lib in libraries:
+    for scenario in CORE_SCENARIOS:
+        for lib in CORE_LIBRARIES:
             # If profiling a specific scenario, skip others
             if profile_scenario and scenario != profile_scenario:
                 continue
@@ -348,7 +413,6 @@ def run_benchmark_profiled(
                 continue
 
             is_async = inspect.iscoroutinefunction(func)
-            label = SQLSPEC_LABEL if lib == "sqlspec" else lib
             prof_name = f"{driver}_{lib}_{scenario}"
 
             try:
@@ -357,7 +421,15 @@ def run_benchmark_profiled(
                     func, is_async=is_async, iterations=iterations, warmup=warmup, profiler=profiler
                 )
                 summary = _summarize_times(times)
-                results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **summary})
+                results.append(
+                    {
+                        "driver": driver,
+                        "library": _benchmark_library_label(lib),
+                        "scenario": scenario,
+                        "times": times,
+                        **summary,
+                    }
+                )
 
                 # Save profile data
                 prof_path = profiles_dir / f"{prof_name}.prof"
@@ -395,26 +467,24 @@ def run_extended_benchmark(
     Returns:
         List of benchmark result dictionaries
     """
-    libraries = ["raw", "sqlspec"]
-    scenarios = ["dict_key_transform", "schema_mapping", "complex_parameters", "thin_path_stress", "schema_type_numpy"]
+    scenario_entries = EXTENDED_SCENARIOS_BY_DRIVER.get(driver, SQLITE_EXTENDED_SCENARIOS)
     results: list[dict[str, Any]] = []
 
-    for scenario in scenarios:
-        for lib in libraries:
-            func = SCENARIO_REGISTRY.get((lib, driver, scenario))
-            if func is None:
-                errors.append(f"No extended implementation for library={lib}, driver={driver}, scenario={scenario}")
-                continue
+    for lib, scenario in scenario_entries:
+        func = SCENARIO_REGISTRY.get((lib, driver, scenario))
+        if func is None:
+            errors.append(f"No extended implementation for library={lib}, driver={driver}, scenario={scenario}")
+            continue
 
-            is_async = inspect.iscoroutinefunction(func)
+        is_async = inspect.iscoroutinefunction(func)
 
-            try:
-                times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
-                stats = _summarize_times(times)
-                label = SQLSPEC_LABEL if lib == "sqlspec" else lib
-                results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
-            except Exception as exc:
-                errors.append(f"{lib}/{driver}/{scenario}: {exc}")
+        try:
+            times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
+            stats = _summarize_times(times)
+            label = _benchmark_library_label(lib)
+            results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
+        except Exception as exc:
+            errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
     return results
 
@@ -1802,6 +1872,228 @@ def sqlspec_sqlite_thin_path_stress() -> None:
                 session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
 
 
+# --- Oracle LOB fetch scenarios ---
+
+ORACLE_LOB_TABLES = {"1k": "SQLSPEC_LOB_1K", "100k": "SQLSPEC_LOB_100K"}
+
+
+def _get_oracledb() -> Any:
+    """Import python-oracledb lazily."""
+    try:
+        import oracledb
+    except ImportError:
+        return None
+    else:
+        return oracledb
+
+
+def _oracle_connection_config_from_env() -> dict[str, Any]:
+    """Build Oracle connection config from service-safe benchmark env vars."""
+    missing = [name for name in ORACLE_LOB_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        joined = ", ".join(missing)
+        msg = f"Oracle benchmarks require service-derived environment variables: {joined}"
+        raise RuntimeError(msg)
+
+    return {
+        "host": os.environ["SQLSPEC_BENCH_ORACLE_HOST"],
+        "port": int(os.environ["SQLSPEC_BENCH_ORACLE_PORT"]),
+        "service_name": os.environ["SQLSPEC_BENCH_ORACLE_SERVICE_NAME"],
+        "user": os.environ["SQLSPEC_BENCH_ORACLE_USER"],
+        "password": os.environ["SQLSPEC_BENCH_ORACLE_PASSWORD"],
+        "min": 1,
+        "max": max(1, POOL_SIZE),
+        "increment": 1,
+    }
+
+
+def _oracle_connect_config_from_env() -> dict[str, Any]:
+    config = _oracle_connection_config_from_env()
+    for key in ("min", "max", "increment"):
+        config.pop(key, None)
+    return config
+
+
+def _oracle_lob_payload(size_key: str) -> str:
+    return "x" * ORACLE_LOB_PAYLOAD_SIZES[size_key]
+
+
+def _oracle_lob_table(size_key: str) -> str:
+    return ORACLE_LOB_TABLES[size_key]
+
+
+def _oracle_drop_table_sql(table_name: str) -> str:
+    return (
+        f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table_name}'; "
+        "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+
+def _oracle_create_lob_table_sql(table_name: str) -> str:
+    return f"CREATE TABLE {table_name} (id NUMBER PRIMARY KEY, payload CLOB)"
+
+
+def _oracle_insert_lob_sql(table_name: str) -> str:
+    return f"INSERT INTO {table_name} (id, payload) VALUES (:1, :2)"
+
+
+def _oracle_select_lob_sql(table_name: str) -> str:
+    return f"SELECT id, payload FROM {table_name} ORDER BY id"
+
+
+def _oracle_lob_rows(size_key: str) -> list[tuple[int, str]]:
+    payload = _oracle_lob_payload(size_key)
+    return [(index, payload) for index in range(1, ORACLE_LOB_ROWS + 1)]
+
+
+def _read_oracle_lob_value(value: Any) -> Any:
+    read = getattr(value, "read", None)
+    if callable(read):
+        return read()
+    return value
+
+
+async def _read_oracle_lob_value_async(value: Any) -> Any:
+    read = getattr(value, "read", None)
+    if not callable(read):
+        return value
+    result = read()
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _assert_oracle_lob_rows(rows: Sequence[Any], size_key: str) -> None:
+    expected = _oracle_lob_payload(size_key)
+    assert len(rows) == ORACLE_LOB_ROWS
+    first_row = rows[0]
+    payload = first_row["payload"] if isinstance(first_row, dict) else first_row[1]
+    assert _read_oracle_lob_value(payload) == expected
+
+
+async def _assert_oracle_lob_rows_async(rows: Sequence[Any], size_key: str) -> None:
+    expected = _oracle_lob_payload(size_key)
+    assert len(rows) == ORACLE_LOB_ROWS
+    first_row = rows[0]
+    payload = first_row["payload"] if isinstance(first_row, dict) else first_row[1]
+    assert await _read_oracle_lob_value_async(payload) == expected
+
+
+def _run_raw_oracle_lob_fetch(size_key: str) -> None:
+    oracledb = _get_oracledb()
+    if oracledb is None:
+        return
+    table_name = _oracle_lob_table(size_key)
+    conn = oracledb.connect(**_oracle_connect_config_from_env())
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(_oracle_drop_table_sql(table_name))
+            cursor.execute(_oracle_create_lob_table_sql(table_name))
+            cursor.executemany(_oracle_insert_lob_sql(table_name), _oracle_lob_rows(size_key))
+            conn.commit()
+            cursor.execute(_oracle_select_lob_sql(table_name))
+            rows = cursor.fetchall()
+            _assert_oracle_lob_rows(rows, size_key)
+    finally:
+        conn.close()
+
+
+def _run_sqlspec_oracle_lob_fetch(size_key: str, *, fetch_lobs: bool) -> None:
+    from sqlspec.adapters.oracledb import OracleSyncConfig
+
+    table_name = _oracle_lob_table(size_key)
+    spec = SQLSpec()
+    config = OracleSyncConfig(
+        connection_config=_oracle_connection_config_from_env(),
+        driver_features={"fetch_lobs": fetch_lobs},
+    )
+    try:
+        with spec.provide_session(config) as session:
+            session.execute_script(_oracle_drop_table_sql(table_name))
+            session.execute(_oracle_create_lob_table_sql(table_name))
+            session.execute_many(_oracle_insert_lob_sql(table_name), _oracle_lob_rows(size_key))
+            rows = session.fetch(_oracle_select_lob_sql(table_name))
+            _assert_oracle_lob_rows(rows, size_key)
+        _check_pool_leak(config.connection_instance, f"oracle/lob_fetch/{size_key}/fetch_lobs={fetch_lobs}")
+        config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
+
+
+async def _run_sqlspec_oracle_lob_fetch_async(size_key: str, *, fetch_lobs: bool) -> None:
+    from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+    table_name = _oracle_lob_table(size_key)
+    spec = SQLSpec()
+    config = OracleAsyncConfig(
+        connection_config=_oracle_connection_config_from_env(),
+        driver_features={"fetch_lobs": fetch_lobs},
+    )
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute_script(_oracle_drop_table_sql(table_name))
+            await session.execute(_oracle_create_lob_table_sql(table_name))
+            await session.execute_many(_oracle_insert_lob_sql(table_name), _oracle_lob_rows(size_key))
+            rows = await session.fetch(_oracle_select_lob_sql(table_name))
+            await _assert_oracle_lob_rows_async(rows, size_key)
+        _check_pool_leak(config.connection_instance, f"oracle/lob_fetch_async/{size_key}/fetch_lobs={fetch_lobs}")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+def raw_oracle_lob_fetch_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows through raw python-oracledb."""
+    _run_raw_oracle_lob_fetch("1k")
+
+
+def raw_oracle_lob_fetch_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows through raw python-oracledb."""
+    _run_raw_oracle_lob_fetch("100k")
+
+
+def sqlspec_oracle_lob_fetch_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with sqlspec direct LOB fetching."""
+    _run_sqlspec_oracle_lob_fetch("1k", fetch_lobs=False)
+
+
+def sqlspec_oracle_lob_fetch_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with sqlspec direct LOB fetching."""
+    _run_sqlspec_oracle_lob_fetch("100k", fetch_lobs=False)
+
+
+def sqlspec_oracle_lob_fetch_fetch_lobs_true_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with sqlspec LOB locators enabled."""
+    _run_sqlspec_oracle_lob_fetch("1k", fetch_lobs=True)
+
+
+def sqlspec_oracle_lob_fetch_fetch_lobs_true_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with sqlspec LOB locators enabled."""
+    _run_sqlspec_oracle_lob_fetch("100k", fetch_lobs=True)
+
+
+async def sqlspec_oracle_lob_fetch_async_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with async sqlspec direct LOB fetching."""
+    await _run_sqlspec_oracle_lob_fetch_async("1k", fetch_lobs=False)
+
+
+async def sqlspec_oracle_lob_fetch_async_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec direct LOB fetching."""
+    await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=False)
+
+
+async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
+    await _run_sqlspec_oracle_lob_fetch_async("1k", fetch_lobs=True)
+
+
+async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
+    await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=True)
+
+
 SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     # SQLite scenarios
     ("raw", "sqlite", "initialization"): raw_sqlite_initialization,
@@ -1872,6 +2164,25 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "sqlite", "complex_parameters"): sqlspec_sqlite_complex_parameters,
     ("raw", "sqlite", "thin_path_stress"): raw_sqlite_thin_path_stress,
     ("sqlspec", "sqlite", "thin_path_stress"): sqlspec_sqlite_thin_path_stress,
+    # Extended Oracle LOB fetch scenarios
+    ("raw", "oracle", "lob_fetch_1k"): raw_oracle_lob_fetch_1k,
+    ("raw", "oracle", "lob_fetch_100k"): raw_oracle_lob_fetch_100k,
+    ("sqlspec", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_1k,
+    ("sqlspec", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_100k,
+    ("sqlspec_fetch_lobs_true", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_fetch_lobs_true_1k,
+    ("sqlspec_fetch_lobs_true", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_fetch_lobs_true_100k,
+    ("sqlspec_async", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_async_1k,
+    ("sqlspec_async", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_async_100k,
+    (
+        "sqlspec_async_fetch_lobs_true",
+        "oracle",
+        "lob_fetch_1k",
+    ): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k,
+    (
+        "sqlspec_async_fetch_lobs_true",
+        "oracle",
+        "lob_fetch_100k",
+    ): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k,
 }
 
 
