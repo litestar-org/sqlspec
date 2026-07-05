@@ -157,7 +157,7 @@ def test_event_channel_runtime_hints_for_asyncmy(tmp_path) -> None:
     assert channel._adapter_name == "asyncmy"
     backend = channel._backend
     assert backend._lease_seconds == 5
-    assert "FOR UPDATE SKIP LOCKED" in backend._select_sql.upper()
+    assert "FOR UPDATE SKIP LOCKED" in backend._select_statement.upper()
 
 
 def test_event_channel_runtime_hints_for_duckdb(tmp_path) -> None:
@@ -185,7 +185,7 @@ def test_table_event_queue_locking_clause(tmp_path) -> None:
     """Locking hints are embedded when select_for_update/skip_locked are enabled."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "locks.db")})
     queue = SyncTableEventQueue(config, select_for_update=True, skip_locked=True)
-    assert "FOR UPDATE SKIP LOCKED" in queue._select_sql.upper()
+    assert "FOR UPDATE SKIP LOCKED" in queue._select_statement.upper()
 
 
 class _SyncBackend:

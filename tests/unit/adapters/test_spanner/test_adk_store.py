@@ -117,7 +117,7 @@ def test_append_event_and_update_state_preserves_event_record_timestamp() -> Non
 def test_spanner_session_table_generates_row_deletion_policy_from_retention() -> None:
     store = SpannerSyncADKStore(_mock_config({"retention": {"session_ttl_seconds": 86_400}}))
 
-    sql = store._get_create_sessions_table_sql()
+    sql = store._sessions_table_ddl()
 
     assert "ROW DELETION POLICY (OLDER_THAN(create_time, INTERVAL 1 DAY))" in sql
 
@@ -125,7 +125,7 @@ def test_spanner_session_table_generates_row_deletion_policy_from_retention() ->
 def test_spanner_events_table_rounds_retention_up_to_days() -> None:
     store = SpannerSyncADKStore(_mock_config({"retention": {"event_ttl_seconds": 86_401}}))
 
-    sql = store._get_create_events_table_sql()
+    sql = store._events_table_ddl()
 
     assert "ROW DELETION POLICY (OLDER_THAN(timestamp, INTERVAL 2 DAY))" in sql
 
@@ -135,7 +135,7 @@ def test_spanner_memory_table_generates_ttl_and_table_options() -> None:
         _mock_config({"memory_table_options": "locality_group = 'hot'", "retention": {"memory_ttl_seconds": 604_800}})
     )
 
-    statements = store._get_create_memory_table_sql()
+    statements = store._memory_table_ddl()
     table_sql = statements[0]
 
     assert "OPTIONS (locality_group = 'hot')" in table_sql
@@ -163,7 +163,7 @@ def test_spanner_session_store_emits_expiration_indexes_with_configured_options(
 def test_spanner_session_store_drops_expiration_indexes_before_tables() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    statements = store._get_drop_tables_sql()
+    statements = store._drop_tables_sql()
 
     assert statements[:2] == ["DROP INDEX idx_adk_event_timestamp", "DROP INDEX idx_adk_session_update_time"]
     assert statements[-2:] == ["DROP TABLE adk_event", "DROP TABLE adk_session"]
@@ -228,7 +228,7 @@ def test_spanner_reset_drop_tables_filters_absent_tables() -> None:
     config.get_database.return_value.list_tables.return_value = [SimpleNamespace(table_id="adk_events")]
     store = SpannerSyncADKStore(config)
 
-    statements = store._get_reset_drop_tables_sql()
+    statements = store._reset_drop_tables_sql()
 
     assert statements == ["DROP INDEX idx_adk_events_timestamp", "DROP TABLE adk_events"]
 
@@ -238,7 +238,7 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
     config.get_database.return_value.list_tables.return_value = [SimpleNamespace(table_id="adk_memory_entries")]
     store = SpannerSyncADKMemoryStore(config)
 
-    statements = store._get_reset_drop_memory_table_sql()
+    statements = store._reset_drop_memory_table_sql()
 
     assert statements == [
         "DROP INDEX idx_adk_memory_entries_session",

@@ -67,12 +67,12 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def create_tables(self) -> None:
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_sessions_table_sql())
-            await driver.execute_script(await self._get_create_events_table_sql())
-            await driver.execute_script(await self._get_create_app_states_table_sql())
-            await driver.execute_script(await self._get_create_user_states_table_sql())
-            await driver.execute_script(await self._get_create_metadata_table_sql())
-            await driver.execute_script(await self._get_seed_metadata_sql())
+            await driver.execute_script(await self._sessions_table_ddl())
+            await driver.execute_script(await self._events_table_ddl())
+            await driver.execute_script(await self._app_states_table_ddl())
+            await driver.execute_script(await self._user_states_table_ddl())
+            await driver.execute_script(await self._metadata_table_ddl())
+            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -442,7 +442,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             await conn.execute(sql, [key, value])
 
-    async def _get_create_sessions_table_sql(self) -> str:
+    async def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
@@ -468,7 +468,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             WHERE state != '{{}}'::jsonb;
         """
 
-    async def _get_create_events_table_sql(self) -> str:
+    async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
             adk_config, self._events_table
@@ -489,7 +489,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         {generated_indexes}
         """
 
-    async def _get_create_app_states_table_sql(self) -> str:
+    async def _app_states_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
@@ -498,7 +498,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         ) WITH (fillfactor = 80);
         """
 
-    async def _get_create_user_states_table_sql(self) -> str:
+    async def _user_states_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -509,7 +509,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         ) WITH (fillfactor = 80);
         """
 
-    async def _get_create_metadata_table_sql(self) -> str:
+    async def _metadata_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
             key VARCHAR(128) PRIMARY KEY,
@@ -517,27 +517,27 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         );
         """
 
-    async def _get_seed_metadata_sql(self) -> str:
+    async def _metadata_seed_sql(self) -> str:
         return f"""
         INSERT INTO {self._metadata_table} (key, value)
         VALUES ('schema_version', '1')
         ON CONFLICT (key) DO NOTHING
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -558,7 +558,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             return
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_memory_table_sql())
+            await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -699,7 +699,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                     return 0
             raise
 
-    async def _get_create_memory_table_sql(self) -> str:
+    async def _memory_table_ddl(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL for memory entries."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -735,7 +735,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         {fts_index}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 

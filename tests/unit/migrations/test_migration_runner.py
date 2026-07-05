@@ -691,7 +691,7 @@ def down():
     assert metadata["has_downgrade"] is True
 
 
-def test_get_migration_sql_upgrade_success() -> None:
+def test_migration_sql_upgrade_success() -> None:
     """Test successful upgrade SQL generation."""
     runner = create_test_migration_runner()
 
@@ -703,14 +703,14 @@ def test_get_migration_sql_upgrade_success() -> None:
         "loader": Mock(get_up_sql=Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    result = runner._migration_sql(migration, "up")
 
     assert result is not None
     assert isinstance(result, list)
     assert result == ["CREATE TABLE test (id INTEGER PRIMARY KEY);"]
 
 
-def test_get_migration_sql_downgrade_success() -> None:
+def test_migration_sql_downgrade_success() -> None:
     """Test successful downgrade SQL generation."""
     runner = create_test_migration_runner()
 
@@ -722,14 +722,14 @@ def test_get_migration_sql_downgrade_success() -> None:
         "loader": Mock(get_down_sql=Mock(return_value=["DROP TABLE test;"])),
     }
 
-    result = runner._get_migration_sql(migration, "down")
+    result = runner._migration_sql(migration, "down")
 
     assert result is not None
     assert isinstance(result, list)
     assert result == ["DROP TABLE test;"]
 
 
-def test_get_migration_sql_no_downgrade_warning() -> None:
+def test_migration_sql_no_downgrade_warning() -> None:
     """Test warning when no downgrade is available."""
     runner = create_test_migration_runner()
 
@@ -743,13 +743,13 @@ def test_get_migration_sql_no_downgrade_warning() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._get_migration_sql(migration, "down")
+    result = runner._migration_sql(migration, "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
 
 
-def test_get_migration_sql_no_upgrade_error() -> None:
+def test_migration_sql_no_upgrade_error() -> None:
     """Test error when no upgrade is available."""
     runner = create_test_migration_runner()
 
@@ -762,12 +762,12 @@ def test_get_migration_sql_no_upgrade_error() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._get_migration_sql(migration, "up")
+        runner._migration_sql(migration, "up")
 
     assert "Migration 0001 has no upgrade query" in str(exc_info.value)
 
 
-def test_get_migration_sql_loader_exception_upgrade() -> None:
+def test_migration_sql_loader_exception_upgrade() -> None:
     """Test handling of loader exceptions during upgrade SQL generation."""
     runner = create_test_migration_runner()
     loader = Mock()
@@ -782,12 +782,12 @@ def test_get_migration_sql_loader_exception_upgrade() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._get_migration_sql(migration, "up")
+        runner._migration_sql(migration, "up")
 
     assert "Failed to load upgrade for migration 0001" in str(exc_info.value)
 
 
-def test_get_migration_sql_loader_exception_downgrade() -> None:
+def test_migration_sql_loader_exception_downgrade() -> None:
     """Test handling of loader exceptions during downgrade SQL generation."""
     runner = create_test_migration_runner()
     loader = Mock()
@@ -803,13 +803,13 @@ def test_get_migration_sql_loader_exception_downgrade() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._get_migration_sql(migration, "down")
+    result = runner._migration_sql(migration, "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
 
 
-def test_get_migration_sql_empty_statements() -> None:
+def test_migration_sql_empty_statements() -> None:
     """Test handling when migration loader returns empty statements."""
     runner = create_test_migration_runner()
 
@@ -821,12 +821,12 @@ def test_get_migration_sql_empty_statements() -> None:
         "loader": Mock(get_up_sql=Mock(return_value=[])),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    result = runner._migration_sql(migration, "up")
 
     assert result is None
 
 
-def test_get_migration_sql_none_statements() -> None:
+def test_migration_sql_none_statements() -> None:
     """Test handling when migration loader returns None."""
     runner = create_test_migration_runner()
 
@@ -838,7 +838,7 @@ def test_get_migration_sql_none_statements() -> None:
         "loader": Mock(get_up_sql=Mock(return_value=None)),
     }
 
-    result = runner._get_migration_sql(migration, "up")
+    result = runner._migration_sql(migration, "up")
 
     assert result is None
 

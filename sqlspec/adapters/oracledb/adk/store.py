@@ -222,13 +222,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(self._get_create_sessions_table_sql_for_type(storage_type))
+            await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
 
-            await driver.execute_script(self._get_create_events_table_sql_for_type(storage_type))
-            await driver.execute_script(self._get_create_app_states_table_sql_for_type(storage_type))
-            await driver.execute_script(self._get_create_user_states_table_sql_for_type(storage_type))
-            await driver.execute_script(await self._get_create_metadata_table_sql())
-            await driver.execute_script(await self._get_seed_metadata_sql())
+            await driver.execute_script(self._events_table_ddl_for_type(storage_type))
+            await driver.execute_script(self._app_states_table_ddl_for_type(storage_type))
+            await driver.execute_script(self._user_states_table_ddl_for_type(storage_type))
+            await driver.execute_script(await self._metadata_table_ddl())
+            await driver.execute_script(await self._metadata_seed_sql())
             await driver.commit()
 
     async def create_session(
@@ -780,35 +780,35 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, {"key": key, "value": value})
             await conn.commit()
 
-    async def _get_create_sessions_table_sql(self) -> str:
+    async def _sessions_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
         Result is cached to minimize database queries.
         """
         storage_type = await self._detect_json_storage_type()
-        return self._get_create_sessions_table_sql_for_type(storage_type)
+        return self._sessions_table_ddl_for_type(storage_type)
 
-    async def _get_create_events_table_sql(self) -> str:
+    async def _events_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for events table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
         Result is cached to minimize database queries.
         """
         storage_type = await self._detect_json_storage_type()
-        return self._get_create_events_table_sql_for_type(storage_type)
+        return self._events_table_ddl_for_type(storage_type)
 
-    async def _get_create_app_states_table_sql(self) -> str:
+    async def _app_states_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state."""
         storage_type = await self._detect_json_storage_type()
-        return self._get_create_app_states_table_sql_for_type(storage_type)
+        return self._app_states_table_ddl_for_type(storage_type)
 
-    async def _get_create_user_states_table_sql(self) -> str:
+    async def _user_states_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state."""
         storage_type = await self._detect_json_storage_type()
-        return self._get_create_user_states_table_sql_for_type(storage_type)
+        return self._user_states_table_ddl_for_type(storage_type)
 
-    async def _get_create_metadata_table_sql(self) -> str:
+    async def _metadata_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
         return f"""
         BEGIN
@@ -824,7 +824,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    async def _get_seed_metadata_sql(self) -> str:
+    async def _metadata_seed_sql(self) -> str:
         """Get Oracle SQL to seed the ADK schema-version metadata row."""
         return f"""
         BEGIN
@@ -954,7 +954,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         return str(data)
 
-    def _get_create_sessions_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _sessions_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for sessions with specified storage type.
 
         Args:
@@ -1017,7 +1017,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _events_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for events with specified storage type.
 
         The events table stores the full ADK Event in ``event_data`` and
@@ -1087,7 +1087,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_create_app_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
@@ -1106,7 +1106,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_create_user_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
@@ -1127,7 +1127,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'DROP TABLE {self._app_state_table}';
@@ -1139,7 +1139,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'DROP TABLE {self._user_state_table}';
@@ -1151,7 +1151,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'DROP TABLE {self._metadata_table}';
@@ -1163,7 +1163,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         END;
         """
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL statements.
 
         Returns:
@@ -1174,9 +1174,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             Oracle automatically drops indexes when dropping tables.
         """
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"""
             BEGIN
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
@@ -1369,35 +1369,35 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Set a value in the ADK internal metadata table."""
         self._set_metadata(key, value)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
         Result is cached to minimize database queries.
         """
         storage_type = self._detect_json_storage_type()
-        return self._get_create_sessions_table_sql_for_type(storage_type)
+        return self._sessions_table_ddl_for_type(storage_type)
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for events table.
 
         Auto-detects optimal JSON storage type based on Oracle version.
         Result is cached to minimize database queries.
         """
         storage_type = self._detect_json_storage_type()
-        return self._get_create_events_table_sql_for_type(storage_type)
+        return self._events_table_ddl_for_type(storage_type)
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state."""
         storage_type = self._detect_json_storage_type()
-        return self._get_create_app_states_table_sql_for_type(storage_type)
+        return self._app_states_table_ddl_for_type(storage_type)
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state."""
         storage_type = self._detect_json_storage_type()
-        return self._get_create_user_states_table_sql_for_type(storage_type)
+        return self._user_states_table_ddl_for_type(storage_type)
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
         return f"""
         BEGIN
@@ -1413,7 +1413,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         """Get Oracle SQL to seed the ADK schema-version metadata row."""
         return f"""
         BEGIN
@@ -1539,7 +1539,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         return str(data)
 
-    def _get_create_sessions_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _sessions_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for sessions with specified storage type.
 
         Args:
@@ -1602,7 +1602,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_create_events_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _events_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for events with specified storage type.
 
         The events table stores the full ADK Event in ``event_data`` and
@@ -1672,7 +1672,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_create_app_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
@@ -1691,7 +1691,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_create_user_states_table_sql_for_type(self, storage_type: JSONStorageType) -> str:
+    def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
@@ -1712,7 +1712,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'DROP TABLE {self._app_state_table}';
@@ -1724,7 +1724,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'DROP TABLE {self._user_state_table}';
@@ -1736,7 +1736,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'DROP TABLE {self._metadata_table}';
@@ -1748,7 +1748,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         END;
         """
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL statements.
 
         Returns:
@@ -1759,9 +1759,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             Oracle automatically drops indexes when dropping tables.
         """
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"""
             BEGIN
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._events_table}_session';
@@ -1825,15 +1825,15 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
         with self._config.provide_session() as driver:
-            sessions_sql = SQL(self._get_create_sessions_table_sql_for_type(storage_type))
+            sessions_sql = SQL(self._sessions_table_ddl_for_type(storage_type))
             driver.execute_script(sessions_sql)
 
-            events_sql = SQL(self._get_create_events_table_sql_for_type(storage_type))
+            events_sql = SQL(self._events_table_ddl_for_type(storage_type))
             driver.execute_script(events_sql)
-            driver.execute_script(SQL(self._get_create_app_states_table_sql_for_type(storage_type)))
-            driver.execute_script(SQL(self._get_create_user_states_table_sql_for_type(storage_type)))
-            driver.execute_script(SQL(self._get_create_metadata_table_sql()))
-            driver.execute_script(SQL(self._get_seed_metadata_sql()))
+            driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
+            driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
+            driver.execute_script(SQL(self._metadata_table_ddl()))
+            driver.execute_script(SQL(self._metadata_seed_sql()))
             driver.commit()
 
     def _create_session(
@@ -2391,7 +2391,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_memory_table_sql())
+            await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2517,11 +2517,11 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
         return _extract_json_value(data)
 
-    async def _get_create_memory_table_sql(self) -> str:
+    async def _memory_table_ddl(self) -> str:
         storage_type = await self._detect_json_storage_type()
-        return self._get_create_memory_table_sql_for_type(storage_type)
+        return self._memory_table_ddl_for_type(storage_type)
 
-    def _get_create_memory_table_sql_for_type(self, storage_type: "JSONStorageType") -> str:
+    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType") -> str:
         if storage_type == JSONStorageType.JSON_NATIVE:
             json_columns = """
                 content_json JSON,
@@ -2604,7 +2604,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         {fts_index}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [
             f"""
             BEGIN
@@ -2792,11 +2792,11 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         return _extract_json_value(data)
 
-    def _get_create_memory_table_sql(self) -> str:
+    def _memory_table_ddl(self) -> str:
         storage_type = self._detect_json_storage_type()
-        return self._get_create_memory_table_sql_for_type(storage_type)
+        return self._memory_table_ddl_for_type(storage_type)
 
-    def _get_create_memory_table_sql_for_type(self, storage_type: "JSONStorageType") -> str:
+    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType") -> str:
         if storage_type == JSONStorageType.JSON_NATIVE:
             json_columns = """
                 content_json JSON,
@@ -2879,7 +2879,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         {fts_index}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [
             f"""
             BEGIN
@@ -2918,7 +2918,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(self._memory_table_ddl())
 
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""

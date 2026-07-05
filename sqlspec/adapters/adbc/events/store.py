@@ -136,7 +136,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
 
         return "TEXT", "TEXT", "TIMESTAMP"
 
-    def _build_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Build dialect-specific CREATE TABLE SQL."""
         dialect = self.dialect
 
@@ -204,9 +204,9 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 ")"
             )
 
-        return super()._build_create_table_sql()
+        return super()._table_ddl()
 
-    def _build_index_sql(self) -> str | None:
+    def _index_ddl(self) -> str | None:
         """Build dialect-specific index SQL."""
         dialect = self.dialect
 
@@ -222,7 +222,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 "WHERE status = 'pending'"
             )
 
-        return super()._build_index_sql()
+        return super()._index_ddl()
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
         """Return statement unchanged since ADBC dialects support IF NOT EXISTS.
@@ -247,8 +247,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         Returns separate statements for table and index to support
         databases that require separate execution.
         """
-        statements = [self._build_create_table_sql()]
-        index_sql = self._build_index_sql()
+        statements = [self._table_ddl()]
+        index_sql = self._index_ddl()
         if index_sql:
             statements.append(index_sql)
         return statements

@@ -132,12 +132,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """Create both sessions and events tables if they don't exist."""
         async with self._config.provide_session() as driver:
             await self._apply_pragmas(driver.connection)
-            await driver.execute_script(await self._get_create_sessions_table_sql())
-            await driver.execute_script(await self._get_create_events_table_sql())
-            await driver.execute_script(await self._get_create_app_states_table_sql())
-            await driver.execute_script(await self._get_create_user_states_table_sql())
-            await driver.execute_script(await self._get_create_metadata_table_sql())
-            await driver.execute_script(await self._get_seed_metadata_sql())
+            await driver.execute_script(await self._sessions_table_ddl())
+            await driver.execute_script(await self._events_table_ddl())
+            await driver.execute_script(await self._app_states_table_ddl())
+            await driver.execute_script(await self._user_states_table_ddl())
+            await driver.execute_script(await self._metadata_table_ddl())
+            await driver.execute_script(await self._metadata_seed_sql())
             await driver.commit()
 
     async def create_session(
@@ -659,7 +659,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         for pragma_name, pragma_value in self._pragma_overrides:
             await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
 
-    async def _get_create_sessions_table_sql(self) -> str:
+    async def _sessions_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
 
         Returns:
@@ -684,7 +684,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             ON {self._session_table}(update_time DESC);
         """
 
-    async def _get_create_events_table_sql(self) -> str:
+    async def _events_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for events."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -705,7 +705,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             ON {self._events_table}(timestamp ASC);
         """
 
-    async def _get_create_app_states_table_sql(self) -> str:
+    async def _app_states_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for app-scoped state."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
@@ -715,7 +715,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         );
         """
 
-    async def _get_create_user_states_table_sql(self) -> str:
+    async def _user_states_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for user-scoped state."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
@@ -727,7 +727,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         );
         """
 
-    async def _get_create_metadata_table_sql(self) -> str:
+    async def _metadata_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for ADK internal metadata."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
@@ -736,7 +736,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         );
         """
 
-    async def _get_seed_metadata_sql(self) -> str:
+    async def _metadata_seed_sql(self) -> str:
         """Get SQLite SQL to seed the ADK schema-version metadata row."""
         return f"""
         INSERT INTO {self._metadata_table} (key, value)
@@ -744,24 +744,24 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         ON CONFLICT(key) DO NOTHING;
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for user-scoped state."""
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for ADK internal metadata."""
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements."""
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -803,7 +803,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             return
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_memory_table_sql())
+            await driver.execute_script(await self._memory_table_ddl())
             await driver.commit()
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
@@ -940,7 +940,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             await conn.commit()
             return cursor.rowcount
 
-    async def _get_create_memory_table_sql(self) -> str:
+    async def _memory_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -999,7 +999,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         {fts_table}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements."""
         statements = [f"DROP TABLE IF EXISTS {self._memory_table}"]
         if self._use_fts:

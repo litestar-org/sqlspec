@@ -255,23 +255,23 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return None
         return from_json(str(data))  # type: ignore[no-any-return]
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Get CREATE TABLE SQL for sessions with dialect dispatch.
 
         Returns:
             SQL statement to create adk_sessions table.
         """
         if self._dialect == DIALECT_POSTGRESQL:
-            return self._get_sessions_ddl_postgresql()
+            return self._sessions_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
-            return self._get_sessions_ddl_sqlite()
+            return self._sessions_ddl_sqlite()
         if self._dialect == DIALECT_DUCKDB:
-            return self._get_sessions_ddl_duckdb()
+            return self._sessions_ddl_duckdb()
         if self._dialect == DIALECT_SNOWFLAKE:
-            return self._get_sessions_ddl_snowflake()
-        return self._get_sessions_ddl_generic()
+            return self._sessions_ddl_snowflake()
+        return self._sessions_ddl_generic()
 
-    def _get_sessions_ddl_postgresql(self) -> str:
+    def _sessions_ddl_postgresql(self) -> str:
         """PostgreSQL DDL with JSONB and TIMESTAMPTZ.
 
         Returns:
@@ -289,7 +289,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_sessions_ddl_sqlite(self) -> str:
+    def _sessions_ddl_sqlite(self) -> str:
         """SQLite DDL with TEXT and REAL timestamps.
 
         Returns:
@@ -307,7 +307,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_sessions_ddl_duckdb(self) -> str:
+    def _sessions_ddl_duckdb(self) -> str:
         """DuckDB DDL with native JSON type.
 
         Returns:
@@ -325,7 +325,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_sessions_ddl_snowflake(self) -> str:
+    def _sessions_ddl_snowflake(self) -> str:
         """Snowflake DDL with VARIANT type.
 
         Returns:
@@ -343,7 +343,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_sessions_ddl_generic(self) -> str:
+    def _sessions_ddl_generic(self) -> str:
         """Generic SQL-92 compatible DDL fallback.
 
         Returns:
@@ -361,23 +361,23 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Get CREATE TABLE SQL for events with dialect dispatch.
 
         Returns:
             SQL statement to create adk_events table.
         """
         if self._dialect == DIALECT_POSTGRESQL:
-            return self._get_events_ddl_postgresql()
+            return self._events_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
-            return self._get_events_ddl_sqlite()
+            return self._events_ddl_sqlite()
         if self._dialect == DIALECT_DUCKDB:
-            return self._get_events_ddl_duckdb()
+            return self._events_ddl_duckdb()
         if self._dialect == DIALECT_SNOWFLAKE:
-            return self._get_events_ddl_snowflake()
-        return self._get_events_ddl_generic()
+            return self._events_ddl_snowflake()
+        return self._events_ddl_generic()
 
-    def _get_events_ddl_postgresql(self) -> str:
+    def _events_ddl_postgresql(self) -> str:
         """PostgreSQL DDL for events table.
 
         Returns:
@@ -394,7 +394,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_events_ddl_sqlite(self) -> str:
+    def _events_ddl_sqlite(self) -> str:
         """SQLite DDL for events table.
 
         Returns:
@@ -411,7 +411,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_events_ddl_duckdb(self) -> str:
+    def _events_ddl_duckdb(self) -> str:
         """DuckDB DDL for events table.
 
         Returns:
@@ -428,7 +428,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_events_ddl_snowflake(self) -> str:
+    def _events_ddl_snowflake(self) -> str:
         """Snowflake DDL for events table.
 
         Returns:
@@ -445,7 +445,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_events_ddl_generic(self) -> str:
+    def _events_ddl_generic(self) -> str:
         """Generic SQL-92 compatible DDL for events table.
 
         Returns:
@@ -462,7 +462,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         json_type = self._json_storage_type()
         timestamp_type = self._timestamp_storage_type()
         default = "DEFAULT CURRENT_TIMESTAMP()" if self._dialect == DIALECT_SNOWFLAKE else "DEFAULT CURRENT_TIMESTAMP"
@@ -474,7 +474,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         json_type = self._json_storage_type()
         timestamp_type = self._timestamp_storage_type()
         default = "DEFAULT CURRENT_TIMESTAMP()" if self._dialect == DIALECT_SNOWFLAKE else "DEFAULT CURRENT_TIMESTAMP"
@@ -488,7 +488,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
             key VARCHAR(128) PRIMARY KEY,
@@ -496,7 +496,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         if self._dialect in {DIALECT_POSTGRESQL, DIALECT_SQLITE, DIALECT_DUCKDB}:
             return f"""
             INSERT INTO {self._metadata_table} (key, value)
@@ -509,25 +509,25 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         WHERE NOT EXISTS (SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version')
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get DROP TABLE SQL statements.
 
         Returns:
             List of SQL statements to drop tables and indexes.
         """
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -539,7 +539,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             try:
                 self._enable_foreign_keys(cursor, conn)
 
-                cursor.execute(self._get_create_sessions_table_sql())
+                cursor.execute(self._sessions_table_ddl())
                 conn.commit()
 
                 sessions_idx_app_user = (
@@ -556,7 +556,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(sessions_idx_update)
                 conn.commit()
 
-                cursor.execute(self._get_create_events_table_sql())
+                cursor.execute(self._events_table_ddl())
                 conn.commit()
 
                 events_idx = (
@@ -566,16 +566,16 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(events_idx)
                 conn.commit()
 
-                cursor.execute(self._get_create_app_states_table_sql())
+                cursor.execute(self._app_states_table_ddl())
                 conn.commit()
 
-                cursor.execute(self._get_create_user_states_table_sql())
+                cursor.execute(self._user_states_table_ddl())
                 conn.commit()
 
-                cursor.execute(self._get_create_metadata_table_sql())
+                cursor.execute(self._metadata_table_ddl())
                 conn.commit()
 
-                cursor.execute(self._get_seed_metadata_sql())
+                cursor.execute(self._metadata_seed_sql())
                 conn.commit()
             finally:
                 cursor.close()
@@ -1256,18 +1256,18 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return datetime.fromisoformat(value)
         return datetime.fromisoformat(str(value))
 
-    def _get_create_memory_table_sql(self) -> str:
+    def _memory_table_ddl(self) -> str:
         if self._dialect == DIALECT_POSTGRESQL:
-            return self._get_memory_ddl_postgresql()
+            return self._memory_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
-            return self._get_memory_ddl_sqlite()
+            return self._memory_ddl_sqlite()
         if self._dialect == DIALECT_DUCKDB:
-            return self._get_memory_ddl_duckdb()
+            return self._memory_ddl_duckdb()
         if self._dialect == DIALECT_SNOWFLAKE:
-            return self._get_memory_ddl_snowflake()
-        return self._get_memory_ddl_generic()
+            return self._memory_ddl_snowflake()
+        return self._memory_ddl_generic()
 
-    def _get_memory_ddl_postgresql(self) -> str:
+    def _memory_ddl_postgresql(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -1285,7 +1285,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
-    def _get_memory_ddl_sqlite(self) -> str:
+    def _memory_ddl_sqlite(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -1303,7 +1303,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
-    def _get_memory_ddl_duckdb(self) -> str:
+    def _memory_ddl_duckdb(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -1321,7 +1321,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
-    def _get_memory_ddl_snowflake(self) -> str:
+    def _memory_ddl_snowflake(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -1339,7 +1339,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
-    def _get_memory_ddl_generic(self) -> str:
+    def _memory_ddl_generic(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -1357,7 +1357,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     def _create_tables(self) -> None:
@@ -1367,7 +1367,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(self._get_create_memory_table_sql())
+                cursor.execute(self._memory_table_ddl())
                 conn.commit()
 
                 idx_app_user = (

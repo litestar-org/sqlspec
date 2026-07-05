@@ -12,6 +12,15 @@ from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
+def test_migration_tracker_private_sql_helpers_use_purpose_names() -> None:
+    assert hasattr(SyncMigrationTracker, "_tracking_table_ddl")
+    assert hasattr(SyncMigrationTracker, "_current_version_query")
+    assert hasattr(SyncMigrationTracker, "_record_migration_statement")
+    assert not hasattr(SyncMigrationTracker, "_get_create_table_sql")
+    assert not hasattr(SyncMigrationTracker, "_get_current_version_sql")
+    assert not hasattr(SyncMigrationTracker, "_get_record_migration_sql")
+
+
 def test_sync_update_version_record_success() -> None:
     """Test sync update succeeds when old version exists."""
     tracker = SyncMigrationTracker()
@@ -35,16 +44,18 @@ def test_sync_tracker_qualifies_table_sql_when_schema_is_configured() -> None:
 
     assert tracker.version_table == "history.ddl_migrations"
     rendered_statements = [
-        str(tracker._get_create_table_sql()),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_current_version_sql()),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_applied_migrations_sql()),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_next_execution_sequence_sql()),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_record_migration_sql("0001", "sequential", 1, "init", 10, "abc", "tester")),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_remove_migration_sql("0001")),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_update_version_sql("20250101000000", "0001", "sequential")),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_delete_versions_sql(["0001"])),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_record_squashed_migration_sql("0002", "sequential", 2, "squash", 0, "def", "tester", "0001")),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._get_check_column_exists_sql()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._tracking_table_ddl()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._current_version_query()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._applied_migrations_query()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._next_execution_sequence_query()),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._record_migration_statement("0001", "sequential", 1, "init", 10, "abc", "tester")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._remove_migration_statement("0001")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._update_version_statement("20250101000000", "0001", "sequential")),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._delete_versions_statement(["0001"])),  # pyright: ignore[reportPrivateUsage]
+        str(
+            tracker._record_squashed_migration_statement("0002", "sequential", 2, "squash", 0, "def", "tester", "0001")
+        ),  # pyright: ignore[reportPrivateUsage]
+        str(tracker._column_exists_query()),  # pyright: ignore[reportPrivateUsage]
     ]
 
     assert all('"history"."ddl_migrations"' in statement for statement in rendered_statements)
@@ -55,7 +66,7 @@ def test_sync_tracker_keeps_bare_table_sql_without_schema() -> None:
     tracker = SyncMigrationTracker(version_table_name="ddl_migrations")
 
     assert tracker.version_table == "ddl_migrations"
-    assert "history.ddl_migrations" not in str(tracker._get_create_table_sql())  # pyright: ignore[reportPrivateUsage]
+    assert "history.ddl_migrations" not in str(tracker._tracking_table_ddl())  # pyright: ignore[reportPrivateUsage]
 
 
 def test_sync_tracker_introspects_bare_table_name_with_schema() -> None:
@@ -64,7 +75,7 @@ def test_sync_tracker_introspects_bare_table_name_with_schema() -> None:
     driver = Mock()
     driver.data_dictionary.get_columns.return_value = [
         {"column_name": column.name}
-        for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+        for column in tracker._tracking_table_ddl().columns  # pyright: ignore[reportPrivateUsage]
     ]
 
     tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
@@ -81,7 +92,7 @@ async def test_async_tracker_introspects_bare_table_name_with_schema() -> None:
     driver.data_dictionary.get_columns = AsyncMock(
         return_value=[
             {"column_name": column.name}
-            for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+            for column in tracker._tracking_table_ddl().columns  # pyright: ignore[reportPrivateUsage]
         ]
     )
     driver.execute = AsyncMock()
@@ -116,7 +127,7 @@ def test_oracle_sync_tracker_introspects_unmodified_table_name_with_schema() -> 
     driver = Mock()
     driver.data_dictionary.get_columns.return_value = [
         {"column_name": column.name}
-        for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+        for column in tracker._tracking_table_ddl().columns  # pyright: ignore[reportPrivateUsage]
     ]
 
     tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
@@ -133,7 +144,7 @@ async def test_oracle_async_tracker_introspects_unmodified_table_name_with_schem
     driver.data_dictionary.get_columns = AsyncMock(
         return_value=[
             {"column_name": column.name}
-            for column in tracker._get_create_table_sql().columns  # pyright: ignore[reportPrivateUsage]
+            for column in tracker._tracking_table_ddl().columns  # pyright: ignore[reportPrivateUsage]
         ]
     )
     driver.execute = AsyncMock()

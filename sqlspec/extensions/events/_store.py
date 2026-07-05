@@ -27,7 +27,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     - `_table_clause()`: Additional table options (default: empty)
 
     For complex dialects (Oracle PL/SQL, BigQuery CLUSTER BY), adapters may
-    override `_build_create_table_sql()` directly.
+    override `_table_ddl()` directly.
     """
 
     __slots__ = ("_config", "_extension_settings", "_table_name")
@@ -51,8 +51,8 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     def create_statements(self) -> "list[str]":
         """Return statements required to create the queue table and indexes."""
-        statements = [self._wrap_create_statement(self._build_create_table_sql(), "table")]
-        index_statement = self._build_index_sql()
+        statements = [self._wrap_create_statement(self._table_ddl(), "table")]
+        index_statement = self._index_ddl()
         if index_statement:
             statements.append(self._wrap_create_statement(index_statement, "index"))
         return statements
@@ -105,7 +105,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         """
         return ""
 
-    def _build_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Build CREATE TABLE SQL using hook methods.
 
         Most adapters should NOT override this method. Instead, override the
@@ -141,7 +141,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
             f"){pk_inline}{table_clause}"
         )
 
-    def _build_index_sql(self) -> str | None:
+    def _index_ddl(self) -> str | None:
         """Build CREATE INDEX SQL for queue operations."""
         index_name = self._index_name()
         return f"CREATE INDEX {index_name} ON {self.table_name}(channel, status, available_at)"

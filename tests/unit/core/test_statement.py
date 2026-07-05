@@ -74,6 +74,11 @@ DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
 TEST_CONFIG = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
 
 
+def test_sql_private_raw_sql_helper_uses_purpose_name() -> None:
+    assert hasattr(SQL, "_materialized_raw_sql")
+    assert not hasattr(SQL, "_get_raw_sql")
+
+
 @pytest.mark.parametrize(
     "config_kwargs,expected_values",
     [

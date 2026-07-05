@@ -69,7 +69,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             return f"{version_table_schema}.{version_table_name}"
         return version_table_name
 
-    def _get_create_table_builder(self) -> CreateTable:
+    def _tracking_table_builder(self) -> CreateTable:
         """Return a CREATE TABLE builder for the tracker table."""
         builder = sql.create_table(self.version_table_name)
         if self.version_table_schema:
@@ -88,7 +88,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """Return True when logger output is preferred."""
         return bool(self._output_policy.get("use_logger", False))
 
-    def _get_create_table_sql(self) -> CreateTable:
+    def _tracking_table_ddl(self) -> CreateTable:
         """Get SQL builder for creating the tracking table.
 
         Schema includes both legacy and new versioning columns:
@@ -106,7 +106,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return (
             self
-            ._get_create_table_builder()
+            ._tracking_table_builder()
             .if_not_exists()
             .column("version_num", "VARCHAR(32)", primary_key=True)
             .column("version_type", "VARCHAR(16)")
@@ -119,7 +119,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             .column("replaces", "TEXT")
         )
 
-    def _get_current_version_sql(self) -> Select:
+    def _current_version_query(self) -> Select:
         """Get SQL builder for retrieving current version.
 
         Uses execution_sequence to get the last applied migration,
@@ -130,7 +130,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.select("version_num").from_(self.version_table).order_by("execution_sequence DESC").limit(1)
 
-    def _get_applied_migrations_sql(self) -> Select:
+    def _applied_migrations_query(self) -> Select:
         """Get SQL builder for retrieving all applied migrations.
 
         Orders by execution_sequence to show migrations in application order,
@@ -141,7 +141,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.select("*").from_(self.version_table).order_by("execution_sequence")
 
-    def _get_next_execution_sequence_sql(self) -> Select:
+    def _next_execution_sequence_query(self) -> Select:
         """Get SQL builder for retrieving next execution sequence.
 
         Returns:
@@ -149,7 +149,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
 
-    def _get_record_migration_sql(
+    def _record_migration_statement(
         self,
         version: str,
         version_type: str,
@@ -188,7 +188,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             .values(version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by)
         )
 
-    def _get_remove_migration_sql(self, version: str) -> Delete:
+    def _remove_migration_statement(self, version: str) -> Delete:
         """Get SQL builder for removing a migration record.
 
         Args:
@@ -199,7 +199,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.delete().from_(self.version_table).where(sql.version_num == version)
 
-    def _get_update_version_sql(self, old_version: str, new_version: str, new_version_type: str) -> Update:
+    def _update_version_statement(self, old_version: str, new_version: str, new_version_type: str) -> Update:
         """Get SQL builder for updating version record.
 
         Updates version_num and version_type while preserving execution_sequence,
@@ -222,7 +222,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             .where(sql.version_num == old_version)
         )
 
-    def _get_delete_versions_sql(self, versions: "list[str]") -> Delete:
+    def _delete_versions_statement(self, versions: "list[str]") -> Delete:
         """Get SQL builder for deleting multiple version records.
 
         Used by squash operations to remove replaced migration records.
@@ -235,7 +235,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.delete().from_(self.version_table).where(sql.version_num.in_(versions))
 
-    def _get_check_versions_exist_sql(self, versions: "list[str]") -> Select:
+    def _check_versions_query(self, versions: "list[str]") -> Select:
         """Get SQL builder for checking whether any versions exist.
 
         Args:
@@ -246,7 +246,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         return sql.select("version_num").from_(self.version_table).where(sql.version_num.in_(versions))
 
-    def _get_record_squashed_migration_sql(
+    def _record_squashed_migration_statement(
         self,
         version: str,
         version_type: str,
@@ -297,7 +297,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             )
         )
 
-    def _get_check_column_exists_sql(self) -> Select:
+    def _column_exists_query(self) -> Select:
         """Get SQL to check what columns exist in the tracking table.
 
         Returns a query that will fail gracefully if the table doesn't exist,
@@ -317,7 +317,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             Set of missing column names (lowercase).
         """
-        target_create = self._get_create_table_sql()
+        target_create = self._tracking_table_ddl()
         target_columns = {col.name.lower() for col in target_create.columns}
         existing_lower = {col.lower() for col in existing_columns}
         return target_columns - existing_lower

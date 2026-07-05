@@ -39,7 +39,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL.
 
         Returns:
@@ -55,7 +55,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements.
 
         Returns:
@@ -97,7 +97,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()

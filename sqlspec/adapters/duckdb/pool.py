@@ -385,7 +385,7 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
     try:
         _validate_sql_identifier(secret_name, "secret_name")
         _validate_sql_identifier(secret_type, "secret_type")
-        sql = _build_secret_sql(secret_config, secret_name, secret_type)
+        sql = _secret_sql(secret_config, secret_name, secret_type)
         connection.execute(sql)
         if required:
             _verify_secret(connection, secret_config, secret_name, secret_type)
@@ -395,7 +395,7 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
         logger.warning("DuckDB secret %r creation failed (best-effort)", secret_name)
 
 
-def _build_secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:
+def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:
     parts = [f"TYPE {secret_type}"]
 
     provider = secret_config.get("provider")

@@ -20,11 +20,11 @@ def _mock_result(**kwargs: Any) -> Mock:
 
 
 def test_tracker_schema_squash_create_table_sql_includes_replaces_column() -> None:
-    """Test that _get_create_table_sql includes replaces column."""
+    """Test that _tracking_table_ddl includes replaces column."""
     from sqlspec.migrations.tracker import SyncMigrationTracker
 
     tracker = SyncMigrationTracker()
-    create_sql = tracker._get_create_table_sql()
+    create_sql = tracker._tracking_table_ddl()
     column_names = [col.name.lower() for col in create_sql.columns]
     assert "replaces" in column_names
 
@@ -34,7 +34,7 @@ def test_tracker_schema_squash_replaces_column_is_nullable() -> None:
     from sqlspec.migrations.tracker import SyncMigrationTracker
 
     tracker = SyncMigrationTracker()
-    create_sql = tracker._get_create_table_sql()
+    create_sql = tracker._tracking_table_ddl()
     replaces_col = next((col for col in create_sql.columns if col.name.lower() == "replaces"), None)
     assert replaces_col is not None
     assert not replaces_col.not_null
@@ -186,7 +186,7 @@ def test_check_versions_exist_sql_uses_where_in_clause() -> None:
     from sqlspec.migrations.tracker import SyncMigrationTracker
 
     tracker = SyncMigrationTracker()
-    query = str(tracker._get_check_versions_exist_sql(["0001", "0002"])).upper()
+    query = str(tracker._check_versions_query(["0001", "0002"])).upper()
     assert "WHERE" in query
     assert "IN" in query
     assert "SELECT *" not in query

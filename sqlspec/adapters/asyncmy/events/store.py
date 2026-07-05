@@ -50,7 +50,7 @@ class AsyncmyEventQueueStore(BaseEventQueueStore[AsyncmyConfig]):
         """
         return "CURRENT_TIMESTAMP(6)"
 
-    def _build_index_sql(self) -> str | None:
+    def _index_ddl(self) -> str | None:
         """Build MySQL conditional index creation SQL.
 
         MySQL does not support IF NOT EXISTS for CREATE INDEX, so this method

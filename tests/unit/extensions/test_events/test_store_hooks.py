@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.extensions.events._queue import _BaseTableEventQueue
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite import SqliteConfig
@@ -21,6 +22,30 @@ if TYPE_CHECKING:
     BaseEventQueueStoreBase = BaseEventQueueStore[SqliteConfig]
 else:
     BaseEventQueueStoreBase = BaseEventQueueStore
+
+
+def test_private_sql_helpers_use_purpose_names() -> None:
+    assert hasattr(BaseEventQueueStore, "_table_ddl")
+    assert hasattr(BaseEventQueueStore, "_index_ddl")
+    assert not hasattr(BaseEventQueueStore, "_build_create_table_sql")
+    assert not hasattr(BaseEventQueueStore, "_build_index_sql")
+
+
+def test_table_queue_private_sql_helpers_use_purpose_names() -> None:
+    assert hasattr(_BaseTableEventQueue, "_insert_sql")
+    assert hasattr(_BaseTableEventQueue, "_select_sql")
+    assert hasattr(_BaseTableEventQueue, "_select_by_id_sql")
+    assert hasattr(_BaseTableEventQueue, "_claim_sql")
+    assert hasattr(_BaseTableEventQueue, "_ack_sql")
+    assert hasattr(_BaseTableEventQueue, "_nack_sql")
+    assert hasattr(_BaseTableEventQueue, "_cleanup_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_insert_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_select_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_select_by_id_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_claim_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_ack_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_nack_sql")
+    assert not hasattr(_BaseTableEventQueue, "_build_cleanup_sql")
 
 
 def test_base_store_string_type_default() -> None:
@@ -110,8 +135,8 @@ def test_hook_override_string_type() -> None:
     store = CustomStore(config)
 
     assert store._string_type(64) == "STRING(64)"
-    assert "STRING(64)" in store._build_create_table_sql()
-    assert "STRING(128)" in store._build_create_table_sql()
+    assert "STRING(64)" in store._table_ddl()
+    assert "STRING(128)" in store._table_ddl()
 
 
 def test_hook_override_integer_type() -> None:
@@ -129,7 +154,7 @@ def test_hook_override_integer_type() -> None:
     store = CustomStore(config)
 
     assert store._integer_type() == "INT64"
-    assert "INT64 NOT NULL" in store._build_create_table_sql()
+    assert "INT64 NOT NULL" in store._table_ddl()
 
 
 def test_hook_override_timestamp_default() -> None:
@@ -147,7 +172,7 @@ def test_hook_override_timestamp_default() -> None:
     store = CustomStore(config)
 
     assert store._timestamp_default() == "CURRENT_TIMESTAMP(6)"
-    assert "DEFAULT CURRENT_TIMESTAMP(6)" in store._build_create_table_sql()
+    assert "DEFAULT CURRENT_TIMESTAMP(6)" in store._table_ddl()
 
 
 def test_hook_override_primary_key_syntax() -> None:
@@ -165,7 +190,7 @@ def test_hook_override_primary_key_syntax() -> None:
     store = CustomStore(config)
 
     assert store._primary_key_syntax() == " PRIMARY KEY (event_id)"
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
     assert " PRIMARY KEY (event_id)" in ddl
     assert "event_id VARCHAR(64)," in ddl
 
@@ -185,7 +210,7 @@ def test_hook_override_table_clause() -> None:
     store = CustomStore(config)
 
     assert store._table_clause() == " CLUSTER BY channel, status"
-    assert " CLUSTER BY channel, status" in store._build_create_table_sql()
+    assert " CLUSTER BY channel, status" in store._table_ddl()
 
 
 def test_ddl_generation_uses_all_hooks() -> None:
@@ -213,7 +238,7 @@ def test_ddl_generation_uses_all_hooks() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = FullCustomStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "STRING(64)" in ddl
     assert "STRING(128)" in ddl
@@ -347,7 +372,7 @@ def test_spanner_ddl_no_defaults() -> None:
 
     config = SpannerSyncConfig(connection_config={"project": "test", "instance": "inst", "database": "db"})
     store = SpannerSyncEventQueueStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "DEFAULT" not in ddl
 
@@ -443,7 +468,7 @@ def test_ddl_column_primary_key_without_inline_pk() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = ColumnPKStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "event_id VARCHAR(64) PRIMARY KEY," in ddl
     assert not ddl.endswith(") PRIMARY KEY (event_id)")
@@ -462,7 +487,7 @@ def test_ddl_inline_primary_key_with_override() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = InlinePKStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "event_id VARCHAR(64)," in ddl
     assert "event_id VARCHAR(64) PRIMARY KEY" not in ddl
@@ -479,7 +504,7 @@ def test_ddl_contains_all_required_columns() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = FixtureStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     required_columns = [
         "event_id",
@@ -508,7 +533,7 @@ def test_ddl_default_values() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = FixtureStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "DEFAULT 'pending'" in ddl
     assert "DEFAULT 0" in ddl
@@ -525,7 +550,7 @@ def test_ddl_nullable_columns() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = FixtureStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "metadata_json JSON," in ddl
     assert "lease_expires_at TIMESTAMP," in ddl
@@ -542,7 +567,7 @@ def test_ddl_not_null_columns() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = FixtureStore(config)
-    ddl = store._build_create_table_sql()
+    ddl = store._table_ddl()
 
     assert "channel VARCHAR(128) NOT NULL" in ddl
     assert "payload_json JSON NOT NULL" in ddl
@@ -553,14 +578,14 @@ def test_ddl_not_null_columns() -> None:
 
 
 def test_create_statements_with_no_index() -> None:
-    """create_statements returns only table when _build_index_sql returns None."""
+    """create_statements returns only table when _index_ddl returns None."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
     class NoIndexStore(BaseEventQueueStoreBase):
         def _column_types(self) -> tuple[str, str, str]:
             return "TEXT", "TEXT", "TIMESTAMP"
 
-        def _build_index_sql(self) -> str | None:
+        def _index_ddl(self) -> str | None:
             return None
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
@@ -666,8 +691,8 @@ def test_index_name_with_schema_qualified_table() -> None:
     assert store._index_name() == "idx_myschema_events_channel_status"
 
 
-def test_build_index_sql() -> None:
-    """_build_index_sql generates correct CREATE INDEX statement."""
+def test_index_ddl() -> None:
+    """_index_ddl generates correct CREATE INDEX statement."""
     from sqlspec.adapters.sqlite import SqliteConfig
 
     class FixtureStore(BaseEventQueueStoreBase):
@@ -676,7 +701,7 @@ def test_build_index_sql() -> None:
 
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = FixtureStore(config)
-    index_sql = store._build_index_sql()
+    index_sql = store._index_ddl()
 
     assert index_sql is not None
     assert "CREATE INDEX idx_sqlspec_event_queue_channel_status" in index_sql

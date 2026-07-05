@@ -23,7 +23,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get CockroachDB CREATE TABLE SQL with optimized schema."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -38,11 +38,11 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
     async def create_table(self) -> None:
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
             await driver.commit()
@@ -171,7 +171,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -185,11 +185,11 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _create_table(self) -> None:
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
             driver.commit()

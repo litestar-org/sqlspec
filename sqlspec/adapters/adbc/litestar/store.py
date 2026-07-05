@@ -75,7 +75,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         assert self._dialect is not None
         return self._dialect
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get dialect-specific CREATE TABLE SQL for ADBC.
 
         Returns:
@@ -198,13 +198,13 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table using ADBC driver."""
-        sql_text = self._get_create_table_sql()
+        sql_text = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql_text)
             driver.commit()
         self._log_table_created()
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get dialect-specific DROP TABLE SQL statements for ADBC.
 
         Returns:

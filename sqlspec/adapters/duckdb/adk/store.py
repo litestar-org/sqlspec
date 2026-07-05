@@ -270,7 +270,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """Set a metadata value."""
         self._set_metadata(key, value)
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for sessions.
 
         Returns:
@@ -293,14 +293,14 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC);
         """
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for events.
 
         Returns:
             SQL statement to create adk_event table with indexes.
         """
-        generated_columns = self._get_event_generated_columns_sql()
-        generated_indexes = self._get_event_generated_column_indexes_sql()
+        generated_columns = self._event_generated_columns_sql()
+        generated_indexes = self._event_generated_column_indexes_sql()
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
@@ -314,7 +314,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         {generated_indexes}
         """
 
-    def _get_event_generated_columns_sql(self) -> str:
+    def _event_generated_columns_sql(self) -> str:
         """Return DuckDB ADK generated event projection columns."""
         adk_config = _adk_config(self._config)
         if not adk_config.get("enable_event_generated_columns", False):
@@ -324,7 +324,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             author_gc VARCHAR GENERATED ALWAYS AS ((event_data::{DUCKDB_EVENT_PROJECTION_STRUCT}).author) VIRTUAL,
             node_path_gc VARCHAR GENERATED ALWAYS AS ((event_data::{DUCKDB_EVENT_PROJECTION_STRUCT}).node_info.path) VIRTUAL"""
 
-    def _get_event_generated_column_indexes_sql(self) -> str:
+    def _event_generated_column_indexes_sql(self) -> str:
         """Return optional indexes for generated event projection columns."""
         adk_config = _adk_config(self._config)
         if not (
@@ -341,7 +341,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             ON {self._events_table}(session_id, node_path_gc, timestamp ASC);
         """
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for app-scoped state."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
@@ -351,7 +351,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
         """
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for user-scoped state."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
@@ -363,7 +363,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
         """
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for internal ADK metadata."""
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
@@ -372,7 +372,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
         """
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         """Get DuckDB SQL for seeding the schema metadata row."""
         return f"""
         INSERT INTO {self._metadata_table} (key, value)
@@ -380,28 +380,28 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         ON CONFLICT(key) DO NOTHING
         """
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         """Get DuckDB DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         """Get DuckDB DROP TABLE SQL for user-scoped state."""
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         """Get DuckDB DROP TABLE SQL for internal ADK metadata."""
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get DuckDB DROP TABLE SQL statements.
 
         Returns:
             List of SQL statements to drop tables and indexes.
         """
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -409,15 +409,15 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
         with self._config.provide_connection() as conn:
-            conn.execute(self.__get_create_sessions_table_sql_sync())
-            conn.execute(self.__get_create_events_table_sql_sync())
-            conn.execute(self._get_create_app_states_table_sql())
-            conn.execute(self._get_create_user_states_table_sql())
-            conn.execute(self._get_create_metadata_table_sql())
-            conn.execute(self._get_seed_metadata_sql())
+            conn.execute(self._sync_sessions_table_ddl())
+            conn.execute(self._sync_events_table_ddl())
+            conn.execute(self._app_states_table_ddl())
+            conn.execute(self._user_states_table_ddl())
+            conn.execute(self._metadata_table_ddl())
+            conn.execute(self._metadata_seed_sql())
             conn.commit()
 
-    def __get_create_sessions_table_sql_sync(self) -> str:
+    def _sync_sessions_table_ddl(self) -> str:
         """Synchronous version of DDL generation for use in _create_tables."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -436,10 +436,10 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC);
         """
 
-    def __get_create_events_table_sql_sync(self) -> str:
+    def _sync_events_table_ddl(self) -> str:
         """Synchronous version of DDL generation for use in _create_tables."""
-        generated_columns = self._get_event_generated_columns_sql()
-        generated_indexes = self._get_event_generated_column_indexes_sql()
+        generated_columns = self._event_generated_columns_sql()
+        generated_indexes = self._event_generated_column_indexes_sql()
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
@@ -935,7 +935,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             return
 
         try:
-            conn.execute(self._get_create_fts_index_sql(overwrite=False))
+            conn.execute(self._fts_index_ddl(overwrite=False))
             conn.commit()
         except Exception as exc:
             logger.debug("Failed to create DuckDB FTS index: %s", exc)
@@ -950,12 +950,12 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             return
 
         try:
-            conn.execute(self._get_create_fts_index_sql(overwrite=True))
+            conn.execute(self._fts_index_ddl(overwrite=True))
             conn.commit()
         except Exception as exc:
             logger.debug("Failed to refresh DuckDB FTS index: %s", exc)
 
-    def _get_create_fts_index_sql(self, *, overwrite: bool) -> str:
+    def _fts_index_ddl(self, *, overwrite: bool) -> str:
         """Return DuckDB FTS index PRAGMA SQL for the memory table."""
         return (
             f"PRAGMA create_fts_index('{self._memory_table}', 'id', 'content_text', "
@@ -980,7 +980,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             if option_name in options
         )
 
-    def _get_create_memory_table_sql(self) -> str:
+    def _memory_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for memory entries.
 
         Returns:
@@ -1012,7 +1012,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             ON {self._memory_table}(session_id);
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         """Get DuckDB DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
@@ -1021,13 +1021,13 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if not self._enabled:
             return
 
-        ddl = self.__get_create_memory_table_sql_sync()
+        ddl = self._sync_memory_table_ddl()
         with self._config.provide_connection() as conn:
             conn.execute(ddl)
             if self._use_fts:
                 self._create_fts_index(conn)
 
-    def __get_create_memory_table_sql_sync(self) -> str:
+    def _sync_memory_table_ddl(self) -> str:
         """Synchronous version of DDL generation for use in _create_tables."""
         owner_id_line = ""
         if self._owner_id_column_ddl:

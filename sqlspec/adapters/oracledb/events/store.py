@@ -101,9 +101,7 @@ def _init_oracle_settings(extension_settings: "dict[str, Any]") -> "tuple[bool, 
     return in_memory, json_storage
 
 
-def _build_oracle_create_table_sql(
-    table_name: str, storage_type: "JSONStorageType", in_memory: bool, index_name: str
-) -> str:
+def _oracle_table_ddl(table_name: str, storage_type: "JSONStorageType", in_memory: bool, index_name: str) -> str:
     """Build Oracle CREATE TABLE and INDEX SQL as a single PL/SQL script.
 
     Args:
@@ -160,7 +158,7 @@ def _build_oracle_create_table_sql(
         """
 
 
-def _build_oracle_drop_sql(table_name: str, index_name: str) -> "list[str]":
+def _oracle_drop_sql(table_name: str, index_name: str) -> "list[str]":
     """Build Oracle DROP TABLE SQL with PL/SQL error handling.
 
     Args:
@@ -237,11 +235,11 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         For auto-detection, use create_table() instead.
         """
         storage_type = self._json_storage or JSONStorageType.BLOB_JSON
-        return [_build_oracle_create_table_sql(self.table_name, storage_type, self._in_memory, self._index_name())]
+        return [_oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())]
 
     def drop_statements(self) -> "list[str]":
         """Return drop statements in reverse dependency order."""
-        return _build_oracle_drop_sql(self.table_name, self._index_name())
+        return _oracle_drop_sql(self.table_name, self._index_name())
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -283,13 +281,13 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         )
 
         with self._config.provide_session() as driver:
-            sql = _build_oracle_create_table_sql(self.table_name, storage_type, self._in_memory, self._index_name())
+            sql = _oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())
             driver.execute_script(sql)
 
     def drop_table(self) -> None:
         """Drop the event queue table and index."""
         with self._config.provide_session() as driver:
-            for stmt in _build_oracle_drop_sql(self.table_name, self._index_name()):
+            for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
                 driver.execute_script(stmt)
 
 
@@ -336,11 +334,11 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         For auto-detection, use create_table() instead.
         """
         storage_type = self._json_storage or JSONStorageType.BLOB_JSON
-        return [_build_oracle_create_table_sql(self.table_name, storage_type, self._in_memory, self._index_name())]
+        return [_oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())]
 
     def drop_statements(self) -> "list[str]":
         """Return drop statements in reverse dependency order."""
-        return _build_oracle_drop_sql(self.table_name, self._index_name())
+        return _oracle_drop_sql(self.table_name, self._index_name())
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -382,11 +380,11 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         )
 
         async with self._config.provide_session() as driver:
-            sql = _build_oracle_create_table_sql(self.table_name, storage_type, self._in_memory, self._index_name())
+            sql = _oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())
             await driver.execute_script(sql)
 
     async def drop_table(self) -> None:
         """Drop the event queue table and index."""
         async with self._config.provide_session() as driver:
-            for stmt in _build_oracle_drop_sql(self.table_name, self._index_name()):
+            for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
                 await driver.execute_script(stmt)

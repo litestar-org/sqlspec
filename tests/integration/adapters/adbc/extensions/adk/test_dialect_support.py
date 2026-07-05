@@ -47,7 +47,7 @@ def test_postgresql_sessions_ddl_contains_jsonb() -> None:
     """Test PostgreSQL DDL uses JSONB type."""
     config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_sessions_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in ddl
     assert "TIMESTAMPTZ" in ddl
     assert "'{}'::jsonb" in ddl
@@ -57,7 +57,7 @@ def test_sqlite_sessions_ddl_contains_text() -> None:
     """Test SQLite DDL uses TEXT type."""
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
     assert "TEXT" in ddl
     assert "REAL" in ddl
 
@@ -66,7 +66,7 @@ def test_duckdb_sessions_ddl_contains_json() -> None:
     """Test DuckDB DDL uses JSON type."""
     config = AdbcConfig(connection_config={"driver_name": "duckdb", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_sessions_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
     assert "JSON" in ddl
     assert "TIMESTAMP" in ddl
 
@@ -75,7 +75,7 @@ def test_snowflake_sessions_ddl_contains_variant() -> None:
     """Test Snowflake DDL uses VARIANT type."""
     config = AdbcConfig(connection_config={"driver_name": "snowflake", "uri": "snowflake://test"})
     store = AdbcADKStore(config)
-    ddl = store._get_sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "VARIANT" in ddl
     assert "TIMESTAMP_TZ" in ddl
 
@@ -84,7 +84,7 @@ def test_generic_sessions_ddl_contains_text() -> None:
     """Test generic DDL uses TEXT type."""
     config = AdbcConfig(connection_config={"driver_name": "unknown", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_sessions_ddl_generic()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_generic()  # pyright: ignore[reportPrivateUsage]
     assert "TEXT" in ddl
     assert "TIMESTAMP" in ddl
 
@@ -93,7 +93,7 @@ def test_postgresql_events_ddl_uses_jsonb() -> None:
     """Test PostgreSQL events DDL uses JSONB for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_events_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._events_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in ddl
     assert "event_data" in ddl
     assert "session_id" in ddl
@@ -105,7 +105,7 @@ def test_sqlite_events_ddl_uses_text() -> None:
     """Test SQLite events DDL uses TEXT for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_events_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._events_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
     assert "TEXT" in ddl
     assert "event_data" in ddl
     assert "session_id" in ddl
@@ -116,7 +116,7 @@ def test_duckdb_events_ddl_uses_json() -> None:
     """Test DuckDB events DDL uses JSON type for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "duckdb", "uri": ":memory:"})
     store = AdbcADKStore(config)
-    ddl = store._get_events_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._events_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
     assert "JSON" in ddl
     assert "event_data" in ddl
 
@@ -125,7 +125,7 @@ def test_snowflake_events_ddl_uses_variant() -> None:
     """Test Snowflake events DDL uses VARIANT for event_data."""
     config = AdbcConfig(connection_config={"driver_name": "snowflake", "uri": "snowflake://test"})
     store = AdbcADKStore(config)
-    ddl = store._get_events_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._events_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "VARIANT" in ddl
     assert "event_data" in ddl
 
@@ -135,10 +135,10 @@ def test_ddl_dispatch_uses_correct_dialect() -> None:
     config = AdbcConfig(connection_config={"driver_name": "postgresql", "uri": ":memory:"})
     store = AdbcADKStore(config)
 
-    sessions_ddl = store._get_create_sessions_table_sql()  # pyright: ignore[reportPrivateUsage]
+    sessions_ddl = store._sessions_table_ddl()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in sessions_ddl
 
-    events_ddl = store._get_create_events_table_sql()  # pyright: ignore[reportPrivateUsage]
+    events_ddl = store._events_table_ddl()  # pyright: ignore[reportPrivateUsage]
     assert "JSONB" in events_ddl
     assert "event_data" in events_ddl
 
@@ -151,7 +151,7 @@ def test_owner_id_column_included_in_sessions_ddl() -> None:
     )
     store = AdbcADKStore(config)
 
-    ddl = store._get_sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
     assert "tenant_id INTEGER NOT NULL" in ddl
 
 
@@ -160,7 +160,7 @@ def test_owner_id_column_not_included_when_none() -> None:
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
     store = AdbcADKStore(config)
 
-    ddl = store._get_sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_sqlite()  # pyright: ignore[reportPrivateUsage]
     assert "tenant_id" not in ddl
 
 
@@ -174,7 +174,7 @@ def test_owner_id_column_postgresql() -> None:
     )
     store = AdbcADKStore(config)
 
-    ddl = store._get_sessions_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_postgresql()  # pyright: ignore[reportPrivateUsage]
     assert "organization_id UUID REFERENCES organizations(id)" in ddl
 
 
@@ -186,7 +186,7 @@ def test_owner_id_column_duckdb() -> None:
     )
     store = AdbcADKStore(config)
 
-    ddl = store._get_sessions_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_duckdb()  # pyright: ignore[reportPrivateUsage]
     assert "workspace_id VARCHAR(128) NOT NULL" in ddl
 
 
@@ -198,5 +198,5 @@ def test_owner_id_column_snowflake() -> None:
     )
     store = AdbcADKStore(config)
 
-    ddl = store._get_sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "account_id VARCHAR NOT NULL" in ddl

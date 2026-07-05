@@ -68,12 +68,12 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def create_tables(self) -> None:
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_sessions_table_sql())
-            await driver.execute_script(await self._get_create_events_table_sql())
-            await driver.execute_script(await self._get_create_app_states_table_sql())
-            await driver.execute_script(await self._get_create_user_states_table_sql())
-            await driver.execute_script(await self._get_create_metadata_table_sql())
-            await driver.execute_script(await self._get_seed_metadata_sql())
+            await driver.execute_script(await self._sessions_table_ddl())
+            await driver.execute_script(await self._events_table_ddl())
+            await driver.execute_script(await self._app_states_table_ddl())
+            await driver.execute_script(await self._user_states_table_ddl())
+            await driver.execute_script(await self._metadata_table_ddl())
+            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -365,44 +365,44 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def set_metadata(self, key: str, value: str) -> None:
         await _async_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
 
-    async def _get_create_sessions_table_sql(self) -> str:
+    async def _sessions_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "session_table_options")
         return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
-    async def _get_create_events_table_sql(self) -> str:
+    async def _events_table_ddl(self) -> str:
         return _mysql_events_ddl(self._events_table, self._session_table, _adk_config(self._config))
 
-    async def _get_create_app_states_table_sql(self) -> str:
+    async def _app_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "app_state_table_options")
         return _mysql_app_state_ddl(self._app_state_table, table_options)
 
-    async def _get_create_user_states_table_sql(self) -> str:
+    async def _user_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "user_state_table_options")
         return _mysql_user_state_ddl(self._user_state_table, table_options)
 
-    async def _get_create_metadata_table_sql(self) -> str:
+    async def _metadata_table_ddl(self) -> str:
         return _mysql_metadata_ddl(self._metadata_table)
 
-    async def _get_seed_metadata_sql(self) -> str:
+    async def _metadata_seed_sql(self) -> str:
         return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -509,12 +509,12 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_sessions_table_sql())
-            driver.execute_script(self._get_create_events_table_sql())
-            driver.execute_script(self._get_create_app_states_table_sql())
-            driver.execute_script(self._get_create_user_states_table_sql())
-            driver.execute_script(self._get_create_metadata_table_sql())
-            driver.execute_script(self._get_seed_metadata_sql())
+            driver.execute_script(self._sessions_table_ddl())
+            driver.execute_script(self._events_table_ddl())
+            driver.execute_script(self._app_states_table_ddl())
+            driver.execute_script(self._user_states_table_ddl())
+            driver.execute_script(self._metadata_table_ddl())
+            driver.execute_script(self._metadata_seed_sql())
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -803,44 +803,44 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def _set_metadata(self, key: str, value: str) -> None:
         _sync_execute_commit(self, _mysql_upsert_metadata_sql(self._metadata_table), (key, value))
 
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "session_table_options")
         return _mysql_sessions_ddl(self._session_table, self._owner_id_column_ddl, table_options)
 
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         return _mysql_events_ddl(self._events_table, self._session_table, _adk_config(self._config))
 
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "app_state_table_options")
         return _mysql_app_state_ddl(self._app_state_table, table_options)
 
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         table_options = _mysql_table_options(adk_config, "user_state_table_options")
         return _mysql_user_state_ddl(self._user_state_table, table_options)
 
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         return _mysql_metadata_ddl(self._metadata_table)
 
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
 
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._user_state_table}"
 
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._metadata_table}"
 
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         return [
-            self._get_drop_metadata_table_sql(),
-            self._get_drop_user_states_table_sql(),
-            self._get_drop_app_states_table_sql(),
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
             f"DROP TABLE IF EXISTS {self._events_table}",
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
@@ -859,7 +859,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             return
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._get_create_memory_table_sql())
+            await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -1000,7 +1000,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             finally:
                 await cursor.close()
 
-    async def _get_create_memory_table_sql(self) -> str:
+    async def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         owner_id_line = ""
         fk_constraint = ""
@@ -1033,7 +1033,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
 
@@ -1067,7 +1067,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days)
 
-    def _get_create_memory_table_sql(self) -> str:
+    def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         owner_id_line = ""
         fk_constraint = ""
@@ -1100,7 +1100,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
-    def _get_drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     def _create_tables(self) -> None:
@@ -1108,7 +1108,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_memory_table_sql())
+            driver.execute_script(self._memory_table_ddl())
 
     def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:

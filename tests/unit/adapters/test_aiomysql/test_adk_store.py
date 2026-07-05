@@ -47,8 +47,8 @@ def test_aiomysql_adk_tables_use_plain_mysql_schema_by_default() -> None:
     store = AiomysqlADKStore(_mock_config())
     memory_store = AiomysqlADKMemoryStore(_mock_config())
 
-    events_sql = asyncio.run(store._get_create_events_table_sql())
-    memory_sql = asyncio.run(memory_store._get_create_memory_table_sql())
+    events_sql = asyncio.run(store._events_table_ddl())
+    memory_sql = asyncio.run(memory_store._memory_table_ddl())
 
     assert "author_gc" not in events_sql
     assert "node_path_gc" not in events_sql
@@ -72,11 +72,11 @@ def test_aiomysql_adk_tables_apply_adapter_local_mysql_profile() -> None:
     )
     memory_store = AiomysqlADKMemoryStore(_mock_config({"memory_table_options": "COMMENT='adk-memory'"}))
 
-    session_sql = asyncio.run(store._get_create_sessions_table_sql())
-    events_sql = asyncio.run(store._get_create_events_table_sql())
-    app_state_sql = asyncio.run(store._get_create_app_states_table_sql())
-    user_state_sql = asyncio.run(store._get_create_user_states_table_sql())
-    memory_sql = asyncio.run(memory_store._get_create_memory_table_sql())
+    session_sql = asyncio.run(store._sessions_table_ddl())
+    events_sql = asyncio.run(store._events_table_ddl())
+    app_state_sql = asyncio.run(store._app_states_table_ddl())
+    user_state_sql = asyncio.run(store._user_states_table_ddl())
+    memory_sql = asyncio.run(memory_store._memory_table_ddl())
 
     assert (
         "author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED"

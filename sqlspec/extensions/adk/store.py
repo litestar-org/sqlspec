@@ -394,7 +394,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
 
     async def drop_tables(self) -> None:
         """Drop all ADK tables managed by this store in FK-safe order."""
-        await self._execute_lifecycle_scripts(self._get_drop_tables_sql())
+        await self._execute_lifecycle_scripts(self._drop_tables_sql())
         self._log_tables_dropped()
 
     async def recreate_tables(self) -> None:
@@ -403,11 +403,11 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         await self.ensure_tables()
         self._log_tables_recreated()
 
-    def _get_reset_drop_tables_sql(self) -> "list[str]":
+    def _reset_drop_tables_sql(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""
-        statements = list(self._get_drop_tables_sql())
+        statements = list(self._drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
-            statements.extend(self._get_drop_tables_sql_for_table_profile(table_profile))
+            statements.extend(self._drop_sql_for_table_profile(table_profile))
         return unique_statements(statements)
 
     def _store_config_from_extension(self) -> "dict[str, Any]":
@@ -464,7 +464,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         await async_(_execute_sync)()
 
     @abstractmethod
-    async def _get_create_sessions_table_sql(self) -> str:
+    async def _sessions_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the sessions table.
 
         Returns:
@@ -473,7 +473,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def _get_create_events_table_sql(self) -> str:
+    async def _events_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the events table.
 
         Returns:
@@ -482,7 +482,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def _get_create_app_states_table_sql(self) -> str:
+    async def _app_states_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the app-scoped state table.
 
         Returns:
@@ -491,7 +491,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def _get_create_user_states_table_sql(self) -> str:
+    async def _user_states_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the user-scoped state table.
 
         Returns:
@@ -500,7 +500,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def _get_create_metadata_table_sql(self) -> str:
+    async def _metadata_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the ADK internal metadata table.
 
         Returns:
@@ -509,7 +509,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    async def _get_seed_metadata_sql(self) -> str:
+    async def _metadata_seed_sql(self) -> str:
         """Get the SQL statement that seeds the ADK schema-version metadata row.
 
         Returns:
@@ -518,7 +518,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the app-scoped state table.
 
         Returns:
@@ -527,7 +527,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the user-scoped state table.
 
         Returns:
@@ -536,7 +536,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the ADK internal metadata table.
 
         Returns:
@@ -545,7 +545,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect.
 
         Returns:
@@ -558,7 +558,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def _get_drop_tables_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
+    def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
         current_session_table = self._session_table
         current_events_table = self._events_table
@@ -571,7 +571,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         self._user_state_table = user_state_table
         self._metadata_table = metadata_table
         try:
-            return list(self._get_drop_tables_sql())
+            return list(self._drop_tables_sql())
         finally:
             self._session_table = current_session_table
             self._events_table = current_events_table
@@ -809,7 +809,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
 
     def drop_tables(self) -> None:
         """Drop all ADK tables managed by this store in FK-safe order."""
-        self._execute_lifecycle_scripts(self._get_drop_tables_sql())
+        self._execute_lifecycle_scripts(self._drop_tables_sql())
         self._log_tables_dropped()
 
     def recreate_tables(self) -> None:
@@ -844,63 +844,63 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
                 commit()
 
     @abstractmethod
-    def _get_create_sessions_table_sql(self) -> str:
+    def _sessions_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the sessions table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_create_events_table_sql(self) -> str:
+    def _events_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the events table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_create_app_states_table_sql(self) -> str:
+    def _app_states_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the app-scoped state table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_create_user_states_table_sql(self) -> str:
+    def _user_states_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the user-scoped state table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_create_metadata_table_sql(self) -> str:
+    def _metadata_table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for the ADK internal metadata table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_seed_metadata_sql(self) -> str:
+    def _metadata_seed_sql(self) -> str:
         """Get the SQL statement that seeds the ADK schema-version metadata row."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_app_states_table_sql(self) -> str:
+    def _drop_app_states_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the app-scoped state table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_user_states_table_sql(self) -> str:
+    def _drop_user_states_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the user-scoped state table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_metadata_table_sql(self) -> str:
+    def _drop_metadata_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the ADK internal metadata table."""
         raise NotImplementedError
 
     @abstractmethod
-    def _get_drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
 
-    def _get_reset_drop_tables_sql(self) -> "list[str]":
+    def _reset_drop_tables_sql(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""
-        statements = list(self._get_drop_tables_sql())
+        statements = list(self._drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
-            statements.extend(self._get_drop_tables_sql_for_table_profile(table_profile))
+            statements.extend(self._drop_sql_for_table_profile(table_profile))
         return unique_statements(statements)
 
-    def _get_drop_tables_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
+    def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
         current_session_table = self._session_table
         current_events_table = self._events_table
@@ -913,7 +913,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         self._user_state_table = user_state_table
         self._metadata_table = metadata_table
         try:
-            return list(self._get_drop_tables_sql())
+            return list(self._drop_tables_sql())
         finally:
             self._session_table = current_session_table
             self._events_table = current_events_table

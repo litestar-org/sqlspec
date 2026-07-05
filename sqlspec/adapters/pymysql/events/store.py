@@ -21,7 +21,7 @@ class PyMysqlEventQueueStore(BaseEventQueueStore[PyMysqlConfig]):
     def _timestamp_default(self) -> str:
         return "CURRENT_TIMESTAMP(6)"
 
-    def _build_index_sql(self) -> str | None:
+    def _index_ddl(self) -> str | None:
         table_name = self.table_name
         segments = table_name.split(".", 1)
 

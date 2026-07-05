@@ -25,8 +25,8 @@ class MysqlConnectorSyncEventQueueStore(BaseEventQueueStore[MysqlConnectorSyncCo
     def _timestamp_default(self) -> str:
         return _mysql_timestamp_default()
 
-    def _build_index_sql(self) -> str | None:
-        return _mysql_build_index_sql(self)
+    def _index_ddl(self) -> str | None:
+        return _mysql_index_ddl(self)
 
 
 def _mysql_column_types() -> "tuple[str, str, str]":
@@ -39,8 +39,8 @@ def _mysql_timestamp_default() -> str:
     return "CURRENT_TIMESTAMP(6)"
 
 
-def _mysql_build_index_sql(store: Any) -> str | None:
-    """Build MySQL-specific index SQL that checks for existing indexes.
+def _mysql_index_ddl(store: Any) -> str | None:
+    """Return MySQL-specific index DDL that checks for existing indexes.
 
     MySQL doesn't support CREATE INDEX IF NOT EXISTS, so we use a workaround
     with information_schema to check if the index already exists.
@@ -94,5 +94,5 @@ class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsync
     def _timestamp_default(self) -> str:
         return _mysql_timestamp_default()
 
-    def _build_index_sql(self) -> str | None:
-        return _mysql_build_index_sql(self)
+    def _index_ddl(self) -> str | None:
+        return _mysql_index_ddl(self)

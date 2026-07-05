@@ -82,7 +82,7 @@ async def test_aiosqlite_adk_fts5_options_render_only_when_fts_enabled() -> None
         )
     )
 
-    assert "tokenize" not in await default_store._get_create_memory_table_sql()
-    sql = await configured_store._get_create_memory_table_sql()
+    assert "tokenize" not in await default_store._memory_table_ddl()
+    sql = await configured_store._memory_table_ddl()
     assert "tokenize = 'porter unicode61'" in sql
     assert "detail = column" in sql

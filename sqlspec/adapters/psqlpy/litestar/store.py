@@ -37,7 +37,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         """
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
 
         Returns:
@@ -61,7 +61,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         );
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements.
 
         Returns:
@@ -71,7 +71,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
-        sql = self._get_create_table_sql()
+        sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()

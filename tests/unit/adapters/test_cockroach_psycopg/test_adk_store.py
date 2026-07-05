@@ -54,9 +54,9 @@ async def test_cockroach_psycopg_async_adk_tables_use_plain_schema_by_default() 
     store = CockroachPsycopgAsyncADKStore(_mock_config())
     memory_store = CockroachPsycopgAsyncADKMemoryStore(_mock_config())
 
-    session_sql = await store._get_create_sessions_table_sql()
-    events_sql = await store._get_create_events_table_sql()
-    memory_sql = await memory_store._get_create_memory_table_sql()
+    session_sql = await store._sessions_table_ddl()
+    events_sql = await store._events_table_ddl()
+    memory_sql = await memory_store._memory_table_ddl()
 
     assert "LOCALITY" not in session_sql
     assert "LOCALITY" not in events_sql
@@ -75,9 +75,9 @@ def test_cockroach_psycopg_sync_adk_tables_use_plain_schema_by_default() -> None
     store = CockroachPsycopgSyncADKStore(_mock_config())
     memory_store = CockroachPsycopgSyncADKMemoryStore(_mock_config())
 
-    session_sql = store._get_create_sessions_table_sql()
-    events_sql = store._get_create_events_table_sql()
-    memory_sql = memory_store._get_create_memory_table_sql()
+    session_sql = store._sessions_table_ddl()
+    events_sql = store._events_table_ddl()
+    memory_sql = memory_store._memory_table_ddl()
 
     assert "LOCALITY" not in session_sql
     assert "LOCALITY" not in events_sql
@@ -103,8 +103,8 @@ async def test_cockroach_psycopg_async_adk_tables_apply_locality_hash_and_storin
     })
     store = CockroachPsycopgAsyncADKStore(config)
 
-    session_sql = await store._get_create_sessions_table_sql()
-    events_sql = await store._get_create_events_table_sql()
+    session_sql = await store._sessions_table_ddl()
+    events_sql = await store._events_table_ddl()
 
     assert 'LOCALITY REGIONAL BY TABLE IN "us-east1"' in session_sql
     assert "LOCALITY REGIONAL BY ROW" in events_sql
@@ -126,8 +126,8 @@ def test_cockroach_psycopg_sync_adk_tables_apply_locality_hash_and_storing_index
     })
     store = CockroachPsycopgSyncADKStore(config)
 
-    session_sql = store._get_create_sessions_table_sql()
-    events_sql = store._get_create_events_table_sql()
+    session_sql = store._sessions_table_ddl()
+    events_sql = store._events_table_ddl()
 
     assert 'LOCALITY REGIONAL BY TABLE IN "us-east1"' in session_sql
     assert "LOCALITY REGIONAL BY ROW" in events_sql
@@ -144,7 +144,7 @@ async def test_cockroach_psycopg_async_memory_table_applies_trigram_index_and_lo
     config = _mock_config({"memory_table_locality": "LOCALITY GLOBAL", "enable_memory_trigram_index": True})
     memory_store = CockroachPsycopgAsyncADKMemoryStore(config)
 
-    sql = await memory_store._get_create_memory_table_sql()
+    sql = await memory_store._memory_table_ddl()
 
     assert "LOCALITY GLOBAL" in sql
     assert "idx_adk_memory_content_trgm" in sql
@@ -157,7 +157,7 @@ def test_cockroach_psycopg_sync_memory_table_applies_trigram_index_and_locality(
     config = _mock_config({"memory_table_locality": "LOCALITY GLOBAL", "enable_memory_trigram_index": True})
     memory_store = CockroachPsycopgSyncADKMemoryStore(config)
 
-    sql = memory_store._get_create_memory_table_sql()
+    sql = memory_store._memory_table_ddl()
 
     assert "LOCALITY GLOBAL" in sql
     assert "idx_adk_memory_content_trgm" in sql

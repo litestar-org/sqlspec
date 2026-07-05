@@ -60,7 +60,7 @@ def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
 
     store = DuckdbADKStore(_mock_config())
 
-    sql = store._get_create_events_table_sql()
+    sql = store._events_table_ddl()
 
     assert _normalize_sql(sql) == _normalize_sql(
         """
@@ -86,7 +86,7 @@ def test_duckdb_adk_events_table_applies_adapter_local_generated_columns() -> No
         _mock_config({"enable_event_generated_columns": True, "enable_event_generated_column_indexes": True})
     )
 
-    sql = store._get_create_events_table_sql()
+    sql = store._events_table_ddl()
 
     assert (
         "author_gc VARCHAR GENERATED ALWAYS AS "
@@ -108,13 +108,11 @@ def test_duckdb_adk_memory_fts_pragmas_use_default_options() -> None:
     store = DuckdbADKMemoryStore(_mock_config({"memory_use_fts": True}))
 
     assert (
-        store._get_create_fts_index_sql(overwrite=False)
-        == "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
+        store._fts_index_ddl(overwrite=False) == "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
         "stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
     )
     assert (
-        store._get_create_fts_index_sql(overwrite=True)
-        == "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
+        store._fts_index_ddl(overwrite=True) == "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
         "overwrite=1, stemmer='porter', stopwords='english', strip_accents=1, lower=1)"
     )
 
@@ -135,8 +133,8 @@ def test_duckdb_adk_memory_fts_pragmas_apply_adapter_local_options() -> None:
         })
     )
 
-    create_sql = store._get_create_fts_index_sql(overwrite=False)
-    refresh_sql = store._get_create_fts_index_sql(overwrite=True)
+    create_sql = store._fts_index_ddl(overwrite=False)
+    refresh_sql = store._fts_index_ddl(overwrite=True)
 
     assert create_sql == (
         "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "

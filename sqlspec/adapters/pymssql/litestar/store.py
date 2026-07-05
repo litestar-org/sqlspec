@@ -20,7 +20,7 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
     def __init__(self, config: "PymssqlConfig") -> None:
         super().__init__(config)
 
-    def _get_create_table_sql(self) -> str:
+    def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
         return f"""
         IF NOT EXISTS (
@@ -44,13 +44,13 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
         END;
         """
 
-    def _get_drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         return [f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};"]
 
     def _create_table(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._get_create_table_sql())
+            driver.execute_script(self._table_ddl())
             driver.commit()
         self._log_table_created()
 
