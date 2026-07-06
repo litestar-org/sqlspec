@@ -9,7 +9,7 @@ SELECT
     ix.indisprimary AS is_primary,
     ix.indisexclusion AS is_exclusion,
     ix.indisvalid AS is_valid,
-    ix.indispartial AS is_partial,
+    pg_catalog.pg_get_expr(ix.indpred, ix.indrelid)::text IS NOT NULL AS is_partial,
     pg_catalog.pg_get_expr(ix.indpred, ix.indrelid)::text AS predicate,
     pg_catalog.pg_get_indexdef(idx.oid)::text AS definition,
     ARRAY(

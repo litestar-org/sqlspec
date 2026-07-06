@@ -73,6 +73,11 @@ def test_postgres_query_pack_uses_catalogs_needed_for_ddl_grade_metadata() -> No
     assert constraints is not None and "pg_catalog.pg_get_constraintdef" in constraints
     assert indexes is not None and "pg_catalog.pg_index" in indexes
     assert indexes is not None and "pg_catalog.pg_get_indexdef" in indexes
+    assert indexes is not None and "ix.indispartial" not in indexes
+    assert (
+        indexes is not None
+        and "pg_catalog.pg_get_expr(ix.indpred, ix.indrelid)::text IS NOT NULL AS is_partial" in indexes
+    )
     assert indexes is not None and "::text" in indexes
     assert dependencies is not None and "pg_catalog.pg_depend" in dependencies
     assert ddl is not None and "pg_catalog.pg_get_" in ddl
