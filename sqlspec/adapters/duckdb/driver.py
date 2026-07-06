@@ -174,9 +174,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Execute many with a DuckDB bulk insert fast path for simple INSERT batches."""
         config = statement_config or self.statement_config
         if isinstance(statement, str) and not filters and not kwargs and config is self.statement_config:
-            prepared_statement = self.prepare_statement(
-                statement, tuple(parameters), statement_config=config, kwargs=kwargs
-            )
+            prepared_statement = SQL(statement, tuple(parameters), statement_config=config, is_many=True)
             _, prepared_parameters = self._compiled_sql(prepared_statement, config)
             processed_state = prepared_statement.get_processed_state()
             parsed_expression = processed_state.parsed_expression

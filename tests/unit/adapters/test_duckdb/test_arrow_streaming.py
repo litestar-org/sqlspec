@@ -63,14 +63,17 @@ def test_execute_many_uses_bulk_insert_fast_path() -> None:
     with _seed_driver() as driver:
         driver.execute("CREATE OR REPLACE TABLE bulk_target (id INTEGER, name VARCHAR)")
 
-        result = driver.execute_many("INSERT INTO bulk_target (id, name) VALUES (?, ?)", [(1, "one"), (2, "two")])
+        result = driver.execute_many(
+            "INSERT INTO bulk_target (id, name) VALUES (?, ?)", [(1, "one"), (2, "two"), (3, "three")]
+        )
 
         assert isinstance(result, DMLResult)
         assert result.operation_type == "INSERT"
-        assert result.rows_affected == 2
+        assert result.rows_affected == 3
         assert driver.execute("SELECT id, name FROM bulk_target ORDER BY id").get_data() == [
             {"id": 1, "name": "one"},
             {"id": 2, "name": "two"},
+            {"id": 3, "name": "three"},
         ]
 
 

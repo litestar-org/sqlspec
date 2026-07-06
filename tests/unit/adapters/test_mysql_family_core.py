@@ -40,16 +40,28 @@ def test_resolve_many_rowcount_falls_back_to_parameter_count(module_path: str) -
 
 
 @pytest.mark.parametrize("module_path", MODULE_PATHS)
-def test_collect_rows_accepts_precomputed_column_names(module_path: str) -> None:
+def test_resolve_row_plan_combines_column_names_and_json_indexes(module_path: str) -> None:
+    core = importlib.import_module(module_path)
+    description = [("id", 3), ("payload", 245), ("name", 253)]
+
+    column_names, json_indexes = core.resolve_row_plan(description, {245})
+
+    assert column_names == ["id", "payload", "name"]
+    assert json_indexes == [1]
+
+
+@pytest.mark.parametrize("module_path", MODULE_PATHS)
+def test_collect_rows_accepts_precomputed_row_plan(module_path: str) -> None:
     core = importlib.import_module(module_path)
     description = [("id", 3), ("payload", 245)]
-    column_names = ["id", "payload"]
+    row_plan = core.resolve_row_plan(description, {245})
     rows = [{"id": 1, "payload": json.dumps({"a": 1})}]
-    (data, resolved_column_names, row_format) = core.collect_rows(
-        rows, description, [1], json.loads, column_names=column_names
-    )
-    assert resolved_column_names is column_names
+
+    data, resolved_column_names, row_format = core.collect_rows(rows, row_plan, json.loads)
+
+    assert resolved_column_names is row_plan[0]
     assert row_format == "dict"
+    assert data is rows
     assert data[0]["payload"] == {"a": 1}
 
 
@@ -65,14 +77,26 @@ def test_detect_json_columns_uses_provided_description(module_path: str) -> None
 def test_collect_rows_without_json_reuses_input_list(module_path: str) -> None:
     core = importlib.import_module(module_path)
     description = [("id", 3), ("name", 253)]
-    column_names = ["id", "name"]
+    row_plan = core.resolve_row_plan(description, set())
     rows = [{"id": 1, "name": "a"}]
-    (data, resolved_column_names, row_format) = core.collect_rows(
-        rows, description, [], json.loads, column_names=column_names
-    )
+
+    data, resolved_column_names, row_format = core.collect_rows(rows, row_plan, json.loads)
+
     assert data is rows
-    assert resolved_column_names is column_names
+    assert resolved_column_names is row_plan[0]
     assert row_format == "dict"
+
+
+@pytest.mark.parametrize("module_path", MODULE_PATHS)
+def test_collect_stream_rows_decodes_json_using_row_plan(module_path: str) -> None:
+    core = importlib.import_module(module_path)
+    description = [("id", 3), ("payload", 245)]
+    row_plan = core.resolve_row_plan(description, {245})
+    rows = [(1, json.dumps({"a": 1}))]
+
+    data = core.collect_stream_rows(rows, row_plan, json.loads)
+
+    assert data == [{"id": 1, "payload": {"a": 1}}]
 
 
 def test_asyncmy_uses_canonical_private_json_helper_names() -> None:
@@ -107,7 +131,8 @@ def test_asyncmy_collect_rows_uses_canonical_dict_json_helper(monkeypatch: pytes
 
     monkeypatch.setattr(core, "_deserialize_json_dict_rows", deserialize)
     rows = [{"payload": json.dumps({"ok": True})}]
-    (data, _columns, row_format) = core.collect_rows(rows, [("payload", 245)], [0], json.loads)
+    row_plan = core.resolve_row_plan([("payload", 245)], {245})
+    (data, _columns, row_format) = core.collect_rows(rows, row_plan, json.loads)
     assert row_format == "dict"
     assert data == rows
     assert calls == [(["payload"], rows, [0])]
@@ -126,7 +151,8 @@ def test_asyncmy_collect_rows_uses_canonical_tuple_json_helper(monkeypatch: pyte
 
     monkeypatch.setattr(core, "_deserialize_json_tuple_rows", deserialize)
     rows = [(json.dumps({"ok": True}),)]
-    (data, _columns, row_format) = core.collect_rows(rows, [("payload", 245)], [0], json.loads)
+    row_plan = core.resolve_row_plan([("payload", 245)], {245})
+    (data, _columns, row_format) = core.collect_rows(rows, row_plan, json.loads)
     assert row_format == "tuple"
     assert data == rows
     assert calls == [(rows, [0])]

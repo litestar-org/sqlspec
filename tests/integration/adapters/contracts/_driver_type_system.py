@@ -150,6 +150,78 @@ SOURCE_EQUIVALENCE_CASES: tuple[SourceEquivalenceCase, ...] = (
         allowlist_key="mysql_four_way:resolve_column_names",
     ),
     SourceEquivalenceCase(
+        case_id="mysql_four_way_detect_json_columns_from_description",
+        group="mysql_four_way",
+        symbol="detect_json_columns_from_description",
+        module_paths=(
+            "sqlspec.adapters.aiomysql.core",
+            "sqlspec.adapters.asyncmy.core",
+            "sqlspec.adapters.mysqlconnector.core",
+            "sqlspec.adapters.pymysql.core",
+        ),
+        allowlist_key="mysql_four_way:detect_json_columns_from_description",
+    ),
+    SourceEquivalenceCase(
+        case_id="mysql_four_way_detect_json_columns",
+        group="mysql_four_way",
+        symbol="detect_json_columns",
+        module_paths=(
+            "sqlspec.adapters.aiomysql.core",
+            "sqlspec.adapters.asyncmy.core",
+            "sqlspec.adapters.mysqlconnector.core",
+            "sqlspec.adapters.pymysql.core",
+        ),
+        allowlist_key="mysql_four_way:detect_json_columns",
+    ),
+    SourceEquivalenceCase(
+        case_id="mysql_four_way_resolve_row_plan",
+        group="mysql_four_way",
+        symbol="resolve_row_plan",
+        module_paths=(
+            "sqlspec.adapters.aiomysql.core",
+            "sqlspec.adapters.asyncmy.core",
+            "sqlspec.adapters.mysqlconnector.core",
+            "sqlspec.adapters.pymysql.core",
+        ),
+        allowlist_key="mysql_four_way:resolve_row_plan",
+    ),
+    SourceEquivalenceCase(
+        case_id="mysql_four_way_collect_rows",
+        group="mysql_four_way",
+        symbol="collect_rows",
+        module_paths=(
+            "sqlspec.adapters.aiomysql.core",
+            "sqlspec.adapters.asyncmy.core",
+            "sqlspec.adapters.mysqlconnector.core",
+            "sqlspec.adapters.pymysql.core",
+        ),
+        allowlist_key="mysql_four_way:collect_rows",
+    ),
+    SourceEquivalenceCase(
+        case_id="mysql_four_way_collect_stream_rows",
+        group="mysql_four_way",
+        symbol="collect_stream_rows",
+        module_paths=(
+            "sqlspec.adapters.aiomysql.core",
+            "sqlspec.adapters.asyncmy.core",
+            "sqlspec.adapters.mysqlconnector.core",
+            "sqlspec.adapters.pymysql.core",
+        ),
+        allowlist_key="mysql_four_way:collect_stream_rows",
+    ),
+    SourceEquivalenceCase(
+        case_id="mysql_four_way_create_mapped_exception",
+        group="mysql_four_way",
+        symbol="create_mapped_exception",
+        module_paths=(
+            "sqlspec.adapters.aiomysql.core",
+            "sqlspec.adapters.asyncmy.core",
+            "sqlspec.adapters.mysqlconnector.core",
+            "sqlspec.adapters.pymysql.core",
+        ),
+        allowlist_key="mysql_four_way:create_mapped_exception",
+    ),
+    SourceEquivalenceCase(
         case_id="sqlite_pair_apply_driver_features",
         group="sqlite_pair",
         symbol="apply_driver_features",
@@ -189,6 +261,10 @@ SOURCE_EQUIVALENCE_CASES: tuple[SourceEquivalenceCase, ...] = (
 SOURCE_EQUIVALENCE_ALLOWLIST: dict[str, frozenset[str]] = {
     case.allowlist_key: frozenset() for case in SOURCE_EQUIVALENCE_CASES
 }
+# mysqlconnector intentionally resolves error codes from errno instead of args[0].
+SOURCE_EQUIVALENCE_ALLOWLIST["mysql_four_way:create_mapped_exception"] = frozenset({
+    "sqlspec.adapters.mysqlconnector.core"
+})
 
 
 def _load_symbol(module_path: str, symbol_name: str) -> Any:

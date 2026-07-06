@@ -2,7 +2,7 @@
 
 import contextlib
 from collections.abc import Callable, Sized
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -39,6 +39,7 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "collect_rows",
+    "collect_stream_rows",
     "create_mapped_exception",
     "default_statement_config",
     "detect_json_columns",
@@ -51,6 +52,7 @@ __all__ = (
     "normalize_lastrowid",
     "resolve_column_names",
     "resolve_many_rowcount",
+    "resolve_row_plan",
     "resolve_rowcount",
 )
 
@@ -177,15 +179,16 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 class AiomysqlStreamSource:
     """Compiled async chunk source streaming dict rows from an aiomysql unbuffered ``SSCursor``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_chunk_size", "_cursor", "_driver", "_json_type_codes", "_parameters", "_row_plan", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, json_type_codes: "set[int]") -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
         self._cursor: Any = None
-        self._column_names: list[str] | None = None
+        self._json_type_codes = json_type_codes
+        self._row_plan: tuple[list[str], list[int] | None] | None = None
 
     async def start(self) -> None:
         from aiomysql import SSCursor
@@ -195,6 +198,7 @@ class AiomysqlStreamSource:
             cursor = await self._driver.connection.cursor(SSCursor)
             await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
         self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -205,9 +209,10 @@ class AiomysqlStreamSource:
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
-        if self._column_names is None:
-            self._column_names = [description[0] for description in self._cursor.description]
-        return rows_to_dicts(rows, self._column_names)
+        if self._row_plan is None:
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
+        return collect_stream_rows(rows, self._row_plan, deserializer)
 
     async def close(self) -> None:
         cursor = self._cursor
@@ -332,7 +337,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
 
     if error_code in _MYSQL_MIGRATION_ERROR_CODES:
         if logger is not None:
-            logger.warning("aiomysql MySQL expected migration error (ignoring): %s", error)
+            logger.warning("MySQL expected migration error (ignoring): %s", error)
         return True
 
     dispatch = _MYSQL_SQLSTATE_EXACT_DISPATCH.get(sqlstate) if sqlstate is not None else None
@@ -388,23 +393,36 @@ def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
     return [desc[0] for desc in description]
 
 
-def detect_json_columns_from_description(
+def resolve_row_plan(
     description: "Sequence[Any] | None", json_type_codes: "set[int]"
-) -> "list[int]":
-    """Identify JSON column indexes from pre-fetched cursor description metadata."""
-    if not description or not json_type_codes:
-        return []
+) -> "tuple[list[str], list[int] | None]":
+    """Resolve ordered column names and JSON column indexes in one pass."""
+    if not description:
+        return [], None
+
+    column_names: list[str] = []
+    if not json_type_codes:
+        column_names.extend(column[0] for column in description)
+        return column_names, None
 
     json_indexes: list[int] = []
-    append = json_indexes.append
+    append_json = json_indexes.append
     for index, column in enumerate(description):
+        column_names.append(column[0])
         if isinstance(column, (tuple, list)):
             type_code = column[1] if len(column) > 1 else None
         else:
             type_code = column.type_code if isinstance(column, HasTypeCodeProtocol) else None
         if type_code in json_type_codes:
-            append(index)
-    return json_indexes
+            append_json(index)
+    return column_names, json_indexes or None
+
+
+def detect_json_columns_from_description(
+    description: "Sequence[Any] | None", json_type_codes: "set[int]"
+) -> "list[int]":
+    """Identify JSON column indexes from pre-fetched cursor description metadata."""
+    return resolve_row_plan(description, json_type_codes)[1] or []
 
 
 def detect_json_columns(
@@ -515,46 +533,53 @@ def _deserialize_json_tuple_rows(
     return result
 
 
-def collect_rows(
+def collect_stream_rows(
     fetched_data: "Sequence[Any] | None",
-    description: "Sequence[Any] | None",
-    json_indexes: "list[int]",
+    row_plan: "tuple[list[str], list[int] | None]",
     deserializer: "Callable[[Any], Any]",
     *,
-    column_names: "list[str] | None" = None,
+    logger: Any | None = None,
+) -> "list[dict[str, Any]]":
+    """Materialize streamed rows as dicts and decode JSON columns in place."""
+    column_names, json_indexes = row_plan
+    if not column_names or not fetched_data:
+        return []
+
+    rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
+    if not rows:
+        return []
+
+    dict_rows = rows_to_dicts(rows, column_names)
+    if json_indexes:
+        dict_rows = _deserialize_json_dict_rows(column_names, dict_rows, json_indexes, deserializer, logger=logger)
+    return dict_rows
+
+
+def collect_rows(
+    fetched_data: "Sequence[Any] | None",
+    row_plan: "tuple[list[str], list[int] | None]",
+    deserializer: "Callable[[Any], Any]",
+    *,
     logger: Any | None = None,
 ) -> "tuple[list[Any], list[str], str]":
-    """Collect aiomysql rows with JSON decoding, preserving raw format.
-
-    Args:
-        fetched_data: Rows returned from cursor.fetchall().
-        description: Cursor description metadata.
-        json_indexes: Column indexes containing JSON values.
-        deserializer: JSON deserializer function.
-        column_names: Optional precomputed ordered column names.
-        logger: Optional logger for debug output.
-
-    Returns:
-        Tuple of (rows, column_names, row_format).
-    """
-    if not description:
+    """Collect aiomysql rows with JSON decoding, preserving raw format."""
+    column_names, json_indexes = row_plan
+    if not column_names:
         return [], [], "tuple"
-    resolved_column_names = resolve_column_names(description) if column_names is None else column_names
     if not fetched_data:
-        return [], resolved_column_names, "tuple"
+        return [], column_names, "tuple"
 
     first_row = fetched_data[0]
     if isinstance(first_row, dict):
-        if not json_indexes:
-            rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
-            return rows, resolved_column_names, "dict"
-        rows = [dict(row) for row in fetched_data]
-        rows = _deserialize_json_dict_rows(resolved_column_names, rows, json_indexes, deserializer, logger=logger)
-        return rows, resolved_column_names, "dict"
+        rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
+        if json_indexes:
+            rows = _deserialize_json_dict_rows(column_names, rows, json_indexes, deserializer, logger=logger)
+        return rows, column_names, "dict"
+
     rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
     if json_indexes:
         rows = _deserialize_json_tuple_rows(rows, json_indexes, deserializer, logger=logger)
-    return rows, resolved_column_names, "tuple"
+    return rows, column_names, "tuple"
 
 
 def resolve_rowcount(cursor: Any) -> int:

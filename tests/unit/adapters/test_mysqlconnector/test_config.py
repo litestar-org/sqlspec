@@ -1,5 +1,6 @@
 """Unit tests for mysql-connector configuration modernization."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,6 +18,7 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncConnectionParams,
 )
+from sqlspec.adapters.mysqlconnector.core import MysqlConnectorAsyncStreamSource, MysqlConnectorSyncStreamSource
 from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
 
 if TYPE_CHECKING:
@@ -27,7 +29,7 @@ def test_sync_config_uses_connector_python_host_default_and_disables_local_infil
     """SQLSpec should preserve the driver host default and close the local infile gate."""
     config = MysqlConnectorSyncConfig()
 
-    assert config.connection_config["host"] == "127.0.0.1"
+    assert config.connection_config["host"] == "localhost"
     assert config.connection_config["port"] == 3306
     assert config.connection_config["allow_local_infile"] is False
 
@@ -36,16 +38,18 @@ def test_async_config_uses_connector_python_host_default_and_disables_local_infi
     """The async config should use the same connection defaults as sync."""
     config = MysqlConnectorAsyncConfig()
 
-    assert config.connection_config["host"] == "127.0.0.1"
+    assert config.connection_config["host"] == "localhost"
     assert config.connection_config["port"] == 3306
     assert config.connection_config["allow_local_infile"] is False
 
 
-def test_local_infile_must_be_enabled_explicitly() -> None:
-    """Explicit local infile opt-in should be preserved for callers that need it."""
-    config = MysqlConnectorSyncConfig(connection_config={"allow_local_infile": True})
+@pytest.mark.parametrize("config_cls", [MysqlConnectorSyncConfig, MysqlConnectorAsyncConfig])
+def test_local_infile_uses_connector_python_security_gate(config_cls: type[Any]) -> None:
+    """LOAD DATA LOCAL INFILE should use mysql-connector's native consent gate."""
+    config = config_cls(connection_config={"allow_local_infile": True})
 
     assert config.connection_config["allow_local_infile"] is True
+    assert "local_infile" not in config.connection_config
 
 
 def test_sync_connection_params_type_accepts_modern_connector_options() -> None:
@@ -195,6 +199,92 @@ def test_async_driver_with_cursor_uses_driver_cursor_options() -> None:
     assert cursor_context.cursor_options == {"prepared": True}
 
 
+def test_sync_dispatch_select_stream_uses_driver_cursor_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync stream execution should reuse cursor options and force unbuffered cursors."""
+    connection = MagicMock()
+    cursor = MagicMock()
+    cursor.description = []
+    connection.cursor.return_value = cursor
+    driver = MysqlConnectorSyncDriver(connection=connection, driver_features={"cursor_options": {"prepared": True}})
+    statement = MagicMock()
+    statement.returns_rows.return_value = True
+
+    monkeypatch.setattr(MysqlConnectorSyncDriver, "_compiled_sql", lambda self, stmt, config: ("SELECT 1", None))
+    monkeypatch.setattr(MysqlConnectorSyncDriver, "handle_database_exceptions", lambda self: contextlib.nullcontext())
+    monkeypatch.setattr(MysqlConnectorSyncDriver, "_check_pending_exception", lambda self, handler: None)
+    stream = driver.dispatch_select_stream(statement, 10)
+
+    assert stream is not None
+    source = stream._source
+    assert isinstance(source, MysqlConnectorSyncStreamSource)
+    assert source._cursor_options == {"prepared": True, "buffered": False}
+
+    source.start()
+
+    connection.cursor.assert_called_once_with(prepared=True, buffered=False)
+
+
+@pytest.mark.anyio
+async def test_async_dispatch_select_stream_uses_driver_cursor_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async stream execution should reuse cursor options and force unbuffered cursors."""
+    connection = AsyncMock()
+    cursor = AsyncMock()
+    cursor.description = []
+    connection.cursor.return_value = cursor
+    driver = MysqlConnectorAsyncDriver(connection=connection, driver_features={"cursor_options": {"prepared": True}})
+    statement = MagicMock()
+    statement.returns_rows.return_value = True
+
+    monkeypatch.setattr(MysqlConnectorAsyncDriver, "_compiled_sql", lambda self, stmt, config: ("SELECT 1", None))
+    monkeypatch.setattr(MysqlConnectorAsyncDriver, "handle_database_exceptions", lambda self: _AsyncNullContext())
+    monkeypatch.setattr(MysqlConnectorAsyncDriver, "_check_pending_exception", lambda self, handler: None)
+    stream = driver.dispatch_select_stream(statement, 10)
+
+    assert stream is not None
+    source = stream._source
+    assert isinstance(source, MysqlConnectorAsyncStreamSource)
+    assert source._cursor_options == {"prepared": True, "buffered": False}
+
+    await source.start()
+
+    connection.cursor.assert_awaited_once_with(prepared=True, buffered=False)
+
+
+def test_sync_create_connection_forwards_local_infile_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connection creation should forward mysql-connector's local infile gate."""
+    calls: list[dict[str, Any]] = []
+    connection = MagicMock()
+
+    def connect(**kwargs: Any) -> MagicMock:
+        calls.append(kwargs)
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.mysqlconnector.config.mysql.connector.connect", connect)
+    MysqlConnectorSyncConfig(connection_config={"allow_local_infile": True}).create_connection()
+
+    assert calls[0]["allow_local_infile"] is True
+    assert "local_infile" not in calls[0]
+
+
+@pytest.mark.anyio
+async def test_async_create_connection_forwards_local_infile_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async connection creation should forward mysql-connector's local infile gate."""
+    calls: list[dict[str, Any]] = []
+    connection = AsyncMock()
+
+    async def connect(**kwargs: Any) -> AsyncMock:
+        calls.append(kwargs)
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.mysqlconnector.config.mysqlconnector_aio.connect", connect)
+
+    config = MysqlConnectorAsyncConfig(connection_config={"allow_local_infile": True})
+    await config.create_connection()
+
+    assert calls[0]["allow_local_infile"] is True
+    assert "local_infile" not in calls[0]
+
+
 def test_sync_create_connection_passes_local_infile_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connection creation should pass the local infile gate explicitly to the driver."""
     calls: list[dict[str, Any]] = []
@@ -208,3 +298,13 @@ def test_sync_create_connection_passes_local_infile_gate(monkeypatch: pytest.Mon
     MysqlConnectorSyncConfig().create_connection()
 
     assert calls[0]["allow_local_infile"] is False
+
+
+class _AsyncNullContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object
+    ) -> None:
+        return None

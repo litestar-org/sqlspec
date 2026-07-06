@@ -8,10 +8,10 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 @pytest.mark.sqlite
-def test_driver_features_enabled_by_default() -> None:
-    """Test that driver features are enabled by default for stdlib types."""
+def test_custom_adapters_disabled_by_default() -> None:
+    """Test that process-global custom adapters are opt-in."""
     config = SqliteConfig(connection_config={"database": ":memory:"})
-    assert config.driver_features.get("enable_custom_adapters") is True
+    assert config.driver_features.get("enable_custom_adapters") is False
 
 
 @pytest.mark.sqlite
