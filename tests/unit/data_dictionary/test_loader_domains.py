@@ -79,7 +79,9 @@ def test_version_and_feature_gates_return_unsupported_status() -> None:
     assert query.sql is None
     assert query.capability.support == MetadataSupport.UNSUPPORTED
     assert query.capability.risks == (MetadataRisk.VERSION_GATED,)
-    assert query.capability.warnings == ("postgres/objects/by_schema requires supports_window_functions >= 8.4.0",)
+    assert query.capability.warnings == (
+        "postgres/objects/by_schema requires supports_window_functions >= 8.4.0",
+    )
 
 
 def test_domain_query_batch_lookup_reuses_domain_results() -> None:
