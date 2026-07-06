@@ -270,19 +270,13 @@ class DataDictionaryLoader:
 
         if not self._ensure_domain_loaded(normalized_dialect, normalized_domain, normalized_mode):
             return self._unsupported_domain_query(
-                normalized_dialect,
-                normalized_domain,
-                normalized_query,
-                mode=normalized_mode,
+                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
             )
 
         loader = self._get_domain_loader(normalized_dialect, normalized_domain, normalized_mode)
         if not loader.has_query(normalized_query):
             return self._unsupported_domain_query(
-                normalized_dialect,
-                normalized_domain,
-                normalized_query,
-                mode=normalized_mode,
+                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
             )
 
         capability = MetadataCapability(
@@ -327,12 +321,7 @@ class DataDictionaryLoader:
         for query_name in query_names:
             normalized_query = _normalize_query_key(query_name)
             results[normalized_query] = self.get_domain_query(
-                dialect,
-                domain,
-                normalized_query,
-                mode=mode,
-                version=version,
-                required_features=required_features,
+                dialect, domain, normalized_query, mode=mode, version=version, required_features=required_features
             )
         return results
 
@@ -348,12 +337,7 @@ class DataDictionaryLoader:
     ) -> str | None:
         """Get raw SQL text for a domain query, or None when unsupported."""
         query = self.get_domain_query(
-            dialect,
-            domain,
-            query_name,
-            mode=mode,
-            version=version,
-            required_features=required_features,
+            dialect, domain, query_name, mode=mode, version=version, required_features=required_features
         )
         return query.query_text
 

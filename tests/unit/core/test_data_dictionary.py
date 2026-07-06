@@ -59,7 +59,8 @@ def test_get_data_dictionary_loader_singleton() -> None:
 def test_registry_normalizes_aliases() -> None:
     """Ensure dialect aliases normalize to canonical names."""
     assert normalize_dialect_name("PostgreSQL") == "postgres"
-    assert normalize_dialect_name("mariadb") == "mysql"
+    assert normalize_dialect_name("mysql") == "mysql"
+    assert normalize_dialect_name("mariadb") == "mariadb"
 
 
 def test_registry_lists_registered_dialects() -> None:

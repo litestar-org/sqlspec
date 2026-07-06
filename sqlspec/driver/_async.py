@@ -1925,9 +1925,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """Get database object metadata or an unsupported-domain result."""
         return self._unsupported_metadata("objects")
 
-    async def get_table_details(
-        self, driver: Any, table: str, schema: "str | None" = None
-    ) -> "MetadataResult":
+    async def get_table_details(self, driver: Any, table: str, schema: "str | None" = None) -> "MetadataResult":
         """Get rich table metadata or an unsupported-domain result."""
         return self._unsupported_metadata("tables")
 

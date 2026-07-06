@@ -1862,15 +1862,11 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """Get database object metadata or an unsupported-domain result."""
         return self._unsupported_metadata("objects")
 
-    def get_table_details(
-        self, driver: Any, table: str, schema: "str | None" = None
-    ) -> "MetadataResult":
+    def get_table_details(self, driver: Any, table: str, schema: "str | None" = None) -> "MetadataResult":
         """Get rich table metadata or an unsupported-domain result."""
         return self._unsupported_metadata("tables")
 
-    def get_constraints(
-        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
-    ) -> "MetadataResult":
+    def get_constraints(self, driver: Any, table: "str | None" = None, schema: "str | None" = None) -> "MetadataResult":
         """Get constraint metadata or an unsupported-domain result."""
         return self._unsupported_metadata("constraints")
 
