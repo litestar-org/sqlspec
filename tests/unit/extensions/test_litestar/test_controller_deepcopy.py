@@ -20,7 +20,7 @@ import pytest
 from litestar import Controller, get
 from litestar.router import Router
 
-from sqlspec.extensions.litestar.providers import FieldNameType, create_filter_dependencies, dep_cache
+from sqlspec.extensions.litestar.providers import ChoiceField, FieldNameType, create_filter_dependencies, dep_cache
 from sqlspec.typing import LITESTAR_INSTALLED
 
 if not LITESTAR_INSTALLED:
@@ -67,6 +67,8 @@ def test_handler_deepcopy_with_full_filter_set() -> None:
         "not_in_fields": [FieldNameType("name", str)],
         "null_fields": "deleted_at",
         "not_null_fields": "created_at",
+        "boolean_fields": "is_active",
+        "choice_fields": [ChoiceField("status", ["active", "pending"])],
     })
 
     @get("/probe", dependencies=deps)

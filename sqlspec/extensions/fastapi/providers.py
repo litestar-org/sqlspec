@@ -4,6 +4,7 @@ This module provides filter dependency injection for FastAPI routes, allowing
 automatic parsing of query parameters into SQLSpec filter objects.
 """
 
+import copy
 import datetime
 import inspect
 import typing
@@ -12,7 +13,7 @@ from enum import Enum
 from functools import partial
 from inspect import isclass
 from types import GenericAlias
-from typing import Annotated, Any, Literal, NamedTuple, cast
+from typing import Annotated, Any, Literal, NamedTuple, TypeVar, cast
 from uuid import UUID
 
 from fastapi import Depends, Query
@@ -65,6 +66,7 @@ SortOrderOrNone = SortOrder | None
 SortField = str | set[str] | list[str]
 HashableValue = str | int | float | bool | None
 HashableType = HashableValue | tuple[Any, ...] | tuple[tuple[str, Any], ...] | tuple[HashableValue, ...]
+_ProviderT = TypeVar("_ProviderT")
 _FILTER_CONFIG_KEYS = frozenset({
     "id_filter",
     "created_at",
@@ -394,6 +396,13 @@ def _query_parameter_annotation(value_annotation: Any, query: Any) -> Any:
     return Annotated[value_annotation, query]
 
 
+def _memoize_deepcopy(original: Any, copied: _ProviderT, memo: dict[int, Any]) -> _ProviderT:
+    memo[id(original)] = copied
+    if hasattr(original, "__signature__"):
+        setattr(copied, "__signature__", original.__signature__)
+    return copied
+
+
 def _set_provider_metadata(
     provider: Any, signature: inspect.Signature, annotations: dict[str, Any]
 ) -> Callable[..., Any]:
@@ -433,6 +442,7 @@ def _make_aggregate_filter_provider(
 class _IdFilterProvider:
     def __init__(self, field_name: str, id_type: type[Any]) -> None:
         self.field_name = field_name
+        self.id_type = id_type
         self.return_annotation = InCollectionFilter[id_type] | None  # type: ignore[valid-type]
         ids_parameter_annotation = _query_parameter_annotation(
             _collection_value_annotation(list, id_type), Query(alias="ids", description="IDs to filter by.")
@@ -448,6 +458,9 @@ class _IdFilterProvider:
 
     def __call__(self, ids: list[Any] | None = None) -> InCollectionFilter[Any] | None:
         return InCollectionFilter(field_name=self.field_name, values=ids) if ids else None
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_IdFilterProvider":
+        return _memoize_deepcopy(self, _IdFilterProvider(self.field_name, self.id_type), memo)
 
 
 class _BeforeAfterFilterProvider:
@@ -497,6 +510,11 @@ class _BeforeAfterFilterProvider:
             return BeforeAfterFilter(field_name=self.field_name, before=before_dt, after=after_dt)
         return None
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_BeforeAfterFilterProvider":
+        return _memoize_deepcopy(
+            self, _BeforeAfterFilterProvider(self.field_name, self.before_alias, self.after_alias), memo
+        )
+
     @staticmethod
     def _parse_datetime(value: Any, alias: str) -> datetime.datetime | None:
         if value is None:
@@ -538,6 +556,9 @@ class _LimitOffsetFilterProvider:
         resolved_page_size = page_size if page_size is not None else self.default_page_size
         return LimitOffsetFilter(limit=resolved_page_size, offset=resolved_page_size * (current_page - 1))
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_LimitOffsetFilterProvider":
+        return _memoize_deepcopy(self, _LimitOffsetFilterProvider(self.default_page_size), memo)
+
 
 class _SearchFilterProvider:
     def __init__(self, search_fields: str | set[str] | list[str], ignore_case_default: bool) -> None:
@@ -577,13 +598,19 @@ class _SearchFilterProvider:
             )
         return None
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_SearchFilterProvider":
+        return _memoize_deepcopy(
+            self, _SearchFilterProvider(copy.deepcopy(self.search_fields, memo), self.ignore_case_default), memo
+        )
+
 
 class _OrderByProvider:
     def __init__(self, sort_field: SortField, config: FilterConfig) -> None:
+        self.sort_field = sort_field
+        self.sort_field_aliases = config.get("sort_field_aliases")
+        self.sort_field_camelize = config.get("sort_field_camelize", True)
         self.sort_resolution = _resolve_sort_field_aliases(
-            sort_field,
-            sort_field_aliases=config.get("sort_field_aliases"),
-            sort_field_camelize=config.get("sort_field_camelize", True),
+            sort_field, sort_field_aliases=self.sort_field_aliases, sort_field_camelize=self.sort_field_camelize
         )
         self.sort_order_default: SortOrder = config.get("sort_order", "desc")
         self.allowed_field_names = ", ".join(self.sort_resolution.allowed_display_names)
@@ -615,6 +642,12 @@ class _OrderByProvider:
             msg = f"Invalid orderBy field '{query_value}'. Allowed fields: {self.allowed_field_names}"
             raise RequestValidationError(errors=[{"loc": ("query", "orderBy"), "msg": msg, "type": "value_error"}])
         return OrderByFilter(field_name=resolved_field, sort_order=sort_order or self.sort_order_default)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_OrderByProvider":
+        config: FilterConfig = {"sort_order": self.sort_order_default, "sort_field_camelize": self.sort_field_camelize}
+        if self.sort_field_aliases is not None:
+            config["sort_field_aliases"] = copy.deepcopy(self.sort_field_aliases, memo)
+        return _memoize_deepcopy(self, _OrderByProvider(copy.deepcopy(self.sort_field, memo), config), memo)
 
 
 def _resolve_sort_field_aliases(
@@ -700,6 +733,15 @@ class _CollectionFilterProvider:
         values = kwargs.get(self.param_name)
         return self.filter_cls[self.type_hint](field_name=self.field_name, values=values) if values else None
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_CollectionFilterProvider":
+        return _memoize_deepcopy(
+            self,
+            _CollectionFilterProvider(
+                FieldNameType(self.field_name, self.type_hint), negated=self.filter_cls is NotInCollectionFilter
+            ),
+            memo,
+        )
+
 
 class _NullFilterProvider:
     def __init__(self, field_name: str, *, negated: bool) -> None:
@@ -728,6 +770,11 @@ class _NullFilterProvider:
     def __call__(self, **kwargs: Any) -> Any:
         return self.filter_cls(field_name=self.field_name) if kwargs.get(self.param_name) else None
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_NullFilterProvider":
+        return _memoize_deepcopy(
+            self, _NullFilterProvider(self.field_name, negated=self.filter_cls is NotNullFilter), memo
+        )
+
 
 class _BooleanFilterProvider:
     __slots__ = ("__signature__", "field_name", "param_name", "return_annotation")
@@ -753,6 +800,9 @@ class _BooleanFilterProvider:
         if val is None:
             return None
         return BooleanFilter(field_name=self.field_name, value=val)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_BooleanFilterProvider":
+        return _memoize_deepcopy(self, _BooleanFilterProvider(self.field_name), memo)
 
 
 class _ChoicesFilterProvider:
@@ -782,6 +832,9 @@ class _ChoicesFilterProvider:
         if not values:
             return None
         return ChoicesFilter[Any](field_name=self.field_name, values=values)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_ChoicesFilterProvider":
+        return _memoize_deepcopy(self, _ChoicesFilterProvider(self.field_name, copy.deepcopy(self.choices, memo)), memo)
 
 
 def _add_dependency(params: list[inspect.Parameter], annotations: dict[str, Any], name: str, provider: Any) -> None:

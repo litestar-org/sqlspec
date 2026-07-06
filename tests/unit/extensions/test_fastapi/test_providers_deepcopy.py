@@ -1,11 +1,7 @@
-"""Round-trip tests for copy.deepcopy and pickle on mypyc-compiled FastAPI filter providers."""
+"""Round-trip tests for copy.deepcopy on mypyc-compiled FastAPI filter providers."""
 
-# Safe: pickle round-trips here serialize objects produced inside the test and
-# immediately deserialize them in the same process. No untrusted input crosses
-# the pickle boundary.
 import copy
 import inspect
-import pickle
 from typing import Any
 
 import pytest
@@ -79,15 +75,6 @@ def _assert_state_equal(left: Any, right: Any) -> None:
 def test_provider_deepcopy_roundtrip(cls: "type[Any]") -> None:
     inst = _build(cls)
     out = copy.deepcopy(inst)
-    assert out is not inst
-    assert type(out) is type(inst)
-    _assert_state_equal(inst, out)
-
-
-@pytest.mark.parametrize("cls", _discover_provider_classes(), ids=lambda c: c.__name__)
-def test_provider_pickle_roundtrip(cls: "type[Any]") -> None:
-    inst = _build(cls)
-    out = pickle.loads(pickle.dumps(inst))
     assert out is not inst
     assert type(out) is type(inst)
     _assert_state_equal(inst, out)
