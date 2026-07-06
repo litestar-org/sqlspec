@@ -18,7 +18,10 @@ from sqlspec.data_dictionary import (
     VersionInfo,
     get_data_dictionary_loader,
 )
-from sqlspec.data_dictionary.dialects.bigquery import format_bigquery_schema_prefix
+from sqlspec.data_dictionary.dialects.bigquery import (
+    format_bigquery_information_schema_tables,
+    format_bigquery_schema_prefix,
+)
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -183,9 +186,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         """Get tables sorted by topological dependency order using BigQuery catalog."""
         scope = BigQueryMetadataScope.from_schema(schema)
         self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="tables")
-        tables_table = scope.dataset_information_schema_table("TABLES")
-        kcu_table = scope.dataset_information_schema_table("KEY_COLUMN_USAGE")
-        rc_table = scope.dataset_information_schema_table("REFERENTIAL_CONSTRAINTS")
+        tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(schema)
 
         query_text = self.get_query_text("tables_by_schema").format(
             tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
@@ -197,7 +198,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
         scope = BigQueryMetadataScope.from_schema(schema)
-        schema_prefix = scope.dataset_prefix() or format_bigquery_schema_prefix(None)
+        schema_prefix = format_bigquery_schema_prefix(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="columns")
             query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
