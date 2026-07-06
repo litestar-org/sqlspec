@@ -1,5 +1,6 @@
 """pymssql SQL Server driver implementation."""
 
+import contextlib
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
@@ -23,7 +24,13 @@ from sqlspec.adapters.pymssql.core import (
 )
 from sqlspec.adapters.pymssql.data_dictionary import PymssqlSyncDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import (
+    BaseSyncExceptionHandler,
+    ExecutionResult,
+    SyncDriverAdapterBase,
+    SyncRowStream,
+    rows_to_dicts,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -57,10 +64,63 @@ class PymssqlExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+class PymssqlStreamSource:
+    """Native pymssql chunk source backed by ``cursor.fetchmany()``."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor_manager", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: "PymssqlDriver", sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor_manager: PymssqlCursor | None = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        cursor_manager = self._driver.with_cursor(self._driver.connection)
+        try:
+            cursor = cursor_manager.__enter__()
+            handler = self._driver.handle_database_exceptions()
+            with handler:
+                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+            raise
+        self._cursor_manager = cursor_manager
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        cursor_manager = self._cursor_manager
+        if cursor_manager is None or cursor_manager.cursor is None:
+            return []
+        cursor = cursor_manager.cursor
+        handler = self._driver.handle_database_exceptions()
+        rows: Any = []
+        with handler:
+            rows = cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names = resolve_column_names(cursor.description or None, self._driver._column_name_cache)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    def close(self) -> None:
+        cursor_manager = self._cursor_manager
+        self._cursor_manager = None
+        if cursor_manager is not None:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+
+
 class PymssqlDriver(SyncDriverAdapterBase):
     """SQL Server database driver using pymssql."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_column_name_cache", "_data_dictionary")
     dialect = "tsql"
 
     def __init__(
@@ -76,6 +136,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
 
     def dispatch_execute(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -84,7 +145,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             description = cursor.description or None
-            rows, column_names, row_format = collect_rows(fetched_data, description)
+            rows, column_names, row_format = collect_rows(fetched_data, description, self._column_name_cache)
             return self.create_execution_result(
                 cursor,
                 selected_data=rows,
@@ -149,6 +210,13 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "PymssqlExceptionHandler":
         return PymssqlExceptionHandler()
 
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native pymssql row stream backed by ``fetchmany()``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(PymssqlStreamSource(self, sql, prepared_parameters, chunk_size))
+
     def create_savepoint(self, name: str) -> None:
         self.execute_script(f"SAVE TRANSACTION {name}")
 
@@ -165,7 +233,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def collect_rows(self, cursor: "PymssqlRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        column_names = resolve_column_names(cursor.description or None)
+        column_names = resolve_column_names(cursor.description or None, self._column_name_cache)
         return fetched, column_names, len(fetched)
 
     def resolve_rowcount(self, cursor: "PymssqlRawCursor") -> int:

@@ -46,18 +46,20 @@ def test_duckdb_config_applies_driver_feature_serializer() -> None:
 
 
 def test_duckdb_config_honors_uuid_conversion_flag() -> None:
-    """Driver features should control UUID string conversion."""
+    """Driver features should control native UUID parameter coercion without string sniffing."""
 
-    uuid_str = "550e8400-e29b-41d4-a716-446655440000"
+    uuid_value = UUID("550e8400-e29b-41d4-a716-446655440000")
 
     enabled_config = DuckDBConfig(driver_features={"enable_uuid_conversion": True})
     disabled_config = DuckDBConfig(driver_features={"enable_uuid_conversion": False})
 
-    enabled_converter = enabled_config.statement_config.parameter_config.type_coercion_map[str]
-    disabled_converter = disabled_config.statement_config.parameter_config.type_coercion_map[str]
+    enabled_map = enabled_config.statement_config.parameter_config.type_coercion_map
+    disabled_map = disabled_config.statement_config.parameter_config.type_coercion_map
 
-    assert isinstance(enabled_converter(uuid_str), UUID)
-    assert disabled_converter(uuid_str) == uuid_str
+    assert str not in enabled_map
+    assert str not in disabled_map
+    assert enabled_map[UUID](uuid_value) == str(uuid_value)
+    assert UUID not in disabled_map
 
 
 def test_connection_param_types_match_current_duckdb_settings() -> None:

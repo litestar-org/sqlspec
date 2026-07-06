@@ -1,6 +1,7 @@
 """mssql-python sync and async drivers."""
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
@@ -24,9 +25,12 @@ from sqlspec.core import (
 )
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
+    AsyncRowStream,
     BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
     SyncDriverAdapterBase,
+    SyncRowStream,
+    rows_to_dicts,
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
@@ -62,6 +66,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.mssql_python")
 _MSSQL_ERROR = cast("type[BaseException]", getattr(MSSQL_PYTHON_MODULE, "Error", Exception))
+_COLUMN_CACHE_MAX_SIZE = 256
 
 
 class MssqlPythonBulkCopyResult(TypedDict):
@@ -100,10 +105,116 @@ class MssqlPythonAsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+class MssqlPythonStreamSource:
+    """Native mssql-python chunk source backed by ``cursor.fetchmany()``."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor_manager", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: "MssqlPythonDriver", sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor_manager: MssqlPythonCursor | None = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        cursor_manager = self._driver.with_cursor(self._driver.connection)
+        try:
+            cursor = cursor_manager.__enter__()
+            handler = self._driver.handle_database_exceptions()
+            with handler:
+                _execute_cursor(cursor, self._sql, self._parameters)
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+            raise
+        self._cursor_manager = cursor_manager
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        cursor_manager = self._cursor_manager
+        if cursor_manager is None or cursor_manager.cursor is None:
+            return []
+        cursor = cursor_manager.cursor
+        handler = self._driver.handle_database_exceptions()
+        rows: Any = []
+        with handler:
+            rows = cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names = _resolve_column_names(cursor.description, self._driver._column_name_cache)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    def close(self) -> None:
+        cursor_manager = self._cursor_manager
+        self._cursor_manager = None
+        if cursor_manager is not None:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+
+
+class MssqlPythonAsyncStreamSource:
+    """Async mssql-python chunk source backed by ``cursor.fetchmany()``."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor_manager", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: "MssqlPythonAsyncDriver", sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor_manager: MssqlPythonAsyncCursor | None = None
+        self._column_names: list[str] | None = None
+
+    async def start(self) -> None:
+        cursor_manager = self._driver.with_cursor(self._driver.connection)
+        try:
+            cursor = await cursor_manager.__aenter__()
+            handler = self._driver.handle_database_exceptions()
+            async with handler:
+                await asyncio.to_thread(_execute_cursor, cursor, self._sql, self._parameters)
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await cursor_manager.__aexit__(None, None, None)
+            raise
+        self._cursor_manager = cursor_manager
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        cursor_manager = self._cursor_manager
+        if cursor_manager is None or cursor_manager.cursor is None:
+            return []
+        cursor = cursor_manager.cursor
+        handler = self._driver.handle_database_exceptions()
+        rows: Any = []
+        async with handler:
+            rows = await asyncio.to_thread(cursor.fetchmany, self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names = _resolve_column_names(cursor.description, self._driver._column_name_cache)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    async def close(self) -> None:
+        cursor_manager = self._cursor_manager
+        self._cursor_manager = None
+        if cursor_manager is not None:
+            with contextlib.suppress(Exception):
+                await cursor_manager.__aexit__(None, None, None)
+
+
 class MssqlPythonDriver(SyncDriverAdapterBase):
     """mssql-python sync driver."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_column_name_cache", "_data_dictionary")
     dialect = "tsql"
 
     def __init__(
@@ -118,6 +229,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             )
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MssqlPythonSyncDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
 
     @property
     def data_dictionary(self) -> "MssqlPythonSyncDataDictionary":
@@ -131,7 +243,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched = cursor.fetchall()
-            column_names = [desc[0] for desc in (cursor.description or [])]
+            column_names = _resolve_column_names(cursor.description, self._column_name_cache)
             return self.create_execution_result(
                 cursor,
                 selected_data=fetched,
@@ -160,7 +272,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         )
 
     def collect_rows(self, cursor: "MssqlPythonRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        column_names = [desc[0] for desc in (cursor.description or [])]
+        column_names = _resolve_column_names(cursor.description, self._column_name_cache)
         return fetched, column_names, len(fetched)
 
     def resolve_rowcount(self, cursor: "MssqlPythonRawCursor") -> int:
@@ -191,6 +303,13 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
     def handle_database_exceptions(self) -> "MssqlPythonExceptionHandler":
         return MssqlPythonExceptionHandler()
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native mssql-python row stream backed by ``fetchmany()``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(MssqlPythonStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def create_savepoint(self, name: str) -> None:
         self.execute_script(f"SAVE TRANSACTION {name}")
@@ -361,7 +480,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
     """Async wrapper around mssql-python's sync DB-API via asyncio.to_thread."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_column_name_cache", "_data_dictionary")
     dialect = "tsql"
 
     def __init__(
@@ -376,6 +495,7 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
             )
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MssqlPythonAsyncDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
 
     @property
     def data_dictionary(self) -> "MssqlPythonAsyncDataDictionary":
@@ -389,7 +509,7 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
 
         if statement.returns_rows():
             fetched = await asyncio.to_thread(cursor.fetchall)
-            column_names = [desc[0] for desc in (cursor.description or [])]
+            column_names = _resolve_column_names(cursor.description, self._column_name_cache)
             return self.create_execution_result(
                 cursor,
                 selected_data=fetched,
@@ -418,7 +538,7 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
         )
 
     def collect_rows(self, cursor: "MssqlPythonRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        column_names = [desc[0] for desc in (cursor.description or [])]
+        column_names = _resolve_column_names(cursor.description, self._column_name_cache)
         return fetched, column_names, len(fetched)
 
     def resolve_rowcount(self, cursor: "MssqlPythonRawCursor") -> int:
@@ -449,6 +569,13 @@ class MssqlPythonAsyncDriver(AsyncDriverAdapterBase):
 
     def handle_database_exceptions(self) -> "MssqlPythonAsyncExceptionHandler":
         return MssqlPythonAsyncExceptionHandler()
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native async mssql-python row stream backed by ``fetchmany()``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return AsyncRowStream(MssqlPythonAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     async def create_savepoint(self, name: str) -> None:
         await self.execute_script(f"SAVE TRANSACTION {name}")
@@ -632,6 +759,20 @@ def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -
 def _cursor_rowcount(cursor: "MssqlPythonRawCursor") -> int:
     rowcount = getattr(cursor, "rowcount", 0)
     return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+
+
+def _resolve_column_names(description: Any, cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
+    if not description:
+        return []
+    cache_key = id(description)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] is description:
+        return cached[1]
+    column_names = [desc[0] for desc in description]
+    if len(cache) >= _COLUMN_CACHE_MAX_SIZE:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (description, column_names)
+    return column_names
 
 
 def _cursor_arrow_reader(

@@ -4,7 +4,7 @@ import contextlib
 import inspect
 import json
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
@@ -376,16 +376,22 @@ def _stream_seed_rows(count: int) -> "list[tuple[str, int, None]]":
     return [(f"row-{i:06d}", i, None) for i in range(count)]
 
 
-def _seed_stream_table(driver: SyncContractDriver, table: ContractTable, count: int) -> None:
+def _stream_contract_rows(count: int) -> tuple[ContractRow, ...]:
+    return tuple(ContractRow(name, value, note) for name, value, note in _stream_seed_rows(count))
+
+
+def _seed_stream_table(driver: SyncContractDriver, table: ContractTable, count: int, case: DriverCase) -> None:
     driver.execute(table.delete_sql)
-    driver.execute_many(table.insert_qmark_sql, _stream_seed_rows(count))
     driver.commit()
+    _seed_sync(driver, _stream_contract_rows(count), table, case)
 
 
-async def _seed_stream_table_async(driver: AsyncContractDriver, table: ContractTable, count: int) -> None:
+async def _seed_stream_table_async(
+    driver: AsyncContractDriver, table: ContractTable, count: int, case: DriverCase
+) -> None:
     await driver.execute(table.delete_sql)
-    await driver.execute_many(table.insert_qmark_sql, _stream_seed_rows(count))
     await driver.commit()
+    await _seed_async(driver, _stream_contract_rows(count), table, case)
 
 
 def assert_sync_streaming_unsupported_contract(driver: object, case: DriverCase) -> None:
@@ -431,7 +437,7 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
     count = case.streaming_row_count
-    _seed_stream_table(sync_driver, table, count)
+    _seed_stream_table(sync_driver, table, count, case)
 
     stream = sync_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE)
     iterator = iter(stream)
@@ -469,7 +475,7 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
     count = case.streaming_row_count
-    await _seed_stream_table_async(async_driver, table, count)
+    await _seed_stream_table_async(async_driver, table, count, case)
 
     stream = async_driver.select_stream(table.select_ordered_sql, chunk_size=_STREAM_CHUNK_SIZE)
     iterator = aiter(stream)
@@ -4306,6 +4312,190 @@ def assert_sync_custom_type_adapters_contract(make_config: SyncConfigFactory, ca
             assert json.loads(row["data"]) == test_dict
     finally:
         disabled.close_pool()
+
+
+async def assert_async_custom_type_adapters_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Async mirror of the sqlite custom-adapter enable-false semantics contract."""
+    import sqlite3
+
+    table = _pc_table(case, "adapters")
+    test_dict = {"key": "value", "count": 42}
+    test_list = [1, 2, 3, "four"]
+
+    enabled = make_config(
+        driver_features={"enable_custom_adapters": True}, connection_overrides={"detect_types": sqlite3.PARSE_DECLTYPES}
+    )
+    try:
+        async with enabled.provide_session() as session:
+            await session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            await session.execute(f"CREATE TABLE {table} (id INTEGER, data JSON, items JSON)")
+            await session.execute(
+                f"INSERT INTO {table} (id, data, items) VALUES (?, ?, ?)",
+                (1, json.dumps(test_dict), json.dumps(test_list)),
+            )
+            await session.commit()
+            row = await session.select_one(f"SELECT data, items FROM {table} WHERE id = 1")
+            assert row["data"] == test_dict
+            assert row["items"] == test_list
+    finally:
+        await enabled.close_pool()
+
+    disabled = make_config()
+    try:
+        async with disabled.provide_session() as session:
+            await session.execute_script(f"DROP TABLE IF EXISTS {table}")
+            await session.execute(f"CREATE TABLE {table} (id INTEGER, data TEXT)")
+            await session.execute(f"INSERT INTO {table} (id, data) VALUES (?, ?)", (1, json.dumps(test_dict)))
+            await session.commit()
+            row = await session.select_one(f"SELECT data FROM {table} WHERE id = 1")
+            assert isinstance(row["data"], str)
+            assert json.loads(row["data"]) == test_dict
+    finally:
+        await disabled.close_pool()
+
+
+_DRIVER_FEATURE_PARITY_ROWS = (
+    ContractRow("feature-a", 1, "note-a"),
+    ContractRow("feature-b", 2, None),
+    ContractRow("feature-c", 3, "note-c"),
+)
+
+
+def _expected_feature_rows(rows: tuple[ContractRow, ...] = _DRIVER_FEATURE_PARITY_ROWS) -> list[dict[str, object]]:
+    return [{"name": row.name, "value": row.value, "note": row.note} for row in rows]
+
+
+def _assert_row_format_matches_data(result: SQLResult, expected_rows: list[dict[str, object]]) -> None:
+    assert result.get_data() == expected_rows
+    assert result.data is not None
+    if not result.data:
+        return
+    row_format = cast("str", result._row_format)  # pyright: ignore[reportPrivateUsage]
+    first = result.data[0]
+    if isinstance(first, dict):
+        assert row_format == "dict"
+        return
+    if isinstance(first, Mapping):
+        assert row_format in {"dict", "record"}
+        return
+    if hasattr(first, "keys"):
+        assert row_format == "record"
+        return
+    assert row_format == "tuple"
+
+
+def _reset_contract_table_sync(driver: SyncContractDriver, table: ContractTable) -> None:
+    with contextlib.suppress(Exception):
+        driver.execute_script(f"DROP TABLE IF EXISTS {table.name}")
+    driver.execute_script(table.create_sql)
+    driver.commit()
+
+
+async def _reset_contract_table_async(driver: AsyncContractDriver, table: ContractTable) -> None:
+    with contextlib.suppress(Exception):
+        await driver.execute_script(f"DROP TABLE IF EXISTS {table.name}")
+    await driver.execute_script(table.create_sql)
+    await driver.commit()
+
+
+def _row_format_config_kwargs(case: DriverCase) -> dict[str, Any]:
+    if case.adapter == "psycopg":
+        from psycopg.rows import dict_row
+
+        return {"connection_overrides": {"row_factory": dict_row}}
+    if case.adapter == "sqlite":
+        return {"driver_features": {"row_factory": "dict"}}
+    return {}
+
+
+def _async_row_format_config_kwargs(case: DriverCase) -> dict[str, Any]:
+    if case.adapter == "psycopg":
+        from psycopg.rows import dict_row
+
+        return {"connection_overrides": {"row_factory": dict_row}}
+    if case.adapter == "aiosqlite":
+        return {"driver_features": {"row_factory": "dict"}}
+    return {}
+
+
+def assert_sync_driver_feature_parity_contract(driver: object, case: DriverCase) -> None:
+    """Assert buffered, native row-stream, and Arrow rows agree for one canonical fixture."""
+    if not (case.supports_native_row_streaming or case.supports_arrow):
+        pytest.skip(f"{case.adapter} has no row-stream or Arrow feature path")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    _seed_sync(sync_driver, _DRIVER_FEATURE_PARITY_ROWS, table, case)
+    expected = _expected_feature_rows()
+
+    buffered = sync_driver.execute(table.select_ordered_sql).get_data()
+    assert buffered == expected
+
+    if case.supports_native_row_streaming:
+        with sync_driver.select_stream(table.select_ordered_sql, chunk_size=1) as stream:
+            assert list(stream) == expected
+
+    if case.supports_arrow:
+        assert sync_driver.select_to_arrow(table.select_ordered_sql).data.to_pylist() == expected
+
+
+async def assert_async_driver_feature_parity_contract(driver: object, case: DriverCase) -> None:
+    """Async mirror of the buffered/native-stream/Arrow parity contract."""
+    if not (case.supports_native_row_streaming or case.supports_arrow):
+        pytest.skip(f"{case.adapter} has no row-stream or Arrow feature path")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    await _seed_async(async_driver, _DRIVER_FEATURE_PARITY_ROWS, table, case)
+    expected = _expected_feature_rows()
+
+    buffered = (await async_driver.execute(table.select_ordered_sql)).get_data()
+    assert buffered == expected
+
+    if case.supports_native_row_streaming:
+        async with async_driver.select_stream(table.select_ordered_sql, chunk_size=1) as stream:
+            assert [row async for row in stream] == expected
+
+    if case.supports_arrow:
+        assert (await async_driver.select_to_arrow(table.select_ordered_sql)).data.to_pylist() == expected
+
+
+def assert_sync_driver_feature_row_format_contract(
+    make_config: SyncConfigFactory | None, case: DriverCase
+) -> None:
+    """Assert configured row factories are tagged consistently with their materialized data."""
+    if make_config is None:
+        pytest.skip(f"{case.adapter} has no config factory for row-format verification")
+    config = make_config(**_row_format_config_kwargs(case))
+    try:
+        with config.provide_session() as session:
+            sync_driver = cast("SyncContractDriver", session)
+            _reset_contract_table_sync(sync_driver, case.table)
+            _seed_sync(sync_driver, _DRIVER_FEATURE_PARITY_ROWS, case.table, case)
+            result = assert_sql_result(sync_driver.execute(case.table.select_ordered_sql))
+            _assert_row_format_matches_data(result, _expected_feature_rows())
+    finally:
+        config.close_pool()
+
+
+async def assert_async_driver_feature_row_format_contract(
+    make_config: AsyncConfigFactory | None, case: DriverCase
+) -> None:
+    """Async mirror of the configured row-factory row-format contract."""
+    if make_config is None:
+        pytest.skip(f"{case.adapter} has no config factory for row-format verification")
+    config = make_config(**_async_row_format_config_kwargs(case))
+    try:
+        async with config.provide_session() as session:
+            async_driver = cast("AsyncContractDriver", session)
+            await _reset_contract_table_async(async_driver, case.table)
+            await _seed_async(async_driver, _DRIVER_FEATURE_PARITY_ROWS, case.table, case)
+            result = assert_sql_result(await async_driver.execute(case.table.select_ordered_sql))
+            _assert_row_format_matches_data(result, _expected_feature_rows())
+    finally:
+        await config.close_pool()
 
 
 def assert_sync_statement_input_contract(driver: object, case: DriverCase, input_case: StatementInputCase) -> None:

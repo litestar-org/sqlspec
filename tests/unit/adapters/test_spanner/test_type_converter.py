@@ -1,52 +1,20 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter, coerce_params_for_spanner
-from sqlspec.core import BaseTypeConverter, TypedParameter
+from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, spanner_json, spanner_to_uuid
+from sqlspec.core import TypedParameter
 
 
-def test_uuid_conversion() -> None:
-    """Test UUID string auto-conversion."""
-    converter = SpannerOutputConverter(enable_uuid_conversion=True)
-    uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result = converter.convert_if_detected(uuid_str)
-    assert isinstance(result, UUID)
-    assert str(result) == uuid_str
+def test_spanner_to_uuid_converts_bytes() -> None:
+    uuid_value = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    assert spanner_to_uuid(uuid_value.bytes) == uuid_value
 
 
-def test_json_detection() -> None:
-    """Test JSON string auto-detection."""
-    converter = SpannerOutputConverter()
-    json_str = '{"key": "value"}'
-    result = converter.convert_if_detected(json_str)
-    assert isinstance(result, dict)
+def test_spanner_json_uses_native_json_object() -> None:
+    result = spanner_json({"key": "value"})
+
     assert result == {"key": "value"}
-
-
-def test_disabled_uuid_conversion() -> None:
-    """Test UUID conversion when disabled."""
-    converter = SpannerOutputConverter(enable_uuid_conversion=False)
-    uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result = converter.convert_if_detected(uuid_str)
-    assert isinstance(result, str)
-    assert result == uuid_str
-
-
-def test_spanner_output_converter_is_final() -> None:
-    assert getattr(SpannerOutputConverter, "__final__", False) is True
-
-
-def test_spanner_output_converter_inherits_base_type_converter_directly() -> None:
-    assert SpannerOutputConverter.__mro__[1] is BaseTypeConverter
-
-
-def test_spanner_output_converter_no_longer_exposes_convert() -> None:
-    assert not hasattr(SpannerOutputConverter, "convert")
-
-
-def test_spanner_output_converter_instantiates() -> None:
-    converter = SpannerOutputConverter()
-    assert isinstance(converter, SpannerOutputConverter)
 
 
 def test_coerce_params_unwraps_typed_datetime_parameter() -> None:

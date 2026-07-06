@@ -1012,6 +1012,12 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     features.setdefault("enable_uuid_conversion", True)
     features.setdefault("json_serializer", to_json)
+    if not features["enable_uuid_conversion"]:
+        type_coercion_map = dict(statement_config.parameter_config.type_coercion_map)
+        for uuid_type in build_uuid_coercions():
+            type_coercion_map.pop(uuid_type, None)
+        parameter_config = statement_config.parameter_config.replace(type_coercion_map=type_coercion_map)
+        statement_config = statement_config.replace(parameter_config=parameter_config)
     return statement_config, features
 
 

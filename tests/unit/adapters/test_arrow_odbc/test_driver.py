@@ -259,6 +259,25 @@ def test_arrow_odbc_select_to_arrow_reader_skips_table_materialization(monkeypat
     assert result.get_data().read_all().to_pydict() == {"x": [1, 2, 3]}
 
 
+def test_arrow_odbc_select_stream_uses_native_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """select_stream should stream Arrow batches instead of materializing the whole table."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    def fail_reader_to_table(_reader: object) -> pa.Table:
+        msg = "select_stream should not materialize via _reader_to_table"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver._reader_to_table", fail_reader_to_table)
+
+    with driver.select_stream("SELECT 1 AS x", native_only=True, chunk_size=2) as stream:
+        rows = list(stream)
+
+    assert rows == [{"x": 1}, {"x": 2}, {"x": 3}]
+    assert connection.read_calls[0]["query"] == "SELECT 1 AS x"
+    assert connection.read_calls[0]["batch_size"] == 2
+
+
 def test_arrow_odbc_select_to_arrow_raises_mapped_driver_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """Native read failures should use SQLSpec's deferred exception mapping."""
     monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)

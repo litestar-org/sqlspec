@@ -45,6 +45,7 @@ __all__ = (
 )
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
+_COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
@@ -180,18 +181,32 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
     return SQLSpecError(f"SQL Server database error. Original error: {error}")
 
 
-def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
+def resolve_column_names(
+    description: "Sequence[Any] | None", column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None
+) -> "list[str]":
     """Resolve ordered column names from cursor metadata."""
     if not description:
         return []
-    return [desc[0] for desc in description]
+    if column_name_cache is None:
+        return [desc[0] for desc in description]
+    cache_key = id(description)
+    cached = column_name_cache.get(cache_key)
+    if cached is not None and cached[0] is description:
+        return cached[1]
+    column_names = [desc[0] for desc in description]
+    if len(column_name_cache) >= _COLUMN_CACHE_MAX_SIZE:
+        column_name_cache.pop(next(iter(column_name_cache)))
+    column_name_cache[cache_key] = (description, column_names)
+    return column_names
 
 
 def collect_rows(
-    fetched_data: "Sequence[Any] | None", description: "Sequence[Any] | None"
+    fetched_data: "Sequence[Any] | None",
+    description: "Sequence[Any] | None",
+    column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None,
 ) -> "tuple[list[Any], list[str], str]":
     """Collect pymssql rows, preserving tuple row shape."""
-    column_names = resolve_column_names(description)
+    column_names = resolve_column_names(description, column_name_cache)
     if not fetched_data:
         return [], column_names, "tuple"
     return list(fetched_data), column_names, "tuple"

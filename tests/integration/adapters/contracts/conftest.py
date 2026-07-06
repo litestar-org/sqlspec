@@ -1160,9 +1160,12 @@ def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig
         *,
         pooled: bool = False,
         driver_features: "AiosqliteDriverFeatures | None" = None,
+        connection_overrides: "dict[str, Any] | None" = None,
         connection_instance: object | None = None,
     ) -> AiosqliteConfig:
-        connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle_aiosqlite.db"), pooled=pooled)
+        connection_config = _lifecycle_connection_config(
+            str(tmp_path / "lifecycle_aiosqlite.db"), pooled=pooled, connection_overrides=connection_overrides
+        )
         extra: dict[str, Any] = {}
         if driver_features is not None:
             extra["driver_features"] = driver_features
@@ -1248,9 +1251,12 @@ def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callabl
         *,
         pooled: bool = False,
         driver_features: "PsycopgDriverFeatures | None" = None,
+        connection_overrides: "dict[str, Any] | None" = None,
         connection_instance: object | None = None,
     ) -> PsycopgSyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
+        if connection_overrides:
+            connection_config.update(connection_overrides)
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
         extra: dict[str, Any] = {}
@@ -1271,9 +1277,12 @@ def lifecycle_config_psycopg_async(postgres_service: PostgresService) -> "Callab
         *,
         pooled: bool = False,
         driver_features: "PsycopgDriverFeatures | None" = None,
+        connection_overrides: "dict[str, Any] | None" = None,
         connection_instance: object | None = None,
     ) -> PsycopgAsyncConfig:
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
+        if connection_overrides:
+            connection_config.update(connection_overrides)
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
         extra: dict[str, Any] = {}

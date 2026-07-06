@@ -231,7 +231,6 @@ from sqlspec.core.statement import (
 )
 from sqlspec.core.type_converter import (
     BaseInputConverter,
-    BaseTypeConverter,
     convert_decimal,
     convert_iso_date,
     convert_iso_datetime,
@@ -251,7 +250,6 @@ __all__ = (
     "AnyCollectionFilter",
     "ArrowResult",
     "BaseInputConverter",
-    "BaseTypeConverter",
     "BeforeAfterFilter",
     "BooleanFilter",
     "CacheConfig",

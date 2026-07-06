@@ -21,12 +21,8 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
-from typing_extensions import final
-
 from sqlspec.core import TypedParameter
-from sqlspec.core.type_converter import BaseTypeConverter, convert_uuid
 from sqlspec.utils.module_loader import import_optional_attr
-from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 
 _UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
@@ -40,7 +36,6 @@ if TYPE_CHECKING:
     from sqlspec.protocols import SpannerParamTypesProtocol
 
 __all__ = (
-    "SpannerOutputConverter",
     "bytes_to_spanner",
     "coerce_params_for_spanner",
     "infer_spanner_param_types",
@@ -71,55 +66,6 @@ def _get_json_object_type() -> "type[Any]":
 
         _JSON_OBJECT_TYPE = JsonObject
     return _JSON_OBJECT_TYPE
-
-
-@final
-class SpannerOutputConverter(BaseTypeConverter):
-    """Spanner-specific output conversion with UUID and JSON support.
-
-    Extends BaseTypeConverter with Spanner-specific UUID bytes handling
-    and JSON deserialization.
-    """
-
-    __slots__ = ("_enable_uuid_conversion", "_json_deserializer")
-
-    def __init__(
-        self, enable_uuid_conversion: bool = True, json_deserializer: "Callable[[str], Any] | None" = None
-    ) -> None:
-        """Initialize converter with Spanner-specific options.
-
-        Args:
-            enable_uuid_conversion: Enable automatic UUID conversion (default: True)
-            json_deserializer: Custom JSON deserializer (default: from_json)
-        """
-        self._enable_uuid_conversion = enable_uuid_conversion
-        self._json_deserializer = json_deserializer if json_deserializer is not None else from_json
-
-    def convert_if_detected(self, value: Any) -> Any:
-        """Convert values with Spanner-specific byte UUID and JSON handling."""
-        if self._enable_uuid_conversion and isinstance(value, bytes) and len(value) == UUID_BYTE_LENGTH:
-            try:
-                return UUID(bytes=value)
-            except ValueError:
-                return value
-
-        if not isinstance(value, str):
-            return value
-
-        detected_type = self.detect_type(value)
-        if detected_type == "uuid":
-            if not self._enable_uuid_conversion:
-                return value
-            try:
-                return convert_uuid(value)
-            except ValueError:
-                return value
-        if detected_type == "json":
-            try:
-                return self._json_deserializer(value)
-            except (ValueError, TypeError):
-                return value
-        return super().convert_if_detected(value)
 
 
 def _json_param_type() -> Any:

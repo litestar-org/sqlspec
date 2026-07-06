@@ -223,6 +223,7 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_arrow_streaming: "ClassVar[bool]" = True
+    supports_native_row_streaming: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     _connection_context_class: "ClassVar[type[MssqlPythonConnectionContext]]" = MssqlPythonConnectionContext
@@ -303,6 +304,7 @@ class MssqlPythonAsyncConfig(
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_arrow_streaming: "ClassVar[bool]" = True
+    supports_native_row_streaming: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     _connection_context_class: "ClassVar[type[MssqlPythonAsyncConnectionContext]]" = MssqlPythonAsyncConnectionContext

@@ -70,6 +70,18 @@ def test_select_to_arrow_reader_uses_fetch_record_batch_and_defers_cursor_close(
     assert connection.cursor_obj.closed is True
 
 
+def test_select_stream_uses_record_batch_reader_without_eager_table_materialization() -> None:
+    connection = _AdbcStreamingConnection()
+    driver = AdbcDriver(cast("AdbcConnection", connection), dialect="sqlite")
+
+    with driver.select_stream("SELECT 1 AS x", native_only=True, chunk_size=2) as stream:
+        rows = list(stream)
+
+    assert rows == [{"x": 1}, {"x": 2}, {"x": 3}]
+    assert connection.cursor_obj.executed == [("SELECT 1 AS x", [])]
+    assert connection.cursor_obj.closed is True
+
+
 def test_load_from_arrow_passes_record_batch_reader_to_adbc_ingest() -> None:
     connection = _AdbcStreamingConnection()
     driver = AdbcDriver(

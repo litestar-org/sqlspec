@@ -10,14 +10,6 @@ drivers to convert between Python types and database-native representations.
 Base Classes
 ============
 
-.. autoclass:: BaseTypeConverter
-   :members:
-   :show-inheritance:
-
-.. autoclass:: CachedOutputConverter
-   :members:
-   :show-inheritance:
-
 .. autoclass:: BaseInputConverter
    :members:
    :show-inheritance:

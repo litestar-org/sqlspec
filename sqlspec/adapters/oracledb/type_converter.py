@@ -7,7 +7,6 @@ efficient LOB (Large Object) processing and vector helpers.
 import array
 from typing import Any
 
-from sqlspec.core.type_converter import BaseTypeConverter
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_readable
@@ -15,11 +14,10 @@ from sqlspec.utils.type_guards import is_readable
 __all__ = ("OracleOutputConverter",)
 
 
-class OracleOutputConverter(BaseTypeConverter):
+class OracleOutputConverter:
     """Oracle-specific output conversion with LOB optimization.
 
-    Extends BaseTypeConverter with Oracle-specific functionality
-    including streaming LOB support and NumPy vector helpers.
+    Provides streaming LOB support and NumPy vector helpers.
     """
 
     __slots__ = ()

@@ -2,6 +2,7 @@
 
 import importlib
 from collections.abc import Sequence
+from typing import cast
 
 import pytest
 from _pytest.mark.structures import ParameterSet
@@ -19,9 +20,19 @@ from tests.integration.adapters.contracts._driver_type_system import (
     SOURCE_EQUIVALENCE_CASES,
     SourceEquivalenceCase,
     assert_source_equivalent,
+    get_driver_feature_consumed_keys,
+    get_driver_feature_keys,
 )
 from tests.integration.adapters.contracts.behaviors import (
+    AsyncConfigFactory,
+    SyncConfigFactory,
+    assert_async_custom_type_adapters_contract,
+    assert_async_driver_feature_parity_contract,
+    assert_async_driver_feature_row_format_contract,
     assert_async_driver_features_contract,
+    assert_sync_custom_type_adapters_contract,
+    assert_sync_driver_feature_parity_contract,
+    assert_sync_driver_feature_row_format_contract,
     assert_sync_driver_features_contract,
     validate_extra_assertions,
 )
@@ -44,7 +55,9 @@ def test_driver_type_system_registry_module_exports_contract_groups() -> None:
         "parity",
         "row_format",
     }
-    assert not any(module.DRIVER_FEATURE_CONTRACT_ENABLED.values())
+    assert module.DRIVER_FEATURE_CONTRACT_ENABLED == {
+        group_name: group.enabled for group_name, group in module.DRIVER_FEATURE_CONTRACT_GROUPS.items()
+    }
     assert set(module.DRIVER_FEATURE_CONSUMED_KEYS) == {case.adapter for case in DRIVER_CASES}
     assert {case.group for case in module.SOURCE_EQUIVALENCE_CASES} == {"mysql_four_way", "sqlite_pair", "mssql_pair"}
 
@@ -67,22 +80,31 @@ def _disabled_first_params(group_name: str, cases: Sequence[DriverCase]) -> tupl
     return tuple(params)
 
 
-@pytest.mark.parametrize(
-    "sync_driver_case", _disabled_first_params("feature_honesty", SYNC_DRIVER_CASES), indirect=True
-)
-def test_sync_driver_feature_honesty_contract(sync_driver_case: DriverCaseContext) -> None:
-    """Sync feature-honesty scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+def _assert_driver_feature_honesty(adapter: str) -> None:
+    declared = set(get_driver_feature_keys(adapter))
+    consumed = set(get_driver_feature_consumed_keys(adapter))
+    missing = sorted(declared - consumed)
+
+    assert consumed, f"{adapter} has no consumed DriverFeatures registry entry"
+    assert not missing, f"{adapter} declares unconsumed DriverFeatures keys: {missing!r}"
 
 
-@pytest.mark.parametrize(
-    "async_driver_case", _disabled_first_params("feature_honesty", ASYNC_DRIVER_CASES), indirect=True
-)
-async def test_async_driver_feature_honesty_contract(async_driver_case: DriverCaseContext) -> None:
-    """Async feature-honesty scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+@pytest.mark.parametrize("adapter", DRIVER_FEATURE_CONTRACT_GROUPS["feature_honesty"].enabled_adapters)
+def test_driver_feature_honesty_registry_covers_enabled_adapters(adapter: str) -> None:
+    """Every feature-honesty-enabled adapter has an explicit consumed-key registry entry."""
+    _assert_driver_feature_honesty(adapter)
+
+
+@pytest.mark.parametrize("sync_driver_case", _disabled_first_params("feature_honesty", SYNC_DRIVER_CASES))
+def test_sync_driver_feature_honesty_contract(sync_driver_case: DriverCase) -> None:
+    """Sync DriverFeatures TypedDict keys are tracked as consumed after adapter migration."""
+    _assert_driver_feature_honesty(sync_driver_case.adapter)
+
+
+@pytest.mark.parametrize("async_driver_case", _disabled_first_params("feature_honesty", ASYNC_DRIVER_CASES))
+async def test_async_driver_feature_honesty_contract(async_driver_case: DriverCase) -> None:
+    """Async DriverFeatures TypedDict keys are tracked as consumed after adapter migration."""
+    _assert_driver_feature_honesty(async_driver_case.adapter)
 
 
 @pytest.mark.parametrize(
@@ -91,9 +113,9 @@ async def test_async_driver_feature_honesty_contract(async_driver_case: DriverCa
     indirect=True,
 )
 def test_sync_driver_feature_semantics_contract(sync_driver_case: DriverCaseContext) -> None:
-    """Sync enable-false semantics scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+    """Sync enable-false semantics stays inert unless the feature is explicitly enabled."""
+    assert sync_driver_case.make_config is not None
+    assert_sync_custom_type_adapters_contract(cast("SyncConfigFactory", sync_driver_case.make_config), sync_driver_case.case)
 
 
 @pytest.mark.parametrize(
@@ -102,9 +124,11 @@ def test_sync_driver_feature_semantics_contract(sync_driver_case: DriverCaseCont
     indirect=True,
 )
 async def test_async_driver_feature_semantics_contract(async_driver_case: DriverCaseContext) -> None:
-    """Async enable-false semantics scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+    """Async enable-false semantics stays inert unless the feature is explicitly enabled."""
+    assert async_driver_case.make_config is not None
+    await assert_async_custom_type_adapters_contract(
+        cast("AsyncConfigFactory", async_driver_case.make_config), async_driver_case.case
+    )
 
 
 @pytest.mark.parametrize(
@@ -114,15 +138,14 @@ async def test_async_driver_feature_semantics_contract(async_driver_case: Driver
         tuple(
             case
             for case in SYNC_DRIVER_CASES
-            if case.supports_arrow and (case.supports_arrow_streaming or case.supports_native_row_streaming)
+            if case.supports_arrow_streaming or case.supports_native_row_streaming
         ),
     ),
     indirect=True,
 )
 def test_sync_driver_feature_parity_contract(sync_driver_case: DriverCaseContext) -> None:
-    """Sync buffered/streamed/Arrow parity scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+    """Sync buffered, streamed, and Arrow values stay equal for a canonical fixture."""
+    assert_sync_driver_feature_parity_contract(sync_driver_case.driver, sync_driver_case.case)
 
 
 @pytest.mark.parametrize(
@@ -132,29 +155,28 @@ def test_sync_driver_feature_parity_contract(sync_driver_case: DriverCaseContext
         tuple(
             case
             for case in ASYNC_DRIVER_CASES
-            if case.supports_arrow and (case.supports_arrow_streaming or case.supports_native_row_streaming)
+            if case.supports_arrow_streaming or case.supports_native_row_streaming
         ),
     ),
     indirect=True,
 )
 async def test_async_driver_feature_parity_contract(async_driver_case: DriverCaseContext) -> None:
-    """Async buffered/streamed/Arrow parity scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+    """Async buffered, streamed, and Arrow values stay equal for a canonical fixture."""
+    await assert_async_driver_feature_parity_contract(async_driver_case.driver, async_driver_case.case)
 
 
 @pytest.mark.parametrize("sync_driver_case", _disabled_first_params("row_format", SYNC_DRIVER_CASES), indirect=True)
 def test_sync_driver_feature_row_format_contract(sync_driver_case: DriverCaseContext) -> None:
-    """Sync row-format fidelity scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+    """Sync row-format tags match the actual configured row shape."""
+    make_config = cast("SyncConfigFactory | None", sync_driver_case.make_config)
+    assert_sync_driver_feature_row_format_contract(make_config, sync_driver_case.case)
 
 
 @pytest.mark.parametrize("async_driver_case", _disabled_first_params("row_format", ASYNC_DRIVER_CASES), indirect=True)
 async def test_async_driver_feature_row_format_contract(async_driver_case: DriverCaseContext) -> None:
-    """Async row-format fidelity scaffolding stays disabled until migrations populate the registry."""
-    importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-    raise AssertionError("unreachable")
+    """Async row-format tags match the actual configured row shape."""
+    make_config = cast("AsyncConfigFactory | None", async_driver_case.make_config)
+    await assert_async_driver_feature_row_format_contract(make_config, async_driver_case.case)
 
 
 @pytest.mark.parametrize("source_equivalence_case", SOURCE_EQUIVALENCE_CASES, ids=lambda case: case.case_id)
