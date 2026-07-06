@@ -10,10 +10,15 @@ from sqlspec.data_dictionary import (
     IndexMetadata,
     TableMetadata,
     VersionInfo,
+    get_data_dictionary_loader,
     get_dialect_config,
 )
 from sqlspec.data_dictionary.dialects.mssql import (
+    build_mssql_metadata_capability_profile,
+    build_mssql_system_metadata_result,
+    build_mssql_table_ddl_result,
     extract_mssql_version_value,
+    get_mssql_data_dictionary_options,
     is_mssql_azure_sql,
     list_mssql_available_features,
     merge_mssql_table_lists,
@@ -21,13 +26,17 @@ from sqlspec.data_dictionary.dialects.mssql import (
     parse_mssql_engine_edition,
     parse_mssql_version_components,
     resolve_mssql_feature_flag,
+    validate_mssql_system_metadata_options,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.core import SQL
+    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile, MetadataResult
 
 __all__ = ("MssqlPythonAsyncDataDictionary", "MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
 
@@ -91,6 +100,11 @@ class _MssqlDataDictionaryMixin:
         """List available feature flags for this dialect."""
         return list_mssql_available_features(self.get_dialect_config())
 
+    def get_domain_query(self, domain: str, name: str) -> "SQL":
+        """Return a SQL Server domain query."""
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, name)
+        return cast("SQL", query.sql)
+
     def _build_version_info(
         self, version_value: str | None, edition: str | None, engine_edition_value: Any
     ) -> MssqlVersionInfo | None:
@@ -120,6 +134,12 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_metadata_capabilities(
+        self, driver: "MssqlPythonDriver", domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Get SQL Server replacement data-dictionary capability profile."""
+        return build_mssql_metadata_capability_profile(type(self).__name__, domains)
 
     def get_version(self, driver: "MssqlPythonDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
@@ -169,11 +189,15 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered = cast(
             "list[TableMetadata]",
-            driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata),
+            driver.select(
+                self.get_domain_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            ),
         )
         all_rows = cast(
             "list[TableMetadata]",
-            driver.select(self.get_query("all_tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata),
+            driver.select(
+                self.get_domain_query("tables", "all_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            ),
         )
         return merge_mssql_table_lists(ordered, all_rows)
 
@@ -186,13 +210,15 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return cast(
                 "list[ColumnMetadata]",
-                driver.select(self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata),
+                driver.select(
+                    self.get_domain_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return cast(
             "list[ColumnMetadata]",
             driver.select(
-                self.get_query("columns_by_table"),
+                self.get_domain_query("columns", "by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ColumnMetadata,
@@ -208,13 +234,18 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return cast(
                 "list[IndexMetadata]",
-                driver.select(self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata),
+                driver.select(
+                    self.get_domain_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return cast(
             "list[IndexMetadata]",
             driver.select(
-                self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+                self.get_domain_query("indexes", "by_table"),
+                schema_name=schema_name,
+                table_name=table,
+                schema_type=IndexMetadata,
             ),
         )
 
@@ -228,19 +259,44 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             return cast(
                 "list[ForeignKeyMetadata]",
                 driver.select(
-                    self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                    self.get_domain_query("constraints", "foreign_keys_by_schema"),
+                    schema_name=schema_name,
+                    schema_type=ForeignKeyMetadata,
                 ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return cast(
             "list[ForeignKeyMetadata]",
             driver.select(
-                self.get_query("foreign_keys_by_table"),
+                self.get_domain_query("constraints", "foreign_keys_by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ForeignKeyMetadata,
             ),
         )
+
+    def get_ddl(self, driver: "MssqlPythonDriver", object_name: str, schema: str | None = None) -> "MetadataResult":
+        """Generate SQL Server table DDL from sys catalog rows."""
+        schema_name = self.resolve_schema(schema)
+        columns = driver.select(
+            self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
+        )
+        indexes = driver.select(
+            self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
+        )
+        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes)
+
+    def get_system_metadata(
+        self, driver: "MssqlPythonDriver", domain: str, *, include_sensitive: bool = False
+    ) -> "MetadataResult":
+        """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
+        options = get_mssql_data_dictionary_options(driver)
+        denied = validate_mssql_system_metadata_options(domain, options)
+        if denied is not None:
+            return denied
+        query = self.get_domain_query("system", domain)
+        rows = driver.select(query)
+        return build_mssql_system_metadata_result(domain, rows, include_sensitive=include_sensitive)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -251,6 +307,12 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
 
     def __init__(self) -> None:
         super().__init__()
+
+    async def get_metadata_capabilities(
+        self, driver: "MssqlPythonAsyncDriver", domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Get SQL Server replacement data-dictionary capability profile."""
+        return build_mssql_metadata_capability_profile(type(self).__name__, domains)
 
     async def get_version(self, driver: "MssqlPythonAsyncDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
@@ -300,12 +362,14 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered = cast(
             "list[TableMetadata]",
-            await driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata),
+            await driver.select(
+                self.get_domain_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            ),
         )
         all_rows = cast(
             "list[TableMetadata]",
             await driver.select(
-                self.get_query("all_tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+                self.get_domain_query("tables", "all_by_schema"), schema_name=schema_name, schema_type=TableMetadata
             ),
         )
         return merge_mssql_table_lists(ordered, all_rows)
@@ -320,14 +384,14 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
             return cast(
                 "list[ColumnMetadata]",
                 await driver.select(
-                    self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                    self.get_domain_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
                 ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return cast(
             "list[ColumnMetadata]",
             await driver.select(
-                self.get_query("columns_by_table"),
+                self.get_domain_query("columns", "by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ColumnMetadata,
@@ -344,14 +408,17 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
             return cast(
                 "list[IndexMetadata]",
                 await driver.select(
-                    self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                    self.get_domain_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
                 ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return cast(
             "list[IndexMetadata]",
             await driver.select(
-                self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+                self.get_domain_query("indexes", "by_table"),
+                schema_name=schema_name,
+                table_name=table,
+                schema_type=IndexMetadata,
             ),
         )
 
@@ -365,19 +432,46 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
             return cast(
                 "list[ForeignKeyMetadata]",
                 await driver.select(
-                    self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                    self.get_domain_query("constraints", "foreign_keys_by_schema"),
+                    schema_name=schema_name,
+                    schema_type=ForeignKeyMetadata,
                 ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return cast(
             "list[ForeignKeyMetadata]",
             await driver.select(
-                self.get_query("foreign_keys_by_table"),
+                self.get_domain_query("constraints", "foreign_keys_by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ForeignKeyMetadata,
             ),
         )
+
+    async def get_ddl(
+        self, driver: "MssqlPythonAsyncDriver", object_name: str, schema: str | None = None
+    ) -> "MetadataResult":
+        """Generate SQL Server table DDL from sys catalog rows."""
+        schema_name = self.resolve_schema(schema)
+        columns = await driver.select(
+            self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
+        )
+        indexes = await driver.select(
+            self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
+        )
+        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes)
+
+    async def get_system_metadata(
+        self, driver: "MssqlPythonAsyncDriver", domain: str, *, include_sensitive: bool = False
+    ) -> "MetadataResult":
+        """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
+        options = get_mssql_data_dictionary_options(driver)
+        denied = validate_mssql_system_metadata_options(domain, options)
+        if denied is not None:
+            return denied
+        query = self.get_domain_query("system", domain)
+        rows = await driver.select(query)
+        return build_mssql_system_metadata_result(domain, rows, include_sensitive=include_sensitive)
 
 
 def _row_value(row: object, *names: str) -> Any:
