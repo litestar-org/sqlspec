@@ -56,6 +56,7 @@ def test_arrow_odbc_sync_case_is_active_sql_server_bulk_only() -> None:
     assert not case.supports_execute_many
     assert not case.supports_load_from_records
     assert case.execute_rowcount_policy == "unavailable"
+    assert not case.supports_stream_reopen_after_partial_iteration
 
 
 def test_seed_sync_uses_arrow_bulk_ingest_when_execute_many_is_disabled() -> None:

@@ -407,6 +407,7 @@ SYNC_DRIVER_CASES = (
         supports_native_row_streaming=True,
         supports_exception_translation=False,
         execute_rowcount_policy="unavailable",
+        supports_stream_reopen_after_partial_iteration=False,
     ),
     DriverCase(
         id="bigquery-sync",
