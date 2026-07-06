@@ -260,6 +260,41 @@ def test_compilation_cache_hit_skips_compile_and_cache_statement(sqlite_sync_dri
     assert prepared == {"id": 2}
 
 
+def test_compilation_cache_hit_rebinds_dynamic_named_parameters(sqlite_sync_driver: Any) -> None:
+    from sqlspec import SQLFileLoader
+    from sqlspec.adapters.asyncpg.core import default_statement_config as asyncpg_statement_config
+
+    clear_all_caches()
+    loader = SQLFileLoader()
+    loader.add_named_sql(
+        "get-workspace-member",
+        "SELECT * FROM workspace_members AS wm WHERE wm.member_id = :member_id",
+        dialect="postgres",
+    )
+
+    first = sqlite_sync_driver.prepare_statement(
+        loader.get_sql("get-workspace-member").where("wm.account_id = :account_id"),
+        statement_config=asyncpg_statement_config,
+        kwargs={"member_id": 1, "account_id": 10},
+    )
+    first_compiled, first_prepared = sqlite_sync_driver._compiled_statement(
+        first, asyncpg_statement_config, flatten_single_parameters=False
+    )
+
+    second = sqlite_sync_driver.prepare_statement(
+        loader.get_sql("get-workspace-member").where("wm.account_id = :account_id"),
+        statement_config=asyncpg_statement_config,
+        kwargs={"member_id": 2, "account_id": 20},
+    )
+    second_compiled, second_prepared = sqlite_sync_driver._compiled_statement(
+        second, asyncpg_statement_config, flatten_single_parameters=False
+    )
+
+    assert first_compiled.compiled_sql == second_compiled.compiled_sql
+    assert first_prepared == (1, 10)
+    assert second_prepared == (2, 20)
+
+
 def test_sync_execute_cached_statement_re_raises_mapped_exception(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     import sqlite3
 

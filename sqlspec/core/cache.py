@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
     import sqlglot.expressions as exp
 
+    from sqlspec.core.parameters import ParameterProfile
+
 
 __all__ = (
     "CacheConfig",
@@ -581,24 +583,40 @@ class CachedStatement:
     where drivers require list type.
     """
 
-    __slots__ = ("compiled_sql", "expression", "parameters")
+    __slots__ = (
+        "applied_wrap_types",
+        "compiled_sql",
+        "expression",
+        "input_named_parameters",
+        "parameter_profile",
+        "parameters",
+    )
 
     def __init__(
         self,
         compiled_sql: str,
         parameters: "tuple[Any, ...] | list[Any] | dict[str, Any] | None",
         expression: "exp.Expr | None",
+        input_named_parameters: "tuple[str, ...] | None" = None,
+        parameter_profile: "ParameterProfile | None" = None,
+        applied_wrap_types: bool = False,
     ) -> None:
+        self.applied_wrap_types = applied_wrap_types
         self.compiled_sql = compiled_sql
-        self.parameters = parameters
         self.expression = expression
+        self.input_named_parameters = input_named_parameters or ()
+        self.parameter_profile = parameter_profile
+        self.parameters = parameters
 
     def __repr__(self) -> str:
         return (
             "CachedStatement("
             f"compiled_sql={self.compiled_sql!r}, "
             f"parameters={self.parameters!r}, "
-            f"expression={self.expression!r})"
+            f"expression={self.expression!r}, "
+            f"input_named_parameters={self.input_named_parameters!r}, "
+            f"parameter_profile={self.parameter_profile!r}, "
+            f"applied_wrap_types={self.applied_wrap_types!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -608,10 +626,20 @@ class CachedStatement:
             self.compiled_sql == other.compiled_sql
             and self.parameters == other.parameters
             and self.expression == other.expression
+            and self.input_named_parameters == other.input_named_parameters
+            and self.parameter_profile == other.parameter_profile
+            and self.applied_wrap_types == other.applied_wrap_types
         )
 
     def __hash__(self) -> int:
-        return hash((self.compiled_sql, self.parameters, self.expression))
+        return hash((
+            self.compiled_sql,
+            self.parameters,
+            self.expression,
+            self.input_named_parameters,
+            self.parameter_profile,
+            self.applied_wrap_types,
+        ))
 
 
 def create_cache_key(namespace: str, key: str, dialect: str | None = None) -> str:
