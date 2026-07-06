@@ -12,7 +12,7 @@ class _FakeCursor:
 
     def __init__(self, rows: "list[tuple[Any, ...]] | None" = None) -> None:
         self.rows = list(rows or [])
-        self.executed: "list[tuple[str, dict[str, Any] | None]]" = []
+        self.executed: list[tuple[str, dict[str, Any] | None]] = []
         self.rowcount = 0
 
     def execute(self, sql: str, parameters: "dict[str, Any] | None" = None) -> None:
