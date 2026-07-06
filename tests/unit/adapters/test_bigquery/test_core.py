@@ -1,11 +1,12 @@
 """Unit tests for BigQuery core performance helpers."""
 
-from collections.abc import Iterable
+import importlib
+from collections.abc import ItemsView, Iterable, Iterator, Mapping
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import UUID
 
+import pytest
 from google.cloud.bigquery import QueryJobConfig
 
 from sqlspec.adapters.bigquery.core import (
@@ -21,7 +22,6 @@ from sqlspec.adapters.bigquery.core import (
     run_query_job,
 )
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
-from sqlspec.adapters.bigquery.type_converter import BigQueryOutputConverter
 from sqlspec.core import ParameterStyle
 from sqlspec.utils.serializers import to_json
 
@@ -73,12 +73,27 @@ class _RecordingScriptJob:
         self.result_calls.append(kwargs)
 
 
-class _RecordingRow:
+class _RecordingRow(Mapping[str, object]):
     def __init__(self, values: dict[str, object]) -> None:
         self._values = values
 
-    def items(self) -> Iterable[tuple[str, object]]:
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
+
+    def items(self) -> ItemsView[str, object]:
         return self._values.items()
+
+
+class _MappingRow(_RecordingRow):
+    def items(self) -> ItemsView[str, object]:
+        msg = "fetch_chunk should use dict(row), not row.items()"
+        raise AssertionError(msg)
 
 
 def _schema_field(name: str) -> SimpleNamespace:
@@ -86,7 +101,7 @@ def _schema_field(name: str) -> SimpleNamespace:
 
 
 class _RecordingStreamJob:
-    def __init__(self, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
+    def __init__(self, pages: Iterable[Iterable[Mapping[str, object]]] | None = None) -> None:
         self.result_kwargs: dict[str, Any] = {}
         self._pages = iter(pages or ())
 
@@ -96,7 +111,7 @@ class _RecordingStreamJob:
 
 
 class _RecordingStreamDriver:
-    def __init__(self, api_base_url: str, pages: Iterable[Iterable[_RecordingRow]] | None = None) -> None:
+    def __init__(self, api_base_url: str, pages: Iterable[Iterable[Mapping[str, object]]] | None = None) -> None:
         self.connection = SimpleNamespace(_connection=SimpleNamespace(API_BASE_URL=api_base_url))
         self._job_retry: Any = build_retry(2.0)
         self._job_retry_deadline = 2.0
@@ -376,24 +391,14 @@ def test_stream_source_skips_empty_pages_before_rows() -> None:
     assert source.fetch_chunk() == []
 
 
-def test_type_converter_bigquery_output_converter_is_final() -> None:
-    assert getattr(BigQueryOutputConverter, "__final__", False) is True
+def test_stream_source_converts_rows_without_items_copying() -> None:
+    driver = _RecordingStreamDriver("https://bigquery.googleapis.com", pages=((_MappingRow({"value": 1}),),))
+    source = BigQueryStreamSource(cast(Any, driver), "SELECT 1", None, 100)
+    source.start()
+
+    assert source.fetch_chunk() == [{"value": 1}]
 
 
-def test_type_converter_bigquery_output_converter_instantiates() -> None:
-    converter = BigQueryOutputConverter()
-    assert isinstance(converter, BigQueryOutputConverter)
-
-
-def test_type_converter_bigquery_output_converter_converts_uuid_string() -> None:
-    converter = BigQueryOutputConverter(enable_uuid_conversion=True)
-    uuid_str = "550e8400-e29b-41d4-a716-446655440000"
-    result = converter.convert(uuid_str)
-    assert isinstance(result, UUID)
-    assert str(result) == uuid_str
-
-
-def test_type_converter_bigquery_output_converter_convert_detected_fallback() -> None:
-    converter = BigQueryOutputConverter()
-    result = converter._convert_detected("hello", "unknown_type")
-    assert result == "hello"
+def test_bigquery_type_converter_module_is_gone() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("sqlspec.adapters.bigquery.type_converter")

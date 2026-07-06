@@ -759,6 +759,35 @@ def test_schema_dump_wire_format_opt_out_msgspec_fields_are_precomputed_per_seri
     assert call_count == 1
 
 
+def test_schema_dump_dataclass_fields_are_precomputed_per_serializer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serializer registration should precompute dataclass field metadata once."""
+
+    from sqlspec.utils.serializers import _schema as schema_module
+
+    @dataclass
+    class _User:
+        user_id: str
+        display_name: str
+
+    original_fields = schema_module.dataclasses_fields
+    call_count = 0
+
+    def count_fields(schema_type: type[Any]) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return original_fields(schema_type)
+
+    reset_serializer_cache()
+    monkeypatch.setattr(schema_module, "dataclasses_fields", count_fields)
+
+    first = schema_dump(_User(user_id="first", display_name="Alice"), exclude_unset=False)
+    second = schema_dump(_User(user_id="second", display_name="Bob"), exclude_unset=False)
+
+    assert first == {"user_id": "first", "display_name": "Alice"}
+    assert second == {"user_id": "second", "display_name": "Bob"}
+    assert call_count == 1
+
+
 def test_schema_dump_wire_format_opt_out_msgspec_dump_modes_use_one_parameterized_function() -> None:
     """All msgspec serializer modes should share one dump implementation."""
     import msgspec

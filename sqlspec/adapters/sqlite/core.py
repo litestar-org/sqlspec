@@ -417,7 +417,7 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply SQLite driver feature defaults to statement config."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    features.setdefault("enable_custom_adapters", True)
+    features.setdefault("enable_custom_adapters", False)
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 

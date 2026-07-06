@@ -69,6 +69,23 @@ class FakeConnection:
         self.closed = True
 
 
+def test_arrow_odbc_config_applies_driver_feature_json_serializer_to_statement_config() -> None:
+    """Custom JSON serializers should reach the statement parameter config."""
+
+    def serializer(value: object) -> str:
+        return f"json:{value!r}"
+
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": "Driver={ODBC Driver 18 for SQL Server};"},
+        driver_features={"json_serializer": serializer},
+    )
+
+    parameter_config = config.statement_config.parameter_config
+    assert parameter_config.json_serializer is serializer
+    assert parameter_config.type_coercion_map[dict] is serializer
+    assert parameter_config.type_coercion_map[list] is serializer
+
+
 class NoCloseConnection:
     """Connection stub matching arrow-odbc 10.4's no-close public surface."""
 
@@ -240,6 +257,25 @@ def test_arrow_odbc_select_to_arrow_reader_skips_table_materialization(monkeypat
 
     assert result.rows_affected == -1
     assert result.get_data().read_all().to_pydict() == {"x": [1, 2, 3]}
+
+
+def test_arrow_odbc_select_stream_uses_native_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """select_stream should stream Arrow batches instead of materializing the whole table."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    def fail_reader_to_table(_reader: object) -> pa.Table:
+        msg = "select_stream should not materialize via _reader_to_table"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver._reader_to_table", fail_reader_to_table)
+
+    with driver.select_stream("SELECT 1 AS x", native_only=True, chunk_size=2) as stream:
+        rows = list(stream)
+
+    assert rows == [{"x": 1}, {"x": 2}, {"x": 3}]
+    assert connection.read_calls[0]["query"] == "SELECT 1 AS x"
+    assert connection.read_calls[0]["batch_size"] == 2
 
 
 def test_arrow_odbc_select_to_arrow_raises_mapped_driver_exception(monkeypatch: pytest.MonkeyPatch) -> None:

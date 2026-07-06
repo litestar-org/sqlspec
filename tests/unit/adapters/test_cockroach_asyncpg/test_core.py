@@ -194,6 +194,48 @@ class _RecordingCockroachAsyncpgDriver(CockroachAsyncpgDriver):
         return _execution_result("script")
 
 
+class _RetryableCockroachError(Exception):
+    sqlstate = "40001"
+
+
+class _RetryConnection:
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+        self.in_transaction = False
+
+    async def execute(self, sql: str) -> None:
+        self.commands.append(sql)
+        if sql == "BEGIN":
+            self.in_transaction = True
+        elif sql in {"COMMIT", "ROLLBACK"}:
+            self.in_transaction = False
+
+    def is_in_transaction(self) -> bool:
+        return self.in_transaction
+
+
+class _RetryingCockroachAsyncpgDriver(CockroachAsyncpgDriver):
+    def __init__(self, connection: _RetryConnection) -> None:
+        super().__init__(
+            connection=cast("CockroachAsyncpgConnection", connection),
+            driver_features={
+                "enable_auto_retry": True,
+                "enable_retry_logging": False,
+                "max_retries": 1,
+                "retry_delay_base_ms": 0.0,
+                "retry_delay_max_ms": 0.0,
+            },
+        )
+        self.calls = 0
+
+    async def _dispatch_execute_impl(self, cursor: object, statement: SQL) -> ExecutionResult:
+        _ = cursor, statement
+        self.calls += 1
+        if self.calls == 1:
+            raise _RetryableCockroachError("restart transaction")
+        return _execution_result("retried")
+
+
 @pytest.mark.anyio
 async def test_driver_cockroach_asyncpg_non_retry_execute_many_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachAsyncpgDriver()
@@ -208,3 +250,44 @@ async def test_driver_cockroach_asyncpg_non_retry_execute_script_uses_impl_wrapp
     result = await driver.dispatch_execute_script(object(), SQL("SELECT 1"))
     assert result.cursor_result == "script"
     assert driver.calls == ["script"]
+
+
+@pytest.mark.anyio
+async def test_driver_cockroach_asyncpg_dispatch_execute_does_not_retry_inside_statement() -> None:
+    connection = _RetryConnection()
+    driver = _RetryingCockroachAsyncpgDriver(connection)
+
+    with pytest.raises(_RetryableCockroachError):
+        await driver.dispatch_execute(object(), SQL("SELECT 1"))
+
+    assert driver.calls == 1
+    assert connection.commands == []
+
+
+@pytest.mark.anyio
+async def test_driver_cockroach_asyncpg_transaction_retry_replays_whole_callback() -> None:
+    connection = _RetryConnection()
+    driver = CockroachAsyncpgDriver(
+        connection=cast("CockroachAsyncpgConnection", connection),
+        driver_features={
+            "enable_auto_retry": True,
+            "enable_retry_logging": False,
+            "max_retries": 1,
+            "retry_delay_base_ms": 0.0,
+            "retry_delay_max_ms": 0.0,
+        },
+    )
+    calls = 0
+
+    async def operation() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise _RetryableCockroachError("restart transaction")
+        return "ok"
+
+    result = await driver.run_transaction_with_retry(operation)
+
+    assert result == "ok"
+    assert calls == 2
+    assert connection.commands == ["BEGIN", "ROLLBACK", "BEGIN", "COMMIT"]

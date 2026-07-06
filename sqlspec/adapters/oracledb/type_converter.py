@@ -1,64 +1,26 @@
 """Oracle-specific type conversion with LOB optimization.
 
 Provides specialized type handling for Oracle databases, including
-efficient LOB (Large Object) processing and JSON storage detection.
+efficient LOB (Large Object) processing and vector helpers.
 """
 
 import array
-import re
-from typing import Any, Final
+from typing import Any
 
-from sqlspec.core.type_converter import CachedOutputConverter
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_readable
 
-__all__ = ("ORACLE_JSON_STORAGE_REGEX", "ORACLE_SPECIAL_CHARS", "OracleOutputConverter")
-
-ORACLE_JSON_STORAGE_REGEX: Final[re.Pattern[str]] = re.compile(
-    r"^(?:"
-    r"(?P<json_type>JSON)|"
-    r"(?P<blob_oson>BLOB.*OSON)|"
-    r"(?P<blob_json>BLOB.*JSON)|"
-    r"(?P<clob_json>CLOB.*JSON)"
-    r")$",
-    re.IGNORECASE,
-)
-
-ORACLE_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({"{", "[", "-", ":", "T", "."})
+__all__ = ("OracleOutputConverter",)
 
 
-class OracleOutputConverter(CachedOutputConverter):
+class OracleOutputConverter:
     """Oracle-specific output conversion with LOB optimization.
 
-    Extends CachedOutputConverter with Oracle-specific functionality
-    including streaming LOB support and JSON storage type detection.
+    Provides streaming LOB support and NumPy vector helpers.
     """
 
     __slots__ = ()
-
-    def __init__(self, cache_size: int = 5000) -> None:
-        """Initialize converter with Oracle-specific options.
-
-        Args:
-            cache_size: Maximum number of string values to cache (default: 5000)
-        """
-        super().__init__(special_chars=ORACLE_SPECIAL_CHARS, cache_size=cache_size)
-
-    def _convert_detected(self, value: str, detected_type: str) -> Any:
-        """Convert value with Oracle-specific handling.
-
-        Args:
-            value: String value to convert.
-            detected_type: Detected type name.
-
-        Returns:
-            Converted value, or original on failure.
-        """
-        try:
-            return self.convert_value(value, detected_type)
-        except Exception:
-            return value
 
     async def process_lob(self, value: Any) -> Any:
         """Process Oracle LOB objects efficiently.

@@ -17,9 +17,12 @@ Routing matrix (input):
 Routing matrix (output):
 
 * ``DB_TYPE_JSON``: passthrough (python-oracledb already returns ``dict``).
-* ``DB_TYPE_BLOB`` with ``JSON`` in column ``type_name``: parse via
+* ``FetchInfo.is_oson`` + ``DB_TYPE_BLOB``: decode through
+ ``connection.decode_oson``. This branch precedes ``is_json`` because OSON
+ metadata can report both flags.
+* ``FetchInfo.is_json`` + ``DB_TYPE_BLOB``: fetch as bytes and parse via
  ``json_converter_out_blob``.
-* ``DB_TYPE_CLOB`` with ``JSON`` in column ``type_name``: parse via
+* ``FetchInfo.is_json`` + ``DB_TYPE_CLOB`` or string types: parse via
  ``json_converter_out_clob``.
 
 Handlers chain to any pre-existing ``inputtypehandler`` / ``outputtypehandler``
@@ -31,7 +34,9 @@ handler returns ``None`` for values it does not own.
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON
+from oracledb import DB_TYPE_CHAR, DB_TYPE_NCHAR, DB_TYPE_NVARCHAR, DB_TYPE_VARCHAR
+
+from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON, DB_TYPE_LONG, DB_TYPE_LONG_RAW
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -44,19 +49,18 @@ __all__ = (
     "json_converter_in_clob",
     "json_converter_out_blob",
     "json_converter_out_clob",
+    "json_converter_out_oson",
     "json_input_type_handler",
     "json_output_type_handler",
     "register_json_handlers",
 )
-
-
-_JSON_TYPE_NAME_MARKER = "JSON"
 
 # Server-version thresholds for JSON binding strategy selection.
 # 21c+ supports DB_TYPE_JSON (binary OSON); 19c-20c uses BLOB CHECK (... IS JSON);
 # pre-19c uses CLOB CHECK (... IS JSON).
 _NATIVE_JSON_MIN_MAJOR = 21
 _BLOB_IS_JSON_MIN_MAJOR = 19
+_JSON_STRING_TYPE_CODES = (DB_TYPE_VARCHAR, DB_TYPE_CHAR, DB_TYPE_NVARCHAR, DB_TYPE_NCHAR)
 
 
 def json_converter_in_clob(value: Any) -> str:
@@ -81,6 +85,13 @@ def json_converter_out_blob(value: "bytes | None") -> Any:
     if value is None:
         return None
     return from_json(value)
+
+
+def json_converter_out_oson(connection: "Connection | AsyncConnection", value: "bytes | None") -> Any:
+    """Decode OSON bytes from a BLOB read back into a Python value."""
+    if value is None:
+        return None
+    return connection.decode_oson(value)
 
 
 def _is_json_payload(value: Any) -> bool:
@@ -129,14 +140,21 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     if type_code is DB_TYPE_JSON:
         return None
 
-    type_name = (getattr(metadata, "type_name", "") or "").upper()
-    if _JSON_TYPE_NAME_MARKER not in type_name:
-        return None
+    if getattr(metadata, "is_oson", False) and type_code is DB_TYPE_BLOB:
+        return cursor.var(
+            DB_TYPE_LONG_RAW,
+            arraysize=cursor.arraysize,
+            outconverter=partial(json_converter_out_oson, cursor.connection),
+        )
 
-    if type_code is DB_TYPE_BLOB:
-        return cursor.var(DB_TYPE_BLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
-    if type_code is DB_TYPE_CLOB:
-        return cursor.var(DB_TYPE_CLOB, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
+    if getattr(metadata, "is_json", False):
+        if type_code is DB_TYPE_BLOB:
+            return cursor.var(DB_TYPE_LONG_RAW, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
+        if type_code is DB_TYPE_CLOB:
+            return cursor.var(DB_TYPE_LONG, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
+        if type_code in _JSON_STRING_TYPE_CODES:
+            return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
+
     return None
 
 

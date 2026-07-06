@@ -1,13 +1,16 @@
 # pyright: reportArgumentType=false
 """Unit tests for Oracle row materialization helpers."""
 
+import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from sqlspec.adapters.oracledb.core import collect_async_rows, collect_sync_rows, resolve_row_metadata
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.core import OperationProfile, ParameterProfile, ProcessedState
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.driver._query_cache import CachedQuery
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
@@ -30,6 +33,54 @@ class _ReadableValue:
         return self._value
 
 
+class _AsyncReadableValue:
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    async def read(self) -> str:
+        return self._value
+
+
+class _AsyncCursor:
+    def __init__(self) -> None:
+        self.description = [("PAYLOAD", _TypeCode("DB_TYPE_CLOB"))]
+        self.rowcount = 1
+        self.execute_calls: list[tuple[str, object, dict[str, object]]] = []
+
+    async def execute(self, sql: str, parameters: object, **kwargs: object) -> None:
+        self.execute_calls.append((sql, parameters, kwargs))
+
+    async def fetchall(self) -> list[tuple[object]]:
+        return [(_AsyncReadableValue("async text"),)]
+
+    def close(self) -> None:
+        return None
+
+
+class _AsyncConnection:
+    def __init__(self, cursor: _AsyncCursor) -> None:
+        self.cursor_obj = cursor
+
+    def cursor(self) -> _AsyncCursor:
+        return self.cursor_obj
+
+
+def _cached_select(compiled_sql: str = "SELECT payload FROM dual") -> CachedQuery:
+    return CachedQuery(
+        compiled_sql=compiled_sql,
+        parameter_profile=ParameterProfile(),
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+        param_count=0,
+        processed_state=ProcessedState(compiled_sql=compiled_sql, execution_parameters=[], operation_type="SELECT"),
+    )
+
+
 def test_collect_sync_rows_reuses_original_rows_when_no_lob_columns() -> None:
     """collect_sync_rows should avoid row copy work for non-LOB result sets."""
     rows = [(1, "alpha"), (2, "beta")]
@@ -49,6 +100,15 @@ def test_collect_sync_rows_coerces_lob_values_when_lob_columns_present() -> None
     assert column_names == ["id", "payload"]
 
 
+def test_collect_sync_rows_leaves_json_text_as_string_without_content_sniffing() -> None:
+    """Readable CLOB values should be read as strings, not auto-parsed as JSON."""
+    rows = [(1, _ReadableValue('{"key": "value"}'))]
+    description = [("ID", _TypeCode("DB_TYPE_NUMBER")), ("PAYLOAD", _TypeCode("DB_TYPE_CLOB"))]
+    (data, _) = collect_sync_rows(rows, description, {"enable_lowercase_column_names": True})
+    assert data == [(1, '{"key": "value"}')]
+    assert isinstance(data[0][1], str)
+
+
 async def test_collect_async_rows_reuses_original_rows_when_no_lob_columns() -> None:
     """collect_async_rows should avoid async coercion for non-LOB result sets."""
     rows = [(1, "alpha"), (2, "beta")]
@@ -65,6 +125,32 @@ async def test_collect_async_rows_coerces_lob_values_when_lob_columns_present() 
     (data, column_names) = await collect_async_rows(rows, description, {"enable_lowercase_column_names": True})
     assert data == [(1, "plain text")]
     assert column_names == ["id", "payload"]
+
+
+async def test_collect_async_rows_leaves_json_text_as_string_without_content_sniffing() -> None:
+    """Readable CLOB values should be read as strings, not auto-parsed as JSON."""
+    rows = [(1, _ReadableValue('{"key": "value"}'))]
+    description = [("ID", _TypeCode("DB_TYPE_NUMBER")), ("PAYLOAD", _TypeCode("DB_TYPE_CLOB"))]
+    (data, _) = await collect_async_rows(rows, description, {"enable_lowercase_column_names": True})
+    assert data == [(1, '{"key": "value"}')]
+    assert isinstance(data[0][1], str)
+
+
+@pytest.mark.anyio
+async def test_oracle_async_cached_collect_reads_async_lob_locators() -> None:
+    """Async direct collection should not leave coroutine objects in rows."""
+    cursor = _AsyncCursor()
+    driver = OracleAsyncDriver(
+        connection=cast("OracleAsyncConnection", _AsyncConnection(cursor)),
+        driver_features={"enable_lowercase_column_names": True, "fetch_lobs": True},
+    )
+
+    result = await driver._execute_cache_hit("SELECT payload FROM dual", {}, _cached_select())
+
+    value = result.get_data()[0]["payload"]
+    if inspect.iscoroutine(value):
+        value.close()
+    assert value == "async text"
 
 
 def test_resolve_row_metadata_reuses_cached_description() -> None:

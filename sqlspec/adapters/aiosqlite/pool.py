@@ -49,9 +49,15 @@ def _resolve_row_factory(row_factory: Any) -> Any:
     return row_factory
 
 
+def _has_active_transaction(connection: "AiosqliteConnection") -> bool:
+    return bool(getattr(connection, "in_transaction", False))
+
+
 async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup: "dict[str, Any]") -> None:
-    for pragma_name, pragma_value in runtime_setup.get("pragmas", ()):
-        await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
+    pragmas = runtime_setup.get("pragmas", ())
+    if pragmas:
+        pragma_script = "\n".join(f"PRAGMA {pragma_name} = {pragma_value};" for pragma_name, pragma_value in pragmas)
+        await connection.executescript(pragma_script)
 
     extensions = runtime_setup.get("extensions")
     if extensions:
@@ -192,6 +198,8 @@ class AiosqlitePoolConnection:
         """Reset connection to clean state."""
         if self._closed:
             return
+        if not _has_active_transaction(self.connection):
+            return
         with suppress(Exception):
             await self.connection.rollback()
 
@@ -200,8 +208,9 @@ class AiosqlitePoolConnection:
         if self._closed:
             return
         try:
-            with suppress(Exception):
-                await self.connection.rollback()
+            if _has_active_transaction(self.connection):
+                with suppress(Exception):
+                    await self.connection.rollback()
             await self.connection.close()
         except Exception:
             # Note: No pool context available at connection level
@@ -460,20 +469,23 @@ class AiosqliteConnectionPool:
         is_memory_db = ":memory:" in database_path or "mode=memory" in database_path
 
         try:
+            pragma_lines: list[str] = []
             if is_memory_db:
-                await connection.execute("PRAGMA journal_mode = MEMORY")
-                await connection.execute("PRAGMA synchronous = OFF")
-                await connection.execute("PRAGMA temp_store = MEMORY")
-                await connection.execute("PRAGMA cache_size = -16000")
+                pragma_lines.extend([
+                    "PRAGMA journal_mode = MEMORY;",
+                    "PRAGMA synchronous = OFF;",
+                    "PRAGMA temp_store = MEMORY;",
+                    "PRAGMA cache_size = -16000;",
+                ])
             else:
-                await connection.execute("PRAGMA journal_mode = WAL")
-                await connection.execute("PRAGMA synchronous = NORMAL")
+                pragma_lines.extend(["PRAGMA journal_mode = WAL;", "PRAGMA synchronous = NORMAL;"])
 
-            await connection.execute("PRAGMA foreign_keys = ON")
-            await connection.execute("PRAGMA busy_timeout = 30000")
+            pragma_lines.extend(["PRAGMA foreign_keys = ON;", "PRAGMA busy_timeout = 30000;"])
 
             if is_shared_cache and is_memory_db:
-                await connection.execute("PRAGMA read_uncommitted = ON")
+                pragma_lines.append("PRAGMA read_uncommitted = ON;")
+
+            await connection.executescript("\n".join(pragma_lines))
 
             await connection.commit()
 
@@ -769,8 +781,9 @@ class AiosqliteConnectionPool:
         try:
             # Fast path: skip timeout wrapper for reset, just do the rollback directly
             # The rollback itself is fast for SQLite; timeout is overkill for hot path
-            with suppress(Exception):
-                await connection.connection.rollback()
+            if _has_active_transaction(connection.connection):
+                with suppress(Exception):
+                    await connection.connection.rollback()
             connection.idle_since = time.time()  # mark_as_idle inline
             self._queue.put_nowait(connection)
         except Exception as e:

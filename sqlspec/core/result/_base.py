@@ -285,6 +285,7 @@ class SQLResult(StatementResult):
         if not raw:
             self._materialized_dicts = []
             return self._materialized_dicts
+        self._assert_row_format_fidelity(raw)
         fmt = self._row_format
         if fmt == "dict":
             self._materialized_dicts = raw
@@ -304,6 +305,27 @@ class SQLResult(StatementResult):
             # "record" — dict-like objects (asyncpg.Record, sqlite3.Row, bigquery.Row)
             self._materialized_dicts = [dict(record) for record in raw]
         return self._materialized_dicts
+
+    def _assert_row_format_fidelity(self, rows: "list[Any]") -> None:
+        """Debug-only row-format shape check for first-row fidelity."""
+        if not __debug__ or not rows:
+            return
+
+        first_row = rows[0]
+        row_format = self._row_format
+        if row_format == "dict":
+            assert isinstance(first_row, dict), "row_format='dict' requires dict rows"
+            return
+        if row_format == "tuple":
+            assert isinstance(first_row, tuple), "row_format='tuple' requires tuple rows"
+            return
+        if row_format == "record":
+            try:
+                keys = first_row.keys
+            except AttributeError as exc:
+                msg = "row_format='record' requires dict-like rows"
+                raise AssertionError(msg) from exc
+            assert callable(keys), "row_format='record' requires dict-like rows"
 
     @property
     def raw_data(self) -> "tuple[list[Any], list[str]]":
@@ -378,6 +400,7 @@ class SQLResult(StatementResult):
             if cached_rows is not None:
                 return cast("list[SchemaT]", cached_rows)
         converted_rows = cast("list[SchemaT]", to_schema(rows, schema_type=schema_type))
+        self._materialized_dicts = None
         if cache is None:
             self._schema_rows_cache = {schema_type: converted_rows}
         else:
@@ -391,6 +414,7 @@ class SQLResult(StatementResult):
             if cached_row is not None:
                 return cast("SchemaT", cached_row)
         converted_row = to_schema(row, schema_type=schema_type)
+        self._materialized_dicts = None
         if row_cache is None:
             self._schema_row_cache = {schema_type: converted_row}
         else:

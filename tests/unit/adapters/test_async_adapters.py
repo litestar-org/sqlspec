@@ -332,7 +332,7 @@ async def test_async_driver_execute_script_method(aiosqlite_async_driver: Aiosql
     ("method_name", "call_args"),
     [
         pytest.param("execute", ("SELECT * FROM users WHERE id = ?", 1), id="execute"),
-        pytest.param("execute_many", ("INSERT INTO users (name) VALUES (?)", [["alice"]]), id="execute_many"),
+        pytest.param("execute_many", (SQL("INSERT INTO users (name) VALUES (?)"), [["alice"]]), id="execute_many"),
         pytest.param("execute_script", ("INSERT INTO users (name) VALUES ('alice');",), id="execute_script"),
     ],
 )

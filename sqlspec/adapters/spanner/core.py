@@ -1,8 +1,11 @@
 """Spanner adapter compiled helpers."""
 
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from typing import TYPE_CHECKING, Any, cast
 
 from google.api_core import exceptions as api_exceptions
+from google.cloud.spanner_v1.data_types import JsonObject
+from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -37,6 +40,7 @@ __all__ = (
     "driver_profile",
     "infer_param_types",
     "resolve_column_names",
+    "resolve_row_plan",
     "supports_batch_update",
     "supports_write",
 )
@@ -144,6 +148,53 @@ def resolve_column_names(fields: "Sequence[Any] | None", cache: "dict[int, tuple
     return column_names
 
 
+def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
+    """Convert a native Spanner JSON cell using the configured deserializer."""
+    if isinstance(value, JsonObject):
+        json_value = cast("Any", value).serialize()
+    elif isinstance(value, str):
+        json_value = value
+    else:
+        return value
+
+    try:
+        return json_deserializer(json_value)
+    except (TypeError, ValueError):
+        return value
+
+
+def resolve_row_plan(
+    fields: "Sequence[Any] | None",
+    cache: "dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]]",
+    *,
+    json_deserializer: "Callable[[str], Any]",
+) -> "tuple[list[str], tuple[tuple[int, Any], ...] | None]":
+    """Resolve column names and metadata-driven converters for a Spanner result."""
+    if not fields:
+        return [], None
+
+    cache_key = id(fields)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] is fields:
+        return cached[1], cached[2]
+
+    column_names = [getattr(field, "name", "") for field in fields]
+    plan_entries: list[tuple[int, Any]] = []
+    append_plan_entry = plan_entries.append
+    convert_json = partial(_convert_json_row_value, json_deserializer=json_deserializer)
+    for index, field in enumerate(fields):
+        field_type = getattr(field, "type_", None)
+        type_code = getattr(field_type, "code", None)
+        if type_code == TypeCode.JSON:
+            append_plan_entry((index, convert_json))
+
+    plan = tuple(plan_entries) if plan_entries else None
+    if len(cache) >= COLUMN_CACHE_MAX_SIZE:
+        cache.pop(next(iter(cache)))
+    cache[cache_key] = (fields, column_names, plan)
+    return column_names, plan
+
+
 def coerce_params(
     params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None",
     *,
@@ -156,36 +207,39 @@ def coerce_params(
 
 
 def collect_rows(
-    rows: "Sequence[Any]", fields: "Sequence[Any]", converter: Any, *, column_names: "list[str] | None" = None
-) -> "tuple[list[tuple[Any, ...]], list[str]]":
+    rows: "list[Any]",
+    fields: "Sequence[Any]",
+    *,
+    column_names: "list[str] | None" = None,
+    column_plan: "tuple[tuple[int, Any], ...] | None" = None,
+) -> "tuple[list[Any], list[str]]":
     """Collect Spanner rows as tuples with type conversion applied.
 
-    Type conversion is still applied to each row value. The raw converted
-    tuples are returned instead of dicts so that ``SQLResult`` can handle
-    lazy dict materialization based on ``row_format``.
+    When a metadata-driven column plan is unavailable, the original row list
+    is returned unchanged. When a plan exists, only the planned columns are
+    converted and the rows are copied once.
 
     Args:
         rows: Rows from result set.
         fields: Result set fields metadata.
-        converter: Type converter for row values.
         column_names: Optional precomputed column names.
+        column_plan: Optional zero-copy column conversion plan.
 
     Returns:
         Tuple of (rows, column_names).
     """
     resolved_column_names = column_names if column_names is not None else [field.name for field in fields]
-    num_columns = len(resolved_column_names)
-    string_converter = converter.convert_if_detected
-    data: list[tuple[Any, ...]] = []
+    if column_plan is None and all(type(row) is tuple for row in rows):
+        return rows, resolved_column_names
+    if column_plan is None:
+        return [tuple(row) for row in rows], resolved_column_names
+
+    data: list[Any] = []
     append = data.append
     for row in rows:
-        converted_row: list[Any] = []
-        append_value = converted_row.append
-        for index in range(num_columns):
-            value = row[index]
-            if isinstance(value, str):
-                value = string_converter(value)
-            append_value(value)
+        converted_row = list(row)
+        for index, converter in column_plan:
+            converted_row[index] = converter(converted_row[index])
         append(tuple(converted_row))
     return data, resolved_column_names
 

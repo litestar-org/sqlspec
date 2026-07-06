@@ -18,16 +18,23 @@ if TYPE_CHECKING:
 class ArrowCursor:
     """Cursor stub for Arrow and BulkCopy tests."""
 
-    description = (("x",),)
-
     def __init__(self) -> None:
         self.closed = False
         self.executed: list[tuple[str, object]] = []
         self.bulkcopy_calls: list[tuple[str, list[object], dict[str, object]]] = []
+        self.description = (("id",), ("name",))
+        self.fetchmany_sizes: list[int] = []
         self.rowcount = 0
+        self.rows = [(1, "Ada"), (2, "Grace"), (3, "Linus")]
 
     def execute(self, sql: str, parameters: object = None) -> None:
         self.executed.append((sql, parameters))
+
+    def fetchmany(self, size: int) -> list[tuple[int, str]]:
+        self.fetchmany_sizes.append(size)
+        chunk = self.rows[:size]
+        self.rows = self.rows[size:]
+        return chunk
 
     def arrow(self, batch_size: int = 8192) -> object:
         import pyarrow as pa
@@ -147,6 +154,20 @@ def test_select_to_arrow_reader_uses_arrow_reader_and_defers_cursor_close() -> N
     assert result.rows_affected == -1
     assert connection.cursor_obj.closed is False
     assert result.get_data().read_all().to_pydict() == {"x": [1, 2, 3]}
+    assert connection.cursor_obj.closed is True
+
+
+def test_select_stream_uses_fetchmany_chunks() -> None:
+    """The sync driver should stream rows with cursor.fetchmany()."""
+    connection = ArrowConnection()
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
+
+    with driver.select_stream("SELECT id, name FROM dbo.users", native_only=True, chunk_size=2) as stream:
+        rows = list(stream)
+
+    assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}, {"id": 3, "name": "Linus"}]
+    assert connection.cursor_obj.executed == [("SELECT id, name FROM dbo.users", [])]
+    assert connection.cursor_obj.fetchmany_sizes == [2, 2, 2]
     assert connection.cursor_obj.closed is True
 
 
@@ -294,6 +315,30 @@ async def test_async_select_to_arrow_reader_uses_arrow_reader_and_defers_cursor_
     assert connection.cursor_obj.closed is True
     assert "_execute_cursor" in calls
     assert "arrow_reader" in calls
+
+
+@pytest.mark.anyio
+async def test_async_select_stream_offloads_fetchmany(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The async driver should stream rows with cursor.fetchmany() via to_thread."""
+    calls: list[str] = []
+
+    async def fake_to_thread(func: Callable[..., object], /, *args: object, **kwargs: object) -> object:
+        calls.append(getattr(func, "__name__", repr(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(driver_module.asyncio, "to_thread", fake_to_thread)
+
+    connection = ArrowConnection()
+    driver = MssqlPythonAsyncDriver(cast("MssqlPythonConnection", connection))
+
+    async with driver.select_stream("SELECT id, name FROM dbo.users", native_only=True, chunk_size=2) as stream:
+        rows = [row async for row in stream]
+
+    assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}, {"id": 3, "name": "Linus"}]
+    assert connection.cursor_obj.fetchmany_sizes == [2, 2, 2]
+    assert "_execute_cursor" in calls
+    assert "fetchmany" in calls
+    assert "close" in calls
 
 
 @pytest.mark.anyio

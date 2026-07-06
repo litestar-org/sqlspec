@@ -21,6 +21,11 @@ v0.54.0 - SQL processing correctness and cleanup
   statement config plus normalized driver-feature dictionary across backends.
 * MySQL-family adapter config, driver, and pool modules now resolve runtime
   vendor symbols through adapter-local typing modules.
+* Oracle LOB fetches now default to direct string/byte materialization where
+  python-oracledb supports it. Pass ``fetch_lobs=True`` when application code
+  needs native Oracle LOB locators. Unconstrained LOB contents are no longer
+  parsed with content heuristics; native ``JSON``, ``IS JSON`` CLOB/BLOB, and
+  OSON-capable values still decode through Oracle JSON metadata.
 * Driver statement-object caches are now bounded by the configured statement
   cache size, and cached named-parameter rebinding reuses driver-owned
   processing state.

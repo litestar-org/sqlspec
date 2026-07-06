@@ -16,6 +16,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import (
     CATTRS_INSTALLED,
     NUMPY_INSTALLED,
+    MsgspecValidationError,
     SchemaT,
     attrs_asdict,
     cattrs_structure,
@@ -200,14 +201,14 @@ def _coerce_foreign_key_item(data: Any, schema_type: Any) -> Any:
 
 def _convert_typed_dict(data: Any, schema_type: Any) -> Any:
     """Convert data to TypedDict."""
-    return [item for item in data if is_dict(item)] if isinstance(data, list) else data
+    return data
 
 
 def _convert_dataclass(data: Any, schema_type: Any) -> Any:
     """Convert data to dataclass."""
     if isinstance(data, list):
-        return [schema_type(**dict(item)) if is_dict(item) else item for item in data]
-    return schema_type(**dict(data)) if is_dict(data) else (schema_type(**data) if isinstance(data, dict) else data)
+        return [schema_type(**item) if is_dict(item) else item for item in data]
+    return schema_type(**data) if is_dict(data) else data
 
 
 class _IsTypePredicate:
@@ -379,15 +380,19 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
         except Exception as e:
             logger.debug("Field name transformation failed for msgspec schema: %s", e)
 
-    if NUMPY_INSTALLED:
-        transformed_data = _convert_numpy_recursive(transformed_data)
+    target_type = list[schema_type] if isinstance(transformed_data, Sequence) else schema_type
 
-    return convert(
-        obj=transformed_data,
-        type=(list[schema_type] if isinstance(transformed_data, Sequence) else schema_type),
-        from_attributes=True,
-        dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER,
-    )
+    try:
+        return convert(
+            obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER
+        )
+    except MsgspecValidationError:
+        if not NUMPY_INSTALLED:
+            raise
+        transformed_data = _convert_numpy_recursive(transformed_data)
+        return convert(
+            obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER
+        )
 
 
 def _convert_pydantic(data: Any, schema_type: Any) -> Any:
@@ -406,8 +411,8 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
         return cattrs_structure(structured, schema_type)
 
     if isinstance(data, list):
-        return [schema_type(**dict(item)) if is_dict(item) else schema_type(**attrs_asdict(item)) for item in data]
-    return schema_type(**dict(data)) if is_dict(data) else data
+        return [schema_type(**item) if is_dict(item) else schema_type(**attrs_asdict(item)) for item in data]
+    return schema_type(**data) if is_dict(data) else data
 
 
 # Cache for schema converters - maps type directly to converter callable (or None if unsupported)

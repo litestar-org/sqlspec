@@ -27,11 +27,13 @@ def _mock_cursor_with_major(major: int | None) -> Mock:
     return cursor
 
 
-def _mock_metadata(type_code: object, type_name: str = "") -> Mock:
+def _mock_metadata(type_code: object, type_name: str = "", *, is_json: bool = False, is_oson: bool = False) -> Mock:
     """Build a column-metadata mock matching python-oracledb's FetchInfo."""
     metadata = Mock()
     metadata.type_code = type_code
     metadata.type_name = type_name
+    metadata.is_json = is_json
+    metadata.is_oson = is_oson
     return metadata
 
 
@@ -208,35 +210,100 @@ def test_output_handler_short_circuits_db_type_json() -> None:
 
 
 def test_output_handler_claims_blob_is_json() -> None:
-    """BLOB columns whose type_name carries JSON should be parsed via outconverter."""
+    """BLOB columns marked as JSON should be parsed via the blob outconverter."""
     import oracledb
 
     cursor = Mock()
     cursor.arraysize = 100
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
-    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB CHECK (… IS JSON)")
+    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB", is_json=True)
 
     result = json_output_type_handler(cursor, metadata)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=100, outconverter=json_converter_out_blob)
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_LONG_RAW, arraysize=100, outconverter=json_converter_out_blob)
 
 
 def test_output_handler_claims_clob_is_json() -> None:
-    """CLOB columns whose type_name carries JSON should be parsed via outconverter."""
+    """CLOB columns marked as JSON should be parsed via the clob outconverter."""
     import oracledb
 
     cursor = Mock()
     cursor.arraysize = 50
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
-    metadata = _mock_metadata(oracledb.DB_TYPE_CLOB, type_name="CLOB CHECK (… IS JSON)")
+    metadata = _mock_metadata(oracledb.DB_TYPE_CLOB, type_name="CLOB", is_json=True)
 
     result = json_output_type_handler(cursor, metadata)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(oracledb.DB_TYPE_CLOB, arraysize=50, outconverter=json_converter_out_clob)
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_LONG, arraysize=50, outconverter=json_converter_out_clob)
+
+
+def test_output_handler_claims_varchar2_is_json() -> None:
+    """VARCHAR2 columns marked as JSON should be parsed via the clob outconverter."""
+    import oracledb
+
+    cursor = Mock()
+    cursor.arraysize = 7
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+    metadata = _mock_metadata(oracledb.DB_TYPE_VARCHAR, type_name="VARCHAR2", is_json=True)
+
+    result = json_output_type_handler(cursor, metadata)
+
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_VARCHAR, arraysize=7, outconverter=json_converter_out_clob)
+
+
+def test_output_handler_claims_blob_is_oson() -> None:
+    """BLOB columns marked as OSON should decode through connection.decode_oson."""
+    import oracledb
+
+    cursor = Mock()
+    cursor.arraysize = 33
+    connection = Mock()
+    connection.decode_oson = Mock(return_value={"decoded": True})
+    cursor.connection = connection
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB", is_oson=True)
+
+    result = json_output_type_handler(cursor, metadata)
+
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(
+        oracledb.DB_TYPE_LONG_RAW, arraysize=33, outconverter=cursor.var.call_args.kwargs["outconverter"]
+    )
+    outconverter = cursor.var.call_args.kwargs["outconverter"]
+    assert len(inspect.signature(outconverter).parameters) == 1
+    assert outconverter(b"\x01\x02") == {"decoded": True}
+    connection.decode_oson.assert_called_once_with(b"\x01\x02")
+
+
+def test_output_handler_prefers_oson_when_blob_metadata_is_json_and_oson() -> None:
+    """OSON BLOB metadata can also report is_json; decode_oson must win."""
+    import oracledb
+
+    cursor = Mock()
+    cursor.arraysize = 34
+    connection = Mock()
+    connection.decode_oson = Mock(return_value={"decoded": "oson"})
+    cursor.connection = connection
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB", is_json=True, is_oson=True)
+
+    result = json_output_type_handler(cursor, metadata)
+
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(
+        oracledb.DB_TYPE_LONG_RAW, arraysize=34, outconverter=cursor.var.call_args.kwargs["outconverter"]
+    )
+    outconverter = cursor.var.call_args.kwargs["outconverter"]
+    assert outconverter(b"\x01\x02") == {"decoded": "oson"}
+    connection.decode_oson.assert_called_once_with(b"\x01\x02")
 
 
 def test_output_handler_ignores_plain_blob() -> None:
@@ -260,11 +327,21 @@ def test_output_handler_ignores_plain_clob() -> None:
 
 
 def test_output_handler_ignores_varchar2() -> None:
-    """VARCHAR2 columns should never be claimed by JSON handler."""
+    """VARCHAR2 columns without JSON metadata should not be claimed."""
     import oracledb
 
     cursor = Mock()
     metadata = _mock_metadata(oracledb.DB_TYPE_VARCHAR, type_name="VARCHAR2")
+
+    assert json_output_type_handler(cursor, metadata) is None
+
+
+def test_output_handler_ignores_non_json_metadata() -> None:
+    """Columns without JSON metadata should be ignored."""
+    import oracledb
+
+    cursor = Mock()
+    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB", is_json=False, is_oson=False)
 
     assert json_output_type_handler(cursor, metadata) is None
 
@@ -368,7 +445,7 @@ def test_output_handler_chain_prioritises_blob_is_json() -> None:
     cursor.arraysize = 10
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
-    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB IS JSON")
+    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB", is_json=True)
 
     result = connection.outputtypehandler(cursor, metadata)
 
@@ -387,6 +464,7 @@ def test_module_exports_required_symbols() -> None:
     assert "json_converter_in_clob" in _json_handlers.__all__
     assert "json_converter_out_blob" in _json_handlers.__all__
     assert "json_converter_out_clob" in _json_handlers.__all__
+    assert "json_converter_out_oson" in _json_handlers.__all__
 
 
 def test_roundtrip_clob() -> None:

@@ -98,13 +98,19 @@ def test_apply_driver_features_preserves_user_raw_byte_limit() -> None:
     assert features["oracle_raw_byte_limit"] == 100
 
 
-def test_apply_driver_features_does_not_default_fetch_tuning_options() -> None:
-    """Absent fetch tuning keys should leave python-oracledb defaults untouched."""
+def test_apply_driver_features_defaults_fetch_lobs_false() -> None:
+    """``fetch_lobs`` defaults to ``False`` while unrelated fetch tuning stays unset."""
     features = _apply_features({})
+    assert features["fetch_lobs"] is False
     assert "arraysize" not in features
     assert "prefetchrows" not in features
-    assert "fetch_lobs" not in features
     assert "fetch_decimals" not in features
+
+
+def test_apply_driver_features_preserves_user_fetch_lobs_true() -> None:
+    """User-supplied ``fetch_lobs=True`` remains an explicit opt-in escape hatch."""
+    features = _apply_features({"fetch_lobs": True})
+    assert features["fetch_lobs"] is True
 
 
 def test_apply_driver_features_preserves_user_fetch_tuning_options() -> None:

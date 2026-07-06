@@ -1,7 +1,9 @@
 """Spanner driver implementation."""
 
+import contextlib
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from itertools import islice
+from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 
 import sqlglot as _sqlglot
 from sqlglot import exp as _sqlglot_exp
@@ -21,14 +23,19 @@ from sqlspec.adapters.spanner.core import (
     default_statement_config,
     driver_profile,
     infer_param_types,
-    resolve_column_names,
+    resolve_row_plan,
     supports_batch_update,
     supports_write,
 )
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
-from sqlspec.adapters.spanner.type_converter import SpannerOutputConverter
 from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
-from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase
+from sqlspec.driver import (
+    BaseSyncExceptionHandler,
+    ExecutionResult,
+    SyncDriverAdapterBase,
+    SyncRowStream,
+    rows_to_dicts,
+)
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
@@ -51,7 +58,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.core.statement import SQL
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
 
 __all__ = (
     "SpannerDataDictionary",
@@ -140,11 +147,106 @@ class _PerCallExecuteOptions:
         self.timeout = timeout
 
 
+class _SpannerSelectStreamSource:
+    """Native chunk source for Spanner SELECT streaming."""
+
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_column_plan",
+        "_driver",
+        "_execute_kwargs",
+        "_param_types",
+        "_params",
+        "_result_set",
+        "_row_iterator",
+        "_sql",
+    )
+
+    def __init__(
+        self,
+        driver: "SpannerSyncDriver",
+        sql: str,
+        params: "dict[str, Any] | None",
+        param_types: "dict[str, Any]",
+        chunk_size: int,
+        execute_kwargs: "dict[str, Any]",
+    ) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._params = params
+        self._param_types = param_types
+        self._chunk_size = chunk_size
+        self._execute_kwargs = execute_kwargs
+        self._column_names: list[str] | None = None
+        self._column_plan: tuple[tuple[int, Any], ...] | None = None
+        self._result_set: _SpannerResultSetProtocol | None = None
+        self._row_iterator: Iterator[Any] | None = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            result_set = self._driver.connection.execute_sql(
+                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+            )
+            self._result_set = result_set
+            self._row_iterator = iter(result_set)
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        result_set = self._result_set
+        row_iterator = self._row_iterator
+        column_names = self._column_names
+        if result_set is None or row_iterator is None:
+            return []
+
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        with handler:
+            rows = list(islice(row_iterator, self._chunk_size))
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+
+        if column_names is None:
+            try:
+                metadata = result_set.metadata
+                row_type = metadata.row_type
+                fields = row_type.fields
+            except AttributeError:
+                msg = "Result set metadata not available."
+                raise SQLConversionError(msg)
+            if not fields:
+                msg = "Result set metadata not available."
+                raise SQLConversionError(msg)
+            column_names, column_plan = self._driver._resolve_row_plan(fields)
+            self._column_names = column_names
+            self._column_plan = column_plan
+
+        converted_rows, resolved_column_names = collect_rows(
+            rows, (), column_names=column_names, column_plan=self._column_plan
+        )
+        self._column_names = resolved_column_names
+        return rows_to_dicts(converted_rows, resolved_column_names)
+
+    def close(self) -> None:
+        result_set = self._result_set
+        if result_set is not None:
+            close = getattr(result_set, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+        self._result_set = None
+        self._row_iterator = None
+        self._column_names = None
+        self._column_plan = None
+
+
 class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_pending_execute_options", "_type_converter")
+    __slots__ = ("_data_dictionary", "_pending_execute_options", "_row_plan_cache")
 
     def __init__(
         self,
@@ -157,15 +259,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
-
-        json_deserializer = features.get("json_deserializer")
-        self._type_converter = SpannerOutputConverter(
-            enable_uuid_conversion=features.get("enable_uuid_conversion", True),
-            json_deserializer=cast("Callable[[str], Any]", json_deserializer or from_json),
-        )
-        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._data_dictionary: SpannerDataDictionary | None = None
         self._pending_execute_options: _PerCallExecuteOptions | None = None
+        self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS - The Execution Engine
@@ -191,8 +287,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             if not fields:
                 msg = "Result set metadata not available."
                 raise SQLConversionError(msg)
-            column_names = self._resolve_column_names(fields)
-            data, column_names = collect_rows(rows, fields, self._type_converter, column_names=column_names)
+            column_names, column_plan = self._resolve_row_plan(fields)
+            data, column_names = collect_rows(rows, fields, column_names=column_names, column_plan=column_plan)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
@@ -209,6 +305,19 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
         raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        if not statement.returns_rows():
+            return None
+        sql, params = self._compiled_sql(statement, self.statement_config)
+        params = cast("dict[str, Any] | None", params)
+        coerced_params = self._coerce_params(params)
+        param_types_map = self._infer_param_types(coerced_params)
+        return SyncRowStream(
+            _SpannerSelectStreamSource(
+                self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
+            )
+        )
 
     def dispatch_execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         if not supports_batch_update(cursor):
@@ -363,6 +472,70 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._pending_execute_options = execute_options
         try:
             return super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
+        finally:
+            self._pending_execute_options = previous_options
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows with optional Spanner per-call options."""
+        execute_options = self._pop_execute_options(kwargs)
+        if execute_options is None:
+            return super().select_stream(
+                statement,
+                *parameters,
+                schema_type=schema_type,
+                statement_config=statement_config,
+                chunk_size=chunk_size,
+                native_only=native_only,
+                **kwargs,
+            )
+        previous_options = self._pending_execute_options
+        self._pending_execute_options = execute_options
+        try:
+            return super().select_stream(
+                statement,
+                *parameters,
+                schema_type=schema_type,
+                statement_config=statement_config,
+                chunk_size=chunk_size,
+                native_only=native_only,
+                **kwargs,
+            )
         finally:
             self._pending_execute_options = previous_options
 
@@ -580,8 +753,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _infer_param_types(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any]":
         return infer_param_types(params)
 
-    def _resolve_column_names(self, fields: Any) -> list[str]:
-        return resolve_column_names(fields, self._column_name_cache)
+    def _resolve_row_plan(self, fields: Any) -> "tuple[list[str], tuple[tuple[int, Any], ...] | None]":
+        json_deserializer = cast("Callable[[str], Any]", self.driver_features.get("json_deserializer", from_json))
+        return resolve_row_plan(fields, self._row_plan_cache, json_deserializer=json_deserializer)
 
 
 register_driver_profile("spanner", driver_profile)

@@ -4,6 +4,7 @@ Provides database connectivity through ADBC with support for multiple
 database dialects, parameter style conversion, and transaction management.
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from typing_extensions import final
@@ -36,7 +37,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
@@ -80,6 +81,70 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
             return False
         self.pending_exception = create_mapped_exception(exc_val)
         return True
+
+
+class AdbcSelectStreamSource:
+    """Native ADBC chunk source backed by a ``RecordBatchReader``."""
+
+    __slots__ = ("_cursor_manager", "_driver", "_parameters", "_reader", "_sql")
+
+    def __init__(self, driver: "AdbcDriver", sql: str, parameters: Any) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._cursor_manager: AdbcCursor | None = None
+        self._reader: Any = None
+
+    def start(self) -> None:
+        cursor_manager = self._driver.with_cursor(self._driver.connection)
+        reader: Any = None
+        try:
+            cursor = cursor_manager.__enter__()
+            handler = self._driver.handle_database_exceptions()
+            with handler:
+                execute_parameters = normalize_postgres_empty_parameters(self._driver._dialect_name, self._parameters)
+                cursor.execute(self._sql, parameters=execute_parameters)
+                reader = _fetch_record_batch(cursor)
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+            raise
+
+        if reader is None:
+            msg = "ADBC did not return a record batch reader."
+            raise SQLSpecError(msg)
+        self._cursor_manager = cursor_manager
+        self._reader = iter(reader)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        reader = self._reader
+        if reader is None:
+            return []
+        while True:
+            try:
+                batch = next(reader)
+            except StopIteration:
+                return []
+            rows = cast("list[dict[str, Any]]", batch.to_pylist())
+            if rows:
+                return rows
+
+    def close(self) -> None:
+        self._reader = None
+        cursor_manager = self._cursor_manager
+        self._cursor_manager = None
+        if cursor_manager is not None:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+
+
+def _fetch_record_batch(cursor: Any) -> Any:
+    fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
+    if fetch_record_batch is None:
+        msg = "ADBC cursor does not expose fetch_record_batch() for native row streaming."
+        raise SQLSpecError(msg)
+    return fetch_record_batch()
 
 
 @final
@@ -151,19 +216,16 @@ class AdbcDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            fetched_data = cursor.fetchall()
-            column_names = self._resolve_column_names(cursor.description)
-            data, column_names = collect_rows(
-                cast("list[Any] | None", fetched_data), cursor.description, column_names=column_names
-            )
-            row_format = "dict" if data and isinstance(data[0], dict) else "tuple"
+            arrow_table = cursor.fetch_arrow_table()
+            data = arrow_table.to_pylist()
+            column_names = list(arrow_table.column_names)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
                 data_row_count=len(data),
                 is_select_result=True,
-                row_format=row_format,
+                row_format="dict",
             )
 
         row_count = self._resolve_count_result_rowcount(cursor, fallback=resolve_rowcount(cursor))
@@ -264,6 +326,14 @@ class AdbcDriver(SyncDriverAdapterBase):
             rowcount_override=last_rowcount,
             is_script_result=True,
         )
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native ADBC stream backed by ``fetch_record_batch()``."""
+        _ = chunk_size
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(AdbcSelectStreamSource(self, sql, prepared_parameters))
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT

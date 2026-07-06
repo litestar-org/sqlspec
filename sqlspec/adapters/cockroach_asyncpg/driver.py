@@ -2,7 +2,7 @@
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
@@ -20,7 +20,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
     from sqlspec.core import StatementConfig
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 __all__ = ("CockroachAsyncpgDriver", "CockroachAsyncpgExceptionHandler", "CockroachAsyncpgSessionContext")
 
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg")
+_T = TypeVar("_T")
 
 
 class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
@@ -66,21 +67,26 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
 
-    async def _execute_with_retry(self, operation: "Callable[..., Any]", *args: Any) -> "ExecutionResult":
-        if not self._enable_retry:
-            return cast("ExecutionResult", await operation(*args))
+    async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
+        """Execute a full CockroachDB transaction callback with serialization retries."""
+        if not self._enable_retry or self._connection_in_transaction():
+            return await operation()
 
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
 
         for attempt in range(self._retry_config.max_retries + 1):
             try:
-                return cast("ExecutionResult", await operation(*args))
+                await self.begin()
+                result = await operation()
+                await self.commit()
             except Exception as exc:
                 last_error = exc
+                with contextlib.suppress(Exception):
+                    await self.rollback()
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
                     raise
-            with contextlib.suppress(Exception):
-                await self.connection.execute("ROLLBACK")
+            else:
+                return result
             delay = calculate_backoff_seconds(attempt, self._retry_config)
             if self._retry_config.enable_logging:
                 logger.debug("CockroachDB retry %s/%s after %.3fs", attempt + 1, self._retry_config.max_retries, delay)
@@ -112,19 +118,13 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         return await AsyncpgDriver.dispatch_execute_script(self, cursor, statement)
 
     async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return await self._dispatch_execute_impl(cursor, statement)
-        return await self._execute_with_retry(self._dispatch_execute_impl, cursor, statement)
+        return await self._dispatch_execute_impl(cursor, statement)
 
     async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return await self._dispatch_execute_many_impl(cursor, statement)
-        return await self._execute_with_retry(self._dispatch_execute_many_impl, cursor, statement)
+        return await self._dispatch_execute_many_impl(cursor, statement)
 
     async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        if not self._enable_retry:
-            return await self._dispatch_execute_script_impl(cursor, statement)
-        return await self._execute_with_retry(self._dispatch_execute_script_impl, cursor, statement)
+        return await self._dispatch_execute_script_impl(cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":  # type: ignore[override]
         return CockroachAsyncpgExceptionHandler()

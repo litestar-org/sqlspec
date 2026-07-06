@@ -26,6 +26,15 @@ class _OracleBatchConnection:
         raise AssertionError(msg)
 
 
+class _OracleAllConnection:
+    def __init__(self) -> None:
+        self.fetch_all_calls: list[dict[str, object]] = []
+
+    def fetch_df_all(self, **kwargs: object) -> pa.Table:
+        self.fetch_all_calls.append(kwargs)
+        return pa.table({"ID": [1], "VALUE": [10]})
+
+
 class _OracleAsyncBatchConnection:
     def __init__(self) -> None:
         self.fetch_batch_calls: list[dict[str, object]] = []
@@ -40,11 +49,20 @@ class _OracleAsyncBatchConnection:
         raise AssertionError(msg)
 
 
+class _OracleAsyncAllConnection:
+    def __init__(self) -> None:
+        self.fetch_all_calls: list[dict[str, object]] = []
+
+    async def fetch_df_all(self, **kwargs: object) -> pa.Table:
+        self.fetch_all_calls.append(kwargs)
+        return pa.table({"ID": [1], "VALUE": [10]})
+
+
 def test_sync_select_to_arrow_batches_uses_fetch_df_batches() -> None:
     connection = _OracleBatchConnection()
     driver = OracleSyncDriver(
         cast("OracleSyncConnection", connection),
-        driver_features={"enable_lowercase_column_names": True, "fetch_decimals": True},
+        driver_features={"enable_lowercase_column_names": True, "fetch_decimals": True, "fetch_lobs": False},
     )
 
     result = driver.select_to_arrow("SELECT id, value FROM example", return_format="batches", batch_size=2)
@@ -55,6 +73,22 @@ def test_sync_select_to_arrow_batches_uses_fetch_df_batches() -> None:
     assert result.rows_affected == 3
     assert connection.fetch_batch_calls[0]["size"] == 2
     assert connection.fetch_batch_calls[0]["fetch_decimals"] is True
+    assert connection.fetch_batch_calls[0]["fetch_lobs"] is False
+
+
+def test_sync_select_to_arrow_table_forwards_fetch_lobs_to_fetch_df_all() -> None:
+    connection = _OracleAllConnection()
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", connection),
+        driver_features={"enable_lowercase_column_names": True, "fetch_decimals": True, "fetch_lobs": False},
+    )
+
+    result = driver.select_to_arrow("SELECT id, value FROM example", batch_size=2)
+
+    assert result.get_data().to_pydict() == {"id": [1], "value": [10]}
+    assert connection.fetch_all_calls[0]["arraysize"] == 2
+    assert connection.fetch_all_calls[0]["fetch_decimals"] is True
+    assert connection.fetch_all_calls[0]["fetch_lobs"] is False
 
 
 @pytest.mark.anyio
@@ -62,7 +96,7 @@ async def test_async_select_to_arrow_reader_uses_fetch_df_batches() -> None:
     connection = _OracleAsyncBatchConnection()
     driver = OracleAsyncDriver(
         cast("OracleAsyncConnection", connection),
-        driver_features={"enable_lowercase_column_names": True, "fetch_decimals": True},
+        driver_features={"enable_lowercase_column_names": True, "fetch_decimals": True, "fetch_lobs": False},
     )
 
     result = await driver.select_to_arrow("SELECT id, value FROM example", return_format="reader", batch_size=2)
@@ -71,3 +105,20 @@ async def test_async_select_to_arrow_reader_uses_fetch_df_batches() -> None:
     assert result.get_data().read_all().to_pydict() == {"id": [1, 2, 3], "value": [10, 20, 30]}
     assert connection.fetch_batch_calls[0]["size"] == 2
     assert connection.fetch_batch_calls[0]["fetch_decimals"] is True
+    assert connection.fetch_batch_calls[0]["fetch_lobs"] is False
+
+
+@pytest.mark.anyio
+async def test_async_select_to_arrow_table_forwards_fetch_lobs_to_fetch_df_all() -> None:
+    connection = _OracleAsyncAllConnection()
+    driver = OracleAsyncDriver(
+        cast("OracleAsyncConnection", connection),
+        driver_features={"enable_lowercase_column_names": True, "fetch_decimals": True, "fetch_lobs": False},
+    )
+
+    result = await driver.select_to_arrow("SELECT id, value FROM example", batch_size=2)
+
+    assert result.get_data().to_pydict() == {"id": [1], "value": [10]}
+    assert connection.fetch_all_calls[0]["arraysize"] == 2
+    assert connection.fetch_all_calls[0]["fetch_decimals"] is True
+    assert connection.fetch_all_calls[0]["fetch_lobs"] is False

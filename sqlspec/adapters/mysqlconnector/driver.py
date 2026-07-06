@@ -25,15 +25,14 @@ from sqlspec.adapters.mysqlconnector.core import (
     collect_rows,
     create_mapped_exception,
     default_statement_config,
-    detect_json_columns_from_description,
     driver_profile,
     encode_records_for_local_infile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     normalize_lastrowid,
-    resolve_column_names,
     resolve_many_rowcount,
+    resolve_row_plan,
     resolve_rowcount,
 )
 from sqlspec.adapters.mysqlconnector.data_dictionary import (
@@ -123,12 +122,9 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         if statement.returns_rows() or getattr(cursor, "with_rows", False):
             fetched_data = cursor.fetchall()
             description = cursor.description or None
-            column_names = resolve_column_names(description)
-            json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
+            row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names, row_format = collect_rows(
-                fetched_data, description, json_indexes, deserializer, column_names=column_names, logger=logger
-            )
+            rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
 
             return self.create_execution_result(
                 cursor,
@@ -203,7 +199,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(MysqlConnectorSyncStreamSource(self, sql, prepared_parameters, chunk_size))
+        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
+        return SyncRowStream(
+            MysqlConnectorSyncStreamSource(
+                self, sql, prepared_parameters, chunk_size, MYSQLCONNECTOR_JSON_TYPE_CODES, cursor_options
+            )
+        )
 
     def handle_database_exceptions(self) -> "MysqlConnectorSyncExceptionHandler":
         return MysqlConnectorSyncExceptionHandler()
@@ -305,12 +306,9 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector sync rows for the direct execution path."""
         description = cursor.description or None
-        column_names = resolve_column_names(description)
-        json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
+        row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
         deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        rows, column_names, _row_format = collect_rows(
-            fetched, description, json_indexes, deserializer, column_names=column_names, logger=logger
-        )
+        rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
         return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: Any) -> int:
@@ -377,12 +375,9 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         if statement.returns_rows() or getattr(cursor, "with_rows", False):
             fetched_data = await cursor.fetchall()
             description = cursor.description or None
-            column_names = resolve_column_names(description)
-            json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
+            row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names, row_format = collect_rows(
-                fetched_data, description, json_indexes, deserializer, column_names=column_names, logger=logger
-            )
+            rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
 
             return self.create_execution_result(
                 cursor,
@@ -457,7 +452,12 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return AsyncRowStream(MysqlConnectorAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
+        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
+        return AsyncRowStream(
+            MysqlConnectorAsyncStreamSource(
+                self, sql, prepared_parameters, chunk_size, MYSQLCONNECTOR_JSON_TYPE_CODES, cursor_options
+            )
+        )
 
     def handle_database_exceptions(self) -> "MysqlConnectorAsyncExceptionHandler":
         return MysqlConnectorAsyncExceptionHandler()
@@ -561,12 +561,9 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector async rows for the direct execution path."""
         description = cursor.description or None
-        column_names = resolve_column_names(description)
-        json_indexes = detect_json_columns_from_description(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
+        row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
         deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        rows, column_names, _row_format = collect_rows(
-            fetched, description, json_indexes, deserializer, column_names=column_names, logger=logger
-        )
+        rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
         return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: Any) -> int:

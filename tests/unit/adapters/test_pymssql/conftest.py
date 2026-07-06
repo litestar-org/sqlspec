@@ -26,6 +26,7 @@ class FakeCursor:
         self.rowcount = rowcount
         self.closed = False
         self.calls: list[tuple[str, Any]] = []
+        self.fetchmany_sizes: list[int] = []
         self.many_calls: list[tuple[str, Any]] = []
 
     def execute(self, sql: str, parameters: Any = None) -> None:
@@ -36,6 +37,12 @@ class FakeCursor:
 
     def fetchall(self) -> "list[Any]":
         return self.rows
+
+    def fetchmany(self, size: int) -> "list[Any]":
+        self.fetchmany_sizes.append(size)
+        chunk = self.rows[:size]
+        self.rows = self.rows[size:]
+        return chunk
 
     def fetchone(self) -> Any:
         return self.rows[0] if self.rows else None

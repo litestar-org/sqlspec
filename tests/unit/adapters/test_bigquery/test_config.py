@@ -1,12 +1,13 @@
 """BigQuery configuration tests covering statement config builders."""
 
+import uuid
 from typing import Any, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from pytest import MonkeyPatch
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams, BigQueryDriverFeatures
-from sqlspec.adapters.bigquery.core import build_statement_config
+from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config
 
 
 class _RecordingBigQueryClient:
@@ -38,6 +39,19 @@ def test_bigquery_config_applies_driver_feature_serializer() -> None:
     config = BigQueryConfig(driver_features={"json_serializer": serializer})
 
     assert config.driver_features["json_serializer"] is serializer
+
+
+def test_bigquery_driver_features_honor_uuid_conversion_flag() -> None:
+    """The BigQuery UUID conversion flag should control UUID parameter coercion."""
+    enabled_config, enabled_features = apply_driver_features(build_statement_config(), {"enable_uuid_conversion": True})
+    disabled_config, disabled_features = apply_driver_features(
+        build_statement_config(), {"enable_uuid_conversion": False}
+    )
+
+    assert enabled_features["enable_uuid_conversion"] is True
+    assert disabled_features["enable_uuid_conversion"] is False
+    assert uuid.UUID in enabled_config.parameter_config.type_coercion_map
+    assert uuid.UUID not in disabled_config.parameter_config.type_coercion_map
 
 
 def test_bigquery_config_wires_query_timeout_ms_to_default_job_config() -> None:

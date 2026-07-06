@@ -1,7 +1,7 @@
 """Oracle Driver"""
 
 import logging
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -67,7 +67,7 @@ from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackEx
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
-from sqlspec.utils.type_guards import has_pipeline_capability
+from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, SchemaT, StatementParameters
 
 __all__ = (
     "OracleAsyncDriver",
@@ -102,6 +102,24 @@ def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
     if len(parts) == 1:
         return connection.username, parts[0]
     return ".".join(parts[:-1]), parts[-1]
+
+
+def _row_has_async_readable(row: Any) -> bool:
+    if isinstance(row, dict):
+        return any(is_async_readable(value) for value in row.values())
+    try:
+        values = row if isinstance(row, (list, tuple)) else tuple(row)
+    except TypeError:
+        values = (row,)
+    return any(is_async_readable(value) for value in values)
+
+
+def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":
+    if "fetch_lobs" not in fetch_kwargs or "fetch_lobs" not in str(exc):
+        return None
+    retry_kwargs = dict(fetch_kwargs)
+    retry_kwargs.pop("fetch_lobs", None)
+    return retry_kwargs
 
 
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
@@ -524,13 +542,70 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             prefetchrows=self.driver_features.get("prefetchrows"),
         )
 
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks with Oracle fetch tuning."""
+        fetch_lobs = cast("bool | None", kwargs.pop("fetch_lobs", None))
+        if chunk_size < 1:
+            msg = "chunk_size must be greater than or equal to 1"
+            raise ValueError(msg)
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        stream = self.dispatch_select_stream(sql_statement, chunk_size, fetch_lobs=fetch_lobs)
+        if stream is not None:
+            return stream._with_schema_type(schema_type)
+        return super().select_stream(
+            sql_statement,
+            schema_type=schema_type,
+            statement_config=config,
+            chunk_size=chunk_size,
+            native_only=native_only,
+        )
+
+    def dispatch_select_stream(
+        self, statement: "SQL", chunk_size: int, fetch_lobs: bool | None = None
+    ) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native oracledb row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         stream_parameters = cast("list[object] | tuple[object, ...] | dict[object, object] | None", prepared_parameters)
-        return SyncRowStream(OracleSyncStreamSource(self, sql, stream_parameters, chunk_size))
+        return SyncRowStream(OracleSyncStreamSource(self, sql, stream_parameters, chunk_size, fetch_lobs=fetch_lobs))
 
     def handle_database_exceptions(self) -> "OracleSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -794,12 +869,18 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 return execute_df(sql, params, arraysize=batch_size or 1000)
             except TypeError:
                 return execute_df(sql, params)
-        return self.connection.fetch_df_all(
-            statement=sql,
-            parameters=params,
-            arraysize=batch_size or 1000,
-            **build_arrow_fetch_kwargs(self.driver_features),
-        )
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        try:
+            return self.connection.fetch_df_all(
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            return self.connection.fetch_df_all(
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
+            )
 
     def _fetch_arrow_record_batches(
         self,
@@ -813,9 +894,19 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        for oracle_df in self.connection.fetch_df_batches(
-            statement=sql, parameters=params, size=batch_size or 1000, **build_arrow_fetch_kwargs(self.driver_features)
-        ):
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        try:
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
+            )
+        for oracle_df in oracle_dfs:
             batch_table = pa.table(oracle_df)
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:
@@ -1104,13 +1195,70 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             prefetchrows=self.driver_features.get("prefetchrows"),
         )
 
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT]": ...
+
+    @overload
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[dict[str, Any]]": ...
+
+    def select_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT] | AsyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks with Oracle fetch tuning."""
+        fetch_lobs = cast("bool | None", kwargs.pop("fetch_lobs", None))
+        if chunk_size < 1:
+            msg = "chunk_size must be greater than or equal to 1"
+            raise ValueError(msg)
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        stream = self.dispatch_select_stream(sql_statement, chunk_size, fetch_lobs=fetch_lobs)
+        if stream is not None:
+            return stream._with_schema_type(schema_type)
+        return super().select_stream(
+            sql_statement,
+            schema_type=schema_type,
+            statement_config=config,
+            chunk_size=chunk_size,
+            native_only=native_only,
+        )
+
+    def dispatch_select_stream(
+        self, statement: "SQL", chunk_size: int, fetch_lobs: bool | None = None
+    ) -> "AsyncRowStream[dict[str, Any]] | None":
         """Return a native oracledb row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         stream_parameters = cast("list[object] | tuple[object, ...] | dict[object, object] | None", prepared_parameters)
-        return AsyncRowStream(OracleAsyncStreamSource(self, sql, stream_parameters, chunk_size))
+        return AsyncRowStream(OracleAsyncStreamSource(self, sql, stream_parameters, chunk_size, fetch_lobs=fetch_lobs))
 
     def handle_database_exceptions(self) -> "OracleAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -1336,9 +1484,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle async rows for the direct execution path.
 
-        Uses synchronous LOB coercion. For async LOB coercion, the standard
-        dispatch path via collect_async_rows is used instead.
+        Falls back to the standard async dispatch path when rows contain async
+        LOB locators, because those must be read with ``collect_async_rows``.
         """
+        if fetched and any(_row_has_async_readable(row) for row in fetched):
+            msg = "Oracle async LOB locators require async row collection"
+            raise NotImplementedError(msg)
         column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
         data, column_names = collect_sync_rows(
             cast("list[Any] | None", fetched),
@@ -1382,12 +1533,18 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 return await execute_df(sql, params, arraysize=batch_size or 1000)
             except TypeError:
                 return await execute_df(sql, params)
-        return await self.connection.fetch_df_all(
-            statement=sql,
-            parameters=params,
-            arraysize=batch_size or 1000,
-            **build_arrow_fetch_kwargs(self.driver_features),
-        )
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        try:
+            return await self.connection.fetch_df_all(
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            return await self.connection.fetch_df_all(
+                statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
+            )
 
     async def _fetch_arrow_record_batches(
         self,
@@ -1401,9 +1558,19 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        async for oracle_df in self.connection.fetch_df_batches(
-            statement=sql, parameters=params, size=batch_size or 1000, **build_arrow_fetch_kwargs(self.driver_features)
-        ):
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        try:
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
+            )
+        async for oracle_df in oracle_dfs:
             batch_table = pa.table(oracle_df)
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:

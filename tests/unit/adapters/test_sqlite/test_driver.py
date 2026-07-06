@@ -1,6 +1,10 @@
 import inspect
+from typing import Any, cast
+
+import pytest
 
 from sqlspec.adapters.sqlite.driver import SqliteDriver
+from sqlspec.core import SQL
 
 
 def test_driver_cache_execute_cache_hit_has_no_unreachable_returns_rows_guard() -> None:
@@ -48,3 +52,39 @@ def test_pool_no_duplicate_typedef_pool_creates_connection_after_cleanup() -> No
     pool.close()
     assert row is not None
     assert row[0] == 1
+
+
+def test_dispatch_execute_detects_record_row_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Row:
+        def __init__(self, data: dict[str, object]) -> None:
+            self._data = data
+
+        def keys(self) -> object:
+            return self._data.keys()
+
+        def __getitem__(self, key: str) -> object:
+            return self._data[key]
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.description = [("id",), ("name",)]
+            self.executed: list[tuple[str, object]] = []
+
+        def execute(self, sql: str, parameters: object) -> None:
+            self.executed.append((sql, parameters))
+
+        def fetchall(self) -> list[_Row]:
+            return [_Row({"id": 1, "name": "alice"})]
+
+    monkeypatch.setattr(SqliteDriver, "_compiled_sql", lambda *_args, **_kwargs: ("SELECT id, name FROM users", []))
+
+    driver = SqliteDriver(connection=cast("Any", object()))
+    statement = SQL("SELECT id, name FROM users")
+    cursor = _Cursor()
+
+    result = driver.dispatch_execute(cursor, statement)
+
+    assert result.row_format == "record"
+    selected_data = result.selected_data
+    assert selected_data is not None
+    assert dict(selected_data[0]) == {"id": 1, "name": "alice"}

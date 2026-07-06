@@ -62,7 +62,6 @@ class AiomysqlConnectionParams(TypedDict):
     allow_local_infile: NotRequired[bool]
     echo: NotRequired[bool]
     local_infile: NotRequired[bool]
-    enable_local_infile: NotRequired[bool]
     ssl: NotRequired["SSLContext"]
     sql_mode: NotRequired[str]
     init_command: NotRequired[str]
@@ -86,12 +85,12 @@ class AiomysqlPoolParams(AiomysqlConnectionParams):
 
 
 def _normalize_local_infile(connection_config: "Mapping[str, Any]", *, strip_consent_gate: bool) -> "dict[str, Any]":
-    """Normalize aiomysql local-infile aliases and SQLSpec's consent gate."""
+    """Normalize aiomysql local-infile settings and SQLSpec's consent gate."""
     config = dict(connection_config)
 
-    enable_local_infile = bool(config.get("enable_local_infile", False))
+    config.pop("enable_local_infile", None)
     allow_local_infile = bool(config.get(_AIOMYSQL_LOCAL_INFILE_GATE, False))
-    local_infile = bool(config.get("local_infile", False) or enable_local_infile)
+    local_infile = bool(config.get("local_infile", False))
     if local_infile and not allow_local_infile:
         msg = (
             "Aiomysql local_infile=True requires allow_local_infile=True because "
@@ -99,7 +98,6 @@ def _normalize_local_infile(connection_config: "Mapping[str, Any]", *, strip_con
         )
         raise ImproperConfigurationError(msg)
     config["local_infile"] = bool(local_infile and allow_local_infile)
-    config.pop("enable_local_infile", None)
     if strip_consent_gate:
         config.pop(_AIOMYSQL_LOCAL_INFILE_GATE, None)
     return config

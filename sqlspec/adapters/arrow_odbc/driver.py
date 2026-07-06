@@ -1,5 +1,6 @@
 """arrow-odbc sync driver."""
 
+import contextlib
 import re
 from collections.abc import Iterable, Mapping
 from itertools import chain
@@ -20,7 +21,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -51,6 +52,49 @@ class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
+
+
+class ArrowOdbcStreamSource:
+    """Native Arrow ODBC chunk source backed by Arrow record batches."""
+
+    __slots__ = ("_chunk_size", "_driver", "_parameters", "_reader", "_sql")
+
+    def __init__(
+        self, driver: "ArrowOdbcDriver", sql: str, parameters: "list[str | None] | None", chunk_size: int
+    ) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._reader: Any = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
+            self._reader = iter(_to_pyarrow_reader(reader))
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        reader = self._reader
+        if reader is None:
+            return []
+        while True:
+            try:
+                batch = next(reader)
+            except StopIteration:
+                return []
+            rows = cast("list[dict[str, Any]]", batch.to_pylist())
+            if rows:
+                return rows
+
+    def close(self) -> None:
+        reader = self._reader
+        self._reader = None
+        close = getattr(reader, "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
 
 
 class ArrowOdbcDriver(SyncDriverAdapterBase):
@@ -145,6 +189,15 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native Arrow ODBC row stream backed by record batches."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        if self._dialect == "mssql":
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
+        return SyncRowStream(ArrowOdbcStreamSource(self, sql, _odbc_parameters(prepared_parameters), chunk_size))
 
     def collect_rows(self, cursor: "ArrowOdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         return fetched, [], len(fetched)

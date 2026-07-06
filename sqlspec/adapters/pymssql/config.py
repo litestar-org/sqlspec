@@ -96,7 +96,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
-    supports_native_row_streaming: "ClassVar[bool]" = False
+    supports_native_row_streaming: "ClassVar[bool]" = True
     _connection_context_class: "ClassVar[type[PymssqlConnectionContext]]" = PymssqlConnectionContext
     _session_factory_class: "ClassVar[type[_PymssqlSessionConnectionHandler]]" = _PymssqlSessionConnectionHandler
     _session_context_class: "ClassVar[type[PymssqlSessionContext]]" = PymssqlSessionContext

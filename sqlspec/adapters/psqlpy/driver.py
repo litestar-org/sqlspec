@@ -26,7 +26,6 @@ from sqlspec.adapters.psqlpy.core import (
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.adapters.psqlpy.type_converter import PostgreSQLOutputConverter
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
@@ -37,15 +36,13 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
-    from sqlspec.core import ArrowResult
+    from sqlspec.core import ArrowResult, SQLResult
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
 
 logger = get_logger("sqlspec.adapters.psqlpy")
-
-_type_converter = PostgreSQLOutputConverter()
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
@@ -110,12 +107,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-
-        driver_parameters = prepared_parameters
-        operation_type = statement.operation_type
-        should_coerce = operation_type != "SELECT"
-        effective_parameters = coerce_numeric_for_write(driver_parameters) if should_coerce else driver_parameters
-        params = cast("Sequence[Any] | Mapping[str, Any] | None", effective_parameters) or []
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
 
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, params)
@@ -150,9 +142,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        operation_type = statement.operation_type
-        should_coerce = operation_type != "SELECT"
-        formatted_parameters = format_execute_many_parameters(prepared_parameters, coerce_numeric=should_coerce)
+        formatted_parameters = format_execute_many_parameters(prepared_parameters, coerce_numeric=False)
 
         await cursor.execute_many(sql, formatted_parameters)
 
@@ -191,6 +181,21 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
+    ) -> "SQLResult":
+        """Execute cached psqlpy queries with cast-aware parameter preparation."""
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
+        direct_statement = self._cached_statement(
+            sql,
+            params,
+            cached,
+            cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
+            params_are_simple=True,
+            compiled_sql=cached.compiled_sql,
+        )
+        return await self._execute_cached_statement(direct_statement)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT
@@ -404,6 +409,13 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             prepared = prepare_parameters_with_casts(parameters, parameter_casts, statement_config)
         else:
             prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+
+        if not is_many:
+            operation_type = getattr(prepared_statement, "operation_type", None)
+            if operation_type != "SELECT":
+                prepared = coerce_numeric_for_write(prepared)
+        elif getattr(prepared_statement, "operation_type", None) != "SELECT":
+            prepared = coerce_numeric_for_write(prepared)
 
         if not is_many and isinstance(prepared, list):
             prepared = tuple(prepared)

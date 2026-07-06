@@ -4,7 +4,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.adapters.duckdb.type_converter import DuckDBOutputConverter
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -173,8 +172,6 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply DuckDB-specific driver features to statement configuration."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    if not features:
-        return statement_config, features
 
     param_config = statement_config.parameter_config
     json_serializer = features.get("json_serializer")
@@ -183,11 +180,10 @@ def apply_driver_features(
             cast("Callable[[Any], str]", json_serializer), tuple_strategy="tuple"
         )
 
-    enable_uuid_conversion = features.get("enable_uuid_conversion", True)
-    if not enable_uuid_conversion:
-        type_converter = DuckDBOutputConverter(enable_uuid_conversion=enable_uuid_conversion)
+    if not features.get("enable_uuid_conversion", True):
         type_coercion_map = dict(param_config.type_coercion_map)
-        type_coercion_map[str] = type_converter.convert_if_detected
+        for uuid_type in build_uuid_coercions():
+            type_coercion_map.pop(uuid_type, None)
         param_config = param_config.replace(type_coercion_map=type_coercion_map)
 
     if param_config is statement_config.parameter_config:

@@ -2,9 +2,10 @@
 
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import duckdb
+from sqlglot import exp
 
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
@@ -24,6 +25,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
+from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
@@ -31,9 +33,11 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
@@ -116,9 +120,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            fetched_data = cursor.fetchall()
-            data, column_names = collect_rows(cast("list[Any] | None", fetched_data), cursor.description)
-            row_format = "dict" if data and isinstance(data[0], dict) else "tuple"
+            arrow_table = cursor.fetch_arrow_table()
+            data = arrow_table.to_pylist()
+            _restore_uuid_columns(data, cursor.description)
+            column_names = list(arrow_table.column_names)
 
             return self.create_execution_result(
                 cursor,
@@ -126,7 +131,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=len(data),
                 is_select_result=True,
-                row_format=row_format,
+                row_format="dict",
             )
 
         row_count = resolve_rowcount(cursor)
@@ -157,6 +162,28 @@ class DuckDBDriver(SyncDriverAdapterBase):
             row_count = 0
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    def execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
+        """Execute many with a DuckDB bulk insert fast path for simple INSERT batches."""
+        config = statement_config or self.statement_config
+        if isinstance(statement, str) and not filters and not kwargs and config is self.statement_config:
+            prepared_statement = SQL(statement, tuple(parameters), statement_config=config, is_many=True)
+            _, prepared_parameters = self._compiled_sql(prepared_statement, config)
+            processed_state = prepared_statement.get_processed_state()
+            parsed_expression = processed_state.parsed_expression
+            if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
+                bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
+                if bulk_result is not None:
+                    return bulk_result
+        return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
     def dispatch_execute_script(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -438,6 +465,64 @@ class DuckDBDriver(SyncDriverAdapterBase):
         data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
         return data, column_names, len(data)
 
+    def _execute_bulk_insert_many(self, expression: exp.Insert, prepared_parameters: Any) -> "DMLResult | None":
+        """Execute a batch INSERT via Arrow registration when the payload is simple."""
+        if not isinstance(prepared_parameters, list) or not prepared_parameters:
+            return None
+        if not isinstance(expression.this, exp.Schema):
+            return None
+
+        table_expr = expression.this.this
+        if not isinstance(table_expr, exp.Table):
+            return None
+
+        if table_expr.alias:
+            return None
+
+        rows = prepared_parameters
+        column_names = [column.name for column in expression.this.expressions]
+        arrow_table = self._build_arrow_table(rows, column_names)
+        if arrow_table is None:
+            return None
+
+        target_table = table_expr.sql(dialect="duckdb")
+        temp_view = f"_sqlspec_batch_{uuid4().hex}"
+        self.connection.register(temp_view, arrow_table)
+        try:
+            self.connection.execute(f"INSERT INTO {target_table} SELECT * FROM {temp_view}")
+        finally:
+            with contextlib.suppress(Exception):
+                self.connection.unregister(temp_view)
+
+        return DMLResult("INSERT", len(rows))
+
+    @staticmethod
+    def _build_arrow_table(rows: "list[Any]", column_names: "list[str]") -> Any | None:
+        """Build a pyarrow table from batch rows when they share a stable shape."""
+        if not rows:
+            return None
+        first_row = rows[0]
+
+        if isinstance(first_row, dict):
+            keys = column_names or list(first_row.keys())
+            if any(not isinstance(row, dict) for row in rows):
+                return None
+            import pyarrow as pa
+
+            return pa.table({key: [row.get(key) for row in rows] for key in keys})
+
+        if isinstance(first_row, (list, tuple)):
+            values = list(first_row)
+            if not column_names:
+                column_names = [f"col_{index}" for index in range(len(values))]
+            if any(not isinstance(row, (list, tuple)) or len(row) != len(column_names) for row in rows):
+                return None
+            import pyarrow as pa
+
+            return pa.table({name: [row[index] for row in rows] for index, name in enumerate(column_names)})
+
+        return None
+
     def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
         """Resolve rowcount from DuckDB cursor for the direct execution path."""
         return resolve_rowcount(cursor)
@@ -451,6 +536,20 @@ class DuckDBDriver(SyncDriverAdapterBase):
             False - DuckDB requires explicit transaction management.
         """
         return False
+
+
+def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] | None") -> None:
+    """Restore DuckDB UUID columns after Arrow materialization."""
+    if not rows or not description:
+        return
+    uuid_columns = [column[0] for column in description if len(column) > 1 and str(column[1]).upper() == "UUID"]
+    if not uuid_columns:
+        return
+    for row in rows:
+        for column in uuid_columns:
+            value = row.get(column)
+            if isinstance(value, str):
+                row[column] = UUID(value)
 
 
 def _resolve_duckdb_inserted_rows(result: object) -> int:

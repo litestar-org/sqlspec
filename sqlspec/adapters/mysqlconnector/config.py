@@ -1,7 +1,7 @@
 """MysqlConnector database configuration."""
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
 
@@ -194,6 +194,14 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_local_infile_bulk_load: NotRequired[bool]
 
 
+def _normalize_local_infile(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Normalize mysql-connector local-infile consent."""
+    config = normalize_connection_config(connection_config)
+    config.pop("local_infile", None)
+    config["allow_local_infile"] = bool(config.get("allow_local_infile", False))
+    return config
+
+
 class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for mysql-connector sync connections."""
 
@@ -301,10 +309,9 @@ class MysqlConnectorSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = normalize_connection_config(connection_config)
-        connection_config.setdefault("host", "127.0.0.1")
+        connection_config = _normalize_local_infile(connection_config)
+        connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
-        connection_config.setdefault("allow_local_infile", False)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -422,10 +429,9 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.connection_config = normalize_connection_config(connection_config)
-        self.connection_config.setdefault("host", "127.0.0.1")
+        self.connection_config = _normalize_local_infile(connection_config)
+        self.connection_config.setdefault("host", "localhost")
         self.connection_config.setdefault("port", 3306)
-        self.connection_config.setdefault("allow_local_infile", False)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

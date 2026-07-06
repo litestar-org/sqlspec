@@ -21,6 +21,7 @@ from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -110,6 +111,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             data, column_names, row_count = collect_rows(fetched_data, cursor.description)
+            row_format = resolve_row_format(data)
 
             return self.create_execution_result(
                 cursor,
@@ -117,7 +119,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 column_names=column_names,
                 data_row_count=row_count,
                 is_select_result=True,
-                row_format="tuple",
+                row_format=row_format,
             )
 
         affected_rows = resolve_rowcount(cursor)
@@ -223,13 +225,14 @@ class SqliteDriver(SyncDriverAdapterBase):
             if column_names is None:
                 description = cursor.description
                 column_names = [col[0] for col in description] if description else []
+            row_format = resolve_row_format(fetched_data)
             execution_result = self.create_execution_result(
                 cursor,
                 selected_data=fetched_data,
                 column_names=column_names,
                 data_row_count=len(fetched_data),
                 is_select_result=True,
-                row_format="tuple",
+                row_format=row_format,
             )
             direct_statement = self._cached_statement(
                 sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql

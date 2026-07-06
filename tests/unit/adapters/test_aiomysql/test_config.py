@@ -62,7 +62,7 @@ def test_aiomysql_connection_kwargs_normalize_cursor_alias_and_omit_pool_only_ke
             "minsize": 2,
             "maxsize": 8,
             "pool_recycle": 30,
-            "enable_local_infile": True,
+            "local_infile": True,
             "allow_local_infile": True,
         }
     )
@@ -168,8 +168,8 @@ async def test_aiomysql_create_pool_forwards_sanitized_pool_kwargs(monkeypatch: 
     config = AiomysqlConfig(
         connection_config={
             "cursor_class": AiomysqlDictCursor,
-            "enable_local_infile": True,
             "allow_local_infile": True,
+            "local_infile": True,
             "minsize": 2,
             "maxsize": 8,
             "pool_recycle": 30,

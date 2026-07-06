@@ -61,6 +61,7 @@ __all__ = (
     "FailFastStub",
     "Gauge",
     "Histogram",
+    "MsgspecValidationError",
     "NumpyArray",
     "NumpyArrayStub",
     "PandasDataFrame",
@@ -256,15 +257,18 @@ try:
     from msgspec import UNSET as _REAL_UNSET
     from msgspec import Struct as _RealStruct
     from msgspec import UnsetType as _RealUnsetType
+    from msgspec import ValidationError as _RealMsgspecValidationError
     from msgspec import convert as _real_convert
     from msgspec.structs import fields as _real_msgspec_fields
 
+    MsgspecValidationError: type[Exception] = _RealMsgspecValidationError
     Struct = _RealStruct
     UnsetType = _RealUnsetType
     UNSET = _REAL_UNSET
     convert = _real_convert
     msgspec_fields = _real_msgspec_fields
 except ImportError:
+    MsgspecValidationError = ValueError
     Struct = StructStub  # type: ignore[assignment,misc]
     UnsetType = UnsetTypeStub  # type: ignore[assignment,misc]
     UNSET = UNSET_STUB  # type: ignore[assignment] # pyright: ignore[reportConstantRedefinition]

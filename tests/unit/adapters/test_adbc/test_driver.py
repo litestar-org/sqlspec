@@ -1,7 +1,9 @@
 """Unit tests for ADBC driver execute path optimizations."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
@@ -58,10 +60,33 @@ def test_dispatch_execute_postgres_uses_compiled_parameters_directly(monkeypatch
     cursor = MagicMock()
     cursor.rowcount = 1
 
-    result = driver.dispatch_execute(cursor, statement)  # type: ignore[protected-access]
+    result = driver.dispatch_execute(cursor, statement)  # type: ignore[arg-type, protected-access]
 
     cursor.execute.assert_called_once_with("UPDATE users SET name = $2 WHERE id = $1", parameters=prepared_parameters)
     assert result.rowcount_override == 1
+
+
+def test_dispatch_execute_uses_fetch_arrow_table_and_dict_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    connection.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    driver = AdbcDriver(connection)
+
+    table = pa.table({"id": [1]})
+    cursor = SimpleNamespace(
+        description=[("id",)],
+        execute=lambda *_args, **_kwargs: None,
+        fetch_arrow_table=lambda: table,
+        fetchall=lambda: (_ for _ in ()).throw(AssertionError("fetchall should not be used")),
+    )
+    monkeypatch.setattr(AdbcDriver, "_compiled_sql", lambda self, statement, config: ("SELECT 1", None))
+
+    statement = driver.prepare_statement("SELECT 1", statement_config=driver.statement_config)
+    result = driver.dispatch_execute(cursor, statement)  # type: ignore[arg-type, protected-access]
+
+    assert result.selected_data == [{"id": 1}]
+    assert result.column_names == ["id"]
+    assert result.data_row_count == 1
+    assert result.row_format == "dict"
 
 
 def test_prepare_driver_parameters_postgres_applies_cast_aware_preparation_when_casts_present(

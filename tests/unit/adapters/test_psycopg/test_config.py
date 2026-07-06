@@ -90,6 +90,18 @@ def test_build_default_statement_config_custom_serializer() -> None:
     assert parameter_config.json_serializer is serializer
 
 
+def test_build_default_statement_config_custom_deserializer() -> None:
+    """Custom deserializer should propagate into the parameter configuration."""
+
+    def deserializer(_: str) -> object:
+        return {"deserialized": True}
+
+    statement_config = build_statement_config(json_deserializer=deserializer)
+
+    parameter_config = statement_config.parameter_config
+    assert parameter_config.json_deserializer is deserializer
+
+
 def test_psycopg_sync_config_applies_driver_feature_serializer() -> None:
     """Driver features should mutate the sync Psycopg statement configuration."""
 
@@ -100,6 +112,18 @@ def test_psycopg_sync_config_applies_driver_feature_serializer() -> None:
 
     parameter_config = config.statement_config.parameter_config
     assert parameter_config.json_serializer is serializer
+
+
+def test_psycopg_sync_config_applies_driver_feature_deserializer() -> None:
+    """Driver features should mutate the sync Psycopg JSON deserializer."""
+
+    def deserializer(_: str) -> object:
+        return {"feature": True}
+
+    config = PsycopgSyncConfig(driver_features={"json_deserializer": deserializer})
+
+    parameter_config = config.statement_config.parameter_config
+    assert parameter_config.json_deserializer is deserializer
 
 
 def test_psycopg_build_postgres_extension_probe_names_filters_disabled_features() -> None:

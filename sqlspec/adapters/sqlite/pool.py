@@ -45,8 +45,10 @@ def _load_extensions(connection: SqliteConnection, extensions: "list[str]") -> N
 
 
 def _apply_runtime_setup(connection: SqliteConnection, runtime_setup: "dict[str, Any]") -> None:
-    for pragma_name, pragma_value in runtime_setup.get("pragmas", ()):
-        connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
+    pragmas = runtime_setup.get("pragmas", ())
+    if pragmas:
+        pragma_script = "\n".join(f"PRAGMA {pragma_name} = {pragma_value};" for pragma_name, pragma_value in pragmas)
+        connection.executescript(pragma_script)
 
     extensions = runtime_setup.get("extensions")
     if extensions:

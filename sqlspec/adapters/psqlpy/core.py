@@ -46,7 +46,7 @@ from sqlspec.utils.type_guards import has_query_result_metadata
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import SQL, ParameterStyleConfig, StatementConfig
+    from sqlspec.core import ParameterStyleConfig, StatementConfig
 
 __all__ = (
     "PsqlpyStreamSource",
@@ -228,11 +228,16 @@ def _parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleCon
     return base_config.replace(type_coercion_map=updated_type_map)
 
 
-def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
+def build_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
     """Construct the psqlpy statement configuration with optional JSON codecs."""
     serializer = json_serializer or to_json
+    deserializer = json_deserializer or from_json
     profile = driver_profile
-    base_config = build_statement_config_from_profile(profile, json_serializer=serializer)
+    base_config = build_statement_config_from_profile(
+        profile, json_serializer=serializer, json_deserializer=deserializer
+    )
     parameter_config = _parameter_config(base_config.parameter_config)
     return base_config.replace(parameter_config=parameter_config)
 
@@ -258,12 +263,16 @@ def apply_driver_features(
     """Apply psqlpy driver feature defaults to statement config."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     serializer = features.get("json_serializer", to_json)
+    deserializer = features.get("json_deserializer", from_json)
     features.setdefault("json_serializer", serializer)
+    features.setdefault("json_deserializer", deserializer)
     features.setdefault("enable_cast_detection", True)
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
 
-    base_config = build_statement_config_from_profile(driver_profile, json_serializer=serializer)
+    base_config = build_statement_config_from_profile(
+        driver_profile, json_serializer=serializer, json_deserializer=deserializer
+    )
     parameter_config = _parameter_config(base_config.parameter_config)
     statement_config = statement_config.replace(parameter_config=parameter_config)
 
@@ -485,11 +494,19 @@ def extract_rows_affected(result: Any) -> int:
     return -1
 
 
-def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
+def get_parameter_casts(statement: Any) -> "dict[int, str]":
     """Get parameter cast metadata from compiled statements."""
-    processed_state = statement.get_processed_state()
-    if processed_state is not Empty:
-        return processed_state.parameter_casts or {}
+    processed_state = getattr(statement, "get_processed_state", None)
+    if callable(processed_state):
+        state = cast("Any", processed_state())
+        if state is not Empty:
+            return state.parameter_casts or {}
+    parameter_casts = getattr(statement, "parameter_casts", None)
+    if parameter_casts:
+        return cast("dict[int, str]", parameter_casts)
+    processed_state = getattr(statement, "processed_state", None)
+    if processed_state is not None and processed_state is not Empty:
+        return cast("dict[int, str]", getattr(processed_state, "parameter_casts", {}) or {})
     return {}
 
 
