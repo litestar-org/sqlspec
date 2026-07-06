@@ -4,7 +4,13 @@ from collections import defaultdict
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlspec.data_dictionary._types import ForeignKeyMetadata, MetadataSource, ObjectIdentity
+from sqlspec.data_dictionary._types import (
+    DDLResult,
+    DependencyMetadata,
+    ForeignKeyMetadata,
+    MetadataSource,
+    ObjectIdentity,
+)
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
@@ -20,6 +26,8 @@ __all__ = (
     "DependencySortResult",
     "DependencyStrength",
     "dependency_edges_from_foreign_keys",
+    "dependency_edges_from_metadata",
+    "sort_ddl_results",
     "sort_dependencies",
 )
 
@@ -253,6 +261,60 @@ def dependency_edges_from_foreign_keys(
     return tuple(edges)
 
 
+def dependency_edges_from_metadata(
+    dependencies: "Iterable[DependencyMetadata]",
+    *,
+    dialect: str | None = None,
+    source: "MetadataSource | str | None" = None,
+) -> "tuple[DependencyEdge, ...]":
+    """Convert rich dependency metadata rows into typed dependency edges.
+
+    Dependency query packs do not all return the same vendor column names. This
+    helper accepts SQLSpec's rich ``DependencyMetadata`` wrapper and looks for
+    stable attribute aliases such as ``referenced_name``, ``referenced_schema``,
+    ``referenced_type``, ``kind``, ``strength``, and ``confidence``.
+    """
+    edges: list[DependencyEdge] = []
+    for dependency in dependencies:
+        edge = _dependency_edge_from_metadata(dependency, dialect=dialect, source=source)
+        if edge is not None:
+            edges.append(edge)
+    return tuple(edges)
+
+
+def sort_ddl_results(
+    ddl_results: "Iterable[DDLResult]", *, order: "Literal['create', 'drop']" = "create", raise_on_cycles: bool = True
+) -> "tuple[DDLResult, ...]":
+    """Sort DDL result objects by their typed dependency edges.
+
+    Args:
+        ddl_results: DDL payloads to order.
+        order: ``"create"`` or ``"drop"`` dependency direction.
+        raise_on_cycles: Raise ``DependencyCycleError`` instead of returning a partial order.
+
+    Returns:
+        DDL results in dependency order. Results not represented in the sorted
+        graph are appended in their original order.
+    """
+    result_tuple = tuple(ddl_results)
+    result_by_identity = {result.identity: result for result in result_tuple}
+    edges = tuple(edge for result in result_tuple for edge in result.dependencies)
+    sort_result = sort_dependencies(result_by_identity.keys(), edges, order=order)
+    if raise_on_cycles:
+        sort_result.raise_for_cycles()
+
+    ordered: list[DDLResult] = []
+    seen: set[ObjectIdentity] = set()
+    for identity in sort_result.ordered:
+        result = result_by_identity.get(identity)
+        if result is None:
+            continue
+        ordered.append(result)
+        seen.add(identity)
+    ordered.extend(result for result in result_tuple if result.identity not in seen)
+    return tuple(ordered)
+
+
 def sort_dependencies(
     objects: "Iterable[ObjectIdentity]",
     edges: "Iterable[DependencyEdge]",
@@ -364,3 +426,109 @@ def _coerce_source(value: "MetadataSource | str") -> MetadataSource:
     if isinstance(value, MetadataSource):
         return value
     return MetadataSource(value)
+
+
+def _dependency_edge_from_metadata(
+    dependency: DependencyMetadata, *, dialect: str | None, source: "MetadataSource | str | None"
+) -> "DependencyEdge | None":
+    attributes = dependency.attributes
+    target = _dependency_target_identity(attributes, dialect=dialect, source=source or dependency.source)
+    if target is None:
+        return None
+    edge_source = dependency.source if source is None else _coerce_source(source)
+    return DependencyEdge(
+        dependency.identity,
+        target,
+        _dependency_kind(attributes, dependency.identity.object_type),
+        strength=_dependency_strength(attributes),
+        source=edge_source,
+        confidence=_dependency_confidence(attributes),
+    )
+
+
+def _dependency_target_identity(
+    attributes: "dict[str, object]", *, dialect: str | None, source: "MetadataSource | str"
+) -> "ObjectIdentity | None":
+    identity = _object_identity_attribute(attributes, "referenced_identity", "target_identity", "to_identity")
+    if identity is not None:
+        return identity
+    referenced_name = _string_attribute(
+        attributes, "referenced_name", "referenced_object_name", "target_name", "to_name", "depends_on"
+    )
+    if referenced_name is None:
+        return None
+    return ObjectIdentity(
+        referenced_name,
+        _string_attribute(attributes, "referenced_type", "referenced_object_type", "target_type", "to_type")
+        or "object",
+        catalog=_string_attribute(attributes, "referenced_catalog", "target_catalog", "to_catalog"),
+        schema=_string_attribute(attributes, "referenced_schema", "target_schema", "to_schema"),
+        dialect=dialect or _string_attribute(attributes, "referenced_dialect", "target_dialect", "to_dialect"),
+        source=_coerce_source(source),
+    )
+
+
+def _object_identity_attribute(attributes: "dict[str, object]", *names: str) -> "ObjectIdentity | None":
+    for name in names:
+        value = attributes.get(name)
+        if isinstance(value, ObjectIdentity):
+            return value
+    return None
+
+
+def _string_attribute(attributes: "dict[str, object]", *names: str) -> "str | None":
+    for name in names:
+        value = attributes.get(name)
+        if value is None:
+            continue
+        return str(value)
+    return None
+
+
+def _dependency_kind(attributes: "dict[str, object]", from_type: str) -> DependencyEdgeKind:
+    raw_kind = _string_attribute(attributes, "kind", "edge_kind", "dependency_kind", "dependency_type", "type")
+    if raw_kind is not None:
+        normalized = raw_kind.strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "fk": DependencyEdgeKind.FOREIGN_KEY,
+            "foreign_key_constraint": DependencyEdgeKind.FOREIGN_KEY,
+            "sequence": DependencyEdgeKind.SEQUENCE_USE,
+            "sequence_dependency": DependencyEdgeKind.SEQUENCE_USE,
+            "view": DependencyEdgeKind.VIEW_REFERENCE,
+            "view_dependency": DependencyEdgeKind.VIEW_REFERENCE,
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+        try:
+            return DependencyEdgeKind(normalized)
+        except ValueError:
+            pass
+    normalized_type = from_type.strip().lower()
+    if normalized_type in {"view", "materialized_view"}:
+        return DependencyEdgeKind.VIEW_REFERENCE
+    if normalized_type == "trigger":
+        return DependencyEdgeKind.TRIGGER_TARGET
+    if normalized_type in {"function", "procedure", "routine"}:
+        return DependencyEdgeKind.ROUTINE_REFERENCE
+    return DependencyEdgeKind.ROUTINE_REFERENCE
+
+
+def _dependency_strength(attributes: "dict[str, object]") -> DependencyStrength:
+    raw_strength = _string_attribute(attributes, "strength", "dependency_strength")
+    if raw_strength is None:
+        return DependencyStrength.HARD
+    return _coerce_strength(raw_strength.strip().lower().replace("-", "_").replace(" ", "_"))
+
+
+def _dependency_confidence(attributes: "dict[str, object]") -> float:
+    value = attributes.get("confidence")
+    if value is None:
+        return 1.0
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    try:
+        return float(str(value))
+    except ValueError:
+        return 1.0

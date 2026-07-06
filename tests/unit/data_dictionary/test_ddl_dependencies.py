@@ -10,6 +10,7 @@ from sqlspec.data_dictionary import (
     DependencyDirection,
     DependencyEdge,
     DependencyEdgeKind,
+    DependencyMetadata,
     DependencySortResult,
     DependencyStrength,
     ForeignKeyMetadata,
@@ -18,6 +19,8 @@ from sqlspec.data_dictionary import (
     MetadataSupport,
     ObjectIdentity,
     dependency_edges_from_foreign_keys,
+    dependency_edges_from_metadata,
+    sort_ddl_results,
     sort_dependencies,
 )
 from sqlspec.driver._common import DataDictionaryMixin
@@ -150,3 +153,124 @@ def test_fk_topology_is_represented_as_dependency_edges() -> None:
 
     sorted_tables = DataDictionaryMixin().sort_tables_topologically(["orders", "users"], [fk])
     assert sorted_tables == ["users", "orders"]
+
+
+def test_postgres_pilot_sorts_catalog_dependency_metadata_and_native_ddl() -> None:
+    """PostgreSQL pg_depend-style metadata can drive typed DDL ordering."""
+    sequence = ObjectIdentity("order_id_seq", "sequence", schema="public", dialect="postgres")
+    table = ObjectIdentity("orders", "table", schema="public", dialect="postgres")
+    view = ObjectIdentity("order_summary", "view", schema="public", dialect="postgres")
+    dependencies = (
+        DependencyMetadata(
+            table,
+            source=MetadataSource.CATALOG,
+            attributes={"referenced_identity": sequence, "kind": "sequence_use", "confidence": 1.0},
+        ),
+        DependencyMetadata(
+            view,
+            source=MetadataSource.CATALOG,
+            attributes={
+                "referenced_name": "orders",
+                "referenced_schema": "public",
+                "referenced_type": "table",
+                "kind": "view_reference",
+            },
+        ),
+    )
+    edges = dependency_edges_from_metadata(dependencies, dialect="postgres")
+    ddl_results = (
+        DDLResult(
+            view,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl="CREATE VIEW public.order_summary AS SELECT count(*) FROM public.orders",
+            dependencies=(edges[1],),
+        ),
+        DDLResult(
+            table,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.HYBRID,
+            source=MetadataSource.GENERATED,
+            ddl="CREATE TABLE public.orders (id integer DEFAULT nextval('public.order_id_seq'))",
+            dependencies=(edges[0],),
+            warnings=("Table DDL combines generated table text with native catalog dependencies.",),
+        ),
+        DDLResult(
+            sequence,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl="CREATE SEQUENCE public.order_id_seq",
+        ),
+    )
+
+    ordered = sort_ddl_results(ddl_results)
+
+    assert [result.identity.name for result in ordered] == ["order_id_seq", "orders", "order_summary"]
+    assert ordered[1].fidelity == MetadataFidelity.HYBRID
+    assert ordered[1].dependencies[0].kind == DependencyEdgeKind.SEQUENCE_USE
+
+
+def test_sqlite_duckdb_pilot_sorts_native_schema_sql_dependencies() -> None:
+    """Embedded native schema SQL can be ordered with parsed dependency edges."""
+    users = ObjectIdentity("users", "table", schema="main", dialect="sqlite")
+    orders = ObjectIdentity("orders", "table", schema="main", dialect="sqlite")
+    orders_view = ObjectIdentity("orders_view", "view", schema="main", dialect="sqlite")
+    trigger = ObjectIdentity("orders_ai", "trigger", schema="main", dialect="sqlite")
+    edges = (
+        DependencyEdge(orders, users, DependencyEdgeKind.FOREIGN_KEY, source=MetadataSource.PARSED_SQL, confidence=0.8),
+        DependencyEdge(
+            orders_view, orders, DependencyEdgeKind.VIEW_REFERENCE, source=MetadataSource.PARSED_SQL, confidence=0.8
+        ),
+        DependencyEdge(
+            trigger, orders, DependencyEdgeKind.TRIGGER_TARGET, source=MetadataSource.PARSED_SQL, confidence=0.8
+        ),
+    )
+    ddl_results = (
+        DDLResult(
+            trigger,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.LOSSY,
+            source=MetadataSource.PARSED_SQL,
+            ddl="CREATE TRIGGER orders_ai AFTER INSERT ON orders BEGIN SELECT 1; END",
+            dependencies=(edges[2],),
+            warnings=("Dependency edges were parsed from native schema SQL.",),
+        ),
+        DDLResult(
+            orders_view,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl="CREATE VIEW orders_view AS SELECT * FROM orders",
+            dependencies=(edges[1],),
+        ),
+        DDLResult(
+            orders,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl="CREATE TABLE orders (id integer primary key, user_id integer references users(id))",
+            dependencies=(edges[0],),
+        ),
+        DDLResult(
+            users,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl="CREATE TABLE users (id integer primary key)",
+        ),
+    )
+
+    create_order = sort_ddl_results(ddl_results)
+    drop_order = sort_ddl_results(ddl_results, order="drop")
+    create_positions = {result.identity.name: index for index, result in enumerate(create_order)}
+    drop_positions = {result.identity.name: index for index, result in enumerate(drop_order)}
+
+    assert create_positions["users"] < create_positions["orders"]
+    assert create_positions["orders"] < create_positions["orders_view"]
+    assert create_positions["orders"] < create_positions["orders_ai"]
+    assert drop_positions["orders_view"] < drop_positions["orders"]
+    assert drop_positions["orders_ai"] < drop_positions["orders"]
+    assert drop_positions["orders"] < drop_positions["users"]
+    assert create_order[-1].dependencies[0].confidence == 0.8

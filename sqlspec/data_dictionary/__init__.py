@@ -18,6 +18,8 @@ from sqlspec.data_dictionary._dependencies import (
     DependencySortResult,
     DependencyStrength,
     dependency_edges_from_foreign_keys,
+    dependency_edges_from_metadata,
+    sort_ddl_results,
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import (
@@ -119,16 +121,18 @@ __all__ = (
     "VersionInfo",
     "ViewMetadata",
     "dependency_edges_from_foreign_keys",
+    "dependency_edges_from_metadata",
     "ensure_system_metadata_request",
     "get_data_dictionary_loader",
     "get_dialect_config",
     "list_registered_dialects",
     "normalize_dialect_name",
     "register_dialect",
+    "sort_ddl_results",
+    "sort_dependencies",
     "system_metadata_capabilities_from_domains",
     "system_metadata_gated_result",
     "unsupported_system_metadata_capability",
-    "sort_dependencies",
 )
 
 
