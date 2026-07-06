@@ -6,6 +6,8 @@ from mypy_extensions import mypyc_attr
 if TYPE_CHECKING:
     from re import Pattern
 
+    from sqlspec.core.statement import SQL
+
 __all__ = (
     "ColumnDetails",
     "ColumnMetadata",
@@ -22,6 +24,7 @@ __all__ = (
     "MetadataCapability",
     "MetadataCapabilityProfile",
     "MetadataFidelity",
+    "MetadataQuery",
     "MetadataResult",
     "MetadataRisk",
     "MetadataSource",
@@ -345,6 +348,97 @@ class MetadataResult:
 
     def __hash__(self) -> int:
         return hash((self.domain, self.capability, self.items, self.warnings))
+
+
+class MetadataQuery:
+    """Loaded data-dictionary query plus capability status."""
+
+    __slots__ = ("capability", "dialect", "domain", "mode", "name", "sql", "warnings")
+
+    def __init__(
+        self,
+        dialect: str,
+        domain: str,
+        name: str,
+        *,
+        sql: "SQL | None" = None,
+        mode: str | None = None,
+        capability: MetadataCapability | None = None,
+        warnings: "tuple[str, ...]" = (),
+    ) -> None:
+        self.dialect = dialect
+        self.domain = domain
+        self.name = name
+        self.mode = mode
+        self.sql = sql
+        self.capability = capability or MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+        )
+        self.warnings = warnings or self.capability.warnings
+
+    @property
+    def is_supported(self) -> bool:
+        """Return whether the query is available and executable."""
+        return self.sql is not None and self.capability.support == MetadataSupport.SUPPORTED
+
+    @property
+    def query_text(self) -> str | None:
+        """Return raw SQL text when the query is supported."""
+        if self.sql is None:
+            return None
+        return self.sql.raw_sql
+
+    @classmethod
+    def unsupported(
+        cls,
+        dialect: str,
+        domain: str,
+        name: str,
+        *,
+        mode: str | None = None,
+        source: "MetadataSource | str" = MetadataSource.UNKNOWN,
+        risks: "tuple[MetadataRisk | str, ...]" = (),
+        warnings: "tuple[str, ...]" = (),
+    ) -> "MetadataQuery":
+        """Create a structured unsupported query result."""
+        capability = MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=source,
+            risks=risks,
+            warnings=warnings,
+        )
+        return cls(dialect=dialect, domain=domain, name=name, mode=mode, capability=capability, warnings=warnings)
+
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize the query status."""
+        return {
+            "dialect": self.dialect,
+            "domain": self.domain,
+            "name": self.name,
+            "mode": self.mode,
+            "capability": self.capability.to_dict(),
+            "query_text": self.query_text,
+            "warnings": self.warnings,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"MetadataQuery(dialect={self.dialect!r}, domain={self.domain!r}, name={self.name!r}, "
+            f"mode={self.mode!r}, capability={self.capability!r}, sql={self.sql!r}, warnings={self.warnings!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MetadataQuery):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.dialect, self.domain, self.name, self.mode, self.capability, self.query_text, self.warnings))
 
 
 class DDLResult:

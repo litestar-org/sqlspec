@@ -84,6 +84,8 @@ class DriverCase:
     supports_data_dictionary_dependencies: bool = False
     supports_data_dictionary_system: bool = False
     supports_data_dictionary_transport_metadata: bool = False
+    data_dictionary_schema_query_limit: int = 10
+    data_dictionary_index_query_limit: int = 10
     supports_data_dictionary_topology: bool = False
     supports_schema_qualified_data_dictionary: bool = False
     supports_native_metadata: bool = False
