@@ -144,6 +144,17 @@ async def test_execute_many_uses_thin_qmark_path() -> None:
     assert connection.executemany_calls == [("INSERT INTO test_thin_path (value) VALUES (?)", [("a",), ("b",)])]
 
 
+def test_execute_many_thin_path_rejects_subclass_coercion_values() -> None:
+    from collections import defaultdict
+
+    assert (
+        AiosqliteDriver._thin_path_parameters_are_eligible(
+            [(defaultdict(int, a=1),)], default_statement_config.parameter_config.type_coercion_map
+        )
+        is False
+    )
+
+
 class _FakeConnection:
     def __init__(self) -> None:
         self.executed: list[str] = []

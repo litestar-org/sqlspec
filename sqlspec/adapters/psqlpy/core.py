@@ -644,7 +644,7 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
 
 def _sequence_needs_numeric_coercion(values: "list[Any] | tuple[Any, ...]") -> bool:
     """Return True when any value in a parameter sequence needs numeric coercion."""
-    return any(type(value) in _NUMERIC_COERCE_TYPES for value in values)
+    return any(isinstance(value, _NUMERIC_COERCE_TYPES) for value in values)
 
 
 def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "list[Any]":

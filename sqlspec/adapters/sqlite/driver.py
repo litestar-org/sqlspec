@@ -19,7 +19,13 @@ from sqlspec.adapters.sqlite.core import (
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
 from sqlspec.core.result import DMLResult
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.driver import (
+    BaseSyncExceptionHandler,
+    SyncDriverAdapterBase,
+    SyncRowStream,
+    parameter_value_needs_processing,
+    type_coercion_fallbacks,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.type_guards import resolve_row_format
 
@@ -284,6 +290,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         row_len = len(first_sequence)
         coercion_map = type_coercion_map
         has_type_coercion = bool(coercion_map)
+        fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
 
         # Common benchmark shape: list[tuple[value]]
         if row_len == 1:
@@ -294,8 +301,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                         return False
                     if len(sequence) != 1:
                         return False
-                    value_type = type(sequence[0])
-                    if value_type is TypedParameter or value_type in coercion_map:
+                    if parameter_value_needs_processing(sequence[0], coercion_map, fallback_items):
                         return False
                 return True
 
@@ -317,8 +323,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 if len(sequence) != row_len:
                     return False
                 for value in sequence:
-                    value_type = type(value)
-                    if value_type is TypedParameter or value_type in coercion_map:
+                    if parameter_value_needs_processing(value, coercion_map, fallback_items):
                         return False
             return True
 

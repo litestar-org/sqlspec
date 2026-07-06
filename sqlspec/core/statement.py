@@ -1021,12 +1021,25 @@ class SQL:
     def _current_expression(self) -> exp.Expr:
         """Get the current expression or parse the raw SQL.
 
-        Prefers cached parsed expression over re-parsing raw SQL.
+        Preserves authoring-time parameter names for dynamic query modifiers,
+        then falls back to cached parsed expressions.
 
         Returns:
             The SQLGlot expression for this statement
         """
-        # First check processed state for parsed expression
+        # Preserve authoring-time parameter names when applying dynamic query modifiers.
+        if (
+            self._processed_state is not Empty
+            and self._processed_state.input_named_parameters
+            and self._raw_expression is None
+            and self._raw_sql
+        ):
+            try:
+                parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+                if isinstance(parsed, exp.Expr):
+                    return parsed
+            except ParseError:
+                pass
         if self._processed_state is not Empty and self._processed_state.parsed_expression is not None:
             return self._processed_state.parsed_expression.copy()
         # Then check statement_expression (from compilation)

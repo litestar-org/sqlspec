@@ -64,3 +64,24 @@ def test_sqlite_execute_many_falls_back_when_coercion_required() -> None:
         assert connection.execute("SELECT COUNT(*) FROM test_fallback_path").fetchone()[0] == 2
     finally:
         connection.close()
+
+
+def test_sqlite_execute_many_falls_back_when_subclass_coercion_required() -> None:
+    import json
+    from collections import defaultdict
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        driver.execute("CREATE TABLE test_fallback_path (data TEXT)")
+
+        result = driver.execute_many(
+            "INSERT INTO test_fallback_path (data) VALUES (?)", [(defaultdict(int, a=1),), (defaultdict(int, b=2),)]
+        )
+
+        assert not isinstance(result, DMLResult)
+        assert result.operation_type == "INSERT"
+        rows = connection.execute("SELECT data FROM test_fallback_path ORDER BY data").fetchall()
+        assert [json.loads(row[0]) for row in rows] == [{"a": 1}, {"b": 2}]
+    finally:
+        connection.close()
