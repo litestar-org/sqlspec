@@ -40,6 +40,16 @@ Asynchronous Driver
 Data Dictionary
 ===============
 
+The shared data dictionary base classes define the replacement metadata
+contract used by adapter-local dictionaries. User-facing examples and the
+support matrix live in :doc:`../usage/data_dictionary`. In short:
+
+- Structural metadata returns ``MetadataResult`` envelopes.
+- DDL lookups return ``DDLResult`` objects with fidelity and warning metadata.
+- Dependency ordering uses typed dependency edges rather than only table names.
+- System and performance metadata uses ``SystemMetadataRequest`` and
+  ``SystemMetadataResult`` in a separate opt-in namespace.
+
 .. autoclass:: DataDictionaryMixin
    :members:
    :undoc-members:
