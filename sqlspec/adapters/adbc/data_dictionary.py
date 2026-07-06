@@ -9,12 +9,18 @@ from mypy_extensions import mypyc_attr
 from sqlspec.adapters.sqlite.core import format_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    ConstraintMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
     MetadataFidelity,
+    MetadataResult,
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    ObjectIdentity,
     SystemMetadataCapability,
     SystemMetadataRequest,
     SystemMetadataResult,
@@ -54,6 +60,30 @@ logger = get_logger("sqlspec.adapters.adbc")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
 _NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError)
+_ADBC_METADATA_DOMAINS: Final = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "routines",
+    "privileges",
+    "dependencies",
+    "ddl",
+    "statistics",
+    "system",
+)
+_ADBC_TRANSPORT_WARNING: Final = (
+    "ADBC transport metadata is portable discovery metadata; dialect SQL packs remain the DDL-grade source."
+)
+_ADBC_CONSTRAINT_WARNING: Final = (
+    "ADBC GetObjects constraint metadata is lossy; expressions, enforcement details, privileges, and dialect DDL "
+    "are not preserved."
+)
+_ADBC_DDL_UNSUPPORTED_WARNING: Final = "ADBC metadata is not a lossless DDL source for this dialect."
+_ADBC_STATISTICS_WARNING: Final = "ADBC statistics metadata may be approximate, expensive, and driver-specific."
 
 
 class _NativeMetadataIncompleteError(Exception):
@@ -167,6 +197,54 @@ def _normalize_native_foreign_keys(
     return keys
 
 
+def _generated_constraint_name(table_name: str, constraint_type: str, column_names: "tuple[str, ...]") -> str:
+    constraint_label = constraint_type.lower().replace(" ", "_") or "constraint"
+    column_label = "_".join(column_names) if column_names else "unnamed"
+    return f"{table_name}_{constraint_label}_{column_label}"
+
+
+def _normalize_native_constraints(
+    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None, dialect: "str | None" = None
+) -> "list[ConstraintMetadata]":
+    constraints: list[ConstraintMetadata] = []
+    for catalog_name, schema_name, table in _iter_object_tables(rows):
+        table_name = str(table["table_name"])
+        if table_name_exact is not None and table_name != table_name_exact:
+            continue
+        resolved_schema = schema_name or catalog_name
+        for constraint in table.get("table_constraints") or []:
+            constraint_type = str(constraint.get("constraint_type") or "").upper()
+            if not constraint_type:
+                continue
+            column_names = tuple(str(column) for column in constraint.get("constraint_column_names") or ())
+            raw_name = constraint.get("constraint_name")
+            constraint_name = (
+                str(raw_name) if raw_name else _generated_constraint_name(table_name, constraint_type, column_names)
+            )
+            identity = ObjectIdentity(
+                name=constraint_name,
+                object_type="constraint",
+                catalog=str(catalog_name) if catalog_name else None,
+                schema=str(resolved_schema) if resolved_schema else None,
+                dialect=dialect,
+                source=MetadataSource.DRIVER_METADATA,
+            )
+            constraints.append(
+                ConstraintMetadata(
+                    identity=identity,
+                    source=MetadataSource.DRIVER_METADATA,
+                    attributes={
+                        "table_name": table_name,
+                        "constraint_type": constraint_type,
+                        "column_names": column_names,
+                        "column_usage": tuple(constraint.get("constraint_column_usage") or ()),
+                        "is_lossy": True,
+                    },
+                )
+            )
+    return constraints
+
+
 _ARROW_DECIMAL_FORMAT: Final = "DECIMAL({precision},{scale})"
 
 
@@ -212,7 +290,26 @@ _ADBC_STATISTIC_NAMES: dict[int, str] = {
 }
 
 
-def _normalize_native_statistics(rows: "list[dict[str, Any]]") -> "list[TableStatisticsMetadata]":
+def _normalize_native_statistic_names(rows: "list[dict[str, Any]]") -> "dict[int, str]":
+    statistic_names: dict[int, str] = {}
+    for entry in rows:
+        key = entry.get("statistic_key")
+        name = entry.get("statistic_name")
+        if key is None or name is None:
+            continue
+        try:
+            statistic_names[int(key)] = str(name)
+        except (TypeError, ValueError):
+            continue
+    return statistic_names
+
+
+def _normalize_native_statistics(
+    rows: "list[dict[str, Any]]", statistic_names: "dict[int, str] | None" = None
+) -> "list[TableStatisticsMetadata]":
+    statistic_name_map = (
+        _ADBC_STATISTIC_NAMES if statistic_names is None else {**_ADBC_STATISTIC_NAMES, **statistic_names}
+    )
     statistics: list[TableStatisticsMetadata] = []
     for catalog in rows:
         catalog_name = catalog.get("catalog_name")
@@ -225,7 +322,7 @@ def _normalize_native_statistics(rows: "list[dict[str, Any]]") -> "list[TableSta
                     "table_name": str(entry["table_name"]),
                     "column_name": str(column_name) if column_name is not None else None,
                     "statistic_key": key,
-                    "statistic_name": _ADBC_STATISTIC_NAMES.get(key, str(key)),
+                    "statistic_name": statistic_name_map.get(key, str(key)),
                     "statistic_value": entry.get("statistic_value"),
                     "is_approximate": bool(entry.get("statistic_is_approximate")),
                 }
@@ -328,6 +425,16 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             features.update(config.feature_flags.keys())
             features.update(config.feature_versions.keys())
         return sorted(features)
+
+    def get_metadata_capabilities(
+        self, driver: "AdbcDriver", domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Report ADBC transport metadata capabilities without implying DDL fidelity."""
+        dialect = self._normalize_dialect(driver)
+        requested_domains = tuple(domains or _ADBC_METADATA_DOMAINS)
+        probes = self._probe_transport_metadata(driver)
+        capabilities = tuple(self._capability_for_domain(dialect, domain, probes) for domain in requested_domains)
+        return MetadataCapabilityProfile(dialect=dialect, adapter="adbc", capabilities=capabilities)
 
     def get_tables(self, driver: "AdbcDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables for the current dialect."""
@@ -552,7 +659,72 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             msg = f"ADBC driver for dialect {dialect!r} does not support native table statistics: {exc}"
             raise OperationalError(msg) from exc
         rows = reader.read_all().to_pylist()
-        return [entry for entry in _normalize_native_statistics(rows) if entry["table_name"] == table_name]
+        statistic_names = self._native_statistic_names(driver)
+        return [
+            entry for entry in _normalize_native_statistics(rows, statistic_names) if entry["table_name"] == table_name
+        ]
+
+    def get_constraints(
+        self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get lossy ADBC constraint shells from GetObjects."""
+        dialect = self._normalize_dialect(driver)
+        schema_name = self._resolve_schema(dialect, schema)
+        table_name = self._resolve_identifier(dialect, table) if table is not None else None
+        try:
+            rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
+        except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
+            warning = f"ADBC GetObjects is unavailable for constraints: {exc}"
+            capability = MetadataCapability(
+                domain="constraints",
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=(warning,),
+            )
+            return MetadataResult(domain="constraints", capability=capability, warnings=capability.warnings)
+
+        capability = MetadataCapability(
+            domain="constraints",
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.LOSSY,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ADBC_CONSTRAINT_WARNING,),
+        )
+        return MetadataResult(
+            domain="constraints",
+            capability=capability,
+            items=tuple(_normalize_native_constraints(rows, table_name_exact=table_name, dialect=dialect)),
+            warnings=capability.warnings,
+        )
+
+    def get_ddl(self, driver: "AdbcDriver", object_name: str, schema: "str | None" = None) -> "MetadataResult":
+        """Fail closed because ADBC metadata is not a lossless DDL source."""
+        dialect = self._normalize_dialect(driver)
+        schema_name = self._resolve_schema(dialect, schema)
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type="object",
+            schema=schema_name,
+            dialect=dialect,
+            source=MetadataSource.DRIVER_METADATA,
+        )
+        capability = MetadataCapability(
+            domain="ddl",
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,),
+        )
+        ddl = DDLResult(
+            identity=identity,
+            status=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.DRIVER_METADATA,
+            ddl=None,
+            warnings=capability.warnings,
+        )
+        return MetadataResult(domain="ddl", capability=capability, items=(ddl,), warnings=capability.warnings)
 
     def get_system_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
@@ -655,6 +827,141 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if required_version is None or version_info is None:
             return False
         return bool(version_info >= required_version)
+
+    def _probe_transport_metadata(self, driver: "AdbcDriver") -> "dict[str, bool]":
+        connection = driver.connection
+        return {
+            "info": self._probe_callable(connection, "adbc_get_info"),
+            "table_types": self._probe_callable(connection, "adbc_get_table_types"),
+            "objects": self._probe_reader_callable(connection, "adbc_get_objects", depth="catalogs"),
+            "table_schema": callable(getattr(connection, "adbc_get_table_schema", None)),
+            "statistics": self._probe_reader_callable(
+                connection, "adbc_get_statistics", table_name_filter="__sqlspec_metadata_probe__", approximate=True
+            ),
+            "statistic_names": self._probe_reader_callable(connection, "adbc_get_statistic_names"),
+        }
+
+    def _probe_callable(self, connection: Any, name: str) -> bool:
+        method = getattr(connection, name, None)
+        if not callable(method):
+            return False
+        try:
+            method()
+        except Exception:
+            return False
+        return True
+
+    def _probe_reader_callable(self, connection: Any, name: str, **kwargs: Any) -> bool:
+        method = getattr(connection, name, None)
+        if not callable(method):
+            return False
+        try:
+            reader = cast("Any", method(**kwargs))
+            reader.read_all()
+        except Exception:
+            return False
+        return True
+
+    def _capability_for_domain(self, dialect: str, domain: str, probes: "dict[str, bool]") -> "MetadataCapability":
+        if domain == "ddl":
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,),
+            )
+        if domain in {"views", "routines", "privileges", "dependencies"}:
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=(_ADBC_TRANSPORT_WARNING,),
+            )
+        if domain in {"statistics", "system"}:
+            if probes["statistics"] or probes["statistic_names"]:
+                fidelity = (
+                    MetadataFidelity.TRANSPORT_FALLBACK
+                    if probes["statistics"] and probes["statistic_names"]
+                    else MetadataFidelity.PARTIAL
+                )
+                return MetadataCapability(
+                    domain=domain,
+                    support=MetadataSupport.SUPPORTED,
+                    fidelity=fidelity,
+                    source=MetadataSource.DRIVER_METADATA,
+                    risks=(MetadataRisk.EXPENSIVE,),
+                    warnings=(_ADBC_STATISTICS_WARNING,),
+                )
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=("ADBC statistics metadata is unavailable for this driver.",),
+            )
+        if domain == "constraints":
+            if probes["objects"]:
+                return MetadataCapability(
+                    domain=domain,
+                    support=MetadataSupport.SUPPORTED,
+                    fidelity=MetadataFidelity.LOSSY,
+                    source=MetadataSource.DRIVER_METADATA,
+                    warnings=(_ADBC_CONSTRAINT_WARNING,),
+                )
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=("ADBC GetObjects is unavailable for constraints.",),
+            )
+        if domain == "columns" and (probes["objects"] or probes["table_schema"]):
+            return self._transport_capability(domain)
+        if domain in {"schemas", "objects", "tables"} and (probes["objects"] or probes["table_types"]):
+            return self._transport_capability(domain)
+        if domain == "indexes" and self._has_query(dialect, "indexes_by_schema"):
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.NATIVE,
+                source=MetadataSource.CATALOG,
+                warnings=("ADBC uses the dialect SQL pack for index metadata; no transport index API is available.",),
+            )
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ADBC_TRANSPORT_WARNING,),
+        )
+
+    def _transport_capability(self, domain: str) -> "MetadataCapability":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.TRANSPORT_FALLBACK,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ADBC_TRANSPORT_WARNING,),
+        )
+
+    def _has_query(self, dialect: str, name: str) -> bool:
+        try:
+            self._get_query(dialect, name)
+        except SQLFileNotFoundError:
+            return False
+        return True
+
+    def _native_statistic_names(self, driver: "AdbcDriver") -> "dict[int, str]":
+        try:
+            reader = driver.connection.adbc_get_statistic_names()
+            rows = reader.read_all().to_pylist()
+        except Exception:
+            return {}
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            return {}
+        return _normalize_native_statistic_names(cast("list[dict[str, Any]]", rows))
 
     def _native_object_filters(
         self, dialect: str, schema_name: "str | None", table_name: "str | None"

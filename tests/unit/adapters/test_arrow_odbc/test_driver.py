@@ -20,6 +20,7 @@ from sqlspec.adapters.arrow_odbc import (
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.core import LimitOffsetFilter, OrderByFilter
+from sqlspec.data_dictionary import MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError
 
 if TYPE_CHECKING:
@@ -184,6 +185,24 @@ def test_get_columns_probe_failure_returns_empty(monkeypatch: pytest.MonkeyPatch
 
     assert driver.data_dictionary.get_columns(driver, table="items") == []
     assert connection.read_calls[-1]["query"] == 'SELECT * FROM "items" WHERE 1=0'
+
+
+def test_arrow_odbc_data_dictionary_catalog_support_is_explicitly_unavailable_without_bridge() -> None:
+    """arrow-odbc should not claim raw ODBC catalog APIs without a bridge."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    profile = driver.data_dictionary.get_metadata_capabilities(driver, domains=("odbc_catalog", "columns", "ddl"))
+
+    catalog = profile.get("odbc_catalog")
+    assert profile.adapter == "arrow_odbc"
+    assert catalog.support == MetadataSupport.UNSUPPORTED
+    assert catalog.fidelity == MetadataFidelity.UNSUPPORTED
+    assert catalog.source == MetadataSource.DRIVER_METADATA
+    assert catalog.warnings
+    assert profile.get("columns").support == MetadataSupport.SUPPORTED
+    assert profile.get("columns").fidelity == MetadataFidelity.PARTIAL
+    assert profile.get("ddl").support == MetadataSupport.UNSUPPORTED
 
 
 def test_resolve_dialect_from_dbms_name() -> None:
