@@ -4,7 +4,6 @@ import graphlib
 import hashlib
 import logging
 from collections import OrderedDict
-from collections.abc import Mapping
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
@@ -1716,7 +1715,7 @@ class CommonDriverAttributesMixin:
                     compiled_sql=compiled_sql,
                     parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
                     expression=statement.expression,
-                    input_named_parameters=_cached_input_named_parameters(statement, processed),
+                    input_named_parameters=processed.input_named_parameters,
                     parameter_profile=processed.parameter_profile,
                     applied_wrap_types=processed.applied_wrap_types,
                 )
@@ -1733,7 +1732,7 @@ class CommonDriverAttributesMixin:
                     compiled_sql=processed.compiled_sql,
                     parameters=prepared_parameters,
                     expression=processed.parsed_expression,
-                    input_named_parameters=_cached_input_named_parameters(statement, processed),
+                    input_named_parameters=processed.input_named_parameters,
                     parameter_profile=processed.parameter_profile,
                     applied_wrap_types=processed.applied_wrap_types,
                 )
@@ -1749,7 +1748,7 @@ class CommonDriverAttributesMixin:
                 compiled_sql=processed.compiled_sql,
                 parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
                 expression=processed.parsed_expression,
-                input_named_parameters=_cached_input_named_parameters(statement, processed),
+                input_named_parameters=processed.input_named_parameters,
                 parameter_profile=processed.parameter_profile,
                 applied_wrap_types=processed.applied_wrap_types,
             )
@@ -1825,7 +1824,7 @@ class CommonDriverAttributesMixin:
             compiled_sql=compiled_sql,
             parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", cached_parameters),
             expression=statement.expression,
-            input_named_parameters=_cached_input_named_parameters(statement, processed),
+            input_named_parameters=processed.input_named_parameters,
             parameter_profile=processed.parameter_profile,
             applied_wrap_types=processed.applied_wrap_types,
         )
@@ -2160,24 +2159,6 @@ def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") 
     if isinstance(params, dict):
         return tuple(params.values())
     return params
-
-
-def _cached_input_named_parameters(statement: "SQL", processed: "ProcessedState") -> "tuple[str, ...]":
-    input_named_parameters = processed.input_named_parameters
-    parameter_profile = processed.parameter_profile
-    parameters = statement.parameters
-    if (
-        parameter_profile is not None
-        and input_named_parameters
-        and parameter_profile.total_count > len(input_named_parameters)
-        and isinstance(parameters, Mapping)
-    ):
-        parameter_names = tuple(str(name) for name in parameters)
-        if len(parameter_names) == parameter_profile.total_count and all(
-            parameter_name in parameters for parameter_name in input_named_parameters
-        ):
-            return parameter_names
-    return input_named_parameters
 
 
 def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":

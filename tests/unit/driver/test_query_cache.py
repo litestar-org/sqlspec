@@ -295,6 +295,31 @@ def test_compilation_cache_hit_rebinds_dynamic_named_parameters(sqlite_sync_driv
     assert second_prepared == (2, 20)
 
 
+def test_compilation_cache_miss_maps_dynamic_named_parameters_by_placeholder_order(sqlite_sync_driver: Any) -> None:
+    from sqlspec import SQLFileLoader
+    from sqlspec.adapters.asyncpg.core import default_statement_config as asyncpg_statement_config
+
+    clear_all_caches()
+    loader = SQLFileLoader()
+    loader.add_named_sql(
+        "get-workspace-member",
+        "SELECT * FROM workspace_members AS wm WHERE wm.member_id = :member_id",
+        dialect="postgres",
+    )
+
+    statement = sqlite_sync_driver.prepare_statement(
+        loader.get_sql("get-workspace-member").where("wm.account_id = :account_id"),
+        statement_config=asyncpg_statement_config,
+        kwargs={"account_id": 10, "member_id": 1},
+    )
+    compiled, prepared = sqlite_sync_driver._compiled_statement(
+        statement, asyncpg_statement_config, flatten_single_parameters=False
+    )
+
+    assert compiled.compiled_sql.endswith("WHERE wm.member_id = $1 AND wm.account_id = $2")
+    assert prepared == (1, 10)
+
+
 def test_sync_execute_cached_statement_re_raises_mapped_exception(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     import sqlite3
 
