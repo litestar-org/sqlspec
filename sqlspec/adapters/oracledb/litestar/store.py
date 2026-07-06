@@ -14,10 +14,6 @@ __all__ = ("OracleAsyncStore", "OracleSyncStore")
 
 
 ORACLE_SMALL_BLOB_LIMIT = 32000
-ORACLE_EXPIRES_AT_EXPRESSION = (
-    "CASE WHEN :expires_in_seconds IS NULL THEN NULL "
-    "ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND') END"
-)
 
 
 def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "int | None":
@@ -189,7 +185,11 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 if expires_in_seconds is not None:
                     update_sql = f"""
                     UPDATE {self._table_name}
-                    SET expires_at = {ORACLE_EXPIRES_AT_EXPRESSION}, updated_at = SYSTIMESTAMP
+                    SET expires_at = CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
+                        updated_at = SYSTIMESTAMP
                     WHERE session_id = :session_id
                     """
                     await cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
@@ -220,11 +220,23 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = EMPTY_BLOB(),
-                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
+                        expires_at = CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, EMPTY_BLOB(), {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (
+                        :session_id,
+                        EMPTY_BLOB(),
+                        CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
+                        SYSTIMESTAMP,
+                        SYSTIMESTAMP
+                    )
                 """
                 await cursor.execute(merge_sql, {"session_id": key, "expires_in_seconds": expires_in_seconds})
 
@@ -247,11 +259,23 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = :data,
-                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
+                        expires_at = CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, :data, {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (
+                        :session_id,
+                        :data,
+                        CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
+                        SYSTIMESTAMP,
+                        SYSTIMESTAMP
+                    )
                 """
                 await cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
                 await conn.commit()
@@ -487,7 +511,11 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 if expires_in_seconds is not None:
                     update_sql = f"""
                     UPDATE {self._table_name}
-                    SET expires_at = {ORACLE_EXPIRES_AT_EXPRESSION}, updated_at = SYSTIMESTAMP
+                    SET expires_at = CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
+                        updated_at = SYSTIMESTAMP
                     WHERE session_id = :session_id
                     """
                     cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
@@ -523,11 +551,23 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = EMPTY_BLOB(),
-                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
+                        expires_at = CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, EMPTY_BLOB(), {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (
+                        :session_id,
+                        EMPTY_BLOB(),
+                        CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
+                        SYSTIMESTAMP,
+                        SYSTIMESTAMP
+                    )
                 """
                 cursor.execute(merge_sql, {"session_id": key, "expires_in_seconds": expires_in_seconds})
 
@@ -550,11 +590,23 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = :data,
-                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
+                        expires_at = CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, :data, {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (
+                        :session_id,
+                        :data,
+                        CASE
+                            WHEN :expires_in_seconds IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                        END,
+                        SYSTIMESTAMP,
+                        SYSTIMESTAMP
+                    )
                 """
                 cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
                 conn.commit()
