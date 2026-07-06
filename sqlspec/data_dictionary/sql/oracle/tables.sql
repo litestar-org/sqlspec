@@ -2,7 +2,7 @@
 -- dialect: oracle
 SELECT
     table_name,
-    MAX(level) AS level
+    MAX(LEVEL) AS dependency_level
 FROM all_constraints
 WHERE owner = COALESCE(:schema_name, USER)
 START WITH table_name NOT IN (
@@ -14,7 +14,7 @@ START WITH table_name NOT IN (
 CONNECT BY NOCYCLE PRIOR constraint_name = r_constraint_name
     AND PRIOR owner = owner
 GROUP BY table_name
-ORDER BY level, table_name;
+ORDER BY dependency_level, table_name;
 
 -- name: all_tables_by_schema
 -- dialect: oracle
