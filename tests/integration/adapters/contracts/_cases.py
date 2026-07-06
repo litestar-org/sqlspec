@@ -78,6 +78,12 @@ class DriverCase:
     supports_custom_type_adapters: bool = False
     supports_multi_schema_migrations: bool = False
     supports_data_dictionary: bool = False
+    supports_data_dictionary_core: bool = False
+    supports_data_dictionary_constraints: bool = False
+    supports_data_dictionary_ddl: bool = False
+    supports_data_dictionary_dependencies: bool = False
+    supports_data_dictionary_system: bool = False
+    supports_data_dictionary_transport_metadata: bool = False
     supports_data_dictionary_topology: bool = False
     supports_schema_qualified_data_dictionary: bool = False
     supports_native_metadata: bool = False

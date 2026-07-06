@@ -9,6 +9,19 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+------------------------------------------------------------------------------
+
+**Breaking changes:**
+
+* Began replacing the old narrow data-dictionary interface with a consistent
+  metadata contract based on ``MetadataCapabilityProfile``,
+  ``MetadataCapability``, ``MetadataResult``, ``ObjectIdentity``, and
+  ``DDLResult``. This is a pre-1.0 breaking change: adapter metadata
+  capabilities are preserved, but callers should migrate to the domain result
+  envelope and inspect capability status instead of treating empty lists as
+  unsupported metadata.
+
 v0.54.0 - SQL processing correctness and cleanup
 ------------------------------------------------------------------------------
 
