@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.data_dictionary import (
         ColumnMetadata,
+        DDLResult,
         ForeignKeyMetadata,
         IndexMetadata,
         MetadataCapabilityProfile,
@@ -1889,8 +1890,54 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """Get dependency metadata or an unsupported-domain result."""
         return self._unsupported_metadata("dependencies")
 
-    def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult":
-        """Get object DDL or an unsupported-domain result."""
+    def get_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult":
+        """Get object DDL or an explicit unsupported DDL result."""
+        return self.get_object_ddl(
+            driver,
+            object_name,
+            schema=schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            prefer_native=prefer_native,
+            redact=redact,
+        )
+
+    def get_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None" = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult":
+        """Get one object's DDL or an explicit unsupported DDL result."""
+        return self._unsupported_ddl(object_name, schema=schema, object_type=object_type)
+
+    def get_schema_ddl(
+        self,
+        driver: Any,
+        schema: "str | None" = None,
+        *,
+        include_domains: "Sequence[str] | None" = None,
+        exclude_domains: "Sequence[str] | None" = None,
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "MetadataResult":
+        """Get schema DDL items or an unsupported-domain result."""
         return self._unsupported_metadata("ddl")
 
     def get_system_metadata(
@@ -2003,3 +2050,11 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         from sqlspec.data_dictionary import MetadataResult
 
         return MetadataResult.unsupported(domain)
+
+    def _unsupported_ddl(self, object_name: str, *, schema: "str | None", object_type: str) -> "DDLResult":
+        from sqlspec.data_dictionary import DDLResult, ObjectIdentity
+
+        return DDLResult.unsupported(
+            ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect),
+            warnings=(f"{self.dialect} DDL extraction is not implemented",),
+        )

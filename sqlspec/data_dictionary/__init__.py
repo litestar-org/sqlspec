@@ -9,6 +9,17 @@ from sqlspec.data_dictionary._capabilities import (
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
+from sqlspec.data_dictionary._dependencies import (
+    DependencyCycle,
+    DependencyCycleError,
+    DependencyDirection,
+    DependencyEdge,
+    DependencyEdgeKind,
+    DependencySortResult,
+    DependencyStrength,
+    dependency_edges_from_foreign_keys,
+    sort_dependencies,
+)
 from sqlspec.data_dictionary._registry import (
     get_dialect_config,
     list_registered_dialects,
@@ -67,7 +78,14 @@ __all__ = (
     "ConstraintMetadata",
     "DDLResult",
     "DataDictionaryLoader",
+    "DependencyCycle",
+    "DependencyCycleError",
+    "DependencyDirection",
+    "DependencyEdge",
+    "DependencyEdgeKind",
     "DependencyMetadata",
+    "DependencySortResult",
+    "DependencyStrength",
     "DialectConfig",
     "FeatureFlags",
     "FeatureVersions",
@@ -100,6 +118,7 @@ __all__ = (
     "VersionCacheResult",
     "VersionInfo",
     "ViewMetadata",
+    "dependency_edges_from_foreign_keys",
     "ensure_system_metadata_request",
     "get_data_dictionary_loader",
     "get_dialect_config",
@@ -109,6 +128,7 @@ __all__ = (
     "system_metadata_capabilities_from_domains",
     "system_metadata_gated_result",
     "unsupported_system_metadata_capability",
+    "sort_dependencies",
 )
 
 
