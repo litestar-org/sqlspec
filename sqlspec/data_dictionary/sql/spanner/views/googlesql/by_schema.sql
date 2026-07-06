@@ -1,0 +1,13 @@
+-- name: by_schema
+-- dialect: spanner
+SELECT
+    TABLE_CATALOG,
+    TABLE_SCHEMA,
+    TABLE_NAME,
+    VIEW_DEFINITION,
+    CHECK_OPTION,
+    SECURITY_TYPE
+FROM INFORMATION_SCHEMA.VIEWS
+WHERE (:schema_name IS NULL OR TABLE_SCHEMA = :schema_name)
+  AND (:view_name IS NULL OR TABLE_NAME = :view_name)
+ORDER BY TABLE_SCHEMA, TABLE_NAME;
