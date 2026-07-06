@@ -2,6 +2,13 @@
 
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.data_dictionary._capabilities import (
+    DEFAULT_SYSTEM_METADATA_DOMAINS,
+    ensure_system_metadata_request,
+    system_metadata_capabilities_from_domains,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
+)
 from sqlspec.data_dictionary._registry import (
     get_dialect_config,
     list_registered_dialects,
@@ -36,6 +43,10 @@ from sqlspec.data_dictionary._types import (
     RoutineMetadata,
     SchemaMetadata,
     SystemMetadata,
+    SystemMetadataCapability,
+    SystemMetadataRedactionPolicy,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableDetails,
     TableMetadata,
     TableStatisticsMetadata,
@@ -49,6 +60,7 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary._loader import DataDictionaryLoader, get_data_dictionary_loader
 
 __all__ = (
+    "DEFAULT_SYSTEM_METADATA_DOMAINS",
     "ColumnDetails",
     "ColumnMetadata",
     "CommentMetadata",
@@ -77,6 +89,10 @@ __all__ = (
     "RoutineMetadata",
     "SchemaMetadata",
     "SystemMetadata",
+    "SystemMetadataCapability",
+    "SystemMetadataRedactionPolicy",
+    "SystemMetadataRequest",
+    "SystemMetadataResult",
     "TableDetails",
     "TableMetadata",
     "TableStatisticsMetadata",
@@ -84,11 +100,15 @@ __all__ = (
     "VersionCacheResult",
     "VersionInfo",
     "ViewMetadata",
+    "ensure_system_metadata_request",
     "get_data_dictionary_loader",
     "get_dialect_config",
     "list_registered_dialects",
     "normalize_dialect_name",
     "register_dialect",
+    "system_metadata_capabilities_from_domains",
+    "system_metadata_gated_result",
+    "unsupported_system_metadata_capability",
 )
 
 

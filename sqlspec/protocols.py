@@ -23,6 +23,9 @@ if TYPE_CHECKING:
         IndexMetadata,
         MetadataCapabilityProfile,
         MetadataResult,
+        SystemMetadataCapability,
+        SystemMetadataRequest,
+        SystemMetadataResult,
         TableMetadata,
         VersionInfo,
     )
@@ -944,7 +947,13 @@ class SyncDataDictionaryProtocol(Protocol):
 
     def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult": ...
 
-    def get_system_metadata(self, driver: Any, domain: str, *, include_sensitive: bool = False) -> "MetadataResult": ...
+    def get_system_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "tuple[SystemMetadataCapability, ...]": ...
+
+    def get_system_metadata(
+        self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
+    ) -> "SystemMetadataResult": ...
 
     def get_version(self, driver: Any) -> "VersionInfo | None": ...
 
@@ -1002,9 +1011,13 @@ class AsyncDataDictionaryProtocol(Protocol):
 
     async def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult": ...
 
+    async def get_system_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "tuple[SystemMetadataCapability, ...]": ...
+
     async def get_system_metadata(
-        self, driver: Any, domain: str, *, include_sensitive: bool = False
-    ) -> "MetadataResult": ...
+        self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
+    ) -> "SystemMetadataResult": ...
 
     async def get_version(self, driver: Any) -> "VersionInfo | None": ...
 

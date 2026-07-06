@@ -11,13 +11,23 @@ from sqlspec.data_dictionary import (
     ColumnMetadata,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataFidelity,
+    MetadataRisk,
+    MetadataSource,
+    MetadataSupport,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     TableStatisticsMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
     get_dialect_config,
     list_registered_dialects,
     normalize_dialect_name,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
 )
 from sqlspec.data_dictionary.dialects.bigquery import (
     format_bigquery_information_schema_tables,
@@ -33,6 +43,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import SQL
 
@@ -541,6 +553,59 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             raise OperationalError(msg) from exc
         rows = reader.read_all().to_pylist()
         return [entry for entry in _normalize_native_statistics(rows) if entry["table_name"] == table_name]
+
+    def get_system_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "tuple[SystemMetadataCapability, ...]":
+        """Get ADBC system metadata capability disclosures."""
+        requested_domains = ("table_statistics",) if domains is None else tuple(domains)
+        return tuple(self._system_metadata_capability(domain) for domain in requested_domains)
+
+    def get_system_metadata(
+        self, driver: "AdbcDriver", request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
+    ) -> "SystemMetadataResult":
+        """Get ADBC transport metadata through the opt-in system namespace."""
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = self._system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+        if metadata_request.domain != "table_statistics":
+            return gate_result
+        if metadata_request.table is None:
+            missing_table_capability = capability.with_support(
+                MetadataSupport.GATED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                warnings=("ADBC table_statistics system metadata requires request.table.",),
+            )
+            return SystemMetadataResult(
+                metadata_request, missing_table_capability, source=MetadataSource.DRIVER_METADATA
+            )
+        try:
+            statistics = self.get_statistics(driver, metadata_request.table, metadata_request.schema)
+        except OperationalError as exc:
+            unsupported_capability = SystemMetadataCapability.unsupported(
+                "table_statistics", source=MetadataSource.DRIVER_METADATA
+            ).with_support(MetadataSupport.UNSUPPORTED, fidelity=MetadataFidelity.UNSUPPORTED, warnings=(str(exc),))
+            return SystemMetadataResult(metadata_request, unsupported_capability, source=MetadataSource.DRIVER_METADATA)
+        rows = tuple(cast("dict[str, object]", entry) for entry in statistics)
+        return SystemMetadataResult.from_rows(
+            metadata_request, capability, rows=rows, source=MetadataSource.DRIVER_METADATA
+        )
+
+    def _system_metadata_capability(self, domain: str) -> "SystemMetadataCapability":
+        if domain != "table_statistics":
+            return unsupported_system_metadata_capability(domain)
+        return SystemMetadataCapability(
+            "table_statistics",
+            MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.TRANSPORT_FALLBACK,
+            source=MetadataSource.DRIVER_METADATA,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.EXPENSIVE, MetadataRisk.REDACTED),
+            required_privileges=("ADBC GetStatistics support",),
+            redaction_fields=("catalog_name", "schema_name", "table_name", "column_name"),
+            warnings=("ADBC statistics are driver-reported transport metadata, not a full system query namespace.",),
+        )
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
         dialect_value = str(driver.dialect)

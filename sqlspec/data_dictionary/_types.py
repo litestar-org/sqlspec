@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from mypy_extensions import mypyc_attr
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from re import Pattern
 
     from sqlspec.core.statement import SQL
@@ -36,6 +37,10 @@ __all__ = (
     "RoutineMetadata",
     "SchemaMetadata",
     "SystemMetadata",
+    "SystemMetadataCapability",
+    "SystemMetadataRedactionPolicy",
+    "SystemMetadataRequest",
+    "SystemMetadataResult",
     "TableDetails",
     "TableMetadata",
     "TableStatisticsMetadata",
@@ -49,6 +54,7 @@ __all__ = (
 class MetadataSupport(str, Enum):
     """Support status for a metadata domain."""
 
+    GATED = "gated"
     NOT_IMPLEMENTED = "not_implemented"
     SUPPORTED = "supported"
     UNKNOWN = "unknown"
@@ -566,6 +572,525 @@ class PartitionMetadata(ObjectMetadata):
     """Rich metadata for partition, clustering, storage, or table options."""
 
     __slots__ = ()
+
+
+_REDACTED_VALUE = "[REDACTED]"
+_SQL_TEXT_FIELDS = {
+    "current_query",
+    "query",
+    "query_text",
+    "sql",
+    "sql_fulltext",
+    "sql_text",
+    "statement",
+    "statement_text",
+}
+_USER_FIELDS = {
+    "current_user",
+    "login",
+    "login_name",
+    "owner",
+    "principal",
+    "principal_name",
+    "session_user",
+    "user",
+    "user_name",
+    "username",
+    "usename",
+}
+_HOST_FIELDS = {
+    "client_addr",
+    "client_host",
+    "client_hostname",
+    "host",
+    "hostname",
+    "ip_address",
+    "machine",
+    "program_host",
+    "remote_addr",
+}
+_SETTING_VALUE_FIELDS = {"option_value", "parameter_value", "setting_value", "variable_value"}
+_SETTING_NAME_FIELDS = {"name", "option_name", "parameter_name", "setting_name", "variable_name"}
+_CONNECTION_STRING_FIELDS = {"connection_string", "database_url", "dsn", "jdbc_url", "url", "uri"}
+_GRANT_FIELDS = {"grant", "grant_sql", "grant_statement", "grantee", "grantor", "grants", "permission", "permissions"}
+_SENSITIVE_NAME_FRAGMENTS = {
+    "api_key",
+    "auth",
+    "credential",
+    "database_url",
+    "dsn",
+    "jwt",
+    "key",
+    "oauth",
+    "passwd",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _normalize_redaction_key(key: str) -> str:
+    return key.strip().lower().replace("-", "_")
+
+
+def _is_sensitive_name(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = _normalize_redaction_key(value)
+    return any(fragment in normalized for fragment in _SENSITIVE_NAME_FRAGMENTS)
+
+
+def _row_setting_name(row: "Mapping[str, object]") -> object | None:
+    for key, value in row.items():
+        if _normalize_redaction_key(str(key)) in _SETTING_NAME_FIELDS:
+            return value
+    return None
+
+
+def _looks_like_connection_string(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    lowered = value.lower()
+    if "://" in value and ("@" in value or "password" in lowered or "token" in lowered):
+        return True
+    if "password=" in lowered or "pwd=" in lowered:
+        return True
+    return "user id=" in lowered and ("server=" in lowered or "host=" in lowered)
+
+
+class SystemMetadataRedactionPolicy:
+    """Redaction policy for system and performance metadata rows.
+
+    Args:
+        redact_sql_text: Redact SQL, query, and statement text fields.
+        redact_users: Redact user, owner, login, and principal fields.
+        redact_hosts: Redact host, address, and machine fields.
+        redact_settings: Redact settings likely to contain secrets.
+        redact_connection_strings: Redact connection string and URL values.
+        redact_grants: Redact grant and permission fields.
+    """
+
+    __slots__ = (
+        "redact_connection_strings",
+        "redact_grants",
+        "redact_hosts",
+        "redact_settings",
+        "redact_sql_text",
+        "redact_users",
+    )
+
+    def __init__(
+        self,
+        *,
+        redact_sql_text: bool = True,
+        redact_users: bool = True,
+        redact_hosts: bool = True,
+        redact_settings: bool = True,
+        redact_connection_strings: bool = True,
+        redact_grants: bool = True,
+    ) -> None:
+        self.redact_sql_text = redact_sql_text
+        self.redact_users = redact_users
+        self.redact_hosts = redact_hosts
+        self.redact_settings = redact_settings
+        self.redact_connection_strings = redact_connection_strings
+        self.redact_grants = redact_grants
+
+    @classmethod
+    def unredacted(cls) -> "SystemMetadataRedactionPolicy":
+        """Create a policy that leaves system metadata rows unchanged."""
+        return cls(
+            redact_sql_text=False,
+            redact_users=False,
+            redact_hosts=False,
+            redact_settings=False,
+            redact_connection_strings=False,
+            redact_grants=False,
+        )
+
+    @classmethod
+    def sensitive_field_names(cls) -> "tuple[str, ...]":
+        """Return the canonical sensitive field categories covered by the default policy."""
+        return ("sql_text", "user", "host", "setting", "connection_string", "grant")
+
+    def redact_row(self, row: "Mapping[str, object]") -> "tuple[dict[str, object], tuple[str, ...]]":
+        """Return a redacted row and the fields that were changed.
+
+        Args:
+            row: Metadata row to redact.
+
+        Returns:
+            A tuple of the redacted row and sorted redacted field names.
+        """
+        redacted: dict[str, object] = {}
+        fields: set[str] = set()
+        for key, value in row.items():
+            field_name = str(key)
+            if self._should_redact_field(field_name, value, row):
+                redacted[field_name] = _REDACTED_VALUE
+                fields.add(field_name)
+                continue
+            redacted[field_name] = value
+        return redacted, tuple(sorted(fields))
+
+    def _should_redact_field(self, key: str, value: object, row: "Mapping[str, object]") -> bool:
+        normalized = _normalize_redaction_key(key)
+        if self.redact_sql_text and (
+            normalized in _SQL_TEXT_FIELDS or normalized.endswith(("_sql", "_query", "_statement"))
+        ):
+            return True
+        if self.redact_users and normalized in _USER_FIELDS:
+            return True
+        if self.redact_hosts and normalized in _HOST_FIELDS:
+            return True
+        if self.redact_connection_strings and (
+            normalized in _CONNECTION_STRING_FIELDS or _looks_like_connection_string(value)
+        ):
+            return True
+        if self.redact_settings and (
+            _is_sensitive_name(normalized)
+            or normalized in _SETTING_VALUE_FIELDS
+            or (normalized == "value" and _is_sensitive_name(_row_setting_name(row)))
+        ):
+            return True
+        return self.redact_grants and normalized in _GRANT_FIELDS
+
+    def to_dict(self) -> "dict[str, bool]":
+        """Serialize redaction settings."""
+        return {
+            "redact_sql_text": self.redact_sql_text,
+            "redact_users": self.redact_users,
+            "redact_hosts": self.redact_hosts,
+            "redact_settings": self.redact_settings,
+            "redact_connection_strings": self.redact_connection_strings,
+            "redact_grants": self.redact_grants,
+        }
+
+
+class SystemMetadataRequest:
+    """Opt-in request for system and performance metadata.
+
+    Args:
+        domain: System metadata domain to query.
+        include_system: Enable system metadata domains such as settings or sessions.
+        include_performance: Enable performance metadata domains such as statistics or history.
+        allow_billed_metadata: Permit domains that may incur cloud or service billing.
+        allow_license_gated_diagnostics: Permit license-gated diagnostics such as AWR/ASH.
+        include_sensitive: Disable default row redaction for this request.
+        table: Optional table target for table-scoped metadata.
+        schema: Optional schema target for table-scoped metadata.
+        redaction_policy: Optional explicit row redaction policy.
+    """
+
+    __slots__ = (
+        "allow_billed_metadata",
+        "allow_license_gated_diagnostics",
+        "domain",
+        "include_performance",
+        "include_sensitive",
+        "include_system",
+        "redaction_policy",
+        "schema",
+        "table",
+    )
+
+    def __init__(
+        self,
+        domain: str,
+        *,
+        include_system: bool = False,
+        include_performance: bool = False,
+        allow_billed_metadata: bool = False,
+        allow_license_gated_diagnostics: bool = False,
+        include_sensitive: bool = False,
+        table: str | None = None,
+        schema: str | None = None,
+        redaction_policy: SystemMetadataRedactionPolicy | None = None,
+        redact_sql_text: bool = True,
+        redact_users: bool = True,
+        redact_hosts: bool = True,
+        redact_settings: bool = True,
+        redact_connection_strings: bool = True,
+        redact_grants: bool = True,
+    ) -> None:
+        self.domain = domain
+        self.include_system = include_system
+        self.include_performance = include_performance
+        self.allow_billed_metadata = allow_billed_metadata
+        self.allow_license_gated_diagnostics = allow_license_gated_diagnostics
+        self.include_sensitive = include_sensitive
+        self.table = table
+        self.schema = schema
+        if redaction_policy is not None:
+            self.redaction_policy = redaction_policy
+        elif include_sensitive:
+            self.redaction_policy = SystemMetadataRedactionPolicy.unredacted()
+        else:
+            self.redaction_policy = SystemMetadataRedactionPolicy(
+                redact_sql_text=redact_sql_text,
+                redact_users=redact_users,
+                redact_hosts=redact_hosts,
+                redact_settings=redact_settings,
+                redact_connection_strings=redact_connection_strings,
+                redact_grants=redact_grants,
+            )
+
+    @property
+    def is_enabled(self) -> bool:
+        """Return whether either system or performance metadata was explicitly enabled."""
+        return self.include_system or self.include_performance
+
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize the request."""
+        return {
+            "domain": self.domain,
+            "include_system": self.include_system,
+            "include_performance": self.include_performance,
+            "allow_billed_metadata": self.allow_billed_metadata,
+            "allow_license_gated_diagnostics": self.allow_license_gated_diagnostics,
+            "include_sensitive": self.include_sensitive,
+            "table": self.table,
+            "schema": self.schema,
+            "redaction_policy": self.redaction_policy.to_dict(),
+        }
+
+
+class SystemMetadataCapability:
+    """Capability disclosure for one system or performance metadata domain.
+
+    Args:
+        domain: System metadata domain name.
+        support: Support status for the domain.
+        fidelity: Fidelity of the domain response.
+        source: Metadata source used for the domain.
+        risks: Risk and gate categories attached to the domain.
+        required_privileges: Required database privileges or roles.
+        cost_implications: Billing or expensive-query disclosure.
+        license_gate: License requirement disclosure.
+        managed_service_restricted: Whether managed services commonly restrict this domain.
+        redaction_fields: Sensitive fields that may appear in rows.
+        warnings: Additional capability warnings.
+    """
+
+    __slots__ = (
+        "cost_implications",
+        "domain",
+        "fidelity",
+        "license_gate",
+        "managed_service_restricted",
+        "redaction_fields",
+        "required_privileges",
+        "risks",
+        "source",
+        "support",
+        "warnings",
+    )
+
+    def __init__(
+        self,
+        domain: str,
+        support: "MetadataSupport | str",
+        *,
+        fidelity: "MetadataFidelity | str" = MetadataFidelity.UNSUPPORTED,
+        source: "MetadataSource | str" = MetadataSource.SYSTEM_VIEW,
+        risks: "tuple[MetadataRisk | str, ...]" = (),
+        required_privileges: "tuple[str, ...]" = (),
+        cost_implications: str | None = None,
+        license_gate: str | None = None,
+        managed_service_restricted: bool = False,
+        redaction_fields: "tuple[str, ...]" = (),
+        warnings: "tuple[str, ...]" = (),
+    ) -> None:
+        self.domain = domain
+        self.support = _coerce_support(support)
+        self.fidelity = _coerce_fidelity(fidelity)
+        self.source = _coerce_source(source)
+        self.risks = tuple(_coerce_risk(risk) for risk in risks)
+        self.required_privileges = required_privileges
+        self.cost_implications = cost_implications
+        self.license_gate = license_gate
+        self.managed_service_restricted = managed_service_restricted
+        self.redaction_fields = redaction_fields
+        self.warnings = warnings
+
+    @classmethod
+    def unsupported(
+        cls, domain: str, *, source: "MetadataSource | str" = MetadataSource.SYSTEM_VIEW
+    ) -> "SystemMetadataCapability":
+        """Create a safe unsupported system-domain capability."""
+        return cls(
+            domain,
+            MetadataSupport.UNSUPPORTED,
+            source=source,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+            redaction_fields=SystemMetadataRedactionPolicy.sensitive_field_names(),
+            warnings=("No system metadata query pack is registered for this domain.",),
+        )
+
+    @property
+    def requires_billed_opt_in(self) -> bool:
+        """Return whether this domain requires billed metadata opt-in."""
+        return MetadataRisk.BILLED in self.risks
+
+    @property
+    def requires_license_opt_in(self) -> bool:
+        """Return whether this domain requires license-gated diagnostics opt-in."""
+        return MetadataRisk.LICENSE_GATED in self.risks
+
+    def with_support(
+        self,
+        support: "MetadataSupport | str",
+        *,
+        warnings: "tuple[str, ...]" = (),
+        fidelity: "MetadataFidelity | str | None" = None,
+    ) -> "SystemMetadataCapability":
+        """Return a copy with a different support status and additional warnings."""
+        return SystemMetadataCapability(
+            self.domain,
+            support,
+            fidelity=self.fidelity if fidelity is None else fidelity,
+            source=self.source,
+            risks=self.risks,
+            required_privileges=self.required_privileges,
+            cost_implications=self.cost_implications,
+            license_gate=self.license_gate,
+            managed_service_restricted=self.managed_service_restricted,
+            redaction_fields=self.redaction_fields,
+            warnings=self.warnings + warnings,
+        )
+
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize the capability with stable enum values."""
+        return {
+            "domain": self.domain,
+            "support": self.support.value,
+            "fidelity": self.fidelity.value,
+            "source": self.source.value,
+            "risks": tuple(risk.value for risk in self.risks),
+            "required_privileges": self.required_privileges,
+            "cost_implications": self.cost_implications,
+            "license_gate": self.license_gate,
+            "managed_service_restricted": self.managed_service_restricted,
+            "redaction_fields": self.redaction_fields,
+            "warnings": self.warnings,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"SystemMetadataCapability(domain={self.domain!r}, support={self.support!r}, "
+            f"source={self.source!r}, risks={self.risks!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SystemMetadataCapability):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((
+            self.domain,
+            self.support,
+            self.fidelity,
+            self.source,
+            self.risks,
+            self.required_privileges,
+            self.cost_implications,
+            self.license_gate,
+            self.managed_service_restricted,
+            self.redaction_fields,
+            self.warnings,
+        ))
+
+
+class SystemMetadataResult:
+    """Result envelope for system and performance metadata.
+
+    Args:
+        request: Request that produced the result.
+        capability: Capability status for the request domain.
+        rows: Redacted metadata rows.
+        source: Metadata source override.
+        warnings: Additional result warnings.
+        redactions: Redacted fields.
+    """
+
+    __slots__ = ("capability", "redactions", "request", "rows", "source", "warnings")
+
+    def __init__(
+        self,
+        request: SystemMetadataRequest,
+        capability: SystemMetadataCapability,
+        *,
+        rows: "tuple[Mapping[str, object], ...]" = (),
+        source: "MetadataSource | str | None" = None,
+        warnings: "tuple[str, ...]" = (),
+        redactions: "tuple[str, ...]" = (),
+    ) -> None:
+        self.request = request
+        self.capability = capability
+        self.rows = tuple(dict(row) for row in rows)
+        self.source = capability.source if source is None else _coerce_source(source)
+        self.warnings = capability.warnings + warnings
+        self.redactions = redactions
+
+    @classmethod
+    def from_rows(
+        cls,
+        request: SystemMetadataRequest,
+        capability: SystemMetadataCapability,
+        *,
+        rows: "tuple[Mapping[str, object], ...]",
+        source: "MetadataSource | str | None" = None,
+        warnings: "tuple[str, ...]" = (),
+    ) -> "SystemMetadataResult":
+        """Create a result from raw rows, applying request redaction first."""
+        redacted_rows: list[dict[str, object]] = []
+        redactions: set[str] = set()
+        for row in rows:
+            redacted, fields = request.redaction_policy.redact_row(row)
+            redacted_rows.append(redacted)
+            redactions.update(fields)
+        return cls(
+            request,
+            capability,
+            rows=tuple(redacted_rows),
+            source=source,
+            warnings=warnings,
+            redactions=tuple(sorted(redactions)),
+        )
+
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize the system metadata result."""
+        return {
+            "request": self.request.to_dict(),
+            "capability": self.capability.to_dict(),
+            "rows": self.rows,
+            "source": self.source.value,
+            "warnings": self.warnings,
+            "redactions": self.redactions,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"SystemMetadataResult(request={self.request!r}, capability={self.capability!r}, "
+            f"rows={self.rows!r}, warnings={self.warnings!r}, redactions={self.redactions!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SystemMetadataResult):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        rows_hash = tuple(tuple(sorted((key, repr(value)) for key, value in row.items())) for row in self.rows)
+        return hash((
+            repr(self.request.to_dict()),
+            self.capability,
+            rows_hash,
+            self.source,
+            self.warnings,
+            self.redactions,
+        ))
 
 
 class SystemMetadata(ObjectMetadata):
