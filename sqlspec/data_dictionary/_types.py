@@ -1382,6 +1382,7 @@ class FeatureFlags(TypedDict, total=False):
 
     supports_arrays: bool
     supports_clustering: bool
+    supports_crdb_internal_metadata: bool
     supports_cte: bool
     supports_generators: bool
     supports_for_update: bool
