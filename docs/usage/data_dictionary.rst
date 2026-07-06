@@ -2,15 +2,15 @@
 Data Dictionary
 ===============
 
-SQLSpec's data dictionary is being rebuilt as a clean pre-1.0 replacement
-interface. The old narrow metadata shape is not kept as a compatibility target;
-adapter chapters preserve the same discovery capabilities while moving them
-behind richer result and capability contracts.
+SQLSpec's data dictionary provides structured database metadata discovery
+across supported adapters. It reports what each adapter can inspect, returns
+capability details with every metadata lookup, and represents database objects
+with typed result models.
 
-Breaking Interface Change
-=========================
+Metadata Contract
+=================
 
-The replacement contract uses structured metadata envelopes:
+The data dictionary uses structured metadata envelopes:
 
 - ``MetadataCapabilityProfile`` reports support by domain and adapter.
 - ``MetadataCapability`` distinguishes supported, unsupported, unknown, and
@@ -20,12 +20,10 @@ The replacement contract uses structured metadata envelopes:
   "the database cannot answer this".
 - Object detail models carry an ``ObjectIdentity`` with catalog, schema,
   object name, object type, dialect, quoted name, and source.
-- DDL lookups return a ``DDLResult`` with native/generated/hybrid/lossy status
-  instead of returning plain SQL text.
+- DDL lookups return a ``DDLResult`` with native/generated/hybrid/lossy status.
 
-Applications using the old flat methods should plan to migrate to the
-replacement domain methods and inspect ``MetadataResult.capability`` before
-using ``MetadataResult.items``.
+Applications should inspect ``MetadataResult.capability`` before using
+``MetadataResult.items``.
 
 Capability Vocabulary
 =====================
@@ -50,8 +48,8 @@ Risk gates describe why metadata may be hidden, expensive, or unavailable:
 ``privileged``, ``billed``, ``expensive``, ``license_gated``, ``redacted``,
 ``managed_service_limited``, ``extension_required``, and ``version_gated``.
 
-Migration Guidance
-==================
+Usage
+=====
 
 Use capabilities first:
 
