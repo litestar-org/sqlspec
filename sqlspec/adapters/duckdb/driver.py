@@ -2,7 +2,7 @@
 
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import duckdb
 from sqlglot import exp
@@ -122,6 +122,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if is_select_like:
             arrow_table = cursor.fetch_arrow_table()
             data = arrow_table.to_pylist()
+            _restore_uuid_columns(data, cursor.description)
             column_names = list(arrow_table.column_names)
 
             return self.create_execution_result(
@@ -535,6 +536,20 @@ class DuckDBDriver(SyncDriverAdapterBase):
             False - DuckDB requires explicit transaction management.
         """
         return False
+
+
+def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] | None") -> None:
+    """Restore DuckDB UUID columns after Arrow materialization."""
+    if not rows or not description:
+        return
+    uuid_columns = [column[0] for column in description if len(column) > 1 and str(column[1]).upper() == "UUID"]
+    if not uuid_columns:
+        return
+    for row in rows:
+        for column in uuid_columns:
+            value = row.get(column)
+            if isinstance(value, str):
+                row[column] = UUID(value)
 
 
 def _resolve_duckdb_inserted_rows(result: object) -> int:

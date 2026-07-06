@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from uuid import UUID
 
 import pyarrow as pa
 import pytest
@@ -75,6 +76,20 @@ def test_execute_many_uses_bulk_insert_fast_path() -> None:
             {"id": 2, "name": "two"},
             {"id": 3, "name": "three"},
         ]
+
+
+def test_select_arrow_path_restores_uuid_columns_only() -> None:
+    uuid_value = "550e8400-e29b-41d4-a716-446655440000"
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE uuid_target (id UUID, text_id VARCHAR)")
+        driver.execute("INSERT INTO uuid_target VALUES (?, ?)", uuid_value, uuid_value)
+
+        row = driver.select_one("SELECT id, text_id FROM uuid_target")
+
+    assert isinstance(row["id"], UUID)
+    assert str(row["id"]) == uuid_value
+    assert row["text_id"] == uuid_value
+    assert isinstance(row["text_id"], str)
 
 
 def test_missing_pyarrow_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
