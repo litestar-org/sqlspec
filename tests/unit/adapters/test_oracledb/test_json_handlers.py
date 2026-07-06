@@ -282,6 +282,30 @@ def test_output_handler_claims_blob_is_oson() -> None:
     connection.decode_oson.assert_called_once_with(b"\x01\x02")
 
 
+def test_output_handler_prefers_oson_when_blob_metadata_is_json_and_oson() -> None:
+    """OSON BLOB metadata can also report is_json; decode_oson must win."""
+    import oracledb
+
+    cursor = Mock()
+    cursor.arraysize = 34
+    connection = Mock()
+    connection.decode_oson = Mock(return_value={"decoded": "oson"})
+    cursor.connection = connection
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+    metadata = _mock_metadata(oracledb.DB_TYPE_BLOB, type_name="BLOB", is_json=True, is_oson=True)
+
+    result = json_output_type_handler(cursor, metadata)
+
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(
+        oracledb.DB_TYPE_LONG_RAW, arraysize=34, outconverter=cursor.var.call_args.kwargs["outconverter"]
+    )
+    outconverter = cursor.var.call_args.kwargs["outconverter"]
+    assert outconverter(b"\x01\x02") == {"decoded": "oson"}
+    connection.decode_oson.assert_called_once_with(b"\x01\x02")
+
+
 def test_output_handler_ignores_plain_blob() -> None:
     """BLOB columns without JSON in type_name should not be claimed."""
     import oracledb

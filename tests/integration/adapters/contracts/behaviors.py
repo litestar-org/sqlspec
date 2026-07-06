@@ -4,7 +4,7 @@ import contextlib
 import inspect
 import json
 import math
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
@@ -3695,6 +3695,333 @@ async def _oracle_json_native_async(driver: object, case: DriverCase) -> None:
 
 register_sync_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native)
 register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEATURES_SCOPE, _oracle_json_native_async)
+
+
+ORACLE_LOB_FETCH_SCOPE = "oracle_lob_fetch"
+_ORACLE_LOB_JSON_PAYLOAD: dict[str, object] = {
+    "integer": 42,
+    "fraction": 1.25,
+    "nested": {"label": "metadata-driven"},
+}
+_ORACLE_OSON_PAYLOAD: dict[str, object] = {"kind": "oson", "tags": ["contract", "oracle"]}
+_ORACLE_PLAIN_JSON_TEXT = to_json({"looks": "json", "but": "plain-clob"})
+_ORACLE_LONG_CLOB_TEXT = "long oracle clob " + ("x" * 5000)
+_ORACLE_PLAIN_BLOB_BYTES = b"plain-oracle-blob"
+
+
+def _oracle_lob_table(case: DriverCase, suffix: str) -> str:
+    return _pc_table(case, f"lob_{suffix}")
+
+
+def _oracle_lob_select_sql(table: str) -> str:
+    return (
+        "SELECT native_json, json_clob, json_blob, plain_clob, plain_blob, long_clob "
+        f"FROM {table} WHERE id = 1"
+    )
+
+
+@contextlib.contextmanager
+def _oracle_driver_feature(driver: object, key: str, value: object) -> "Iterator[None]":
+    features = cast("Any", driver).driver_features
+    missing = object()
+    previous = features.get(key, missing)
+    features[key] = value
+    try:
+        yield
+    finally:
+        if previous is missing:
+            features.pop(key, None)
+        else:
+            features[key] = previous
+
+
+def _json_dict(value: object) -> dict[str, Any]:
+    if isinstance(value, memoryview):
+        return cast("dict[str, Any]", from_json(value.tobytes()))
+    if isinstance(value, bytes | bytearray):
+        return cast("dict[str, Any]", from_json(bytes(value)))
+    if isinstance(value, str):
+        return cast("dict[str, Any]", from_json(value))
+    return cast("dict[str, Any]", value)
+
+
+def _bytes_value(value: object) -> bytes:
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return cast("bytes", value)
+
+
+def _assert_oracle_json_lanes(row: dict[str, object]) -> None:
+    native_json = _json_dict(row["native_json"])
+    json_clob = _json_dict(row["json_clob"])
+    json_blob = _json_dict(row["json_blob"])
+
+    assert native_json["nested"] == _ORACLE_LOB_JSON_PAYLOAD["nested"]
+    assert isinstance(native_json["integer"], Decimal)
+    assert isinstance(native_json["fraction"], Decimal)
+    assert json_clob == _ORACLE_LOB_JSON_PAYLOAD
+    assert json_blob == _ORACLE_LOB_JSON_PAYLOAD
+    assert type(json_clob["integer"]) is int
+    assert type(json_clob["fraction"]) is float
+    assert type(json_blob["integer"]) is int
+    assert type(json_blob["fraction"]) is float
+
+
+def _assert_oracle_lob_materialized_row(row: Mapping[str, object]) -> None:
+    normalized = _lower_keys(dict(row))
+    _assert_oracle_json_lanes(normalized)
+    assert normalized["plain_clob"] == _ORACLE_PLAIN_JSON_TEXT
+    assert _bytes_value(normalized["plain_blob"]) == _ORACLE_PLAIN_BLOB_BYTES
+    assert normalized["long_clob"] == _ORACLE_LONG_CLOB_TEXT
+
+
+def _assert_oracle_lob_arrow_row(row: Mapping[str, object]) -> None:
+    normalized = _lower_keys(dict(row))
+    assert normalized["plain_clob"] == _ORACLE_PLAIN_JSON_TEXT
+    assert _bytes_value(normalized["plain_blob"]) == _ORACLE_PLAIN_BLOB_BYTES
+    assert normalized["long_clob"] == _ORACLE_LONG_CLOB_TEXT
+
+
+def _read_sync_lob(value: object) -> object:
+    read = getattr(value, "read", None)
+    assert callable(read)
+    return read()
+
+
+async def _read_async_lob(value: object) -> object:
+    read = getattr(value, "read", None)
+    assert callable(read)
+    result = read()
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
+def _seed_oracle_lob_fetch_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
+    from sqlspec.adapters.oracledb import OracleBlob, OracleClob
+
+    _sync_drop_table(driver, table)
+    driver.execute_script(
+        f"""
+        CREATE TABLE {table} (
+            id NUMBER PRIMARY KEY,
+            native_json JSON,
+            json_clob CLOB CHECK (json_clob IS JSON),
+            json_blob BLOB CHECK (json_blob IS JSON),
+            plain_clob CLOB,
+            plain_blob BLOB,
+            long_clob CLOB
+        )
+        """
+    )
+    driver.execute(
+        f"""
+        INSERT INTO {table}
+            (id, native_json, json_clob, json_blob, plain_clob, plain_blob, long_clob)
+        VALUES
+            (:id, :native_json, :json_clob, :json_blob, :plain_clob, :plain_blob, :long_clob)
+        """,
+        {
+            "id": 1,
+            "native_json": _ORACLE_LOB_JSON_PAYLOAD,
+            "json_clob": OracleClob(to_json(_ORACLE_LOB_JSON_PAYLOAD)),
+            "json_blob": OracleBlob(to_json(_ORACLE_LOB_JSON_PAYLOAD, as_bytes=True)),
+            "plain_clob": OracleClob(_ORACLE_PLAIN_JSON_TEXT),
+            "plain_blob": OracleBlob(_ORACLE_PLAIN_BLOB_BYTES),
+            "long_clob": _ORACLE_LONG_CLOB_TEXT,
+        },
+    )
+    driver.commit()
+
+
+async def _seed_oracle_lob_fetch_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
+    from sqlspec.adapters.oracledb import OracleBlob, OracleClob
+
+    await _async_drop_table(driver, table)
+    await driver.execute_script(
+        f"""
+        CREATE TABLE {table} (
+            id NUMBER PRIMARY KEY,
+            native_json JSON,
+            json_clob CLOB CHECK (json_clob IS JSON),
+            json_blob BLOB CHECK (json_blob IS JSON),
+            plain_clob CLOB,
+            plain_blob BLOB,
+            long_clob CLOB
+        )
+        """
+    )
+    await driver.execute(
+        f"""
+        INSERT INTO {table}
+            (id, native_json, json_clob, json_blob, plain_clob, plain_blob, long_clob)
+        VALUES
+            (:id, :native_json, :json_clob, :json_blob, :plain_clob, :plain_blob, :long_clob)
+        """,
+        {
+            "id": 1,
+            "native_json": _ORACLE_LOB_JSON_PAYLOAD,
+            "json_clob": OracleClob(to_json(_ORACLE_LOB_JSON_PAYLOAD)),
+            "json_blob": OracleBlob(to_json(_ORACLE_LOB_JSON_PAYLOAD, as_bytes=True)),
+            "plain_clob": OracleClob(_ORACLE_PLAIN_JSON_TEXT),
+            "plain_blob": OracleBlob(_ORACLE_PLAIN_BLOB_BYTES),
+            "long_clob": _ORACLE_LONG_CLOB_TEXT,
+        },
+    )
+    await driver.commit()
+
+
+def _assert_oracle_lob_fetch_true_stream_sync(driver: "SyncContractDriver", table: str) -> None:
+    with driver.select_stream(
+        f"SELECT plain_clob, plain_blob FROM {table} WHERE id = 1", chunk_size=1, fetch_lobs=True
+    ) as stream:
+        row = _lower_keys(next(iter(stream)))
+        assert _read_sync_lob(row["plain_clob"]) == _ORACLE_PLAIN_JSON_TEXT
+        assert _read_sync_lob(row["plain_blob"]) == _ORACLE_PLAIN_BLOB_BYTES
+
+
+async def _assert_oracle_lob_fetch_true_stream_async(driver: "AsyncContractDriver", table: str) -> None:
+    async with driver.select_stream(
+        f"SELECT plain_clob, plain_blob FROM {table} WHERE id = 1", chunk_size=1, fetch_lobs=True
+    ) as stream:
+        row = _lower_keys(await anext(aiter(stream)))
+        assert await _read_async_lob(row["plain_clob"]) == _ORACLE_PLAIN_JSON_TEXT
+        assert await _read_async_lob(row["plain_blob"]) == _ORACLE_PLAIN_BLOB_BYTES
+
+
+def _assert_oracle_lob_oson_sync(driver: "SyncContractDriver", case: DriverCase) -> None:
+    from sqlspec.adapters.oracledb import OracleBlob
+
+    connection = cast("Any", driver).connection
+    encode_oson = getattr(connection, "encode_oson", None)
+    if not callable(encode_oson):
+        return
+    table = _oracle_lob_table(case, "oson")
+    _sync_drop_table(driver, table)
+    try:
+        try:
+            driver.execute_script(
+                f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, payload BLOB CHECK (payload IS JSON FORMAT OSON))"
+            )
+        except Exception as exc:
+            if "ORA-" in str(exc):
+                return
+            raise
+        driver.execute(
+            f"INSERT INTO {table} (id, payload) VALUES (:id, :payload)",
+            {"id": 1, "payload": OracleBlob(cast("bytes", encode_oson(_ORACLE_OSON_PAYLOAD)))},
+        )
+        row = _lower_keys(driver.select_one(f"SELECT payload FROM {table} WHERE id = 1"))
+        assert _json_dict(row["payload"]) == _ORACLE_OSON_PAYLOAD
+    finally:
+        _sync_drop_table(driver, table)
+
+
+async def _assert_oracle_lob_oson_async(driver: "AsyncContractDriver", case: DriverCase) -> None:
+    from sqlspec.adapters.oracledb import OracleBlob
+
+    connection = cast("Any", driver).connection
+    encode_oson = getattr(connection, "encode_oson", None)
+    if not callable(encode_oson):
+        return
+    encoded = encode_oson(_ORACLE_OSON_PAYLOAD)
+    if inspect.isawaitable(encoded):
+        encoded = await encoded
+    table = _oracle_lob_table(case, "oson")
+    await _async_drop_table(driver, table)
+    try:
+        try:
+            await driver.execute_script(
+                f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, payload BLOB CHECK (payload IS JSON FORMAT OSON))"
+            )
+        except Exception as exc:
+            if "ORA-" in str(exc):
+                return
+            raise
+        await driver.execute(
+            f"INSERT INTO {table} (id, payload) VALUES (:id, :payload)",
+            {"id": 1, "payload": OracleBlob(cast("bytes", encoded))},
+        )
+        row = _lower_keys(await driver.select_one(f"SELECT payload FROM {table} WHERE id = 1"))
+        assert _json_dict(row["payload"]) == _ORACLE_OSON_PAYLOAD
+    finally:
+        await _async_drop_table(driver, table)
+
+
+def _oracle_lob_fetch_matrix(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    table = _oracle_lob_table(case, "matrix")
+    _seed_oracle_lob_fetch_sync(sync_driver, case, table)
+    select_sql = _oracle_lob_select_sql(table)
+    try:
+        _assert_oracle_lob_materialized_row(sync_driver.select_one(select_sql))
+        with _oracle_driver_feature(sync_driver, "fetch_lobs", True):
+            _assert_oracle_lob_materialized_row(sync_driver.select_one(select_sql))
+        with sync_driver.select_stream(select_sql, chunk_size=1) as stream:
+            _assert_oracle_lob_materialized_row(next(iter(stream)))
+        _assert_oracle_lob_fetch_true_stream_sync(sync_driver, table)
+        _assert_oracle_lob_arrow_row(
+            sync_driver.select_to_arrow(
+                f"SELECT plain_clob, plain_blob, long_clob FROM {table} WHERE id = 1"
+            ).data.to_pylist()[0]
+        )
+        with _oracle_driver_feature(sync_driver, "fetch_lobs", True):
+            _assert_oracle_lob_arrow_row(
+                sync_driver.select_to_arrow(
+                    f"SELECT plain_clob, plain_blob, long_clob FROM {table} WHERE id = 1"
+                ).data.to_pylist()[0]
+            )
+        _assert_oracle_lob_oson_sync(sync_driver, case)
+    finally:
+        _sync_drop_table(sync_driver, table)
+
+
+async def _oracle_lob_fetch_matrix_async(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    table = _oracle_lob_table(case, "matrix")
+    await _seed_oracle_lob_fetch_async(async_driver, case, table)
+    select_sql = _oracle_lob_select_sql(table)
+    try:
+        _assert_oracle_lob_materialized_row(await async_driver.select_one(select_sql))
+        with _oracle_driver_feature(async_driver, "fetch_lobs", True):
+            _assert_oracle_lob_materialized_row(await async_driver.select_one(select_sql))
+        async with async_driver.select_stream(select_sql, chunk_size=1) as stream:
+            _assert_oracle_lob_materialized_row(await anext(aiter(stream)))
+        await _assert_oracle_lob_fetch_true_stream_async(async_driver, table)
+        _assert_oracle_lob_arrow_row(
+            (
+                await async_driver.select_to_arrow(
+                    f"SELECT plain_clob, plain_blob, long_clob FROM {table} WHERE id = 1"
+                )
+            ).data.to_pylist()[0]
+        )
+        with _oracle_driver_feature(async_driver, "fetch_lobs", True):
+            _assert_oracle_lob_arrow_row(
+                (
+                    await async_driver.select_to_arrow(
+                        f"SELECT plain_clob, plain_blob, long_clob FROM {table} WHERE id = 1"
+                    )
+                ).data.to_pylist()[0]
+            )
+        await _assert_oracle_lob_oson_async(async_driver, case)
+    finally:
+        await _async_drop_table(async_driver, table)
+
+
+register_sync_extra_assertion("oracle_lob_fetch:matrix", ORACLE_LOB_FETCH_SCOPE, _oracle_lob_fetch_matrix)
+register_async_extra_assertion("oracle_lob_fetch:matrix", ORACLE_LOB_FETCH_SCOPE, _oracle_lob_fetch_matrix_async)
+
+
+def assert_sync_oracle_lob_fetch_contract(driver: object, case: DriverCase) -> None:
+    """Run Oracle's shared LOB fetch matrix proof."""
+    dispatch_sync_extra_assertions(driver, case, ORACLE_LOB_FETCH_SCOPE)
+
+
+async def assert_async_oracle_lob_fetch_contract(driver: object, case: DriverCase) -> None:
+    """Run Oracle's shared async LOB fetch matrix proof."""
+    await dispatch_async_extra_assertions(driver, case, ORACLE_LOB_FETCH_SCOPE)
 
 
 def _bigquery_sql_features(driver: object, case: DriverCase) -> None:

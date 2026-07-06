@@ -17,11 +17,13 @@ Routing matrix (input):
 Routing matrix (output):
 
 * ``DB_TYPE_JSON``: passthrough (python-oracledb already returns ``dict``).
+* ``FetchInfo.is_oson`` + ``DB_TYPE_BLOB``: decode through
+ ``connection.decode_oson``. This branch precedes ``is_json`` because OSON
+ metadata can report both flags.
 * ``FetchInfo.is_json`` + ``DB_TYPE_BLOB``: fetch as bytes and parse via
  ``json_converter_out_blob``.
 * ``FetchInfo.is_json`` + ``DB_TYPE_CLOB`` or string types: parse via
  ``json_converter_out_clob``.
-* ``FetchInfo.is_oson`` + ``DB_TYPE_BLOB``: parse via ``json_converter_out_oson``.
 
 Handlers chain to any pre-existing ``inputtypehandler`` / ``outputtypehandler``
 registered on the connection, so registration order
@@ -138,6 +140,13 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     if type_code is DB_TYPE_JSON:
         return None
 
+    if getattr(metadata, "is_oson", False) and type_code is DB_TYPE_BLOB:
+        return cursor.var(
+            DB_TYPE_LONG_RAW,
+            arraysize=cursor.arraysize,
+            outconverter=partial(json_converter_out_oson, cursor.connection),
+        )
+
     if getattr(metadata, "is_json", False):
         if type_code is DB_TYPE_BLOB:
             return cursor.var(DB_TYPE_LONG_RAW, arraysize=cursor.arraysize, outconverter=json_converter_out_blob)
@@ -146,12 +155,6 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
         if type_code in _JSON_STRING_TYPE_CODES:
             return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
 
-    if getattr(metadata, "is_oson", False) and type_code is DB_TYPE_BLOB:
-        return cursor.var(
-            DB_TYPE_LONG_RAW,
-            arraysize=cursor.arraysize,
-            outconverter=partial(json_converter_out_oson, cursor.connection),
-        )
     return None
 
 
