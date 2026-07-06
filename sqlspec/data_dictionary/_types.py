@@ -165,9 +165,7 @@ class ObjectIdentity:
             self.source,
         ))
 
-    def __reduce__(
-        self,
-    ) -> "tuple[type[ObjectIdentity], tuple[str, str], dict[str, str | None | MetadataSource]]":
+    def __reduce__(self) -> "tuple[type[ObjectIdentity], tuple[str, str], dict[str, str | None | MetadataSource]]":
         return (
             self.__class__,
             (self.name, self.object_type),
@@ -227,7 +225,9 @@ class MetadataCapability:
         )
 
     @classmethod
-    def unsupported(cls, domain: str, *, source: "MetadataSource | str" = MetadataSource.UNKNOWN) -> "MetadataCapability":
+    def unsupported(
+        cls, domain: str, *, source: "MetadataSource | str" = MetadataSource.UNKNOWN
+    ) -> "MetadataCapability":
         """Create a standard unsupported-domain capability."""
         return cls(domain=domain, support=MetadataSupport.UNSUPPORTED, source=source)
 
@@ -252,7 +252,9 @@ class MetadataCapabilityProfile:
 
     __slots__ = ("adapter", "capabilities", "dialect")
 
-    def __init__(self, dialect: str, *, adapter: str | None = None, capabilities: "tuple[MetadataCapability, ...]" = ()) -> None:
+    def __init__(
+        self, dialect: str, *, adapter: str | None = None, capabilities: "tuple[MetadataCapability, ...]" = ()
+    ) -> None:
         self.dialect = dialect
         self.adapter = adapter
         self.capabilities = capabilities
@@ -273,9 +275,7 @@ class MetadataCapabilityProfile:
         }
 
     @classmethod
-    def from_domains(
-        cls, dialect: str, adapter: str | None, domains: "tuple[str, ...]"
-    ) -> "MetadataCapabilityProfile":
+    def from_domains(cls, dialect: str, adapter: str | None, domains: "tuple[str, ...]") -> "MetadataCapabilityProfile":
         """Create an unsupported profile for domains without implementation."""
         return cls(
             dialect=dialect,
@@ -313,9 +313,7 @@ class MetadataResult:
     ) -> None:
         self.domain = domain
         self.capability = capability or MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.NATIVE,
+            domain=domain, support=MetadataSupport.SUPPORTED, fidelity=MetadataFidelity.NATIVE
         )
         self.items = items
         self.warnings = warnings

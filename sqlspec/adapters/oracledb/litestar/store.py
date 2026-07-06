@@ -1,6 +1,6 @@
 """Oracle session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -14,6 +14,21 @@ __all__ = ("OracleAsyncStore", "OracleSyncStore")
 
 
 ORACLE_SMALL_BLOB_LIMIT = 32000
+ORACLE_EXPIRES_AT_EXPRESSION = (
+    "CASE WHEN :expires_in_seconds IS NULL THEN NULL "
+    "ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND') END"
+)
+
+
+def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "int | None":
+    """Convert a session TTL value to whole seconds for Oracle interval binds."""
+    if expires_in is None:
+        return None
+
+    expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else int(expires_in)
+    if expires_in_seconds <= 0:
+        return None
+    return expires_in_seconds
 
 
 def _coerce_bytes_payload(value: object) -> bytes:
@@ -170,14 +185,14 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             data_blob, expires_at = row
 
             if renew_for is not None and expires_at is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
+                expires_in_seconds = _oracle_expiry_seconds(renew_for)
+                if expires_in_seconds is not None:
                     update_sql = f"""
                     UPDATE {self._table_name}
-                    SET expires_at = :expires_at, updated_at = SYSTIMESTAMP
+                    SET expires_at = {ORACLE_EXPIRES_AT_EXPRESSION}, updated_at = SYSTIMESTAMP
                     WHERE session_id = :session_id
                     """
-                    await cursor.execute(update_sql, {"expires_at": new_expires_at, "session_id": key})
+                    await cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
                     await conn.commit()
 
             return await _read_blob_async(data_blob)
@@ -191,7 +206,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             expires_in: Time until expiration.
         """
         data = self._value_to_bytes(value)
-        expires_at = self._calculate_expires_at(expires_in)
+        expires_in_seconds = _oracle_expiry_seconds(expires_in)
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
@@ -205,13 +220,13 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = EMPTY_BLOB(),
-                        expires_at = :expires_at,
+                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, EMPTY_BLOB(), :expires_at, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (:session_id, EMPTY_BLOB(), {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
                 """
-                await cursor.execute(merge_sql, {"session_id": key, "expires_at": expires_at})
+                await cursor.execute(merge_sql, {"session_id": key, "expires_in_seconds": expires_in_seconds})
 
                 select_sql = f"""
                 SELECT data FROM {self._table_name}
@@ -232,13 +247,13 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = :data,
-                        expires_at = :expires_at,
+                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, :data, :expires_at, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (:session_id, :data, {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
                 """
-                await cursor.execute(sql, {"session_id": key, "data": data, "expires_at": expires_at})
+                await cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
                 await conn.commit()
 
     async def delete(self, key: str) -> None:
@@ -298,7 +313,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             Seconds until expiration, or None if no expiry or key doesn't exist.
         """
         sql = f"""
-        SELECT expires_at FROM {self._table_name}
+        SELECT expires_at, SYSTIMESTAMP FROM {self._table_name}
         WHERE session_id = :session_id
         """
 
@@ -311,17 +326,17 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             if row is None or row[0] is None:
                 return None
 
-            expires_at = row[0]
+            expires_at, db_now = row
 
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if db_now.tzinfo is None:
+                db_now = db_now.replace(tzinfo=timezone.utc)
 
-            now = datetime.now(timezone.utc)
-
-            if expires_at <= now:
+            if expires_at <= db_now:
                 return 0
 
-            delta = expires_at - now
+            delta = expires_at - db_now
             return int(delta.total_seconds())
 
     async def delete_expired(self) -> int:
@@ -468,14 +483,14 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             data_blob, expires_at = row
 
             if renew_for is not None and expires_at is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
+                expires_in_seconds = _oracle_expiry_seconds(renew_for)
+                if expires_in_seconds is not None:
                     update_sql = f"""
                     UPDATE {self._table_name}
-                    SET expires_at = :expires_at, updated_at = SYSTIMESTAMP
+                    SET expires_at = {ORACLE_EXPIRES_AT_EXPRESSION}, updated_at = SYSTIMESTAMP
                     WHERE session_id = :session_id
                     """
-                    cursor.execute(update_sql, {"expires_at": new_expires_at, "session_id": key})
+                    cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
                     conn.commit()
 
             return _read_blob_sync(data_blob)
@@ -495,7 +510,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
-        expires_at = self._calculate_expires_at(expires_in)
+        expires_in_seconds = _oracle_expiry_seconds(expires_in)
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -508,13 +523,13 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = EMPTY_BLOB(),
-                        expires_at = :expires_at,
+                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, EMPTY_BLOB(), :expires_at, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (:session_id, EMPTY_BLOB(), {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
                 """
-                cursor.execute(merge_sql, {"session_id": key, "expires_at": expires_at})
+                cursor.execute(merge_sql, {"session_id": key, "expires_in_seconds": expires_in_seconds})
 
                 select_sql = f"""
                 SELECT data FROM {self._table_name}
@@ -535,13 +550,13 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 WHEN MATCHED THEN
                     UPDATE SET
                         data = :data,
-                        expires_at = :expires_at,
+                        expires_at = {ORACLE_EXPIRES_AT_EXPRESSION},
                         updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN
                     INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (:session_id, :data, :expires_at, SYSTIMESTAMP, SYSTIMESTAMP)
+                    VALUES (:session_id, :data, {ORACLE_EXPIRES_AT_EXPRESSION}, SYSTIMESTAMP, SYSTIMESTAMP)
                 """
-                cursor.execute(sql, {"session_id": key, "data": data, "expires_at": expires_at})
+                cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
                 conn.commit()
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
@@ -613,7 +628,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
         sql = f"""
-        SELECT expires_at FROM {self._table_name}
+        SELECT expires_at, SYSTIMESTAMP FROM {self._table_name}
         WHERE session_id = :session_id
         """
 
@@ -625,17 +640,17 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             if row is None or row[0] is None:
                 return None
 
-            expires_at = row[0]
+            expires_at, db_now = row
 
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if db_now.tzinfo is None:
+                db_now = db_now.replace(tzinfo=timezone.utc)
 
-            now = datetime.now(timezone.utc)
-
-            if expires_at <= now:
+            if expires_at <= db_now:
                 return 0
 
-            delta = expires_at - now
+            delta = expires_at - db_now
             return int(delta.total_seconds())
 
     async def expires_in(self, key: str) -> "int | None":
