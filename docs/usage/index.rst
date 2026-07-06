@@ -30,6 +30,12 @@ Choose a topic
 
       Execute statements, bind parameters, and batch work.
 
+   .. grid-item-card:: Data Dictionary
+      :link: data_dictionary
+      :link-type: doc
+
+      Inspect schemas, objects, capabilities, and metadata support.
+
    .. grid-item-card:: Query Builder
       :link: query_builder
       :link-type: doc
@@ -112,6 +118,7 @@ Recommended Path
    data_flow
    configuration
    drivers_and_querying
+   data_dictionary
    query_builder
    sql_files
    cli

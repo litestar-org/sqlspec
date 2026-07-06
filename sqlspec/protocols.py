@@ -17,7 +17,15 @@ if TYPE_CHECKING:
 
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
-    from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+    from sqlspec.data_dictionary import (
+        ColumnMetadata,
+        ForeignKeyMetadata,
+        IndexMetadata,
+        MetadataCapabilityProfile,
+        MetadataResult,
+        TableMetadata,
+        VersionInfo,
+    )
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
@@ -908,6 +916,36 @@ class SyncDataDictionaryProtocol(Protocol):
 
     dialect: str
 
+    def get_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile": ...
+
+    def get_schemas(self, driver: Any) -> "MetadataResult": ...
+
+    def get_objects(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    def get_table_details(self, driver: Any, table: str, schema: "str | None" = None) -> "MetadataResult": ...
+
+    def get_constraints(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult": ...
+
+    def get_views(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    def get_routines(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    def get_privileges(
+        self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult": ...
+
+    def get_dependencies(
+        self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult": ...
+
+    def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult": ...
+
+    def get_system_metadata(self, driver: Any, domain: str, *, include_sensitive: bool = False) -> "MetadataResult": ...
+
     def get_version(self, driver: Any) -> "VersionInfo | None": ...
 
     def get_feature_flag(self, driver: Any, feature: str) -> bool: ...
@@ -935,6 +973,38 @@ class AsyncDataDictionaryProtocol(Protocol):
     """Protocol for async data dictionary implementations."""
 
     dialect: str
+
+    async def get_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile": ...
+
+    async def get_schemas(self, driver: Any) -> "MetadataResult": ...
+
+    async def get_objects(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_table_details(self, driver: Any, table: str, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_constraints(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult": ...
+
+    async def get_views(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_routines(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_privileges(
+        self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult": ...
+
+    async def get_dependencies(
+        self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult": ...
+
+    async def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_system_metadata(
+        self, driver: Any, domain: str, *, include_sensitive: bool = False
+    ) -> "MetadataResult": ...
 
     async def get_version(self, driver: Any) -> "VersionInfo | None": ...
 

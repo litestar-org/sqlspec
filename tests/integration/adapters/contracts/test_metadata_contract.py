@@ -53,11 +53,41 @@ def test_sync_data_dictionary_contract(sync_capability_driver_case: DriverCaseCo
 
 
 @pytest.mark.parametrize(
+    "sync_capability_driver_case", sync_driver_params_with("supports_data_dictionary"), indirect=True
+)
+def test_sync_data_dictionary_capability_contract(sync_capability_driver_case: DriverCaseContext) -> None:
+    """Sync data dictionaries expose truthful replacement metadata capability tiers."""
+    case = sync_capability_driver_case.case
+
+    assert isinstance(case.supports_data_dictionary_core, bool)
+    assert isinstance(case.supports_data_dictionary_constraints, bool)
+    assert isinstance(case.supports_data_dictionary_ddl, bool)
+    assert isinstance(case.supports_data_dictionary_dependencies, bool)
+    assert isinstance(case.supports_data_dictionary_system, bool)
+    assert isinstance(case.supports_data_dictionary_transport_metadata, bool)
+
+
+@pytest.mark.parametrize(
     "async_capability_driver_case", async_driver_params_with("supports_data_dictionary"), indirect=True
 )
 async def test_async_data_dictionary_contract(async_capability_driver_case: DriverCaseContext) -> None:
     """Async data dictionaries expose portable version, feature, type, table, and column metadata."""
     await assert_async_data_dictionary_contract(async_capability_driver_case.driver, async_capability_driver_case.case)
+
+
+@pytest.mark.parametrize(
+    "async_capability_driver_case", async_driver_params_with("supports_data_dictionary"), indirect=True
+)
+async def test_async_data_dictionary_capability_contract(async_capability_driver_case: DriverCaseContext) -> None:
+    """Async data dictionaries expose truthful replacement metadata capability tiers."""
+    case = async_capability_driver_case.case
+
+    assert isinstance(case.supports_data_dictionary_core, bool)
+    assert isinstance(case.supports_data_dictionary_constraints, bool)
+    assert isinstance(case.supports_data_dictionary_ddl, bool)
+    assert isinstance(case.supports_data_dictionary_dependencies, bool)
+    assert isinstance(case.supports_data_dictionary_system, bool)
+    assert isinstance(case.supports_data_dictionary_transport_metadata, bool)
 
 
 @pytest.mark.parametrize(

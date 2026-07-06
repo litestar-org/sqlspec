@@ -41,7 +41,15 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+    from sqlspec.data_dictionary import (
+        ColumnMetadata,
+        ForeignKeyMetadata,
+        IndexMetadata,
+        MetadataCapabilityProfile,
+        MetadataResult,
+        TableMetadata,
+        VersionInfo,
+    )
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, SchemaT, StatementParameters
 
 
@@ -1857,6 +1865,86 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         self._version_cache: dict[int, VersionInfo | None] = {}
         self._version_fetch_attempted: set[int] = set()
 
+    async def get_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Get replacement data-dictionary capability profile.
+
+        Args:
+            driver: Async database driver instance.
+            domains: Optional metadata domains to report.
+
+        Returns:
+            Capability profile. Base implementations report requested domains as unsupported.
+        """
+        from sqlspec.data_dictionary import MetadataCapabilityProfile
+
+        requested_domains: tuple[str, ...] = (
+            "schemas",
+            "objects",
+            "tables",
+            "columns",
+            "constraints",
+            "indexes",
+            "views",
+            "routines",
+            "privileges",
+            "dependencies",
+            "ddl",
+            "system",
+        )
+        if domains is not None:
+            requested_domains = tuple(domains)
+        return MetadataCapabilityProfile.from_domains(self.dialect, type(self).__name__, requested_domains)
+
+    async def get_schemas(self, driver: Any) -> "MetadataResult":
+        """Get schema metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("schemas")
+
+    async def get_objects(self, driver: Any, schema: "str | None" = None) -> "MetadataResult":
+        """Get database object metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("objects")
+
+    async def get_table_details(self, driver: Any, table: str, schema: "str | None" = None) -> "MetadataResult":
+        """Get rich table metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("tables")
+
+    async def get_constraints(
+        self, driver: Any, table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get constraint metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("constraints")
+
+    async def get_views(self, driver: Any, schema: "str | None" = None) -> "MetadataResult":
+        """Get view metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("views")
+
+    async def get_routines(self, driver: Any, schema: "str | None" = None) -> "MetadataResult":
+        """Get routine metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("routines")
+
+    async def get_privileges(
+        self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get privilege metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("privileges")
+
+    async def get_dependencies(
+        self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get dependency metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("dependencies")
+
+    async def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult":
+        """Get object DDL or an unsupported-domain result."""
+        return self._unsupported_metadata("ddl")
+
+    async def get_system_metadata(
+        self, driver: Any, domain: str, *, include_sensitive: bool = False
+    ) -> "MetadataResult":
+        """Get opt-in system metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("system")
+
     @abstractmethod
     async def get_version(self, driver: Any) -> "VersionInfo | None":
         """Get database version information.
@@ -1948,3 +2036,8 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             List of foreign key metadata
         """
+
+    def _unsupported_metadata(self, domain: str) -> "MetadataResult":
+        from sqlspec.data_dictionary import MetadataResult
+
+        return MetadataResult.unsupported(domain)

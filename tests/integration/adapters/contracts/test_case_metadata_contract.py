@@ -196,6 +196,14 @@ def test_data_dictionary_cases_are_contract_owned() -> None:
     assert all(case.supports_data_dictionary for case in cases.values())
 
 
+def test_data_dictionary_query_limits_are_contract_metadata() -> None:
+    """Data-dictionary batch/N+1 behavior is guarded by typed case metadata."""
+    cases = {case.id: case for case in ACTIVE_DRIVER_CASES if case.id in DATA_DICTIONARY_CASE_IDS}
+
+    assert all(case.data_dictionary_schema_query_limit >= 1 for case in cases.values())
+    assert all(case.data_dictionary_index_query_limit >= 1 for case in cases.values())
+
+
 def test_default_schema_migration_cases_are_contract_owned() -> None:
     """Default-schema migration behavior belongs to the shared migration contract."""
     cases = {case.id: case for case in ACTIVE_MIGRATION_CASES if case.id in DEFAULT_SCHEMA_MIGRATION_CASE_IDS}
