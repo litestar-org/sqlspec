@@ -28,6 +28,9 @@ WITH RECURSIVE dependency_tree AS (
       AND kcu.referenced_table_name IS NOT NULL
       AND NOT FIND_IN_SET(kcu.table_name, dt.path)
 )
-SELECT DISTINCT table_name
+SELECT
+    table_name,
+    MIN(level) AS level
 FROM dependency_tree
+GROUP BY table_name
 ORDER BY level, table_name;
