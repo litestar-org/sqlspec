@@ -3698,11 +3698,7 @@ register_async_extra_assertion("driver_features:oracle_json_native", DRIVER_FEAT
 
 
 ORACLE_LOB_FETCH_SCOPE = "oracle_lob_fetch"
-_ORACLE_LOB_JSON_PAYLOAD: dict[str, object] = {
-    "integer": 42,
-    "fraction": 1.25,
-    "nested": {"label": "metadata-driven"},
-}
+_ORACLE_LOB_JSON_PAYLOAD: dict[str, object] = {"integer": 42, "fraction": 1.25, "nested": {"label": "metadata-driven"}}
 _ORACLE_OSON_PAYLOAD: dict[str, object] = {"kind": "oson", "tags": ["contract", "oracle"]}
 _ORACLE_PLAIN_JSON_TEXT = to_json({"looks": "json", "but": "plain-clob"})
 _ORACLE_LONG_CLOB_TEXT = "long oracle clob " + ("x" * 5000)
@@ -3714,10 +3710,7 @@ def _oracle_lob_table(case: DriverCase, suffix: str) -> str:
 
 
 def _oracle_lob_select_sql(table: str) -> str:
-    return (
-        "SELECT native_json, json_clob, json_blob, plain_clob, plain_blob, long_clob "
-        f"FROM {table} WHERE id = 1"
-    )
+    return f"SELECT native_json, json_clob, json_blob, plain_clob, plain_blob, long_clob FROM {table} WHERE id = 1"
 
 
 @contextlib.contextmanager
@@ -4697,7 +4690,7 @@ def _assert_row_format_matches_data(result: SQLResult, expected_rows: list[dict[
     assert result.data is not None
     if not result.data:
         return
-    row_format = cast("str", result._row_format)  # pyright: ignore[reportPrivateUsage]
+    row_format = result._row_format  # pyright: ignore[reportPrivateUsage]
     first = result.data[0]
     if isinstance(first, dict):
         assert row_format == "dict"
@@ -4789,16 +4782,14 @@ async def assert_async_driver_feature_parity_contract(driver: object, case: Driv
         assert (await async_driver.select_to_arrow(table.select_ordered_sql)).data.to_pylist() == expected
 
 
-def assert_sync_driver_feature_row_format_contract(
-    make_config: SyncConfigFactory | None, case: DriverCase
-) -> None:
+def assert_sync_driver_feature_row_format_contract(make_config: SyncConfigFactory | None, case: DriverCase) -> None:
     """Assert configured row factories are tagged consistently with their materialized data."""
     if make_config is None:
         pytest.skip(f"{case.adapter} has no config factory for row-format verification")
     config = make_config(**_row_format_config_kwargs(case))
     try:
         with config.provide_session() as session:
-            sync_driver = cast("SyncContractDriver", session)
+            sync_driver = session
             _reset_contract_table_sync(sync_driver, case.table)
             _seed_sync(sync_driver, _DRIVER_FEATURE_PARITY_ROWS, case.table, case)
             result = assert_sql_result(sync_driver.execute(case.table.select_ordered_sql))
@@ -4816,7 +4807,7 @@ async def assert_async_driver_feature_row_format_contract(
     config = make_config(**_async_row_format_config_kwargs(case))
     try:
         async with config.provide_session() as session:
-            async_driver = cast("AsyncContractDriver", session)
+            async_driver = session
             await _reset_contract_table_async(async_driver, case.table)
             await _seed_async(async_driver, _DRIVER_FEATURE_PARITY_ROWS, case.table, case)
             result = assert_sql_result(await async_driver.execute(case.table.select_ordered_sql))

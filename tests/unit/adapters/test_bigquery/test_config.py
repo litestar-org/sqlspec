@@ -1,7 +1,6 @@
 """BigQuery configuration tests covering statement config builders."""
 
 import uuid
-
 from typing import Any, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
@@ -44,9 +43,7 @@ def test_bigquery_config_applies_driver_feature_serializer() -> None:
 
 def test_bigquery_driver_features_honor_uuid_conversion_flag() -> None:
     """The BigQuery UUID conversion flag should control UUID parameter coercion."""
-    enabled_config, enabled_features = apply_driver_features(
-        build_statement_config(), {"enable_uuid_conversion": True}
-    )
+    enabled_config, enabled_features = apply_driver_features(build_statement_config(), {"enable_uuid_conversion": True})
     disabled_config, disabled_features = apply_driver_features(
         build_statement_config(), {"enable_uuid_conversion": False}
     )

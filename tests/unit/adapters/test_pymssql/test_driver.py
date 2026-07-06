@@ -123,11 +123,7 @@ def test_select_stream_uses_fetchmany_chunks() -> None:
     with driver.select_stream("SELECT id, name FROM dbo.users", native_only=True, chunk_size=2) as stream:
         rows = list(stream)
 
-    assert rows == [
-        {"id": 1, "name": "Ada"},
-        {"id": 2, "name": "Grace"},
-        {"id": 3, "name": "Linus"},
-    ]
+    assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}, {"id": 3, "name": "Linus"}]
     assert cursor.calls == [("SELECT id, name FROM dbo.users", ())]
     assert cursor.fetchmany_sizes == [2, 2, 2]
     assert cursor.closed is True

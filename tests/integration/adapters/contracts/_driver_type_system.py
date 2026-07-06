@@ -127,13 +127,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "on_connection_create",
     ),
-    "asyncmy": (
-        "json_serializer",
-        "json_deserializer",
-        "on_connection_create",
-        "enable_events",
-        "events_backend",
-    ),
+    "asyncmy": ("json_serializer", "json_deserializer", "on_connection_create", "enable_events", "events_backend"),
     "bigquery": (
         "connection_instance",
         "on_connection_create",
@@ -159,13 +153,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "events_backend",
     ),
-    "mssql_python": (
-        "use_pool",
-        "json_serializer",
-        "json_deserializer",
-        "on_connection_create",
-        "enable_events",
-    ),
+    "mssql_python": ("use_pool", "json_serializer", "json_deserializer", "on_connection_create", "enable_events"),
     "mysqlconnector": (
         "json_serializer",
         "json_deserializer",
@@ -198,13 +186,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_alloydb_iam_auth",
         "alloydb_ip_type",
     ),
-    "pymssql": (
-        "json_serializer",
-        "json_deserializer",
-        "on_connection_create",
-        "enable_events",
-        "events_backend",
-    ),
+    "pymssql": ("json_serializer", "json_deserializer", "on_connection_create", "enable_events", "events_backend"),
     "pymysql": (
         "json_serializer",
         "json_deserializer",

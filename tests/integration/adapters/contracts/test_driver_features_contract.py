@@ -115,7 +115,9 @@ async def test_async_driver_feature_honesty_contract(async_driver_case: DriverCa
 def test_sync_driver_feature_semantics_contract(sync_driver_case: DriverCaseContext) -> None:
     """Sync enable-false semantics stays inert unless the feature is explicitly enabled."""
     assert sync_driver_case.make_config is not None
-    assert_sync_custom_type_adapters_contract(cast("SyncConfigFactory", sync_driver_case.make_config), sync_driver_case.case)
+    assert_sync_custom_type_adapters_contract(
+        cast("SyncConfigFactory", sync_driver_case.make_config), sync_driver_case.case
+    )
 
 
 @pytest.mark.parametrize(
@@ -136,9 +138,7 @@ async def test_async_driver_feature_semantics_contract(async_driver_case: Driver
     _disabled_first_params(
         "parity",
         tuple(
-            case
-            for case in SYNC_DRIVER_CASES
-            if case.supports_arrow_streaming or case.supports_native_row_streaming
+            case for case in SYNC_DRIVER_CASES if case.supports_arrow_streaming or case.supports_native_row_streaming
         ),
     ),
     indirect=True,
@@ -153,9 +153,7 @@ def test_sync_driver_feature_parity_contract(sync_driver_case: DriverCaseContext
     _disabled_first_params(
         "parity",
         tuple(
-            case
-            for case in ASYNC_DRIVER_CASES
-            if case.supports_arrow_streaming or case.supports_native_row_streaming
+            case for case in ASYNC_DRIVER_CASES if case.supports_arrow_streaming or case.supports_native_row_streaming
         ),
     ),
     indirect=True,

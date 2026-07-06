@@ -165,11 +165,7 @@ def test_select_stream_uses_fetchmany_chunks() -> None:
     with driver.select_stream("SELECT id, name FROM dbo.users", native_only=True, chunk_size=2) as stream:
         rows = list(stream)
 
-    assert rows == [
-        {"id": 1, "name": "Ada"},
-        {"id": 2, "name": "Grace"},
-        {"id": 3, "name": "Linus"},
-    ]
+    assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}, {"id": 3, "name": "Linus"}]
     assert connection.cursor_obj.executed == [("SELECT id, name FROM dbo.users", [])]
     assert connection.cursor_obj.fetchmany_sizes == [2, 2, 2]
     assert connection.cursor_obj.closed is True
@@ -338,11 +334,7 @@ async def test_async_select_stream_offloads_fetchmany(monkeypatch: pytest.Monkey
     async with driver.select_stream("SELECT id, name FROM dbo.users", native_only=True, chunk_size=2) as stream:
         rows = [row async for row in stream]
 
-    assert rows == [
-        {"id": 1, "name": "Ada"},
-        {"id": 2, "name": "Grace"},
-        {"id": 3, "name": "Linus"},
-    ]
+    assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}, {"id": 3, "name": "Linus"}]
     assert connection.cursor_obj.fetchmany_sizes == [2, 2, 2]
     assert "_execute_cursor" in calls
     assert "fetchmany" in calls

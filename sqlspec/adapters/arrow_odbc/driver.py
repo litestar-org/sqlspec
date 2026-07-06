@@ -59,7 +59,9 @@ class ArrowOdbcStreamSource:
 
     __slots__ = ("_chunk_size", "_driver", "_parameters", "_reader", "_sql")
 
-    def __init__(self, driver: "ArrowOdbcDriver", sql: str, parameters: "list[str | None] | None", chunk_size: int) -> None:
+    def __init__(
+        self, driver: "ArrowOdbcDriver", sql: str, parameters: "list[str | None] | None", chunk_size: int
+    ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
