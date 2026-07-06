@@ -14,6 +14,9 @@ from sqlspec.driver._common import (
     StackExecutionObserver,
     describe_stack_statement,
     hash_stack_operations,
+    parameter_value_needs_processing,
+    parameter_values_need_processing,
+    type_coercion_fallbacks,
 )
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._sql_helpers import convert_to_dialect
@@ -47,7 +50,10 @@ __all__ = (
     "convert_to_dialect",
     "describe_stack_statement",
     "hash_stack_operations",
+    "parameter_value_needs_processing",
+    "parameter_values_need_processing",
     "rows_to_dicts",
+    "type_coercion_fallbacks",
 )
 
 DriverAdapterProtocol = SyncDriverAdapterBase | AsyncDriverAdapterBase

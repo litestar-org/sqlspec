@@ -52,6 +52,19 @@ def test_format_execute_many_parameters_with_coercion_converts_float_to_decimal(
     assert formatted[1][0] == 2
 
 
+def test_format_execute_many_parameters_with_coercion_converts_float_subclass() -> None:
+    """Numeric write coercion should not skip float subclasses in execute_many rows."""
+
+    class MyFloat(float):
+        pass
+
+    records = [(MyFloat("1.5"), "a"), (2, "b")]
+    formatted = format_execute_many_parameters(records, coerce_numeric=True)
+    assert type(formatted[0][0]) is Decimal
+    assert formatted[0][0] == Decimal("1.5")
+    assert formatted[1][0] == 2
+
+
 def test_coerce_numeric_for_write_preserves_identity_when_unchanged() -> None:
     """Nested payloads without float values should keep their existing container identities."""
     payload = {"items": [1, {"value": Decimal("1.5")}], "meta": ("a", None)}

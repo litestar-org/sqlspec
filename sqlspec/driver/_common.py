@@ -107,7 +107,10 @@ __all__ = (
     "handle_single_row_error",
     "hash_stack_operations",
     "make_cache_key_hashable",
+    "parameter_value_needs_processing",
+    "parameter_values_need_processing",
     "resolve_db_system",
+    "type_coercion_fallbacks",
 )
 
 
@@ -1056,7 +1059,7 @@ class CommonDriverAttributesMixin:
         if is_many:
             if isinstance(parameters, list):
                 type_coercion_map = statement_config.parameter_config.type_coercion_map
-                fallback_items = _type_coercion_fallbacks(type_coercion_map)
+                fallback_items = type_coercion_fallbacks(type_coercion_map)
                 needs_transform = False
                 for param_set in parameters:
                     if isinstance(param_set, dict):
@@ -1220,12 +1223,8 @@ class CommonDriverAttributesMixin:
         # Fast-path: skip stmt_cache_rebind entirely when no transformations are needed.
         config = self.statement_config.parameter_config
         needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
-        if not needs_rebind and config.type_coercion_map:
-            coercion_types = config.type_coercion_map
-            if len(param_values) == 1:
-                needs_rebind = type(param_values[0]) in coercion_types
-            else:
-                needs_rebind = any(type(p) in coercion_types for p in param_values)
+        if not needs_rebind:
+            needs_rebind = parameter_values_need_processing(param_values, config.type_coercion_map)
         if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
             needs_rebind = True
         if needs_rebind:
@@ -1275,12 +1274,8 @@ class CommonDriverAttributesMixin:
         # Check if we can use the pre-compiled direct execute path
         # This bypasses SQL object construction entirely.
         needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
-        if not needs_rebind and param_config.type_coercion_map:
-            coercion_types = param_config.type_coercion_map
-            if len(param_values) == 1:
-                needs_rebind = type(param_values[0]) in coercion_types
-            else:
-                needs_rebind = any(type(p) in coercion_types for p in param_values)
+        if not needs_rebind:
+            needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
 
         if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
             needs_rebind = True
@@ -1532,7 +1527,7 @@ class CommonDriverAttributesMixin:
             return unwrapped_value
 
         return self._apply_coercion_with_fallback(
-            unwrapped_value, type_coercion_map, _type_coercion_fallbacks(type_coercion_map)
+            unwrapped_value, type_coercion_map, type_coercion_fallbacks(type_coercion_map)
         )
 
     def _apply_coercion_with_fallback(
@@ -1556,15 +1551,7 @@ class CommonDriverAttributesMixin:
         type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
         fallback_items: "tuple[tuple[type, Any], ...]",
     ) -> bool:
-        if type(value) is TypedParameter:
-            return True
-        if not type_coercion_map:
-            return False
-
-        value_type = type(value)
-        if value_type in type_coercion_map:
-            return True
-        return _type_coercion_dispatcher(fallback_items).get(value) is not None
+        return parameter_value_needs_processing(value, type_coercion_map, fallback_items)
 
     def _batch_parameters(
         self, parameters: "StatementParameters", statement_config: "StatementConfig"
@@ -1585,7 +1572,7 @@ class CommonDriverAttributesMixin:
             return []
 
         type_coercion_map = statement_config.parameter_config.type_coercion_map
-        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
 
         if not isinstance(parameters, (dict, list, tuple)):
             return [self._apply_coercion_with_fallback(parameters, type_coercion_map, fallback_items)]
@@ -1632,7 +1619,7 @@ class CommonDriverAttributesMixin:
             return []
 
         type_coercion_map = statement_config.parameter_config.type_coercion_map
-        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
         coerce_value = self._apply_coercion_with_fallback
 
         if not isinstance(parameters, (dict, list, tuple)):
@@ -2161,6 +2148,36 @@ def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") 
     return params
 
 
+def parameter_values_need_processing(
+    values: "tuple[Any, ...] | list[Any]",
+    type_coercion_map: "dict[type, Any] | None",
+    fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
+) -> bool:
+    if fallback_items is None:
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
+    if len(values) == 1:
+        return parameter_value_needs_processing(values[0], type_coercion_map, fallback_items)
+    return any(parameter_value_needs_processing(value, type_coercion_map, fallback_items) for value in values)
+
+
+def parameter_value_needs_processing(
+    value: object,
+    type_coercion_map: "dict[type, Any] | None",
+    fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
+) -> bool:
+    if type(value) is TypedParameter:
+        return True
+    if not type_coercion_map:
+        return False
+
+    value_type = type(value)
+    if value_type in type_coercion_map:
+        return True
+    if fallback_items is None:
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
+    return _type_coercion_dispatcher(fallback_items).get(value) is not None
+
+
 def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
     return ProcessedState(
         compiled_sql=processed.compiled_sql,
@@ -2275,7 +2292,7 @@ def _parameters_for_repeated_names(original_sql: "SQL", excluded_names: "set[str
     )
 
 
-def _type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
+def type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
     if not type_coercion_map:
         return ()
     return tuple(type_coercion_map.items())

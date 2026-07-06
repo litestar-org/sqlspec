@@ -183,6 +183,21 @@ def test_execute_populates_fast_path_cache_on_normal_path(sqlite_sync_driver) ->
     assert result.operation_type == "SELECT"
 
 
+def test_execute_cache_hit_rebinds_type_coercion_subclass(sqlite_sync_driver: Any) -> None:
+    import json
+    from collections import defaultdict
+
+    sqlite_sync_driver._stmt_cache_enabled = True
+    sqlite_sync_driver.execute("CREATE TABLE t (data TEXT)")
+
+    statement = "INSERT INTO t (data) VALUES (?)"
+    sqlite_sync_driver.execute(statement, (defaultdict(int, a=1),))
+    sqlite_sync_driver.execute(statement, (defaultdict(int, b=2),))
+
+    rows = sqlite_sync_driver.connection.execute("SELECT data FROM t ORDER BY data").fetchall()
+    assert [json.loads(row[0]) for row in rows] == [{"a": 1}, {"b": 2}]
+
+
 def test_prepare_statement_sql_object_cache_is_bounded(sqlite_sync_driver: Any) -> None:
     sqlite_sync_driver._stmt_cache_max_size = 2
 
