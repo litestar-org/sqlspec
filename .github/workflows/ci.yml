@@ -291,9 +291,32 @@ jobs:
       - name: Install SQL Server ODBC driver
         run: |
           set -eu
-          curl -sSL -O https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
-          sudo dpkg -i packages-microsoft-prod.deb
-          rm packages-microsoft-prod.deb
+          key_url="https://packages.microsoft.com/keys/microsoft.asc"
+          key_file="microsoft.asc"
+          keyring_file="microsoft-prod.gpg"
+          trap 'rm -f microsoft.asc microsoft-prod.gpg' EXIT
+
+          for attempt in 1 2 3 4 5; do
+            rm -f "${key_file}"
+            if curl --fail --location --show-error --silent --output "${key_file}" "${key_url}" && gpg --show-keys "${key_file}" >/dev/null 2>&1; then
+              break
+            fi
+
+            if [ "${attempt}" -eq 5 ]; then
+              echo "Failed to download a valid Microsoft signing key" >&2
+              ls -l "${key_file}" 2>/dev/null || true
+              gpg --show-keys "${key_file}" || true
+              exit 1
+            fi
+
+            echo "Microsoft signing key download was invalid; retrying (${attempt}/5)." >&2
+            sleep $((attempt * 5))
+          done
+
+          gpg --dearmor --yes --output "${keyring_file}" "${key_file}"
+          sudo install -d -m 0755 /usr/share/keyrings /etc/apt/sources.list.d
+          sudo install -m 0644 "${keyring_file}" /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/24.04/prod noble main" | sudo tee /etc/apt/sources.list.d/microsoft-prod.list >/dev/null
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
           odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
