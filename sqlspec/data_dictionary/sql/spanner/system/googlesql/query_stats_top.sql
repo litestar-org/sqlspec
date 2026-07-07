@@ -1,0 +1,15 @@
+-- name: query_stats_top
+-- dialect: spanner
+SELECT
+    INTERVAL_END,
+    TEXT,
+    TEXT_FINGERPRINT,
+    EXECUTION_COUNT,
+    AVG_LATENCY_SECONDS,
+    AVG_ROWS,
+    AVG_BYTES,
+    AVG_CPU_SECONDS
+FROM SPANNER_SYS.QUERY_STATS_TOP_MINUTE
+WHERE (:interval_end_after IS NULL OR INTERVAL_END >= :interval_end_after)
+ORDER BY INTERVAL_END DESC, EXECUTION_COUNT DESC
+LIMIT :limit;
