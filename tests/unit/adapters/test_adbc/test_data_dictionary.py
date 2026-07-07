@@ -1,6 +1,6 @@
 """Unit tests for ADBC native metadata normalization and fallback."""
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -18,6 +18,7 @@ from sqlspec.adapters.adbc.data_dictionary import (
     _normalize_native_statistics,
     _normalize_native_tables,
 )
+from sqlspec.data_dictionary import MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import OperationalError
 
 SQLITE_OBJECTS_PAYLOAD: list[dict[str, Any]] = [
@@ -389,3 +390,135 @@ def test_get_statistics_filters_exact_table() -> None:
 
     assert len(statistics) == 1
     assert statistics[0]["table_name"] == "items"
+
+
+def test_adbc_capabilities_include_get_info_table_types_statistics() -> None:
+    """ADBC capability profiles should report explicit transport metadata support."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_info.return_value = {"vendor_name": "duckdb", "driver_name": "duckdb"}
+    driver.connection.adbc_get_table_types.return_value = ["BASE TABLE", "VIEW"]
+    driver.connection.adbc_get_objects.return_value = _make_reader([])
+    driver.connection.adbc_get_statistics.return_value = _make_reader([])
+    driver.connection.adbc_get_statistic_names.return_value = _make_reader([
+        {"statistic_key": 6, "statistic_name": "row_count"}
+    ])
+
+    profile = AdbcDataDictionary().get_metadata_capabilities(
+        driver, domains=("tables", "columns", "constraints", "statistics", "ddl")
+    )
+
+    assert profile.dialect == "duckdb"
+    assert profile.adapter == "adbc"
+    assert profile.get("tables").support == MetadataSupport.SUPPORTED
+    assert profile.get("tables").fidelity == MetadataFidelity.TRANSPORT_FALLBACK
+    assert profile.get("tables").source == MetadataSource.DRIVER_METADATA
+    assert profile.get("columns").support == MetadataSupport.SUPPORTED
+    assert profile.get("statistics").support == MetadataSupport.SUPPORTED
+    assert profile.get("statistics").risks
+    assert profile.get("ddl").support == MetadataSupport.UNSUPPORTED
+    driver.connection.adbc_get_info.assert_called_once()
+    driver.connection.adbc_get_table_types.assert_called_once()
+    driver.connection.adbc_get_objects.assert_called()
+    driver.connection.adbc_get_statistics.assert_called_once()
+    driver.connection.adbc_get_statistic_names.assert_called_once()
+
+
+def test_adbc_get_objects_unique_check_constraints_are_lossy() -> None:
+    """ADBC GetObjects constraint shells should be surfaced with lossy fidelity."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_objects.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_tables": [
+                        {
+                            "table_name": "items",
+                            "table_type": "BASE TABLE",
+                            "table_columns": [],
+                            "table_constraints": [
+                                {
+                                    "constraint_name": "uq_items_name",
+                                    "constraint_type": "UNIQUE",
+                                    "constraint_column_names": ["name"],
+                                    "constraint_column_usage": None,
+                                },
+                                {
+                                    "constraint_name": "ck_items_qty",
+                                    "constraint_type": "CHECK",
+                                    "constraint_column_names": ["quantity"],
+                                    "constraint_column_usage": None,
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    ])
+
+    result = AdbcDataDictionary().get_constraints(driver, table="items")
+
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.capability.fidelity == MetadataFidelity.LOSSY
+    assert result.capability.source == MetadataSource.DRIVER_METADATA
+    assert result.warnings
+    constraint_items = [cast("Any", item) for item in result.items]
+    assert [item.identity.name for item in constraint_items] == ["uq_items_name", "ck_items_qty"]
+    assert [item.attributes["constraint_type"] for item in constraint_items] == ["UNIQUE", "CHECK"]
+    assert all(item.attributes["is_lossy"] is True for item in constraint_items)
+
+
+def test_adbc_ddl_is_unsupported_without_dialect_pack() -> None:
+    """ADBC transport metadata should not claim lossless DDL."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+
+    result = AdbcDataDictionary().get_ddl(driver, "items", schema="main")
+
+    assert result.capability.support == MetadataSupport.UNSUPPORTED
+    assert result.capability.source == MetadataSource.DRIVER_METADATA
+    assert result.items
+    ddl = cast("Any", result.items[0])
+    assert ddl.ddl is None
+    assert ddl.status == MetadataSupport.UNSUPPORTED
+    assert ddl.fidelity == MetadataFidelity.UNSUPPORTED
+    assert ddl.source == MetadataSource.DRIVER_METADATA
+    assert ddl.warnings
+
+
+def test_get_statistics_uses_native_statistic_names_when_available() -> None:
+    """ADBC statistic-name metadata should replace built-in fallback labels."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_statistics.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_statistics": [
+                        {
+                            "table_name": "items",
+                            "column_name": None,
+                            "statistic_key": 777,
+                            "statistic_value": 3,
+                            "statistic_is_approximate": False,
+                        }
+                    ],
+                }
+            ],
+        }
+    ])
+    driver.connection.adbc_get_statistic_names.return_value = _make_reader([
+        {"statistic_key": 777, "statistic_name": "vendor.custom_count"}
+    ])
+
+    statistics = AdbcDataDictionary().get_statistics(driver, "items", approximate=False)
+
+    assert statistics[0]["statistic_name"] == "vendor.custom_count"
+    assert statistics[0]["is_approximate"] is False
+    driver.connection.adbc_get_statistic_names.assert_called_once()

@@ -6,8 +6,16 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
     TableMetadata,
     VersionInfo,
     get_data_dictionary_loader,
@@ -18,6 +26,8 @@ from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
     from sqlspec.core import SQL
     from sqlspec.data_dictionary._types import DialectConfig
@@ -25,6 +35,29 @@ if TYPE_CHECKING:
 __all__ = ("ArrowOdbcDataDictionary",)
 
 _ARROW_DECIMAL_FORMAT: Final = "DECIMAL({precision},{scale})"
+_ODBC_METADATA_DOMAINS: Final = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "routines",
+    "privileges",
+    "dependencies",
+    "ddl",
+    "system",
+    "odbc_catalog",
+)
+_ODBC_CATALOG_UNAVAILABLE_WARNING: Final = (
+    "arrow-odbc does not expose SQLGetInfo, SQLGetFunctions, or raw ODBC catalog functions through its Python "
+    "Connection API."
+)
+_ODBC_DDL_UNSUPPORTED_WARNING: Final = "Arrow ODBC transport metadata is not a lossless DDL source."
+_ODBC_COLUMN_PARTIAL_WARNING: Final = (
+    "Arrow ODBC column metadata comes from dialect SQL packs or zero-row Arrow schema probes, not SQLColumns."
+)
 
 
 def _arrow_type_to_sql(data_type: Any) -> str:
@@ -81,6 +114,15 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         """Return raw SQL text for a named runtime dialect query."""
         loader = get_data_dictionary_loader()
         return loader.get_query_text(self._dialect, name)
+
+    def get_metadata_capabilities(
+        self, driver: "ArrowOdbcDriver", domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Report Arrow ODBC metadata capabilities without claiming raw catalog support."""
+        _ = driver
+        requested_domains = tuple(domains or _ODBC_METADATA_DOMAINS)
+        capabilities = tuple(self._capability_for_domain(domain) for domain in requested_domains)
+        return MetadataCapabilityProfile(dialect=self._dialect, adapter="arrow_odbc", capabilities=capabilities)
 
     def resolve_schema(self, schema: str | None) -> str | None:
         """Return a schema name using runtime dialect defaults when missing."""
@@ -210,3 +252,84 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(self.get_query(query_name), schema_type=ForeignKeyMetadata, **parameters)
         except SQLFileNotFoundError:
             return []
+
+    def get_ddl(self, driver: "ArrowOdbcDriver", object_name: str, schema: str | None = None) -> MetadataResult:
+        """Fail closed because arrow-odbc does not expose lossless DDL metadata."""
+        _ = driver
+        schema_name = self.resolve_schema(schema)
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type="object",
+            schema=schema_name,
+            dialect=self._dialect,
+            source=MetadataSource.DRIVER_METADATA,
+        )
+        capability = MetadataCapability(
+            domain="ddl",
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ODBC_DDL_UNSUPPORTED_WARNING,),
+        )
+        ddl = DDLResult(
+            identity=identity,
+            status=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.DRIVER_METADATA,
+            ddl=None,
+            warnings=capability.warnings,
+        )
+        return MetadataResult(domain="ddl", capability=capability, items=(ddl,), warnings=capability.warnings)
+
+    def _capability_for_domain(self, domain: str) -> MetadataCapability:
+        if domain == "odbc_catalog":
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=(_ODBC_CATALOG_UNAVAILABLE_WARNING,),
+            )
+        if domain == "ddl":
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.UNSUPPORTED,
+                fidelity=MetadataFidelity.UNSUPPORTED,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=(_ODBC_DDL_UNSUPPORTED_WARNING,),
+            )
+        if domain == "columns":
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.PARTIAL,
+                source=MetadataSource.DRIVER_METADATA,
+                warnings=(_ODBC_COLUMN_PARTIAL_WARNING,),
+            )
+        query_by_domain = {
+            "tables": "tables_by_schema",
+            "indexes": "indexes_by_schema",
+            "foreign_keys": "foreign_keys_by_schema",
+        }
+        query_name = query_by_domain.get(domain)
+        if query_name is not None and self._has_query(query_name):
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.NATIVE,
+                source=MetadataSource.CATALOG,
+            )
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ODBC_CATALOG_UNAVAILABLE_WARNING,),
+        )
+
+    def _has_query(self, name: str) -> bool:
+        try:
+            self.get_query(name)
+        except SQLFileNotFoundError:
+            return False
+        return True
