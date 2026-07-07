@@ -478,8 +478,9 @@ class SQL:
         self._is_many = sql_obj.is_many
         self._is_script = sql_obj.is_script
         self._declared_parameters = sql_obj._declared_parameters
-        if sql_obj.is_processed:
-            self._processed_state = sql_obj.get_processed_state()
+        source_state = sql_obj.get_processed_state()
+        if source_state is not Empty:
+            self._processed_state = source_state
 
     @staticmethod
     def _should_auto_detect_many(parameters: tuple) -> bool:
@@ -611,9 +612,10 @@ class SQL:
     @property
     def operation_type(self) -> "OperationType":
         """SQL operation type."""
-        if self._processed_state is Empty:
+        state = self._processed_state
+        if state is Empty:
             return "COMMAND"
-        return self._processed_state.operation_type
+        return state.operation_type
 
     @property
     def statement_config(self) -> "StatementConfig":
@@ -626,8 +628,9 @@ class SQL:
 
         This intentionally mirrors statement_expression for compatibility.
         """
-        if self._processed_state is not Empty:
-            return self._processed_state.parsed_expression
+        state = self._processed_state
+        if state is not Empty:
+            return state.parsed_expression
         return self._raw_expression
 
     @property
@@ -651,7 +654,8 @@ class SQL:
     @property
     def is_processed(self) -> bool:
         """Check if SQL has been processed (public API)."""
-        return self._processed_state is not Empty
+        state = self._processed_state
+        return state is not Empty
 
     def get_processed_state(self) -> Any:
         """Get processed state (public API)."""
@@ -671,8 +675,9 @@ class SQL:
         Returns:
             Parsed SQLGlot expression or None if not parsed
         """
-        if self._processed_state is not Empty:
-            return self._processed_state.parsed_expression
+        state = self._processed_state
+        if state is not Empty:
+            return state.parsed_expression
         return self._raw_expression
 
     @property
@@ -688,16 +693,18 @@ class SQL:
     @property
     def validation_errors(self) -> "list[str]":
         """Validation errors."""
-        if self._processed_state is Empty:
+        state = self._processed_state
+        if state is Empty:
             return []
-        return self._processed_state.validation_errors.copy()
+        return state.validation_errors.copy()
 
     @property
     def has_errors(self) -> bool:
         """Check if there are validation errors."""
-        if self._processed_state is Empty:
+        state = self._processed_state
+        if state is Empty:
             return False
-        return bool(self._processed_state.validation_errors)
+        return bool(state.validation_errors)
 
     def returns_rows(self) -> bool:
         """Check if statement returns rows.
@@ -705,21 +712,23 @@ class SQL:
         Returns:
             True if the SQL statement returns result rows
         """
-        if self._processed_state is Empty:
+        state = self._processed_state
+        if state is Empty:
             self.compile()
-            if self._processed_state is Empty:
+            state = self._processed_state
+            if state is Empty:
                 return False
 
-        profile = self._processed_state.operation_profile
+        profile = state.operation_profile
         if profile.returns_rows:
             return True
 
-        op_type = self._processed_state.operation_type
+        op_type = state.operation_type
         if op_type in RETURNS_ROWS_OPERATIONS:
             return True
 
-        if self._processed_state.parsed_expression:
-            expr = self._processed_state.parsed_expression
+        if state.parsed_expression:
+            expr = state.parsed_expression
             if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)) and expr.args.get("returning"):
                 return True
 
@@ -731,19 +740,20 @@ class SQL:
         Returns:
             True if the operation modifies data (INSERT/UPDATE/DELETE)
         """
-        if self._processed_state is Empty:
+        state = self._processed_state
+        if state is Empty:
             return False
 
-        profile = self._processed_state.operation_profile
+        profile = state.operation_profile
         if profile.modifies_rows:
             return True
 
-        op_type = self._processed_state.operation_type
+        op_type = state.operation_type
         if op_type in MODIFYING_OPERATIONS:
             return True
 
-        if self._processed_state.parsed_expression:
-            return isinstance(self._processed_state.parsed_expression, (exp.Insert, exp.Update, exp.Delete, exp.Merge))
+        if state.parsed_expression:
+            return isinstance(state.parsed_expression, (exp.Insert, exp.Update, exp.Delete, exp.Merge))
 
         return False
 
@@ -753,63 +763,57 @@ class SQL:
         Returns:
             Tuple of compiled SQL string and execution parameters
         """
-        if self._processed_state is not Empty:
-            if self._compiled_from_cache:
-                state = self._processed_state
-                if state.execution_parameters is None:
-                    self._processed_state = Empty
-                    self._compiled_from_cache = False
-                else:
-                    can_reuse = (
-                        not self._statement_config.parameter_config.needs_static_script_compilation
-                        and self._can_reuse_cached_state(state)
-                    )
-                    if can_reuse:
-                        return self._rebind_cached_parameters(state)
-                    self._processed_state = Empty
-                    self._compiled_from_cache = False
-            else:
-                return self._processed_state.compiled_sql, self._processed_state.execution_parameters
-        if self._processed_state is Empty:
-            try:
-                config = self._statement_config
-                raw_sql = self._materialized_raw_sql()
-                params = self._named_parameters or self._positional_parameters
-                is_many = self._is_many
-                param_fingerprint = structural_fingerprint(params, is_many=is_many)
-                pipeline_fingerprint: Any | None = (
-                    None if config.parameter_config.needs_static_script_compilation else param_fingerprint
-                )
-                compiled_result = pipeline.compile_with_pipeline(
-                    config,
-                    raw_sql,
-                    params,
-                    is_many=is_many,
-                    expression=self._raw_expression,
-                    param_fingerprint=pipeline_fingerprint,
-                )
+        state = self._processed_state
+        if state is not Empty:
+            if not self._compiled_from_cache:
+                return state.compiled_sql, state.execution_parameters
+            if state.execution_parameters is not None and (
+                not self._statement_config.parameter_config.needs_static_script_compilation
+                and self._can_reuse_cached_state(state)
+            ):
+                return self._rebind_cached_parameters(state)
 
-                self._processed_state = self._build_processed_state(
-                    compiled_sql=compiled_result.compiled_sql,
-                    execution_parameters=compiled_result.execution_parameters,
-                    parsed_expression=compiled_result.expression,
-                    operation_type=compiled_result.operation_type,
-                    input_named_parameters=compiled_result.input_named_parameters,
-                    applied_wrap_types=compiled_result.applied_wrap_types,
-                    filter_hash=hash_filters(self._filters),
-                    parameter_fingerprint=param_fingerprint,
-                    parameter_casts=compiled_result.parameter_casts,
-                    parameter_profile=compiled_result.parameter_profile,
-                    operation_profile=compiled_result.operation_profile,
-                    validation_errors=[],
-                    is_many=self._is_many,
-                )
-            except sqlspec.exceptions.SQLSpecError:
-                raise
-            except Exception as e:
-                self._processed_state = self._handle_compile_failure(e)
+        try:
+            config = self._statement_config
+            raw_sql = self._materialized_raw_sql()
+            params = self._named_parameters or self._positional_parameters
+            is_many = self._is_many
+            param_fingerprint = structural_fingerprint(params, is_many=is_many)
+            pipeline_fingerprint: Any | None = (
+                None if config.parameter_config.needs_static_script_compilation else param_fingerprint
+            )
+            compiled_result = pipeline.compile_with_pipeline(
+                config,
+                raw_sql,
+                params,
+                is_many=is_many,
+                expression=self._raw_expression,
+                param_fingerprint=pipeline_fingerprint,
+            )
 
-        return self._processed_state.compiled_sql, self._processed_state.execution_parameters
+            new_state = self._build_processed_state(
+                compiled_sql=compiled_result.compiled_sql,
+                execution_parameters=compiled_result.execution_parameters,
+                parsed_expression=compiled_result.expression,
+                operation_type=compiled_result.operation_type,
+                input_named_parameters=compiled_result.input_named_parameters,
+                applied_wrap_types=compiled_result.applied_wrap_types,
+                filter_hash=hash_filters(self._filters),
+                parameter_fingerprint=param_fingerprint,
+                parameter_casts=compiled_result.parameter_casts,
+                parameter_profile=compiled_result.parameter_profile,
+                operation_profile=compiled_result.operation_profile,
+                validation_errors=[],
+                is_many=self._is_many,
+            )
+        except sqlspec.exceptions.SQLSpecError:
+            raise
+        except Exception as e:
+            new_state = self._handle_compile_failure(e)
+
+        self._processed_state = new_state
+        self._compiled_from_cache = False
+        return new_state.compiled_sql, new_state.execution_parameters
 
     def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
         params = self._named_parameters or self._positional_parameters
@@ -917,8 +921,10 @@ class SQL:
         new_sql._pooled = True
 
         # Reset mutable state
-        new_sql._compiled_from_cache = self._processed_state is not Empty
-        new_sql._processed_state = self._processed_state if self._processed_state is not Empty else Empty
+        source_state = self._processed_state
+        is_processed = source_state is not Empty
+        new_sql._compiled_from_cache = is_processed
+        new_sql._processed_state = source_state if is_processed else Empty
         new_sql._hash = None
         new_sql._filters = self._filters.copy()
         new_sql._named_parameters = {}
@@ -1028,20 +1034,16 @@ class SQL:
             The SQLGlot expression for this statement
         """
         # Preserve authoring-time parameter names when applying dynamic query modifiers.
-        if (
-            self._processed_state is not Empty
-            and self._processed_state.input_named_parameters
-            and self._raw_expression is None
-            and self._raw_sql
-        ):
+        state = self._processed_state
+        if state is not Empty and state.input_named_parameters and self._raw_expression is None and self._raw_sql:
             try:
                 parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
                 if isinstance(parsed, exp.Expr):
                     return parsed
             except ParseError:
                 pass
-        if self._processed_state is not Empty and self._processed_state.parsed_expression is not None:
-            return self._processed_state.parsed_expression.copy()
+        if state is not Empty and state.parsed_expression is not None:
+            return state.parsed_expression.copy()
         # Then check statement_expression (from compilation)
         if self.statement_expression is not None:
             return self.statement_expression.copy()
@@ -1524,6 +1526,7 @@ class SQL:
         converted_sql, converted_params = converter.convert_placeholder_style(
             raw_sql_for_builder, raw_params, ParameterStyle.NAMED_COLON, is_many=False
         )
+        state = self._processed_state
 
         if (
             self._raw_expression is not None
@@ -1532,12 +1535,12 @@ class SQL:
         ):
             expression = self._raw_expression.copy()
         elif (
-            self._processed_state is not Empty
-            and self._processed_state.parsed_expression is not None
+            state is not Empty
+            and state.parsed_expression is not None
             and converted_sql == raw_sql_for_builder
             and builder_dialect == self._dialect
         ):
-            expression = self._processed_state.parsed_expression.copy()
+            expression = state.parsed_expression.copy()
         else:
             try:
                 expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)

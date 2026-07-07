@@ -113,6 +113,69 @@ def _check_sqlspec_construction() -> dict[str, Any]:
     return result
 
 
+def _check_statement_sentinel_identity(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Check that statement and typing modules share the same Empty sentinel."""
+    result = _new_smoke_result(
+        name="statement_sentinel_identity",
+        module="sqlspec.core.statement",
+        attribute="Empty",
+        compiled_required=require_compiled,
+    )
+    try:
+        statement_module = importlib.import_module("sqlspec.core.statement")
+        private_typing = importlib.import_module("sqlspec._typing")
+        public_typing = importlib.import_module("sqlspec.typing")
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(statement_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+    try:
+        assert statement_module.Empty is private_typing.Empty is public_typing.Empty
+    except AssertionError as exc:
+        result["error"] = f"{type(exc).__name__}: Empty sentinel identity mismatch"
+    return result
+
+
+def _check_statement_cache_rebind(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise a cache-hit copy, parameter rebind, and expression snapshot."""
+    result = _new_smoke_result(
+        name="statement_cache_rebind",
+        module="sqlspec.core.statement",
+        attribute="SQL",
+        compiled_required=require_compiled,
+    )
+    try:
+        statement_module = importlib.import_module("sqlspec.core.statement")
+        sqlglot_exp = importlib.import_module("sqlglot.expressions")
+        sql_cls = statement_module.SQL
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(statement_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+    try:
+        original = sql_cls("SELECT * FROM t WHERE id = :id", {"id": 1})
+        original.compile()
+        copy = original.copy(parameters={"id": 2})
+        assert copy._compiled_from_cache is True
+        assert copy.get_processed_state() is original.get_processed_state()
+        copy.compile()
+        expression = copy._current_expression()
+        assert isinstance(expression, sqlglot_exp.Expr)
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Import the compiled-wheel smoke matrix and return per-entry results."""
     results: list[dict[str, Any]] = []
@@ -284,6 +347,8 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
     """Run construction-time smoke checks for provider classes."""
     return [
         _check_sqlspec_construction(),
+        _check_statement_sentinel_identity(require_compiled=require_compiled),
+        _check_statement_cache_rebind(require_compiled=require_compiled),
         _check_fastapi_filter_construction(require_compiled=require_compiled),
         _check_litestar_filter_construction(require_compiled=require_compiled),
     ]

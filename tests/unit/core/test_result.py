@@ -78,6 +78,25 @@ def test_sql_result_helpers_do_not_upper_operation_type() -> None:
     assert result.get_data() == []
 
 
+def test_arrow_result_operation_type_survives_statement_reset() -> None:
+    stmt = SQL("SELECT * FROM users")
+    stmt.compile()
+    result = ArrowResult(statement=stmt, data=None)
+
+    stmt.reset()
+
+    assert stmt.operation_type == "COMMAND"
+    assert result.operation_type == "SELECT"
+
+
+def test_sql_result_operation_type_explicit_value_overrides_base_snapshot() -> None:
+    stmt = SQL("SELECT * FROM users")
+    stmt.compile()
+    result = SQLResult(statement=stmt, operation_type="INSERT")
+
+    assert result.operation_type == "INSERT"
+
+
 def test_stack_result_type_does_not_upper_sql_result_operation_type() -> None:
     stmt = SQL("SELECT * FROM users")
     result = SQLResult(statement=stmt, operation_type=_operation_type("SELECT"), data=[])

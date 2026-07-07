@@ -143,8 +143,22 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
     assert {result["name"] for result in results} == {
         "fastapi_filter_construction",
         "litestar_filter_construction",
+        "statement_cache_rebind",
+        "statement_sentinel_identity",
         "sqlspec_construction",
     }
+
+
+def test_statement_construction_checks_pass_without_requiring_compilation() -> None:
+    module = _load_mypyc_smoke_module()
+
+    results = module.run_construction_checks(require_compiled=False)
+    result_by_name = {result["name"]: result for result in results}
+
+    for name in ("statement_cache_rebind", "statement_sentinel_identity"):
+        result = result_by_name[name]
+        assert result["imported"] is True
+        assert result["error"] is None
 
 
 def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) -> None:
