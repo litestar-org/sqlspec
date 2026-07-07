@@ -1,7 +1,10 @@
 """Shared adapter native metadata and statistics contracts."""
 
+from typing import Any, cast
+
 import pytest
 
+from sqlspec.data_dictionary import MetadataSupport, SystemMetadataRequest, SystemMetadataResult
 from tests.integration.adapters.contracts._cases import (
     DriverCaseContext,
     async_driver_params_with,
@@ -88,6 +91,42 @@ async def test_async_data_dictionary_capability_contract(async_capability_driver
     assert isinstance(case.supports_data_dictionary_dependencies, bool)
     assert isinstance(case.supports_data_dictionary_system, bool)
     assert isinstance(case.supports_data_dictionary_transport_metadata, bool)
+
+
+@pytest.mark.parametrize(
+    "sync_capability_driver_case", sync_driver_params_with("supports_data_dictionary"), indirect=True
+)
+def test_sync_data_dictionary_system_metadata_disabled_by_default(
+    sync_capability_driver_case: DriverCaseContext,
+) -> None:
+    """Sync system metadata contract fails closed without explicit opt-in."""
+    data_dictionary = cast("Any", sync_capability_driver_case.driver).data_dictionary
+
+    result = data_dictionary.get_system_metadata(
+        sync_capability_driver_case.driver, SystemMetadataRequest(domain="sessions")
+    )
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.GATED
+    assert result.rows == ()
+
+
+@pytest.mark.parametrize(
+    "async_capability_driver_case", async_driver_params_with("supports_data_dictionary"), indirect=True
+)
+async def test_async_data_dictionary_system_metadata_disabled_by_default(
+    async_capability_driver_case: DriverCaseContext,
+) -> None:
+    """Async system metadata contract fails closed without explicit opt-in."""
+    data_dictionary = cast("Any", async_capability_driver_case.driver).data_dictionary
+
+    result = await data_dictionary.get_system_metadata(
+        async_capability_driver_case.driver, SystemMetadataRequest(domain="sessions")
+    )
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.GATED
+    assert result.rows == ()
 
 
 @pytest.mark.parametrize(

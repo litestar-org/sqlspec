@@ -47,6 +47,9 @@ if TYPE_CHECKING:
         IndexMetadata,
         MetadataCapabilityProfile,
         MetadataResult,
+        SystemMetadataCapability,
+        SystemMetadataRequest,
+        SystemMetadataResult,
         TableMetadata,
         VersionInfo,
     )
@@ -1891,11 +1894,27 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             "privileges",
             "dependencies",
             "ddl",
-            "system",
         )
         if domains is not None:
             requested_domains = tuple(domains)
         return MetadataCapabilityProfile.from_domains(self.dialect, type(self).__name__, requested_domains)
+
+    async def get_system_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "tuple[SystemMetadataCapability, ...]":
+        """Get opt-in system metadata capability disclosures.
+
+        Args:
+            driver: Async database driver instance.
+            domains: Optional system metadata domains to report.
+
+        Returns:
+            System metadata capabilities. Base implementations report requested domains as unsupported.
+        """
+        from sqlspec.data_dictionary import DEFAULT_SYSTEM_METADATA_DOMAINS, system_metadata_capabilities_from_domains
+
+        requested_domains = DEFAULT_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
+        return system_metadata_capabilities_from_domains(requested_domains)
 
     async def get_schemas(self, driver: Any) -> "MetadataResult":
         """Get schema metadata or an unsupported-domain result."""
@@ -1940,10 +1959,18 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         return self._unsupported_metadata("ddl")
 
     async def get_system_metadata(
-        self, driver: Any, domain: str, *, include_sensitive: bool = False
-    ) -> "MetadataResult":
-        """Get opt-in system metadata or an unsupported-domain result."""
-        return self._unsupported_metadata("system")
+        self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
+    ) -> "SystemMetadataResult":
+        """Get opt-in system metadata or a gated/unsupported result."""
+        from sqlspec.data_dictionary import (
+            ensure_system_metadata_request,
+            system_metadata_gated_result,
+            unsupported_system_metadata_capability,
+        )
+
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = unsupported_system_metadata_capability(metadata_request.domain)
+        return system_metadata_gated_result(metadata_request, capability)
 
     @abstractmethod
     async def get_version(self, driver: Any) -> "VersionInfo | None":
