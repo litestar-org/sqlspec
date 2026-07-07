@@ -67,6 +67,7 @@ destroy:                                            ## Destroy the virtual envir
 	@echo "${INFO} Destroying virtual environment... 🗑️"
 	@uv run pre-commit clean >/dev/null 2>&1
 	@rm -rf .venv
+	@find sqlspec \( -name '*.so' -o -name '*.c' \) -delete >/dev/null 2>&1 || true
 	@echo "${OK} Virtual environment destroyed 🗑️"
 
 # =============================================================================

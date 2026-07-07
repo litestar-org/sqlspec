@@ -71,7 +71,17 @@ class StatementResult(ABC, Iterable[Any]):
         metadata: Additional metadata about the operation.
     """
 
-    __slots__ = ("data", "execution_time", "last_inserted_id", "metadata", "rows_affected", "statement")
+    __slots__ = (
+        "_operation_type",
+        "data",
+        "execution_time",
+        "last_inserted_id",
+        "metadata",
+        "rows_affected",
+        "statement",
+    )
+
+    _operation_type: "OperationType"
 
     def __init__(
         self,
@@ -93,6 +103,7 @@ class StatementResult(ABC, Iterable[Any]):
             metadata: Additional metadata about the operation.
         """
         self.statement = statement
+        self._operation_type = statement.operation_type
         self.data = data
         self.rows_affected = rows_affected
         self.last_inserted_id = last_inserted_id
@@ -147,7 +158,7 @@ class StatementResult(ABC, Iterable[Any]):
         Returns:
             The type of SQL operation that produced this result.
         """
-        return self.statement.operation_type
+        return self._operation_type
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -163,7 +174,6 @@ class SQLResult(StatementResult):
 
     __slots__ = (
         "_materialized_dicts",
-        "_operation_type",
         "_row_format",
         "_schema_row_cache",
         "_schema_rows_cache",
@@ -179,8 +189,6 @@ class SQLResult(StatementResult):
         "total_count",
         "total_statements",
     )
-
-    _operation_type: "OperationType"
 
     def __init__(
         self,
@@ -259,15 +267,6 @@ class SQLResult(StatementResult):
                 self.column_names = list(first_row.keys())
         if self.total_count is None:
             self.total_count = len(data) if data is not None else 0
-
-    @property
-    def operation_type(self) -> "OperationType":
-        """Get operation type for this result.
-
-        Returns:
-            The type of SQL operation that produced this result.
-        """
-        return self._operation_type
 
     def _get_rows(self) -> "list[dict[str, Any]]":
         """Get row data as list of dicts, materializing lazily from raw format.
