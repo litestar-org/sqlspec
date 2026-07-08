@@ -26,7 +26,7 @@ def test_domain_query_lookup() -> None:
     assert query.capability.support == MetadataSupport.SUPPORTED
     assert isinstance(query.sql, SQL)
     assert query.query_text is not None
-    assert "information_schema.tables" in query.query_text
+    assert "pg_catalog.pg_class" in query.query_text
     assert loader.get_domain_query_text("postgres", "objects", "by_schema") == query.query_text
 
 
@@ -34,14 +34,14 @@ def test_missing_domain_returns_unsupported_status() -> None:
     """Missing domain query files report unsupported instead of false-empty metadata."""
     loader = DataDictionaryLoader()
 
-    query = loader.get_domain_query("postgres", "privileges", "by_schema")
+    query = loader.get_domain_query("postgres", "policies", "by_schema")
 
     assert query.is_supported is False
     assert query.sql is None
     assert query.query_text is None
     assert query.capability.support == MetadataSupport.UNSUPPORTED
     assert query.capability.source == MetadataSource.UNKNOWN
-    assert query.capability.warnings == ("No data-dictionary query found for postgres/privileges/by_schema",)
+    assert query.capability.warnings == ("No data-dictionary query found for postgres/policies/by_schema",)
 
 
 def test_dialect_mode_dispatch() -> None:
