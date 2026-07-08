@@ -350,10 +350,8 @@ class MysqlConnectorSyncConfig(
 
     def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
         """Acquire and initialize a sync mysql-connector connection."""
-        if self.connection_instance is not None:
-            connection = cast("MysqlConnectorSyncConnection", self.connection_instance.get_connection())
-        else:
-            connection = self.create_connection()
+        pool = self.provide_pool()
+        connection = cast("MysqlConnectorSyncConnection", pool.get_connection())
         self._ensure_connection(connection)
         return connection
 
