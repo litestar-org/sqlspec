@@ -19,7 +19,6 @@ _DIALECTS_LOADED: bool = False
 DIALECT_ALIASES: dict[str, str] = {
     "postgresql": "postgres",
     "pg": "postgres",
-    "mariadb": "mysql",
     "cockroach": "cockroachdb",
     "tsql": "mssql",
     "sqlserver": "mssql",

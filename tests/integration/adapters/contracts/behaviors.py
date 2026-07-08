@@ -6161,6 +6161,26 @@ def _data_dictionary_schema_for_case(case: DriverCase) -> str:
 
 
 def _data_dictionary_topology_sql(case: DriverCase, users: str, orders: str, items: str, index_name: str) -> str:
+    if case.dialect == "mysql":
+        return f"""
+            CREATE TABLE {users} (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(50)
+            ) ENGINE=InnoDB;
+            CREATE TABLE {orders} (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                amount INTEGER,
+                FOREIGN KEY (user_id) REFERENCES {users}(id)
+            ) ENGINE=InnoDB;
+            CREATE TABLE {items} (
+                id INTEGER PRIMARY KEY,
+                order_id INTEGER,
+                name VARCHAR(50),
+                FOREIGN KEY (order_id) REFERENCES {orders}(id)
+            ) ENGINE=InnoDB;
+            CREATE INDEX {index_name} ON {users}(name);
+        """
     if case.dialect not in {"postgres", "sqlite"}:
         msg = f"{case.id} has no topology DDL contract"
         raise ValueError(msg)

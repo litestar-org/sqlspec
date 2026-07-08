@@ -1384,16 +1384,24 @@ class FeatureFlags(TypedDict, total=False):
     supports_clustering: bool
     supports_crdb_internal_metadata: bool
     supports_cte: bool
+    supports_events: bool
+    supports_generated_columns: bool
     supports_generators: bool
     supports_for_update: bool
     supports_geography: bool
     supports_in_memory: bool
     supports_index_clustering: bool
+    supports_invisible_columns: bool
+    supports_invisible_indexes: bool
     supports_interleaved_tables: bool
     supports_json: bool
     supports_maps: bool
     supports_partitioning: bool
     supports_prepared_statements: bool
+    supports_resource_groups: bool
+    supports_roles: bool
+    supports_sequences: bool
+    supports_system_versioned_tables: bool
     supports_returning: bool
     supports_schemas: bool
     supports_skip_locked: bool
@@ -1408,11 +1416,21 @@ class FeatureVersions(TypedDict, total=False):
     """Typed feature version requirements for data dictionary dialects."""
 
     supports_cte: "VersionInfo"
+    supports_check_constraints: "VersionInfo"
+    supports_events: "VersionInfo"
+    supports_generated_columns: "VersionInfo"
+    supports_histograms: "VersionInfo"
+    supports_invisible_columns: "VersionInfo"
+    supports_invisible_indexes: "VersionInfo"
     supports_json: "VersionInfo"
     supports_jsonb: "VersionInfo"
     supports_partitioning: "VersionInfo"
+    supports_resource_groups: "VersionInfo"
     supports_returning: "VersionInfo"
+    supports_roles: "VersionInfo"
+    supports_sequences: "VersionInfo"
     supports_skip_locked: "VersionInfo"
+    supports_system_versioned_tables: "VersionInfo"
     supports_upsert: "VersionInfo"
     supports_window_functions: "VersionInfo"
 

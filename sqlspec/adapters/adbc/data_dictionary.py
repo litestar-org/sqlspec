@@ -356,7 +356,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         # Not cached, fetch from database
 
         try:
-            version_value = driver.select_value_or_none(self._get_query(dialect, "version"))
+            version_query_dialect = "mysql" if dialect == "mariadb" else dialect
+            version_value = driver.select_value_or_none(self._get_query(version_query_dialect, "version"))
         except Exception:
             self._log_version_unavailable(dialect, "query_failed")
             self.cache_version(driver_id, None)
@@ -404,7 +405,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 return resolve_postgres_json_type(version_info)
             if dialect == "sqlite":
                 return resolve_sqlite_json_type(version_info)
-            if dialect == "mysql":
+            if dialect in {"mysql", "mariadb"}:
                 return resolve_mysql_json_type(version_info)
             if dialect == "cockroachdb":
                 return resolve_cockroachdb_json_type(version_info)
