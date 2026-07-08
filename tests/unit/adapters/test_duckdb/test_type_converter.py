@@ -28,12 +28,17 @@ class _ArrowCursor:
     def __init__(self) -> None:
         self.executed: list[tuple[str, object]] = []
         self.reader_calls: list[int | None] = []
+        self.description = [("id", "INTEGER")]
 
     def execute(self, sql: str, parameters: object) -> None:
         self.executed.append((sql, parameters))
 
     def arrow(self) -> object:
         msg = "select_to_arrow should use DuckDB cursor.to_arrow_table()"
+        raise AssertionError(msg)
+
+    def fetch_arrow_table(self) -> pa.Table:
+        msg = "dispatch_execute should use DuckDB cursor.to_arrow_table()"
         raise AssertionError(msg)
 
     def to_arrow_table(self) -> pa.Table:
@@ -71,6 +76,16 @@ def test_arrow_select_to_arrow_uses_to_arrow_table() -> None:
     driver = _ArrowDriver(cursor)
     result = driver.select_to_arrow("SELECT 1 AS id")
     assert result.get_data().to_pydict() == {"id": [1]}
+    assert cursor.executed == [("SELECT 1 AS id", ())]
+
+
+def test_dispatch_execute_select_uses_to_arrow_table() -> None:
+    cursor = _ArrowCursor()
+    driver = _ArrowDriver(cursor)
+
+    result = driver.select("SELECT 1 AS id")
+
+    assert result == [{"id": 1}]
     assert cursor.executed == [("SELECT 1 AS id", ())]
 
 

@@ -120,7 +120,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            arrow_table = cursor.fetch_arrow_table()
+            arrow_table = cursor.to_arrow_table()
             data = arrow_table.to_pylist()
             _restore_uuid_columns(data, cursor.description)
             column_names = list(arrow_table.column_names)
