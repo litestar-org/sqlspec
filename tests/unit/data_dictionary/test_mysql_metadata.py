@@ -13,8 +13,11 @@ from sqlspec.data_dictionary import (
     DataDictionaryLoader,
     DDLResult,
     MetadataFidelity,
+    MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     get_dialect_config,
     normalize_dialect_name,
 )
@@ -38,6 +41,10 @@ class _SyncDDLDriver:
         if "VERSION()" in query:
             return "8.4.0"
         return None
+
+    def select(self, statement: str, *args: Any, **kwargs: Any) -> list[dict[str, object]]:
+        self.statements.append(str(statement))
+        return [{"table_schema": "shop", "table_name": "orders", "rows_fetched": 5}]
 
 
 @pytest.mark.parametrize(
@@ -147,15 +154,37 @@ def test_mysql_native_ddl_records_sql_mode() -> None:
     driver = _SyncDDLDriver()
     result = PyMysqlDataDictionary().get_ddl(cast(Any, driver), "orders", schema="shop")
 
-    assert result.capability.support == MetadataSupport.SUPPORTED
-    assert len(result.items) == 1
-    ddl = cast(DDLResult, result.items[0])
-    assert ddl.fidelity == MetadataFidelity.NATIVE
-    assert ddl.source == MetadataSource.NATIVE_API
-    assert ddl.context == {
+    assert isinstance(result, DDLResult)
+    assert result.status == MetadataSupport.SUPPORTED
+    assert result.fidelity == MetadataFidelity.NATIVE
+    assert result.source == MetadataSource.NATIVE_API
+    assert result.context == {
         "engine_family": "mysql",
         "server_version": "8.4.0",
         "sql_mode": "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION",
         "sql_quote_show_create": "1",
     }
     assert driver.statements[-1] == "SHOW CREATE TABLE `shop`.`orders`"
+
+
+def test_mysql_system_metadata_is_gated_by_default() -> None:
+    """System metadata should require explicit opt-in even when the domain is supported."""
+    driver = _SyncDDLDriver()
+    result = PyMysqlDataDictionary().get_system_metadata(cast(Any, driver), "table_statistics")
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.GATED
+    assert MetadataRisk.REDACTED in result.capability.risks
+    assert not result.rows
+
+
+def test_mysql_system_metadata_returns_rows_when_opted_in() -> None:
+    """Opted-in system metadata should use the shared result envelope and redaction path."""
+    driver = _SyncDDLDriver()
+    request = SystemMetadataRequest("table_statistics", include_system=True, schema="shop")
+    result = PyMysqlDataDictionary().get_system_metadata(cast(Any, driver), request)
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.rows == ({"table_schema": "shop", "table_name": "orders", "rows_fetched": 5},)
+    assert "sys.schema_table_statistics" in driver.statements[-1]

@@ -1,24 +1,31 @@
 """MySQL-specific data dictionary for metadata queries via aiomysql."""
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapabilityProfile,
     MetadataResult,
+    MetadataSupport,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
+    system_metadata_gated_result,
 )
 from sqlspec.data_dictionary.dialects.mysql import (
     MySQLEngineVersion,
     build_mysql_metadata_capability_profile,
     build_mysql_show_create_statement,
+    build_mysql_system_metadata_capability,
     make_mysql_ddl_result,
+    mysql_system_metadata_query_name,
     parse_mysql_engine_version,
     resolve_mysql_json_type,
 )
@@ -28,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
+    from sqlspec.data_dictionary import SystemMetadataRequest
 
 __all__ = ("AiomysqlDataDictionary",)
 
@@ -132,48 +140,60 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         return await self._select_domain_result(driver, dialect, "privileges", "by_schema", schema_name=schema_name)
 
     async def get_ddl(
-        self, driver: "AiomysqlDriver", object_name: str, schema: "str | None" = None
-    ) -> "MetadataResult":
+        self,
+        driver: "AiomysqlDriver",
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult":
         """Get native SHOW CREATE output and replay-sensitive context for a table."""
+        _ = include_dependencies, prefer_native, redact
         schema_name = self._resolve_metadata_schema(schema)
         raw_version = await driver.select_value_or_none(self.get_query_text("version"))
         sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
         sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
-        statement = build_mysql_show_create_statement(object_name, schema_name, "TABLE")
+        statement = build_mysql_show_create_statement(object_name, schema_name, object_type)
         row = await driver.select_one(statement, schema_type=dict)
-        ddl = make_mysql_ddl_result(
+        return make_mysql_ddl_result(
             object_name,
             schema_name,
-            "TABLE",
+            object_type,
             row,
             str(raw_version) if raw_version is not None else None,
             str(sql_mode) if sql_mode is not None else None,
             str(sql_quote_show_create) if sql_quote_show_create is not None else None,
         )
-        capability = build_mysql_metadata_capability_profile(
-            ddl.identity.dialect or type(self).dialect, type(self).__name__
-        ).get("ddl")
-        return MetadataResult("ddl", capability=capability, items=(ddl,))
 
     async def get_system_metadata(
-        self, driver: "AiomysqlDriver", domain: str, *, include_sensitive: bool = False
-    ) -> "MetadataResult":
+        self, driver: "AiomysqlDriver", request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
+    ) -> "SystemMetadataResult":
         """Get opt-in system metadata from performance_schema or sys."""
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
         dialect = await self._get_metadata_dialect(driver)
-        capability = build_mysql_metadata_capability_profile(dialect, type(self).__name__).get("system")
-        if not include_sensitive:
-            return MetadataResult("system", capability=capability, warnings=capability.warnings)
-        query_name = (
-            "sys_schema_table_statistics" if domain == "sys_schema_table_statistics" else "performance_schema_tables"
-        )
+        capability = build_mysql_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+        query_name = mysql_system_metadata_query_name(metadata_request.domain)
+        if query_name is None:
+            return gate_result
         query = get_data_dictionary_loader().get_domain_query(dialect, "system", query_name)
         if not query.is_supported or query.sql is None:
-            return MetadataResult.unsupported("system")
+            return gate_result
         if query_name == "sys_schema_table_statistics":
-            rows = await driver.select(query.sql, schema_name=None)
+            rows = await driver.select(query.sql, schema_name=metadata_request.schema)
         else:
             rows = await driver.select(query.sql)
-        return MetadataResult("system", capability=capability, items=tuple(rows))
+        return SystemMetadataResult.from_rows(
+            metadata_request,
+            capability,
+            rows=tuple(cast("dict[str, object]", row) for row in rows),
+            source=capability.source,
+        )
 
     async def get_optimal_type(self, driver: "AiomysqlDriver", type_category: str) -> str:
         """Get optimal MySQL type for a category."""

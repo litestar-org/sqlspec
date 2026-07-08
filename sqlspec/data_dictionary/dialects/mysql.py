@@ -12,6 +12,7 @@ from sqlspec.data_dictionary import (
     MetadataSource,
     MetadataSupport,
     ObjectIdentity,
+    SystemMetadataCapability,
     VersionInfo,
     register_dialect,
 )
@@ -23,8 +24,10 @@ __all__ = (
     "MySQLEngineVersion",
     "build_mysql_metadata_capability_profile",
     "build_mysql_show_create_statement",
+    "build_mysql_system_metadata_capability",
     "format_mysql_identifier",
     "make_mysql_ddl_result",
+    "mysql_system_metadata_query_name",
     "parse_mysql_engine_version",
     "resolve_mysql_json_type",
 )
@@ -293,6 +296,30 @@ def _mysql_metadata_capability(domain: str) -> MetadataCapability:
             warnings=("Sensitive system metadata requires explicit opt-in.",),
         )
     return MetadataCapability.unsupported(domain)
+
+
+def build_mysql_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    """Build system metadata capability disclosures for MySQL-family adapters."""
+    if domain in {"performance_schema_tables", "sys_schema_table_statistics", "table_statistics"}:
+        return SystemMetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+            redaction_fields=("user", "host", "setting", "sql_text"),
+            warnings=("Sensitive system metadata requires explicit opt-in.",),
+        )
+    return SystemMetadataCapability.unsupported(domain, source=MetadataSource.SYSTEM_VIEW)
+
+
+def mysql_system_metadata_query_name(domain: str) -> str | None:
+    """Map public MySQL system metadata domains to query-pack names."""
+    if domain in {"table_statistics", "sys_schema_table_statistics"}:
+        return "sys_schema_table_statistics"
+    if domain == "performance_schema_tables":
+        return "performance_schema_tables"
+    return None
 
 
 def resolve_mysql_json_type(version_info: "VersionInfo | None") -> str:
