@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.data_dictionary import (
         ColumnMetadata,
+        DDLResult,
         ForeignKeyMetadata,
         IndexMetadata,
         MetadataCapabilityProfile,
@@ -945,7 +946,41 @@ class SyncDataDictionaryProtocol(Protocol):
         self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
     ) -> "MetadataResult": ...
 
-    def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult": ...
+    def get_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult": ...
+
+    def get_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None" = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult": ...
+
+    def get_schema_ddl(
+        self,
+        driver: Any,
+        schema: "str | None" = None,
+        *,
+        include_domains: "Sequence[str] | None" = None,
+        exclude_domains: "Sequence[str] | None" = None,
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "MetadataResult": ...
 
     def get_system_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
@@ -1009,7 +1044,41 @@ class AsyncDataDictionaryProtocol(Protocol):
         self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
     ) -> "MetadataResult": ...
 
-    async def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult": ...
+    async def get_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult": ...
+
+    async def get_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None" = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult": ...
+
+    async def get_schema_ddl(
+        self,
+        driver: Any,
+        schema: "str | None" = None,
+        *,
+        include_domains: "Sequence[str] | None" = None,
+        exclude_domains: "Sequence[str] | None" = None,
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "MetadataResult": ...
 
     async def get_system_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None

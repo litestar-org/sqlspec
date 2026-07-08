@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from re import Pattern
 
     from sqlspec.core.statement import SQL
+    from sqlspec.data_dictionary._dependencies import DependencyEdge
 
 __all__ = (
     "ColumnDetails",
@@ -448,7 +449,7 @@ class MetadataQuery:
 class DDLResult:
     """DDL text and fidelity status for one database object."""
 
-    __slots__ = ("ddl", "fidelity", "identity", "source", "status", "warnings")
+    __slots__ = ("context", "ddl", "dependencies", "fidelity", "identity", "redactions", "source", "status", "warnings")
 
     def __init__(
         self,
@@ -458,6 +459,9 @@ class DDLResult:
         fidelity: "MetadataFidelity | str" = MetadataFidelity.UNSUPPORTED,
         source: "MetadataSource | str" = MetadataSource.UNKNOWN,
         ddl: str | None = None,
+        dependencies: "tuple[DependencyEdge, ...]" = (),
+        redactions: "tuple[str, ...]" = (),
+        context: "dict[str, object] | None" = None,
         warnings: "tuple[str, ...]" = (),
     ) -> None:
         self.identity = identity
@@ -465,7 +469,55 @@ class DDLResult:
         self.fidelity = _coerce_fidelity(fidelity)
         self.source = _coerce_source(source)
         self.ddl = ddl
+        self.dependencies = dependencies
+        self.redactions = redactions
+        self.context = {} if context is None else context
         self.warnings = warnings
+
+    @classmethod
+    def unsupported(
+        cls,
+        identity: ObjectIdentity,
+        *,
+        source: "MetadataSource | str" = MetadataSource.UNKNOWN,
+        warnings: "tuple[str, ...]" = (),
+        context: "dict[str, object] | None" = None,
+    ) -> "DDLResult":
+        """Create an explicit unsupported DDL result."""
+        return cls(
+            identity,
+            status=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=source,
+            ddl=None,
+            context=context,
+            warnings=warnings,
+        )
+
+    @classmethod
+    def lossy(
+        cls,
+        identity: ObjectIdentity,
+        *,
+        ddl: str | None,
+        source: "MetadataSource | str",
+        dependencies: "tuple[DependencyEdge, ...]" = (),
+        redactions: "tuple[str, ...]" = (),
+        context: "dict[str, object] | None" = None,
+        warnings: "tuple[str, ...]" = (),
+    ) -> "DDLResult":
+        """Create an explicit lossy DDL result."""
+        return cls(
+            identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.LOSSY,
+            source=source,
+            ddl=ddl,
+            dependencies=dependencies,
+            redactions=redactions,
+            context=context,
+            warnings=warnings,
+        )
 
     def to_dict(self) -> "dict[str, object]":
         """Serialize the DDL result."""
@@ -475,6 +527,9 @@ class DDLResult:
             "fidelity": self.fidelity.value,
             "source": self.source.value,
             "ddl": self.ddl,
+            "dependencies": tuple(_serialize_metadata_item(dependency) for dependency in self.dependencies),
+            "redactions": self.redactions,
+            "context": self.context,
             "warnings": self.warnings,
         }
 
@@ -484,7 +539,17 @@ class DDLResult:
         return self.to_dict() == other.to_dict()
 
     def __hash__(self) -> int:
-        return hash((self.identity, self.status, self.fidelity, self.source, self.ddl, self.warnings))
+        return hash((
+            self.identity,
+            self.status,
+            self.fidelity,
+            self.source,
+            self.ddl,
+            self.dependencies,
+            self.redactions,
+            _hashable_mapping(self.context),
+            self.warnings,
+        ))
 
 
 class ObjectMetadata:
@@ -1471,3 +1536,7 @@ def _serialize_metadata_item(item: object) -> object:
     if callable(to_dict):
         return to_dict()
     return item
+
+
+def _hashable_mapping(value: "dict[str, object]") -> "tuple[tuple[str, str], ...]":
+    return tuple(sorted((key, repr(item)) for key, item in value.items()))

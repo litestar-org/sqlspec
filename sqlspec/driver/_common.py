@@ -1,6 +1,5 @@
 """Common driver attributes and utilities."""
 
-import graphlib
 import hashlib
 import logging
 from collections import OrderedDict
@@ -32,7 +31,15 @@ from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
 from sqlspec.core.statement import ProcessedState
-from sqlspec.data_dictionary import ForeignKeyMetadata, VersionCacheResult, VersionInfo, get_data_dictionary_loader
+from sqlspec.data_dictionary import (
+    ForeignKeyMetadata,
+    ObjectIdentity,
+    VersionCacheResult,
+    VersionInfo,
+    dependency_edges_from_foreign_keys,
+    get_data_dictionary_loader,
+    sort_dependencies,
+)
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
 from sqlspec.driver._storage_helpers import (
@@ -625,7 +632,7 @@ class DataDictionaryMixin:
         }
 
     def sort_tables_topologically(self, tables: "list[str]", foreign_keys: "list[ForeignKeyMetadata]") -> "list[str]":
-        """Sort tables topologically based on foreign key dependencies using Python.
+        """Sort tables topologically based on typed foreign key dependency edges.
 
         Args:
             tables: List of table names.
@@ -634,16 +641,14 @@ class DataDictionaryMixin:
         Returns:
             List of table names in topological order (dependencies first).
         """
-        sorter: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
-        for table in tables:
-            sorter.add(table)
-
+        table_schemas: dict[str, str | None] = {}
         for fk in foreign_keys:
-            if fk.table_name == fk.referenced_table:
-                continue
-            sorter.add(fk.table_name, fk.referenced_table)
-
-        return list(sorter.static_order())
+            table_schemas.setdefault(fk.table_name, fk.schema)
+            table_schemas.setdefault(fk.referenced_table, fk.referenced_schema or fk.schema)
+        table_objects = tuple(ObjectIdentity(table, "table", schema=table_schemas.get(table)) for table in tables)
+        result = sort_dependencies(table_objects, dependency_edges_from_foreign_keys(foreign_keys, source="unknown"))
+        result.raise_for_cycles()
+        return [identity.name for identity in result.ordered]
 
     def _resolve_log_adapter(self) -> str:
         """Resolve adapter identifier for logging."""

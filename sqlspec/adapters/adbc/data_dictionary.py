@@ -698,33 +698,31 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             warnings=capability.warnings,
         )
 
-    def get_ddl(self, driver: "AdbcDriver", object_name: str, schema: "str | None" = None) -> "MetadataResult":
+    def get_ddl(
+        self,
+        driver: "AdbcDriver",
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult":
         """Fail closed because ADBC metadata is not a lossless DDL source."""
+        _ = include_dependencies, prefer_native, redact
         dialect = self._normalize_dialect(driver)
         schema_name = self._resolve_schema(dialect, schema)
         identity = ObjectIdentity(
             name=object_name,
-            object_type="object",
+            object_type=object_type,
             schema=schema_name,
             dialect=dialect,
             source=MetadataSource.DRIVER_METADATA,
         )
-        capability = MetadataCapability(
-            domain="ddl",
-            support=MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.DRIVER_METADATA,
-            warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,),
+        return DDLResult.unsupported(
+            identity, source=MetadataSource.DRIVER_METADATA, warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,)
         )
-        ddl = DDLResult(
-            identity=identity,
-            status=MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.DRIVER_METADATA,
-            ddl=None,
-            warnings=capability.warnings,
-        )
-        return MetadataResult(domain="ddl", capability=capability, items=(ddl,), warnings=capability.warnings)
 
     def get_system_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None

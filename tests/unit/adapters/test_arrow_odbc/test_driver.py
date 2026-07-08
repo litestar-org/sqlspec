@@ -20,7 +20,7 @@ from sqlspec.adapters.arrow_odbc import (
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.core import LimitOffsetFilter, OrderByFilter
-from sqlspec.data_dictionary import MetadataFidelity, MetadataSource, MetadataSupport
+from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError
 
 if TYPE_CHECKING:
@@ -203,6 +203,26 @@ def test_arrow_odbc_data_dictionary_catalog_support_is_explicitly_unavailable_wi
     assert profile.get("columns").support == MetadataSupport.SUPPORTED
     assert profile.get("columns").fidelity == MetadataFidelity.PARTIAL
     assert profile.get("ddl").support == MetadataSupport.UNSUPPORTED
+
+
+def test_arrow_odbc_get_ddl_returns_unsupported_ddl_result() -> None:
+    """arrow-odbc DDL requests should follow the shared DDLResult contract."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
+
+    result = driver.data_dictionary.get_ddl(
+        driver, "items", schema="dbo", object_type="view", include_dependencies=False, prefer_native=False, redact=False
+    )
+
+    assert isinstance(result, DDLResult)
+    assert result.identity.name == "items"
+    assert result.identity.object_type == "view"
+    assert result.identity.schema == "dbo"
+    assert result.status == MetadataSupport.UNSUPPORTED
+    assert result.fidelity == MetadataFidelity.UNSUPPORTED
+    assert result.source == MetadataSource.DRIVER_METADATA
+    assert result.ddl is None
+    assert result.warnings
 
 
 def test_resolve_dialect_from_dbms_name() -> None:
