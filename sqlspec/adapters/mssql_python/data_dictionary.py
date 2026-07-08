@@ -6,15 +6,23 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataSupport,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
     get_dialect_config,
+    system_metadata_gated_result,
 )
 from sqlspec.data_dictionary.dialects.mssql import (
     build_mssql_metadata_capability_profile,
+    build_mssql_system_metadata_capability,
     build_mssql_system_metadata_result,
     build_mssql_table_ddl_result,
     extract_mssql_version_value,
@@ -36,7 +44,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
     from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile, MetadataResult
+    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
 
 __all__ = ("MssqlPythonAsyncDataDictionary", "MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
 
@@ -140,6 +148,14 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
     ) -> "MetadataCapabilityProfile":
         """Get SQL Server replacement data-dictionary capability profile."""
         return build_mssql_metadata_capability_profile(type(self).__name__, domains)
+
+    def get_system_metadata_capabilities(
+        self, driver: "MssqlPythonDriver", domains: "Sequence[str] | None" = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get SQL Server opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("dmv_exec_requests", "query_store_runtime") if domains is None else tuple(domains)
+        return tuple(build_mssql_system_metadata_capability(domain) for domain in requested_domains)
 
     def get_version(self, driver: "MssqlPythonDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
@@ -275,8 +291,19 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             ),
         )
 
-    def get_ddl(self, driver: "MssqlPythonDriver", object_name: str, schema: str | None = None) -> "MetadataResult":
+    def get_ddl(
+        self,
+        driver: "MssqlPythonDriver",
+        object_name: str,
+        schema: str | None = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Generate SQL Server table DDL from sys catalog rows."""
+        _ = include_dependencies, prefer_native, redact
         schema_name = self.resolve_schema(schema)
         columns = driver.select(
             self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
@@ -284,19 +311,24 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         indexes = driver.select(
             self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
         )
-        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes)
+        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes, object_type=object_type)
 
     def get_system_metadata(
-        self, driver: "MssqlPythonDriver", domain: str, *, include_sensitive: bool = False
-    ) -> "MetadataResult":
+        self, driver: "MssqlPythonDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = build_mssql_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
         options = get_mssql_data_dictionary_options(driver)
-        denied = validate_mssql_system_metadata_options(domain, options)
+        denied = validate_mssql_system_metadata_options(metadata_request, options)
         if denied is not None:
             return denied
-        query = self.get_domain_query("system", domain)
+        query = self.get_domain_query("system", metadata_request.domain)
         rows = driver.select(query)
-        return build_mssql_system_metadata_result(domain, rows, include_sensitive=include_sensitive)
+        return build_mssql_system_metadata_result(metadata_request, rows)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -313,6 +345,14 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
     ) -> "MetadataCapabilityProfile":
         """Get SQL Server replacement data-dictionary capability profile."""
         return build_mssql_metadata_capability_profile(type(self).__name__, domains)
+
+    async def get_system_metadata_capabilities(
+        self, driver: "MssqlPythonAsyncDriver", domains: "Sequence[str] | None" = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get SQL Server opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("dmv_exec_requests", "query_store_runtime") if domains is None else tuple(domains)
+        return tuple(build_mssql_system_metadata_capability(domain) for domain in requested_domains)
 
     async def get_version(self, driver: "MssqlPythonAsyncDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
@@ -449,9 +489,18 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         )
 
     async def get_ddl(
-        self, driver: "MssqlPythonAsyncDriver", object_name: str, schema: str | None = None
-    ) -> "MetadataResult":
+        self,
+        driver: "MssqlPythonAsyncDriver",
+        object_name: str,
+        schema: str | None = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Generate SQL Server table DDL from sys catalog rows."""
+        _ = include_dependencies, prefer_native, redact
         schema_name = self.resolve_schema(schema)
         columns = await driver.select(
             self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
@@ -459,19 +508,24 @@ class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDiction
         indexes = await driver.select(
             self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
         )
-        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes)
+        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes, object_type=object_type)
 
     async def get_system_metadata(
-        self, driver: "MssqlPythonAsyncDriver", domain: str, *, include_sensitive: bool = False
-    ) -> "MetadataResult":
+        self, driver: "MssqlPythonAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = build_mssql_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
         options = get_mssql_data_dictionary_options(driver)
-        denied = validate_mssql_system_metadata_options(domain, options)
+        denied = validate_mssql_system_metadata_options(metadata_request, options)
         if denied is not None:
             return denied
-        query = self.get_domain_query("system", domain)
+        query = self.get_domain_query("system", metadata_request.domain)
         rows = await driver.select(query)
-        return build_mssql_system_metadata_result(domain, rows, include_sensitive=include_sensitive)
+        return build_mssql_system_metadata_result(metadata_request, rows)
 
 
 def _row_value(row: object, *names: str) -> Any:

@@ -10,13 +10,16 @@ from sqlspec.data_dictionary import (
     MetadataCapability,
     MetadataCapabilityProfile,
     MetadataFidelity,
-    MetadataResult,
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
     ObjectIdentity,
-    SystemMetadata,
+    SystemMetadataCapability,
+    SystemMetadataRedactionPolicy,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     register_dialect,
+    system_metadata_gated_result,
 )
 
 if TYPE_CHECKING:
@@ -24,6 +27,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "build_mssql_metadata_capability_profile",
+    "build_mssql_system_metadata_capability",
     "build_mssql_system_metadata_result",
     "build_mssql_table_ddl_result",
     "extract_mssql_version_value",
@@ -80,6 +84,7 @@ MSSQL_REPLACEMENT_DOMAINS: Final[tuple[str, ...]] = (
     "ddl",
     "system",
 )
+MSSQL_SYSTEM_METADATA_DOMAINS: Final[tuple[str, ...]] = ("dmv_exec_requests", "query_store_runtime")
 
 MSSQL_DDL_WARNING: Final[str] = "SQL Server table DDL is reconstructed from sys catalog views."
 MSSQL_PERMISSIONS_WARNING: Final[str] = (
@@ -320,87 +325,86 @@ def get_mssql_data_dictionary_options(driver: Any) -> dict[str, Any]:
     return options
 
 
-def mssql_system_metadata_denied(*warnings: str) -> MetadataResult:
-    """Return a permission-aware unsupported system metadata result."""
-    capability = MetadataCapability(
-        domain="system",
-        support=MetadataSupport.UNSUPPORTED,
-        fidelity=MetadataFidelity.UNSUPPORTED,
-        source=MetadataSource.SYSTEM_VIEW,
-        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
-        warnings=warnings,
-    )
-    return MetadataResult(domain="system", capability=capability, warnings=warnings)
-
-
-def validate_mssql_system_metadata_options(domain: str, options: dict[str, Any]) -> MetadataResult | None:
-    """Return an unsupported result when SQL Server system metadata gates fail."""
-    if not options.get("enable_system_metadata"):
-        return mssql_system_metadata_denied(MSSQL_SYSTEM_OPT_IN_WARNING)
-    if domain.startswith("query_store") and not options.get("query_store"):
-        return mssql_system_metadata_denied(MSSQL_QUERY_STORE_PERMISSION_WARNING)
-    if domain.startswith("dmv") and not (
-        options.get("view_server_state") or options.get("view_server_performance_state")
-    ):
-        return mssql_system_metadata_denied(MSSQL_SYSTEM_PERMISSION_WARNING)
-    return None
-
-
-def build_mssql_system_metadata_result(
-    domain: str, rows: "Sequence[Any]", *, include_sensitive: bool = False
-) -> MetadataResult:
-    """Build redacted SQL Server system metadata rows."""
-    capability = MetadataCapability(
-        domain="system",
+def build_mssql_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    """Build a SQL Server system metadata capability disclosure."""
+    if domain not in MSSQL_SYSTEM_METADATA_DOMAINS:
+        return SystemMetadataCapability.unsupported(domain, source=MetadataSource.SYSTEM_VIEW)
+    return SystemMetadataCapability(
+        domain=domain,
         support=MetadataSupport.SUPPORTED,
         fidelity=MetadataFidelity.PARTIAL,
         source=MetadataSource.SYSTEM_VIEW,
         risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+        required_privileges=("VIEW SERVER STATE", "VIEW SERVER PERFORMANCE STATE", "Query Store access"),
+        redaction_fields=SystemMetadataRedactionPolicy.sensitive_field_names(),
         warnings=(MSSQL_SYSTEM_WARNING,),
     )
-    items = []
-    for position, row in enumerate(rows):
-        attributes: dict[str, object] = dict(_row_to_dict(row))
-        if not include_sensitive:
-            redacted: dict[str, object] = {}
-            for key, value in attributes.items():
-                redacted[key] = MSSQL_REDACTED_VALUE if key.lower() in MSSQL_SENSITIVE_SYSTEM_KEYS else value
-            attributes = redacted
-        identity = ObjectIdentity(
-            name=f"{domain}:{position + 1}",
-            object_type="system_metadata",
-            dialect="mssql",
-            source=MetadataSource.SYSTEM_VIEW,
-        )
-        items.append(SystemMetadata(identity, source=MetadataSource.SYSTEM_VIEW, attributes=attributes))
-    return MetadataResult(domain="system", capability=capability, items=tuple(items), warnings=capability.warnings)
+
+
+def mssql_system_metadata_denied(request: SystemMetadataRequest, *warnings: str) -> SystemMetadataResult:
+    """Return a permission-aware unsupported system metadata result."""
+    capability = SystemMetadataCapability(
+        domain=request.domain,
+        support=MetadataSupport.UNSUPPORTED,
+        fidelity=MetadataFidelity.UNSUPPORTED,
+        source=MetadataSource.SYSTEM_VIEW,
+        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+        redaction_fields=SystemMetadataRedactionPolicy.sensitive_field_names(),
+        warnings=warnings,
+    )
+    return SystemMetadataResult(request, capability, source=MetadataSource.SYSTEM_VIEW)
+
+
+def validate_mssql_system_metadata_options(
+    request: SystemMetadataRequest, options: dict[str, Any]
+) -> SystemMetadataResult | None:
+    """Return an unsupported result when SQL Server system metadata gates fail."""
+    if not options.get("enable_system_metadata"):
+        return mssql_system_metadata_denied(request, MSSQL_SYSTEM_OPT_IN_WARNING)
+    if request.domain.startswith("query_store") and not options.get("query_store"):
+        return mssql_system_metadata_denied(request, MSSQL_QUERY_STORE_PERMISSION_WARNING)
+    if request.domain.startswith("dmv") and not (
+        options.get("view_server_state") or options.get("view_server_performance_state")
+    ):
+        return mssql_system_metadata_denied(request, MSSQL_SYSTEM_PERMISSION_WARNING)
+    return None
+
+
+def build_mssql_system_metadata_result(request: SystemMetadataRequest, rows: "Sequence[Any]") -> SystemMetadataResult:
+    """Build redacted SQL Server system metadata rows."""
+    capability = build_mssql_system_metadata_capability(request.domain)
+    gate_result = system_metadata_gated_result(request, capability)
+    if gate_result.capability.support != MetadataSupport.SUPPORTED:
+        return gate_result
+    return SystemMetadataResult.from_rows(
+        request, capability, rows=tuple(_row_to_dict(row) for row in rows), source=MetadataSource.SYSTEM_VIEW
+    )
 
 
 def build_mssql_table_ddl_result(
-    schema_name: str | None, table_name: str, column_rows: "Sequence[Any]", index_rows: "Sequence[Any] | None" = None
-) -> MetadataResult:
+    schema_name: str | None,
+    table_name: str,
+    column_rows: "Sequence[Any]",
+    index_rows: "Sequence[Any] | None" = None,
+    *,
+    object_type: str = "table",
+) -> DDLResult:
     """Generate SQL Server table DDL from structured catalog rows."""
     schema = schema_name or MSSQL_CONFIG.default_schema
     identity = ObjectIdentity(
         name=table_name,
-        object_type="table",
+        object_type=object_type,
         schema=schema,
         dialect="mssql",
         quoted_name=_mssql_qualified_name(schema, table_name),
         source=MetadataSource.GENERATED,
     )
     if not column_rows:
-        capability = MetadataCapability(
-            domain="ddl",
-            support=MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.UNSUPPORTED,
+        return DDLResult.unsupported(
+            identity,
             source=MetadataSource.GENERATED,
             warnings=(f"No SQL Server catalog columns found for {schema or '<default>'}.{table_name}",),
         )
-        ddl = DDLResult(
-            identity, MetadataSupport.UNSUPPORTED, source=MetadataSource.GENERATED, warnings=capability.warnings
-        )
-        return MetadataResult(domain="ddl", capability=capability, items=(ddl,), warnings=capability.warnings)
 
     rows = [_row_to_dict(row) for row in column_rows]
     primary_key_name = _first_non_empty(row.get("primary_key_name") for row in rows)
@@ -422,22 +426,14 @@ def build_mssql_table_ddl_result(
         _render_mssql_index_definition(_row_to_dict(row), schema, table_name) for row in index_rows or ()
     ]
     ddl_text = "\n\n".join(statement for statement in (table_ddl, *index_statements) if statement)
-    capability = MetadataCapability(
-        domain="ddl",
-        support=MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.GENERATED,
-        source=MetadataSource.GENERATED,
-        warnings=(MSSQL_DDL_WARNING,),
-    )
-    ddl = DDLResult(
+    return DDLResult(
         identity,
         MetadataSupport.SUPPORTED,
         fidelity=MetadataFidelity.GENERATED,
         source=MetadataSource.GENERATED,
         ddl=ddl_text,
-        warnings=capability.warnings,
+        warnings=(MSSQL_DDL_WARNING,),
     )
-    return MetadataResult(domain="ddl", capability=capability, items=(ddl,), warnings=capability.warnings)
 
 
 def merge_mssql_table_lists(ordered: "list[TableMetadata]", all_rows: "list[TableMetadata]") -> "list[TableMetadata]":

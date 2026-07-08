@@ -13,7 +13,8 @@ from sqlspec.data_dictionary import (
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
-    SystemMetadata,
+    SystemMetadataRequest,
+    SystemMetadataResult,
 )
 
 REQUIRED_MSSQL_DOMAIN_QUERIES = {
@@ -138,28 +139,27 @@ def test_mssql_generated_table_ddl_reports_generated_fidelity() -> None:
     driver = FakeSyncDriver()
     result = MssqlPythonSyncDataDictionary().get_ddl(cast(Any, driver), "accounts")
 
-    assert result.domain == "ddl"
-    assert result.capability.support == MetadataSupport.SUPPORTED
-    assert result.items
-    ddl = result.items[0]
-    assert isinstance(ddl, DDLResult)
-    assert ddl.status == MetadataSupport.SUPPORTED
-    assert ddl.fidelity == MetadataFidelity.GENERATED
-    assert ddl.source == MetadataSource.GENERATED
-    assert ddl.identity.schema == "dbo"
-    assert ddl.identity.name == "accounts"
-    assert ddl.ddl is not None
-    assert "CREATE TABLE [dbo].[accounts]" in ddl.ddl
-    assert "[id] int IDENTITY(1,1) NOT NULL" in ddl.ddl
-    assert "CONSTRAINT [pk_accounts] PRIMARY KEY ([id])" in ddl.ddl
-    assert "reconstructed from sys catalog views" in " ".join(ddl.warnings)
+    assert isinstance(result, DDLResult)
+    assert result.status == MetadataSupport.SUPPORTED
+    assert result.fidelity == MetadataFidelity.GENERATED
+    assert result.source == MetadataSource.GENERATED
+    assert result.identity.schema == "dbo"
+    assert result.identity.name == "accounts"
+    assert result.ddl is not None
+    assert "CREATE TABLE [dbo].[accounts]" in result.ddl
+    assert "[id] int IDENTITY(1,1) NOT NULL" in result.ddl
+    assert "CONSTRAINT [pk_accounts] PRIMARY KEY ([id])" in result.ddl
+    assert "reconstructed from sys catalog views" in " ".join(result.warnings)
 
 
 def test_mssql_dmvs_disabled_without_permission_flags() -> None:
     """DMV metadata should require explicit opt-in and permission flags."""
     driver = FakeSyncDriver()
-    result = MssqlPythonSyncDataDictionary().get_system_metadata(cast(Any, driver), "dmv_exec_requests")
+    result = MssqlPythonSyncDataDictionary().get_system_metadata(
+        cast(Any, driver), SystemMetadataRequest("dmv_exec_requests", include_system=True)
+    )
 
+    assert isinstance(result, SystemMetadataResult)
     assert result.capability.support == MetadataSupport.UNSUPPORTED
     assert MetadataRisk.PRIVILEGED in result.capability.risks
     assert "enable_system_metadata" in " ".join(result.warnings)
@@ -175,15 +175,17 @@ def test_mssql_dmvs_redact_sensitive_columns_by_default() -> None:
             "view_server_performance_state": True,
         }
     })
-    result = MssqlPythonSyncDataDictionary().get_system_metadata(cast(Any, driver), "dmv_exec_requests")
+    result = MssqlPythonSyncDataDictionary().get_system_metadata(
+        cast(Any, driver), SystemMetadataRequest("dmv_exec_requests", include_system=True)
+    )
 
+    assert isinstance(result, SystemMetadataResult)
     assert result.capability.support == MetadataSupport.SUPPORTED
-    assert result.items
-    item = result.items[0]
-    assert isinstance(item, SystemMetadata)
-    assert item.attributes["sql_text"] == "[redacted]"
-    assert item.attributes["login_name"] == "[redacted]"
-    assert item.attributes["session_id"] == 57
+    assert result.rows
+    row = result.rows[0]
+    assert row["sql_text"] == "[REDACTED]"
+    assert row["login_name"] == "[REDACTED]"
+    assert row["session_id"] == 57
 
 
 @pytest.mark.anyio
