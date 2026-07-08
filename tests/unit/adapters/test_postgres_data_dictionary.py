@@ -12,7 +12,14 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
-from sqlspec.data_dictionary import MetadataFidelity, MetadataSource, MetadataSupport
+from sqlspec.data_dictionary import (
+    DDLResult,
+    MetadataFidelity,
+    MetadataSource,
+    MetadataSupport,
+    SystemMetadataRequest,
+    SystemMetadataResult,
+)
 
 
 class FakeSyncDriver:
@@ -35,6 +42,36 @@ class FakeAsyncDriver:
     async def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
         self.select_calls.append((statement, kwargs))
         return [{"schema_name": kwargs.get("schema_name"), "table_name": kwargs.get("table_name", "app")}]
+
+
+class FakeDdlSyncDriver(FakeSyncDriver):
+    """Sync driver returning DDL-shaped metadata rows."""
+
+    def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        self.select_calls.append((statement, kwargs))
+        return [
+            {
+                "schema_name": kwargs.get("schema_name"),
+                "object_name": kwargs.get("object_name"),
+                "ddl": "CREATE VIEW public.active_orders AS SELECT 1",
+                "fidelity": "native",
+            }
+        ]
+
+
+class FakeDdlAsyncDriver(FakeAsyncDriver):
+    """Async driver returning DDL-shaped metadata rows."""
+
+    async def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        self.select_calls.append((statement, kwargs))
+        return [
+            {
+                "schema_name": kwargs.get("schema_name"),
+                "object_name": kwargs.get("object_name"),
+                "ddl": "CREATE VIEW public.active_orders AS SELECT 1",
+                "fidelity": "native",
+            }
+        ]
 
 
 @pytest.mark.parametrize("data_dictionary", [PsycopgSyncDataDictionary()])
@@ -97,6 +134,68 @@ async def test_postgres_async_domain_methods_delegate_to_direct_query_packs(data
     assert "pg_catalog.pg_constraint" in statement.raw_sql
     assert kwargs["schema_name"] == "reporting"
     assert kwargs["table_name"] == "orders"
+
+
+def test_postgres_sync_ddl_returns_contract_result() -> None:
+    """Sync PostgreSQL DDL lookup returns the typed DDL envelope."""
+    driver = FakeDdlSyncDriver()
+    data_dictionary = PsycopgSyncDataDictionary()
+
+    result = data_dictionary.get_ddl(cast(Any, driver), "active_orders", schema="Public", object_type="view")
+
+    assert isinstance(result, DDLResult)
+    assert result.identity.schema == "public"
+    assert result.identity.name == "active_orders"
+    assert result.fidelity == MetadataFidelity.NATIVE
+    assert result.ddl == "CREATE VIEW public.active_orders AS SELECT 1"
+
+
+@pytest.mark.parametrize(
+    "data_dictionary", [AsyncpgDataDictionary(), PsqlpyDataDictionary(), PsycopgAsyncDataDictionary()]
+)
+async def test_postgres_async_ddl_returns_contract_result(data_dictionary: Any) -> None:
+    """Async PostgreSQL DDL lookup returns the typed DDL envelope."""
+    driver = FakeDdlAsyncDriver()
+
+    result = await data_dictionary.get_ddl(cast(Any, driver), "active_orders", schema="Public", object_type="view")
+
+    assert isinstance(result, DDLResult)
+    assert result.identity.schema == "public"
+    assert result.identity.name == "active_orders"
+    assert result.fidelity == MetadataFidelity.NATIVE
+    assert result.ddl == "CREATE VIEW public.active_orders AS SELECT 1"
+
+
+def test_postgres_sync_system_metadata_returns_contract_result() -> None:
+    """Sync PostgreSQL system metadata returns the typed opt-in envelope."""
+    driver = FakeSyncDriver()
+    data_dictionary = PsycopgSyncDataDictionary()
+
+    result = data_dictionary.get_system_metadata(
+        cast(Any, driver), SystemMetadataRequest("settings", include_system=True)
+    )
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.source == MetadataSource.SYSTEM_VIEW
+    assert result.rows == ({"schema_name": None, "table_name": "app"},)
+
+
+@pytest.mark.parametrize(
+    "data_dictionary", [AsyncpgDataDictionary(), PsqlpyDataDictionary(), PsycopgAsyncDataDictionary()]
+)
+async def test_postgres_async_system_metadata_returns_contract_result(data_dictionary: Any) -> None:
+    """Async PostgreSQL system metadata returns the typed opt-in envelope."""
+    driver = FakeAsyncDriver()
+
+    result = await data_dictionary.get_system_metadata(
+        cast(Any, driver), SystemMetadataRequest("settings", include_system=True)
+    )
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.source == MetadataSource.SYSTEM_VIEW
+    assert result.rows == ({"schema_name": None, "table_name": "app"},)
 
 
 @pytest.mark.parametrize("data_dictionary", [CockroachPsycopgSyncDataDictionary()])

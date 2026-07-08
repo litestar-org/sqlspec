@@ -1,12 +1,13 @@
 """CockroachDB-specific data dictionary for metadata queries."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapability,
@@ -16,9 +17,16 @@ from sqlspec.data_dictionary import (
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    ObjectIdentity,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
 )
 from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
@@ -103,6 +111,41 @@ def _metadata_result(
     return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
 
 
+def _row_value(row: object, key: str) -> object | None:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _cockroach_ddl_result_from_rows(
+    *,
+    dialect: str,
+    object_name: str,
+    object_type: str,
+    schema: str | None,
+    rows: tuple[object, ...],
+    warnings: tuple[str, ...] = (),
+) -> DDLResult:
+    row = rows[0] if rows else None
+    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
+    ddl = _row_value(row, "ddl") if row is not None else None
+    row_warning = _row_value(row, "warning") if row is not None else None
+    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type,
+        schema=str(resolved_schema) if resolved_schema is not None else None,
+        dialect=dialect,
+        source=MetadataSource.INFORMATION_SCHEMA,
+    )
+    return DDLResult.lossy(
+        identity,
+        ddl=str(ddl) if ddl is not None else None,
+        source=MetadataSource.INFORMATION_SCHEMA,
+        warnings=result_warnings,
+    )
+
+
 def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":
     query = get_data_dictionary_loader().get_domain_query("cockroachdb", domain, query_name)
     if query.sql is None:
@@ -125,6 +168,14 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
     ) -> MetadataCapabilityProfile:
         """Get CockroachDB replacement data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
+
+    def get_system_metadata_capabilities(
+        self, driver: "CockroachPsycopgSyncDriver", domains: Sequence[str] | None = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get CockroachDB opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("system",) if domains is None else tuple(domains)
+        return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
 
     def _select_domain(
         self, driver: "CockroachPsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
@@ -195,23 +246,36 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
         driver: "CockroachPsycopgSyncDriver",
         object_name: str,
         schema: str | None = None,
-        object_type: str | None = None,
-    ) -> MetadataResult:
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Get lossy CockroachDB DDL status without parameterized identifiers."""
-        return self._select_domain(
-            driver,
-            "ddl",
-            "by_object",
-            schema_name=self.resolve_schema(schema),
-            object_name=self.resolve_identifier(object_name),
+        _ = include_dependencies, prefer_native, redact
+        schema_name = self.resolve_schema(schema)
+        resolved_object = self.resolve_identifier(object_name)
+        result = self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
+        )
+        return _cockroach_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=resolved_object,
             object_type=object_type,
+            schema=schema_name,
+            rows=result.items,
+            warnings=result.warnings,
         )
 
     def get_system_metadata(
-        self, driver: "CockroachPsycopgSyncDriver", domain: str, *, include_sensitive: bool = False
-    ) -> MetadataResult:
+        self, driver: "CockroachPsycopgSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Get opt-in CockroachDB system metadata."""
-        return _metadata_result("system", _cockroach_metadata_capability("system"))
+        _ = driver
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = unsupported_system_metadata_capability(metadata_request.domain)
+        return system_metadata_gated_result(metadata_request, capability)
 
     def get_version(self, driver: "CockroachPsycopgSyncDriver") -> "VersionInfo | None":
         """Get CockroachDB version information."""
@@ -340,6 +404,14 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         """Get CockroachDB replacement data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
 
+    async def get_system_metadata_capabilities(
+        self, driver: "CockroachPsycopgAsyncDriver", domains: Sequence[str] | None = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get CockroachDB opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("system",) if domains is None else tuple(domains)
+        return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
+
     async def _select_domain(
         self, driver: "CockroachPsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
     ) -> MetadataResult:
@@ -409,23 +481,36 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         driver: "CockroachPsycopgAsyncDriver",
         object_name: str,
         schema: str | None = None,
-        object_type: str | None = None,
-    ) -> MetadataResult:
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Get lossy CockroachDB DDL status without parameterized identifiers."""
-        return await self._select_domain(
-            driver,
-            "ddl",
-            "by_object",
-            schema_name=self.resolve_schema(schema),
-            object_name=self.resolve_identifier(object_name),
+        _ = include_dependencies, prefer_native, redact
+        schema_name = self.resolve_schema(schema)
+        resolved_object = self.resolve_identifier(object_name)
+        result = await self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
+        )
+        return _cockroach_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=resolved_object,
             object_type=object_type,
+            schema=schema_name,
+            rows=result.items,
+            warnings=result.warnings,
         )
 
     async def get_system_metadata(
-        self, driver: "CockroachPsycopgAsyncDriver", domain: str, *, include_sensitive: bool = False
-    ) -> MetadataResult:
+        self, driver: "CockroachPsycopgAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Get opt-in CockroachDB system metadata."""
-        return _metadata_result("system", _cockroach_metadata_capability("system"))
+        _ = driver
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = unsupported_system_metadata_capability(metadata_request.domain)
+        return system_metadata_gated_result(metadata_request, capability)
 
     async def get_version(self, driver: "CockroachPsycopgAsyncDriver") -> "VersionInfo | None":
         """Get CockroachDB version information."""

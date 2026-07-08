@@ -1,12 +1,13 @@
 """PostgreSQL-specific data dictionary for metadata queries via psqlpy."""
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, ClassVar
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapability,
@@ -16,9 +17,16 @@ from sqlspec.data_dictionary import (
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    ObjectIdentity,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
 )
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.driver import AsyncDataDictionaryBase
@@ -51,6 +59,13 @@ _POSTGRES_METADATA_DOMAINS = (
     "system",
 )
 _POSTGRES_SUPPORTED_DOMAINS = frozenset(_POSTGRES_METADATA_DOMAINS) - {"system"}
+_POSTGRES_SYSTEM_METADATA_QUERIES = {
+    "settings": "settings",
+    "statement_history": "pg_stat_statements",
+    "pg_stat_statements": "pg_stat_statements",
+    "table_statistics": "table_stats",
+    "table_stats": "table_stats",
+}
 
 
 def _postgres_metadata_capability(domain: str) -> MetadataCapability:
@@ -88,6 +103,63 @@ def _metadata_result(
     return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
 
 
+def _row_value(row: object, key: str) -> object | None:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _rows_as_mappings(rows: list[Any] | tuple[Any, ...]) -> tuple[Mapping[str, object], ...]:
+    return tuple(cast("Mapping[str, object]", row) for row in rows if isinstance(row, Mapping))
+
+
+def _ddl_result_from_rows(
+    *,
+    dialect: str,
+    object_name: str,
+    object_type: str,
+    schema: str | None,
+    rows: list[Any] | tuple[Any, ...],
+    warnings: tuple[str, ...] = (),
+) -> DDLResult:
+    row = rows[0] if rows else None
+    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
+    ddl = _row_value(row, "ddl") if row is not None else None
+    fidelity = _row_value(row, "fidelity") if row is not None else MetadataFidelity.UNSUPPORTED
+    row_warning = _row_value(row, "warning") if row is not None else None
+    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type,
+        schema=str(resolved_schema) if resolved_schema is not None else None,
+        dialect=dialect,
+        source=MetadataSource.CATALOG,
+    )
+    if ddl is None:
+        return DDLResult.unsupported(identity, source=MetadataSource.CATALOG, warnings=result_warnings)
+    return DDLResult(
+        identity=identity,
+        status=MetadataSupport.SUPPORTED,
+        fidelity=str(fidelity),
+        source=MetadataSource.CATALOG,
+        ddl=str(ddl),
+        warnings=result_warnings,
+    )
+
+
+def _postgres_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    if domain not in _POSTGRES_SYSTEM_METADATA_QUERIES:
+        return unsupported_system_metadata_capability(domain)
+    return SystemMetadataCapability(
+        domain,
+        MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.SYSTEM_VIEW,
+        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+        redaction_fields=("query_text", "setting_value", "user_oid"),
+    )
+
+
 def _postgres_domain_sql(domain: str, query_name: str) -> "SQL":
     query = get_data_dictionary_loader().get_domain_query("postgres", domain, query_name)
     if query.sql is None:
@@ -110,6 +182,14 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
     ) -> MetadataCapabilityProfile:
         """Get PostgreSQL replacement data-dictionary capability profile."""
         return _postgres_metadata_profile(type(self).__name__, domains)
+
+    async def get_system_metadata_capabilities(
+        self, driver: "PsqlpyDriver", domains: Sequence[str] | None = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get PostgreSQL opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
+        return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
 
     async def _select_domain(
         self, driver: "PsqlpyDriver", domain: str, query_name: str, **parameters: Any
@@ -174,25 +254,57 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
         )
 
     async def get_ddl(
-        self, driver: "PsqlpyDriver", object_name: str, schema: str | None = None, object_type: str | None = None
-    ) -> MetadataResult:
+        self,
+        driver: "PsqlpyDriver",
+        object_name: str,
+        schema: str | None = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Get object DDL where PostgreSQL exposes native definition helpers."""
-        return await self._select_domain(
-            driver,
-            "ddl",
-            "by_object",
-            schema_name=self.resolve_schema(schema),
-            object_name=self.resolve_identifier(object_name),
+        _ = include_dependencies, prefer_native, redact
+        schema_name = self.resolve_schema(schema)
+        resolved_object = self.resolve_identifier(object_name)
+        result = await self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
+        )
+        return _ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=resolved_object,
             object_type=object_type,
+            schema=schema_name,
+            rows=result.items,
+            warnings=result.warnings,
         )
 
     async def get_system_metadata(
-        self, driver: "PsqlpyDriver", domain: str, *, include_sensitive: bool = False
-    ) -> MetadataResult:
+        self, driver: "PsqlpyDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Get opt-in PostgreSQL system metadata."""
-        if not include_sensitive:
-            return _metadata_result("system", _postgres_metadata_capability("system"))
-        return await self._select_domain(driver, "system", domain, schema_name=None, table_name=None, limit=100)
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = _postgres_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+
+        query_name = _POSTGRES_SYSTEM_METADATA_QUERIES.get(metadata_request.domain)
+        if query_name is None:
+            return gate_result
+        parameters: dict[str, object] = {}
+        if query_name == "pg_stat_statements":
+            parameters["limit"] = 100
+        elif query_name == "table_stats":
+            parameters["schema_name"] = self.resolve_schema(metadata_request.schema)
+            parameters["table_name"] = (
+                self.resolve_identifier(metadata_request.table) if metadata_request.table is not None else None
+            )
+        result = await self._select_domain(driver, "system", query_name, **parameters)
+        return SystemMetadataResult.from_rows(
+            metadata_request, capability, rows=_rows_as_mappings(result.items), source=MetadataSource.SYSTEM_VIEW
+        )
 
     async def get_version(self, driver: "PsqlpyDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
