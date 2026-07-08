@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectTimeoutError, AiosqliteConnectionPool
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool, AiosqliteConnectTimeoutError
 
 pytest.importorskip("aiosqlite", reason="aiosqlite adapter requires the aiosqlite package")
 

@@ -214,8 +214,7 @@ async def test_psycopg_async_minimal_pool_omits_prepare_threshold(monkeypatch: p
 
 
 @pytest.mark.parametrize(
-    ("open_value", "expect_open_call"),
-    [({}, True), ({"open": True}, True), ({"open": False}, False)],
+    ("open_value", "expect_open_call"), [({}, True), ({"open": True}, True), ({"open": False}, False)]
 )
 async def test_psycopg_async_pool_always_constructs_closed(
     monkeypatch: pytest.MonkeyPatch, open_value: "dict[str, Any]", expect_open_call: bool
