@@ -17,10 +17,15 @@ Unreleased
 * Began replacing the old narrow data-dictionary interface with a consistent
   metadata contract based on ``MetadataCapabilityProfile``,
   ``MetadataCapability``, ``MetadataResult``, ``ObjectIdentity``, and
-  ``DDLResult``. This is a pre-1.0 breaking change: adapter metadata
-  capabilities are preserved, but callers should migrate to the domain result
-  envelope and inspect capability status instead of treating empty lists as
-  unsupported metadata.
+  ``DDLResult``. This is a pre-1.0 breaking change: structural domain lookups
+  return result envelopes, object DDL lookups return ``DDLResult`` directly, and
+  callers should inspect capability or DDL status instead of treating empty
+  lists as unsupported metadata.
+
+**Docs:**
+
+* Expanded the data dictionary guide with capability vocabulary, support
+  matrix, DDL/dependency guidance, and safe system-metadata opt-in behavior.
 
 v0.54.0 - SQL processing correctness and cleanup
 ------------------------------------------------------------------------------
