@@ -6,14 +6,27 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataSupport,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
+    get_data_dictionary_loader,
     get_dialect_config,
+    system_metadata_gated_result,
 )
 from sqlspec.data_dictionary.dialects.mssql import (
+    build_mssql_metadata_capability_profile,
+    build_mssql_system_metadata_capability,
+    build_mssql_system_metadata_result,
+    build_mssql_table_ddl_result,
     extract_mssql_version_value,
+    get_mssql_data_dictionary_options,
     is_mssql_azure_sql,
     list_mssql_available_features,
     merge_mssql_table_lists,
@@ -21,13 +34,17 @@ from sqlspec.data_dictionary.dialects.mssql import (
     parse_mssql_engine_edition,
     parse_mssql_version_components,
     resolve_mssql_feature_flag,
+    validate_mssql_system_metadata_options,
 )
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.core import SQL
+    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
 
 __all__ = ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
 
@@ -91,6 +108,11 @@ class _MssqlDataDictionaryMixin:
         """List available feature flags for this dialect."""
         return list_mssql_available_features(self.get_dialect_config())
 
+    def get_domain_query(self, domain: str, name: str) -> "SQL":
+        """Return a SQL Server domain query."""
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, name)
+        return cast("SQL", query.sql)
+
     def _build_version_info(
         self, version_value: str | None, edition: str | None, engine_edition_value: Any
     ) -> MssqlVersionInfo | None:
@@ -120,6 +142,20 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_metadata_capabilities(
+        self, driver: "PymssqlDriver", domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Get SQL Server replacement data-dictionary capability profile."""
+        return build_mssql_metadata_capability_profile(type(self).__name__, domains)
+
+    def get_system_metadata_capabilities(
+        self, driver: "PymssqlDriver", domains: "Sequence[str] | None" = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get SQL Server opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("dmv_exec_requests", "query_store_runtime") if domains is None else tuple(domains)
+        return tuple(build_mssql_system_metadata_capability(domain) for domain in requested_domains)
 
     def get_version(self, driver: "PymssqlDriver") -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
@@ -169,11 +205,15 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered = cast(
             "list[TableMetadata]",
-            driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata),
+            driver.select(
+                self.get_domain_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            ),
         )
         all_rows = cast(
             "list[TableMetadata]",
-            driver.select(self.get_query("all_tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata),
+            driver.select(
+                self.get_domain_query("tables", "all_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            ),
         )
         return merge_mssql_table_lists(ordered, all_rows)
 
@@ -186,13 +226,15 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return cast(
                 "list[ColumnMetadata]",
-                driver.select(self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata),
+                driver.select(
+                    self.get_domain_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return cast(
             "list[ColumnMetadata]",
             driver.select(
-                self.get_query("columns_by_table"),
+                self.get_domain_query("columns", "by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ColumnMetadata,
@@ -208,13 +250,18 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return cast(
                 "list[IndexMetadata]",
-                driver.select(self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata),
+                driver.select(
+                    self.get_domain_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return cast(
             "list[IndexMetadata]",
             driver.select(
-                self.get_query("indexes_by_table"), schema_name=schema_name, table_name=table, schema_type=IndexMetadata
+                self.get_domain_query("indexes", "by_table"),
+                schema_name=schema_name,
+                table_name=table,
+                schema_type=IndexMetadata,
             ),
         )
 
@@ -228,19 +275,60 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             return cast(
                 "list[ForeignKeyMetadata]",
                 driver.select(
-                    self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                    self.get_domain_query("constraints", "foreign_keys_by_schema"),
+                    schema_name=schema_name,
+                    schema_type=ForeignKeyMetadata,
                 ),
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return cast(
             "list[ForeignKeyMetadata]",
             driver.select(
-                self.get_query("foreign_keys_by_table"),
+                self.get_domain_query("constraints", "foreign_keys_by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ForeignKeyMetadata,
             ),
         )
+
+    def get_ddl(
+        self,
+        driver: "PymssqlDriver",
+        object_name: str,
+        schema: str | None = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
+        """Generate SQL Server table DDL from sys catalog rows."""
+        _ = include_dependencies, prefer_native, redact
+        schema_name = self.resolve_schema(schema)
+        columns = driver.select(
+            self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
+        )
+        indexes = driver.select(
+            self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
+        )
+        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes, object_type=object_type)
+
+    def get_system_metadata(
+        self, driver: "PymssqlDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
+        """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = build_mssql_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+        options = get_mssql_data_dictionary_options(driver)
+        denied = validate_mssql_system_metadata_options(metadata_request, options)
+        if denied is not None:
+            return denied
+        query = self.get_domain_query("system", metadata_request.domain)
+        rows = driver.select(query)
+        return build_mssql_system_metadata_result(metadata_request, rows)
 
 
 def _row_value(row: object, *names: str) -> Any:
