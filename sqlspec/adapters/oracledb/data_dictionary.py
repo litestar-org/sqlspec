@@ -17,10 +17,15 @@ from sqlspec.data_dictionary import (
     MetadataSource,
     MetadataSupport,
     ObjectIdentity,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
     get_dialect_config,
+    system_metadata_gated_result,
 )
 from sqlspec.data_dictionary.dialects.oracle import (
     extract_oracle_version_value,
@@ -84,6 +89,9 @@ ORACLE_DDL_WARNINGS = (
     "DBMS_METADATA output depends on caller privileges and session transform settings.",
     "Native DDL can expose source text, comments, grants, storage details, and security-sensitive metadata.",
 )
+ORACLE_SYSTEM_METADATA_DOMAINS = ("system", "diagnostics", "awr", "ash", "addm", "statspack")
+ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS = ("no_diagnostics", "disabled")
+ORACLE_SYSTEM_REDACTION_FIELDS = ("query_text", "sql_text", "username", "user_name", "session_user")
 
 
 def _oracle_quoted_name(owner: "str | None", object_name: str) -> str:
@@ -194,11 +202,6 @@ def _oracle_capability_profile(
     return MetadataCapabilityProfile(dialect="oracle", adapter=adapter, capabilities=capabilities)
 
 
-def _oracle_disabled_diagnostics_result() -> MetadataResult:
-    capability = _oracle_capability_for_domain("system")
-    return MetadataResult("system", capability=capability, warnings=capability.warnings)
-
-
 def _oracle_domain_metadata_result(domain: str, rows: "list[object]") -> MetadataResult:
     capability = _oracle_capability_for_domain(domain)
     return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
@@ -215,8 +218,7 @@ def _coerce_oracle_ddl_text(value: object) -> "str | None":
 
 def _oracle_ddl_metadata_result(
     *, object_type: str, object_name: str, owner: "str | None", ddl_text: "str | None"
-) -> MetadataResult:
-    capability = _oracle_capability_for_domain("ddl")
+) -> DDLResult:
     identity = ObjectIdentity(
         name=object_name,
         object_type=object_type.lower(),
@@ -225,15 +227,51 @@ def _oracle_ddl_metadata_result(
         quoted_name=_oracle_quoted_name(owner, object_name),
         source=MetadataSource.NATIVE_API,
     )
-    ddl = DDLResult(
+    if ddl_text is None:
+        return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=ORACLE_DDL_WARNINGS)
+    return DDLResult(
         identity=identity,
-        status=MetadataSupport.SUPPORTED if ddl_text is not None else MetadataSupport.UNSUPPORTED,
-        fidelity=MetadataFidelity.NATIVE if ddl_text is not None else MetadataFidelity.UNSUPPORTED,
+        status=MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
         source=MetadataSource.NATIVE_API,
         ddl=ddl_text,
         warnings=ORACLE_DDL_WARNINGS,
     )
-    return MetadataResult("ddl", capability=capability, items=(ddl,), warnings=ORACLE_DDL_WARNINGS)
+
+
+def _oracle_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    normalized_domain = domain.lower()
+    if normalized_domain in ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS:
+        return SystemMetadataCapability(
+            normalized_domain,
+            MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.SYSTEM_VIEW,
+            warnings=("Diagnostics are disabled by default.",),
+        )
+    if normalized_domain not in ORACLE_SYSTEM_METADATA_DOMAINS:
+        return SystemMetadataCapability.unsupported(normalized_domain, source=MetadataSource.SYSTEM_VIEW)
+    return SystemMetadataCapability(
+        normalized_domain,
+        MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.SYSTEM_VIEW,
+        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.LICENSE_GATED, MetadataRisk.REDACTED),
+        required_privileges=("DBA_HIST access", "Oracle Diagnostics Pack entitlement"),
+        license_gate=ORACLE_DIAGNOSTICS_WARNING,
+        redaction_fields=ORACLE_SYSTEM_REDACTION_FIELDS,
+        warnings=(ORACLE_DIAGNOSTICS_WARNING,),
+    )
+
+
+def _oracle_system_metadata_request(
+    request: SystemMetadataRequest | str | None = None, **kwargs: Any
+) -> SystemMetadataRequest:
+    acknowledge_license = bool(kwargs.pop("acknowledge_license", False))
+    if acknowledge_license:
+        kwargs.setdefault("allow_license_gated_diagnostics", True)
+        kwargs.setdefault("include_performance", True)
+    return ensure_system_metadata_request(request, **kwargs)
 
 
 class OracleVersionInfo(VersionInfo):
@@ -337,17 +375,37 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             acknowledge_diagnostics_license=acknowledge_diagnostics_license,
         )
 
+    def get_system_metadata_capabilities(
+        self, driver: "OracleSyncDriver", domains: "Sequence[str] | None" = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get Oracle opt-in system metadata capability disclosures."""
+
+        _ = driver
+        requested_domains = ORACLE_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
+        return tuple(_oracle_system_metadata_capability(domain) for domain in requested_domains)
+
     def get_ddl(
-        self, driver: "OracleSyncDriver", object_name: str, schema: "str | None" = None, *, object_type: str = "TABLE"
-    ) -> MetadataResult:
+        self,
+        driver: "OracleSyncDriver",
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "TABLE",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Get native Oracle DDL using DBMS_METADATA."""
 
+        _ = include_dependencies, prefer_native, redact
         owner = self.resolve_schema(schema)
         normalized_name = self.resolve_identifier(object_name)
         normalized_type = object_type.upper()
         query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "dbms_metadata")
         if not query.is_supported or query.sql is None:
-            return MetadataResult.unsupported("ddl", source=MetadataSource.NATIVE_API)
+            return _oracle_ddl_metadata_result(
+                object_type=normalized_type, object_name=normalized_name, owner=owner, ddl_text=None
+            )
         ddl_value = driver.select_value(
             query.sql, object_type=normalized_type, object_name=normalized_name, owner=owner
         )
@@ -359,41 +417,24 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         )
 
     def get_system_metadata(
-        self,
-        driver: "OracleSyncDriver",
-        domain: str,
-        *,
-        include_sensitive: bool = False,
-        acknowledge_license: bool = False,
-    ) -> MetadataResult:
+        self, driver: "OracleSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Return Oracle system metadata only when diagnostics gates are accepted."""
 
         _ = driver
-        normalized_domain = domain.lower()
-        if normalized_domain in {"no_diagnostics", "disabled"}:
-            capability = MetadataCapability(
-                domain="system",
-                support=MetadataSupport.SUPPORTED,
-                fidelity=MetadataFidelity.NATIVE,
-                source=MetadataSource.SYSTEM_VIEW,
-                warnings=("Diagnostics are disabled by default.",),
-            )
-            return MetadataResult(
-                "system",
-                capability=capability,
-                items=({"diagnostics_enabled": False, "domain": normalized_domain},),
-                warnings=capability.warnings,
-            )
-        if not (include_sensitive and acknowledge_license):
-            return _oracle_disabled_diagnostics_result()
-        capability = _oracle_capability_for_domain(
-            "system", include_diagnostics=True, acknowledge_diagnostics_license=True
+        metadata_request = _oracle_system_metadata_request(request, **kwargs)
+        capability = _oracle_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+        rows = (
+            {
+                "diagnostics_enabled": metadata_request.domain not in ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS,
+                "domain": metadata_request.domain,
+            },
         )
-        return MetadataResult(
-            "system",
-            capability=capability,
-            items=({"diagnostics_enabled": True, "domain": normalized_domain},),
-            warnings=capability.warnings,
+        return SystemMetadataResult.from_rows(
+            metadata_request, capability, rows=rows, source=MetadataSource.SYSTEM_VIEW
         )
 
     def _select_domain(
@@ -694,17 +735,37 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             acknowledge_diagnostics_license=acknowledge_diagnostics_license,
         )
 
+    async def get_system_metadata_capabilities(
+        self, driver: "OracleAsyncDriver", domains: "Sequence[str] | None" = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get Oracle opt-in system metadata capability disclosures."""
+
+        _ = driver
+        requested_domains = ORACLE_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
+        return tuple(_oracle_system_metadata_capability(domain) for domain in requested_domains)
+
     async def get_ddl(
-        self, driver: "OracleAsyncDriver", object_name: str, schema: "str | None" = None, *, object_type: str = "TABLE"
-    ) -> MetadataResult:
+        self,
+        driver: "OracleAsyncDriver",
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "TABLE",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
         """Get native Oracle DDL using DBMS_METADATA."""
 
+        _ = include_dependencies, prefer_native, redact
         owner = self.resolve_schema(schema)
         normalized_name = self.resolve_identifier(object_name)
         normalized_type = object_type.upper()
         query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "dbms_metadata")
         if not query.is_supported or query.sql is None:
-            return MetadataResult.unsupported("ddl", source=MetadataSource.NATIVE_API)
+            return _oracle_ddl_metadata_result(
+                object_type=normalized_type, object_name=normalized_name, owner=owner, ddl_text=None
+            )
         ddl_value = await driver.select_value(
             query.sql, object_type=normalized_type, object_name=normalized_name, owner=owner
         )
@@ -716,41 +777,24 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         )
 
     async def get_system_metadata(
-        self,
-        driver: "OracleAsyncDriver",
-        domain: str,
-        *,
-        include_sensitive: bool = False,
-        acknowledge_license: bool = False,
-    ) -> MetadataResult:
+        self, driver: "OracleAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
         """Return Oracle system metadata only when diagnostics gates are accepted."""
 
         _ = driver
-        normalized_domain = domain.lower()
-        if normalized_domain in {"no_diagnostics", "disabled"}:
-            capability = MetadataCapability(
-                domain="system",
-                support=MetadataSupport.SUPPORTED,
-                fidelity=MetadataFidelity.NATIVE,
-                source=MetadataSource.SYSTEM_VIEW,
-                warnings=("Diagnostics are disabled by default.",),
-            )
-            return MetadataResult(
-                "system",
-                capability=capability,
-                items=({"diagnostics_enabled": False, "domain": normalized_domain},),
-                warnings=capability.warnings,
-            )
-        if not (include_sensitive and acknowledge_license):
-            return _oracle_disabled_diagnostics_result()
-        capability = _oracle_capability_for_domain(
-            "system", include_diagnostics=True, acknowledge_diagnostics_license=True
+        metadata_request = _oracle_system_metadata_request(request, **kwargs)
+        capability = _oracle_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+        rows = (
+            {
+                "diagnostics_enabled": metadata_request.domain not in ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS,
+                "domain": metadata_request.domain,
+            },
         )
-        return MetadataResult(
-            "system",
-            capability=capability,
-            items=({"diagnostics_enabled": True, "domain": normalized_domain},),
-            warnings=capability.warnings,
+        return SystemMetadataResult.from_rows(
+            metadata_request, capability, rows=rows, source=MetadataSource.SYSTEM_VIEW
         )
 
     async def _select_domain(
