@@ -2,8 +2,23 @@
 
 from typing import Any
 
+from sqlspec.adapters.sqlite.core import default_statement_config
 from sqlspec.core import SQL
 from tests.conftest import requires_interpreted
+
+
+def test_as_script_embeds_parameters_statically() -> None:
+    """as_script() should force static parameter embedding regardless of the adapter default."""
+    assert default_statement_config.parameter_config.needs_static_script_compilation is False
+
+    sql = SQL(
+        "INSERT INTO t (a) VALUES (:a); INSERT INTO t (a) VALUES (:a)", a=5, statement_config=default_statement_config
+    ).as_script()
+    compiled_sql, params = sql.compile()
+
+    assert params is None
+    assert ":a" not in compiled_sql
+    assert "5" in compiled_sql
 
 
 @requires_interpreted

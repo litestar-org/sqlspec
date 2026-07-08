@@ -869,11 +869,20 @@ class SQL:
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
 
+        Script execution binds no parameters, so any supplied parameters are
+        embedded statically into the SQL via sqlglot. The script copy forces
+        ``needs_static_script_compilation`` so every adapter compiles bind-free.
+
         Returns:
             New SQL instance configured for script execution
         """
         new_sql = self._copy_base(self._raw_expression or self._raw_sql)
         new_sql._is_script = True
+        param_config = self._statement_config.parameter_config
+        if not param_config.needs_static_script_compilation:
+            new_sql._statement_config = self._statement_config.replace(
+                parameter_config=param_config.replace(needs_static_script_compilation=True)
+            )
         return new_sql
 
     def copy(self, statement: "str | exp.Expr | None" = None, parameters: Any | None = None, **kwargs: Any) -> "SQL":
