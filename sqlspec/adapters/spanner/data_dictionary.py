@@ -12,7 +12,6 @@ from sqlspec.data_dictionary import (
     MetadataCapability,
     MetadataCapabilityProfile,
     MetadataFidelity,
-    MetadataResult,
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
@@ -175,21 +174,31 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         )
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
-    def get_ddl(self, driver: Any, object_name: str, schema: "str | None" = None) -> "MetadataResult":
+    def get_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        schema: "str | None" = None,
+        *,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> "DDLResult":
         """Get Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, prefer_native, redact
         ddl_statements = _get_spanner_ddl_statements(driver)
         identity = ObjectIdentity(
             name=object_name,
-            object_type="object",
+            object_type=object_type,
             schema=schema,
             dialect=self.dialect,
             source=MetadataSource.NATIVE_API,
         )
-        capability = _spanner_capability_for_domain("ddl", mode="googlesql")
         if not ddl_statements:
-            return MetadataResult(domain="ddl", capability=capability, items=(), warnings=_SPANNER_DDL_WARNINGS)
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         ddl = _select_spanner_ddl_for_object(ddl_statements, object_name)
-        result = DDLResult(
+        return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
             fidelity=MetadataFidelity.NATIVE,
@@ -197,7 +206,6 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
             ddl=ddl,
             warnings=_SPANNER_DDL_WARNINGS,
         )
-        return MetadataResult(domain="ddl", capability=capability, items=(result,), warnings=_SPANNER_DDL_WARNINGS)
 
 
 def _spanner_capability_for_domain(domain: str, *, mode: str) -> "MetadataCapability":

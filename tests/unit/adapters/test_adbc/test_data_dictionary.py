@@ -477,17 +477,24 @@ def test_adbc_ddl_is_unsupported_without_dialect_pack() -> None:
     driver = Mock()
     driver.dialect = "duckdb"
 
-    result = AdbcDataDictionary().get_ddl(driver, "items", schema="main")
+    result = AdbcDataDictionary().get_ddl(
+        driver,
+        "items",
+        schema="main",
+        object_type="view",
+        include_dependencies=False,
+        prefer_native=False,
+        redact=False,
+    )
 
-    assert result.capability.support == MetadataSupport.UNSUPPORTED
-    assert result.capability.source == MetadataSource.DRIVER_METADATA
-    assert result.items
-    ddl = cast("Any", result.items[0])
-    assert ddl.ddl is None
-    assert ddl.status == MetadataSupport.UNSUPPORTED
-    assert ddl.fidelity == MetadataFidelity.UNSUPPORTED
-    assert ddl.source == MetadataSource.DRIVER_METADATA
-    assert ddl.warnings
+    assert result.identity.name == "items"
+    assert result.identity.object_type == "view"
+    assert result.identity.schema == "main"
+    assert result.ddl is None
+    assert result.status == MetadataSupport.UNSUPPORTED
+    assert result.fidelity == MetadataFidelity.UNSUPPORTED
+    assert result.source == MetadataSource.DRIVER_METADATA
+    assert result.warnings
 
 
 def test_get_statistics_uses_native_statistic_names_when_available() -> None:

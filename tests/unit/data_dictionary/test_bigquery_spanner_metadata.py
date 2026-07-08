@@ -5,7 +5,6 @@ from typing import Any, cast
 from sqlspec.adapters.bigquery import data_dictionary as bigquery_data_dictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.data_dictionary import (
-    DDLResult,
     MetadataFidelity,
     MetadataRisk,
     MetadataSource,
@@ -141,11 +140,10 @@ def test_spanner_get_ddl_uses_admin_api_capability() -> None:
     result = dictionary.get_ddl(cast(Any, driver), "Singers")
     ddl_capability = dictionary.get_metadata_capabilities(cast(Any, driver)).get("ddl")
 
-    assert result.capability.support == MetadataSupport.SUPPORTED
-    assert result.capability.source == MetadataSource.NATIVE_API
-    assert result.capability.fidelity == MetadataFidelity.NATIVE
-    ddl_result = cast(DDLResult, result.items[0])
-    assert ddl_result.ddl == "CREATE TABLE Singers (SingerId INT64) PRIMARY KEY (SingerId)"
+    assert result.status == MetadataSupport.SUPPORTED
+    assert result.source == MetadataSource.NATIVE_API
+    assert result.fidelity == MetadataFidelity.NATIVE
+    assert result.ddl == "CREATE TABLE Singers (SingerId INT64) PRIMARY KEY (SingerId)"
     assert driver.database.get_ddl_calls == 1
     assert ddl_capability.source == MetadataSource.NATIVE_API
     assert MetadataRisk.PRIVILEGED in ddl_capability.risks
