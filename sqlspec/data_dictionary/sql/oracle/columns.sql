@@ -4,8 +4,12 @@ SELECT
     column_name AS column_name,
     data_type AS data_type,
     nullable AS is_nullable,
-    data_default AS column_default
-FROM all_tab_columns
+    data_default AS column_default,
+    column_id AS ordinal_position,
+    hidden_column,
+    virtual_column,
+    identity_column
+FROM all_tab_cols
 WHERE owner = COALESCE(:schema_name, USER)
   AND table_name = :table_name
 ORDER BY column_id;
@@ -17,7 +21,11 @@ SELECT
     column_name AS column_name,
     data_type AS data_type,
     nullable AS is_nullable,
-    data_default AS column_default
-FROM all_tab_columns
+    data_default AS column_default,
+    column_id AS ordinal_position,
+    hidden_column,
+    virtual_column,
+    identity_column
+FROM all_tab_cols
 WHERE owner = COALESCE(:schema_name, USER)
 ORDER BY table_name, column_id;

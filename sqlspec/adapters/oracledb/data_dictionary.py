@@ -1,15 +1,25 @@
 """Oracle-specific data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataRisk,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
     TableMetadata,
     VersionInfo,
+    get_data_dictionary_loader,
     get_dialect_config,
 )
 from sqlspec.data_dictionary.dialects.oracle import (
@@ -26,15 +36,204 @@ from sqlspec.data_dictionary.dialects.oracle import (
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.text import normalize_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.data_dictionary._types import DialectConfig
 
 __all__ = ("OracleVersionInfo", "OracledbAsyncDataDictionary", "OracledbSyncDataDictionary")
 
 logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
+
+ORACLE_DEFAULT_CAPABILITY_DOMAINS = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "materialized_views",
+    "sequences",
+    "routines",
+    "arguments",
+    "source",
+    "triggers",
+    "comments",
+    "grants",
+    "dependencies",
+    "partitions",
+    "lob_storage",
+    "ddl",
+    "system",
+    "scope:user",
+    "scope:all",
+    "scope:dba",
+    "scope:cdb",
+)
+ORACLE_PARTIAL_VISIBILITY_WARNING = "ALL_* views can omit inaccessible objects."
+ORACLE_PRIVILEGED_SCOPE_WARNING = "DBA_* and CDB_* views require explicit privileged opt-in."
+ORACLE_DIAGNOSTICS_WARNING = (
+    "Oracle diagnostics, AWR/ASH/ADDM, Statspack, and DBA_HIST views require explicit opt-in, "
+    "privileges, and license acknowledgement."
+)
+ORACLE_DDL_WARNINGS = (
+    "DBMS_METADATA output depends on caller privileges and session transform settings.",
+    "Native DDL can expose source text, comments, grants, storage details, and security-sensitive metadata.",
+)
+
+
+def _oracle_quoted_name(owner: "str | None", object_name: str) -> str:
+    if owner is None:
+        return quote_identifier(object_name)
+    return f"{quote_identifier(owner)}.{quote_identifier(object_name)}"
+
+
+def _oracle_scope_capability(domain: str, *, include_privileged: bool) -> MetadataCapability:
+    if domain == "scope:user":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            warnings=("USER_* views are limited to the current schema.",),
+        )
+    if domain == "scope:all":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.CATALOG,
+            risks=(MetadataRisk.PRIVILEGED,),
+            warnings=(ORACLE_PARTIAL_VISIBILITY_WARNING,),
+        )
+    if domain in {"scope:dba", "scope:cdb"}:
+        support = MetadataSupport.SUPPORTED if include_privileged else MetadataSupport.UNSUPPORTED
+        return MetadataCapability(
+            domain=domain,
+            support=support,
+            fidelity=MetadataFidelity.NATIVE if include_privileged else MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.CATALOG,
+            risks=(MetadataRisk.PRIVILEGED,),
+            warnings=(ORACLE_PRIVILEGED_SCOPE_WARNING,),
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _oracle_capability_for_domain(
+    domain: str,
+    *,
+    include_privileged: bool = False,
+    include_diagnostics: bool = False,
+    acknowledge_diagnostics_license: bool = False,
+) -> MetadataCapability:
+    if domain.startswith("scope:"):
+        return _oracle_scope_capability(domain, include_privileged=include_privileged)
+    if domain == "ddl":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.NATIVE_API,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+            warnings=ORACLE_DDL_WARNINGS,
+        )
+    if domain == "system":
+        diagnostics_enabled = include_diagnostics and acknowledge_diagnostics_license
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED if diagnostics_enabled else MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.NATIVE if diagnostics_enabled else MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.LICENSE_GATED, MetadataRisk.REDACTED),
+            warnings=(ORACLE_DIAGNOSTICS_WARNING,),
+        )
+    risks: tuple[MetadataRisk, ...] = ()
+    warnings: tuple[str, ...] = ()
+    fidelity = MetadataFidelity.NATIVE
+    if domain in {"objects", "tables", "columns", "constraints", "indexes", "views", "materialized_views"}:
+        fidelity = MetadataFidelity.PARTIAL
+        warnings = (ORACLE_PARTIAL_VISIBILITY_WARNING,)
+    if domain in {"source", "comments", "grants"}:
+        risks = (MetadataRisk.REDACTED,)
+        warnings = ("Metadata can expose application source text, comments, grants, or security-sensitive details.",)
+    if domain in {"partitions", "lob_storage"}:
+        risks = (MetadataRisk.PRIVILEGED,)
+        warnings = ("Storage metadata can be partial when segment or tablespace privileges are missing.",)
+    return MetadataCapability(
+        domain=domain,
+        support=MetadataSupport.SUPPORTED,
+        fidelity=fidelity,
+        source=MetadataSource.CATALOG,
+        risks=risks,
+        warnings=warnings,
+    )
+
+
+def _oracle_capability_profile(
+    adapter: str,
+    domains: "Sequence[str] | None" = None,
+    *,
+    include_privileged: bool = False,
+    include_diagnostics: bool = False,
+    acknowledge_diagnostics_license: bool = False,
+) -> MetadataCapabilityProfile:
+    requested_domains = ORACLE_DEFAULT_CAPABILITY_DOMAINS if domains is None else tuple(domains)
+    capabilities = tuple(
+        _oracle_capability_for_domain(
+            domain,
+            include_privileged=include_privileged,
+            include_diagnostics=include_diagnostics,
+            acknowledge_diagnostics_license=acknowledge_diagnostics_license,
+        )
+        for domain in requested_domains
+    )
+    return MetadataCapabilityProfile(dialect="oracle", adapter=adapter, capabilities=capabilities)
+
+
+def _oracle_disabled_diagnostics_result() -> MetadataResult:
+    capability = _oracle_capability_for_domain("system")
+    return MetadataResult("system", capability=capability, warnings=capability.warnings)
+
+
+def _oracle_domain_metadata_result(domain: str, rows: "list[object]") -> MetadataResult:
+    capability = _oracle_capability_for_domain(domain)
+    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+def _coerce_oracle_ddl_text(value: object) -> "str | None":
+    if value is None:
+        return None
+    read = getattr(value, "read", None)
+    if callable(read):
+        return str(read())
+    return str(value)
+
+
+def _oracle_ddl_metadata_result(
+    *, object_type: str, object_name: str, owner: "str | None", ddl_text: "str | None"
+) -> MetadataResult:
+    capability = _oracle_capability_for_domain("ddl")
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type.lower(),
+        schema=owner,
+        dialect="oracle",
+        quoted_name=_oracle_quoted_name(owner, object_name),
+        source=MetadataSource.NATIVE_API,
+    )
+    ddl = DDLResult(
+        identity=identity,
+        status=MetadataSupport.SUPPORTED if ddl_text is not None else MetadataSupport.UNSUPPORTED,
+        fidelity=MetadataFidelity.NATIVE if ddl_text is not None else MetadataFidelity.UNSUPPORTED,
+        source=MetadataSource.NATIVE_API,
+        ddl=ddl_text,
+        warnings=ORACLE_DDL_WARNINGS,
+    )
+    return MetadataResult("ddl", capability=capability, items=(ddl,), warnings=ORACLE_DDL_WARNINGS)
 
 
 class OracleVersionInfo(VersionInfo):
@@ -117,6 +316,187 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
 
     def list_available_features(self) -> "list[str]":
         return list_oracle_available_features(self.get_dialect_config())
+
+    def get_metadata_capabilities(
+        self,
+        driver: object,
+        domains: "Sequence[str] | None" = None,
+        *,
+        include_privileged: bool = False,
+        include_diagnostics: bool = False,
+        acknowledge_diagnostics_license: bool = False,
+    ) -> MetadataCapabilityProfile:
+        """Report Oracle replacement metadata capabilities and scope gates."""
+
+        _ = driver
+        return _oracle_capability_profile(
+            type(self).__name__,
+            domains,
+            include_privileged=include_privileged,
+            include_diagnostics=include_diagnostics,
+            acknowledge_diagnostics_license=acknowledge_diagnostics_license,
+        )
+
+    def get_ddl(
+        self, driver: "OracleSyncDriver", object_name: str, schema: "str | None" = None, *, object_type: str = "TABLE"
+    ) -> MetadataResult:
+        """Get native Oracle DDL using DBMS_METADATA."""
+
+        owner = self.resolve_schema(schema)
+        normalized_name = self.resolve_identifier(object_name)
+        normalized_type = object_type.upper()
+        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "dbms_metadata")
+        if not query.is_supported or query.sql is None:
+            return MetadataResult.unsupported("ddl", source=MetadataSource.NATIVE_API)
+        ddl_value = driver.select_value(
+            query.sql, object_type=normalized_type, object_name=normalized_name, owner=owner
+        )
+        return _oracle_ddl_metadata_result(
+            object_type=normalized_type,
+            object_name=normalized_name,
+            owner=owner,
+            ddl_text=_coerce_oracle_ddl_text(ddl_value),
+        )
+
+    def get_system_metadata(
+        self,
+        driver: "OracleSyncDriver",
+        domain: str,
+        *,
+        include_sensitive: bool = False,
+        acknowledge_license: bool = False,
+    ) -> MetadataResult:
+        """Return Oracle system metadata only when diagnostics gates are accepted."""
+
+        _ = driver
+        normalized_domain = domain.lower()
+        if normalized_domain in {"no_diagnostics", "disabled"}:
+            capability = MetadataCapability(
+                domain="system",
+                support=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.NATIVE,
+                source=MetadataSource.SYSTEM_VIEW,
+                warnings=("Diagnostics are disabled by default.",),
+            )
+            return MetadataResult(
+                "system",
+                capability=capability,
+                items=({"diagnostics_enabled": False, "domain": normalized_domain},),
+                warnings=capability.warnings,
+            )
+        if not (include_sensitive and acknowledge_license):
+            return _oracle_disabled_diagnostics_result()
+        capability = _oracle_capability_for_domain(
+            "system", include_diagnostics=True, acknowledge_diagnostics_license=True
+        )
+        return MetadataResult(
+            "system",
+            capability=capability,
+            items=({"diagnostics_enabled": True, "domain": normalized_domain},),
+            warnings=capability.warnings,
+        )
+
+    def _select_domain(
+        self, driver: "OracleSyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult.unsupported(domain, source=query.capability.source)
+        select = cast("Any", driver.select)
+        rows = select(query.sql, **binds)
+        return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
+
+    def get_schemas(self, driver: "OracleSyncDriver") -> MetadataResult:
+        """Get Oracle user/schema metadata."""
+
+        return self._select_domain(driver, "schemas", schema_name=None)
+
+    def get_objects(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle object metadata from ALL_OBJECTS."""
+
+        return self._select_domain(driver, "objects", schema_name=self.resolve_schema(schema), object_name=None)
+
+    def get_table_details(self, driver: "OracleSyncDriver", table: str, schema: "str | None" = None) -> MetadataResult:
+        """Get rich Oracle table metadata."""
+
+        return self._select_domain(
+            driver, "tables", schema_name=self.resolve_schema(schema), table_name=self.resolve_identifier(table)
+        )
+
+    def get_constraints(
+        self, driver: "OracleSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle constraint metadata."""
+
+        table_name = None if table is None else self.resolve_identifier(table)
+        return self._select_domain(
+            driver, "constraints", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
+
+    def get_views(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle view metadata."""
+
+        return self._select_domain(driver, "views", schema_name=self.resolve_schema(schema), view_name=None)
+
+    def get_materialized_views(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle materialized view metadata."""
+
+        return self._select_domain(
+            driver, "materialized_views", schema_name=self.resolve_schema(schema), mview_name=None
+        )
+
+    def get_sequences(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle sequence metadata."""
+
+        return self._select_domain(driver, "sequences", schema_name=self.resolve_schema(schema), sequence_name=None)
+
+    def get_routines(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle routine, package, procedure, and function metadata."""
+
+        return self._select_domain(driver, "routines", schema_name=self.resolve_schema(schema), object_name=None)
+
+    def get_triggers(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle trigger metadata."""
+
+        return self._select_domain(driver, "triggers", schema_name=self.resolve_schema(schema), trigger_name=None)
+
+    def get_privileges(
+        self, driver: "OracleSyncDriver", object_name: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle table and column grants."""
+
+        normalized_object = None if object_name is None else self.resolve_identifier(object_name)
+        return self._select_domain(
+            driver, "grants", schema_name=self.resolve_schema(schema), object_name=normalized_object
+        )
+
+    def get_dependencies(
+        self, driver: "OracleSyncDriver", object_name: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle dependency metadata."""
+
+        normalized_object = None if object_name is None else self.resolve_identifier(object_name)
+        return self._select_domain(
+            driver, "dependencies", schema_name=self.resolve_schema(schema), object_name=normalized_object
+        )
+
+    def get_partitions(
+        self, driver: "OracleSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle partition and storage metadata."""
+
+        table_name = None if table is None else self.resolve_identifier(table)
+        return self._select_domain(driver, "partitions", schema_name=self.resolve_schema(schema), table_name=table_name)
+
+    def get_lob_storage(
+        self, driver: "OracleSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle LOB storage metadata."""
+
+        table_name = None if table is None else self.resolve_identifier(table)
+        return self._select_domain(
+            driver, "lob_storage", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
 
     def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")
@@ -293,6 +673,193 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
 
     def list_available_features(self) -> "list[str]":
         return list_oracle_available_features(self.get_dialect_config())
+
+    async def get_metadata_capabilities(
+        self,
+        driver: object,
+        domains: "Sequence[str] | None" = None,
+        *,
+        include_privileged: bool = False,
+        include_diagnostics: bool = False,
+        acknowledge_diagnostics_license: bool = False,
+    ) -> MetadataCapabilityProfile:
+        """Report Oracle replacement metadata capabilities and scope gates."""
+
+        _ = driver
+        return _oracle_capability_profile(
+            type(self).__name__,
+            domains,
+            include_privileged=include_privileged,
+            include_diagnostics=include_diagnostics,
+            acknowledge_diagnostics_license=acknowledge_diagnostics_license,
+        )
+
+    async def get_ddl(
+        self, driver: "OracleAsyncDriver", object_name: str, schema: "str | None" = None, *, object_type: str = "TABLE"
+    ) -> MetadataResult:
+        """Get native Oracle DDL using DBMS_METADATA."""
+
+        owner = self.resolve_schema(schema)
+        normalized_name = self.resolve_identifier(object_name)
+        normalized_type = object_type.upper()
+        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "dbms_metadata")
+        if not query.is_supported or query.sql is None:
+            return MetadataResult.unsupported("ddl", source=MetadataSource.NATIVE_API)
+        ddl_value = await driver.select_value(
+            query.sql, object_type=normalized_type, object_name=normalized_name, owner=owner
+        )
+        return _oracle_ddl_metadata_result(
+            object_type=normalized_type,
+            object_name=normalized_name,
+            owner=owner,
+            ddl_text=_coerce_oracle_ddl_text(ddl_value),
+        )
+
+    async def get_system_metadata(
+        self,
+        driver: "OracleAsyncDriver",
+        domain: str,
+        *,
+        include_sensitive: bool = False,
+        acknowledge_license: bool = False,
+    ) -> MetadataResult:
+        """Return Oracle system metadata only when diagnostics gates are accepted."""
+
+        _ = driver
+        normalized_domain = domain.lower()
+        if normalized_domain in {"no_diagnostics", "disabled"}:
+            capability = MetadataCapability(
+                domain="system",
+                support=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.NATIVE,
+                source=MetadataSource.SYSTEM_VIEW,
+                warnings=("Diagnostics are disabled by default.",),
+            )
+            return MetadataResult(
+                "system",
+                capability=capability,
+                items=({"diagnostics_enabled": False, "domain": normalized_domain},),
+                warnings=capability.warnings,
+            )
+        if not (include_sensitive and acknowledge_license):
+            return _oracle_disabled_diagnostics_result()
+        capability = _oracle_capability_for_domain(
+            "system", include_diagnostics=True, acknowledge_diagnostics_license=True
+        )
+        return MetadataResult(
+            "system",
+            capability=capability,
+            items=({"diagnostics_enabled": True, "domain": normalized_domain},),
+            warnings=capability.warnings,
+        )
+
+    async def _select_domain(
+        self, driver: "OracleAsyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult.unsupported(domain, source=query.capability.source)
+        select = cast("Any", driver.select)
+        rows = await select(query.sql, **binds)
+        return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
+
+    async def get_schemas(self, driver: "OracleAsyncDriver") -> MetadataResult:
+        """Get Oracle user/schema metadata."""
+
+        return await self._select_domain(driver, "schemas", schema_name=None)
+
+    async def get_objects(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle object metadata from ALL_OBJECTS."""
+
+        return await self._select_domain(driver, "objects", schema_name=self.resolve_schema(schema), object_name=None)
+
+    async def get_table_details(
+        self, driver: "OracleAsyncDriver", table: str, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get rich Oracle table metadata."""
+
+        return await self._select_domain(
+            driver, "tables", schema_name=self.resolve_schema(schema), table_name=self.resolve_identifier(table)
+        )
+
+    async def get_constraints(
+        self, driver: "OracleAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle constraint metadata."""
+
+        table_name = None if table is None else self.resolve_identifier(table)
+        return await self._select_domain(
+            driver, "constraints", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
+
+    async def get_views(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle view metadata."""
+
+        return await self._select_domain(driver, "views", schema_name=self.resolve_schema(schema), view_name=None)
+
+    async def get_materialized_views(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle materialized view metadata."""
+
+        return await self._select_domain(
+            driver, "materialized_views", schema_name=self.resolve_schema(schema), mview_name=None
+        )
+
+    async def get_sequences(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle sequence metadata."""
+
+        return await self._select_domain(
+            driver, "sequences", schema_name=self.resolve_schema(schema), sequence_name=None
+        )
+
+    async def get_routines(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle routine, package, procedure, and function metadata."""
+
+        return await self._select_domain(driver, "routines", schema_name=self.resolve_schema(schema), object_name=None)
+
+    async def get_triggers(self, driver: "OracleAsyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get Oracle trigger metadata."""
+
+        return await self._select_domain(driver, "triggers", schema_name=self.resolve_schema(schema), trigger_name=None)
+
+    async def get_privileges(
+        self, driver: "OracleAsyncDriver", object_name: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle table and column grants."""
+
+        normalized_object = None if object_name is None else self.resolve_identifier(object_name)
+        return await self._select_domain(
+            driver, "grants", schema_name=self.resolve_schema(schema), object_name=normalized_object
+        )
+
+    async def get_dependencies(
+        self, driver: "OracleAsyncDriver", object_name: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle dependency metadata."""
+
+        normalized_object = None if object_name is None else self.resolve_identifier(object_name)
+        return await self._select_domain(
+            driver, "dependencies", schema_name=self.resolve_schema(schema), object_name=normalized_object
+        )
+
+    async def get_partitions(
+        self, driver: "OracleAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle partition and storage metadata."""
+
+        table_name = None if table is None else self.resolve_identifier(table)
+        return await self._select_domain(
+            driver, "partitions", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
+
+    async def get_lob_storage(
+        self, driver: "OracleAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get Oracle LOB storage metadata."""
+
+        table_name = None if table is None else self.resolve_identifier(table)
+        return await self._select_domain(
+            driver, "lob_storage", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
 
     async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
         query_text = self.get_query_text("compatible")
