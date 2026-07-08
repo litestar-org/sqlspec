@@ -740,19 +740,13 @@ class AiosqliteConnectionPool:
         Raises:
             AiosqliteConnectTimeoutError: If acquisition times out
         """
-        # Fast path: try to get connection without timeout wrapper
-        # Only use timeout when we need to wait for a connection
         try:
-            connection = await self._get_connection()
+            connection = await asyncio.wait_for(self._get_connection(), timeout=self._connect_timeout)
         except AiosqlitePoolClosedError:
             raise
-        except Exception:
-            # If fast path fails, fall back to timeout-wrapped acquisition
-            try:
-                connection = await asyncio.wait_for(self._get_connection(), timeout=self._connect_timeout)
-            except asyncio.TimeoutError as e:
-                msg = f"Connection acquisition timed out after {self._connect_timeout}s"
-                raise AiosqliteConnectTimeoutError(msg) from e
+        except asyncio.TimeoutError as e:
+            msg = f"Connection acquisition timed out after {self._connect_timeout}s"
+            raise AiosqliteConnectTimeoutError(msg) from e
 
         return connection
 
