@@ -8,10 +8,10 @@ from sqlspec.extensions.litestar.plugin import DEFAULT_CONNECTION_KEY, DEFAULT_S
 
 
 def _build_initialized_plugin() -> SQLSpecPlugin:
+    """Build a plugin and run on_app_init, which populates PluginConfigState.annotation."""
     sqlspec = SQLSpec()
     sqlspec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
     plugin = SQLSpecPlugin(sqlspec=sqlspec)
-    # on_app_init populates PluginConfigState.annotation (field(init=False)).
     plugin.on_app_init(AppConfig())
     return plugin
 
