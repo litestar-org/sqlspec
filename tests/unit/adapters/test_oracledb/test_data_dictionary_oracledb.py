@@ -11,6 +11,8 @@ from sqlspec.data_dictionary import (
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
     get_data_dictionary_loader,
@@ -334,12 +336,29 @@ def test_oracle_diagnostics_disabled_by_default() -> None:
     data_dictionary = OracledbSyncDataDictionary()
     sync_driver = cast("OracleSyncDriver", _RecordingSyncOracleDriver())
 
-    result = data_dictionary.get_system_metadata(sync_driver, "awr")
+    result = data_dictionary.get_system_metadata(sync_driver, SystemMetadataRequest("awr"))
 
-    assert result.domain == "system"
-    assert result.capability.support == MetadataSupport.UNSUPPORTED
+    assert isinstance(result, SystemMetadataResult)
+    assert result.request.domain == "awr"
+    assert result.capability.support == MetadataSupport.GATED
     assert MetadataRisk.LICENSE_GATED in result.capability.risks
     assert MetadataRisk.PRIVILEGED in result.capability.risks
+    assert "disabled by default" in result.warnings[0]
+
+
+def test_oracle_system_metadata_supports_legacy_license_opt_in() -> None:
+    """Oracle diagnostics should translate legacy license acknowledgement kwargs to the request contract."""
+
+    data_dictionary = OracledbSyncDataDictionary()
+    sync_driver = cast("OracleSyncDriver", _RecordingSyncOracleDriver())
+
+    result = data_dictionary.get_system_metadata(sync_driver, "awr", include_sensitive=True, acknowledge_license=True)
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.request.include_performance is True
+    assert result.request.allow_license_gated_diagnostics is True
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.rows == ({"diagnostics_enabled": True, "domain": "awr"},)
 
 
 def test_oracle_get_ddl_uses_dbms_metadata() -> None:
@@ -351,16 +370,14 @@ def test_oracle_get_ddl_uses_dbms_metadata() -> None:
 
     result = data_dictionary.get_ddl(sync_driver, "orders", schema="app", object_type="TABLE")
 
-    assert result.domain == "ddl"
-    assert result.capability.source == MetadataSource.NATIVE_API
-    assert result.capability.fidelity == MetadataFidelity.NATIVE
-    assert result.capability.support == MetadataSupport.SUPPORTED
-    assert len(result.items) == 1
-    ddl = cast("DDLResult", result.items[0])
-    assert ddl.ddl == 'CREATE TABLE "APP"."ORDERS" ("ID" NUMBER)'
-    assert ddl.source == MetadataSource.NATIVE_API
-    assert ddl.fidelity == MetadataFidelity.NATIVE
-    assert ddl.warnings == result.warnings
+    assert isinstance(result, DDLResult)
+    assert result.identity.schema == "APP"
+    assert result.identity.name == "ORDERS"
+    assert result.ddl == 'CREATE TABLE "APP"."ORDERS" ("ID" NUMBER)'
+    assert result.source == MetadataSource.NATIVE_API
+    assert result.fidelity == MetadataFidelity.NATIVE
+    assert result.status == MetadataSupport.SUPPORTED
+    assert result.warnings
     statement_text, kwargs = sync_driver_stub.select_value_calls[0]
     assert "DBMS_METADATA.GET_DDL" in statement_text
     assert kwargs == {"object_type": "TABLE", "object_name": "ORDERS", "owner": "APP"}
@@ -423,13 +440,30 @@ async def test_async_oracle_get_ddl_uses_dbms_metadata() -> None:
 
     result = await data_dictionary.get_ddl(async_driver, "orders", schema="app", object_type="TABLE")
 
-    assert result.domain == "ddl"
-    assert len(result.items) == 1
-    ddl = cast("DDLResult", result.items[0])
-    assert ddl.ddl == 'CREATE TABLE "APP"."ORDERS" ("ID" NUMBER)'
+    assert isinstance(result, DDLResult)
+    assert result.identity.schema == "APP"
+    assert result.identity.name == "ORDERS"
+    assert result.ddl == 'CREATE TABLE "APP"."ORDERS" ("ID" NUMBER)'
     statement_text, kwargs = async_driver_stub.select_value_calls[0]
     assert "DBMS_METADATA.GET_DDL" in statement_text
     assert kwargs == {"object_type": "TABLE", "object_name": "ORDERS", "owner": "APP"}
+
+
+@pytest.mark.anyio
+async def test_async_oracle_system_metadata_returns_contract_result() -> None:
+    """Async Oracle diagnostics should return the typed opt-in envelope."""
+
+    data_dictionary = OracledbAsyncDataDictionary()
+    async_driver = cast("OracleAsyncDriver", _RecordingAsyncOracleDriver())
+
+    result = await data_dictionary.get_system_metadata(
+        async_driver, SystemMetadataRequest("awr", include_performance=True, allow_license_gated_diagnostics=True)
+    )
+
+    assert isinstance(result, SystemMetadataResult)
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.source == MetadataSource.SYSTEM_VIEW
+    assert result.rows == ({"diagnostics_enabled": True, "domain": "awr"},)
 
 
 @pytest.mark.anyio
