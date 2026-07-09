@@ -11,6 +11,10 @@ The checked-in snapshots are interpreted/uncompiled SQLSpec runs. Each file
 records `metadata.mypyc_compiled: false`; no compiled-performance claim is made
 by these baselines.
 
+The snapshots use `pool_size: 1` so pooled SQLSpec paths are compared with the
+single raw connection used by the matching scenario. Use `--pool-size` only
+when deliberately measuring a different pool topology.
+
 The current inventory is:
 
 - `sqlite.json`, `aiosqlite.json`, and `duckdb.json` for local SQLite-family

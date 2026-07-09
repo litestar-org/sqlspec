@@ -21,6 +21,7 @@ def test_bench_defaults_are_statistically_useful() -> None:
 
     assert module.DEFAULT_BENCH_ITERATIONS == 7
     assert module.DEFAULT_BENCH_WARMUP == 3
+    assert module.POOL_SIZE == 1
 
 
 def test_bench_summary_reports_stddev_iqr_and_noise() -> None:

@@ -152,7 +152,7 @@ SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 
 ROWS_TO_INSERT = 10_000
-POOL_SIZE = 5  # Default pool size for async adapters
+POOL_SIZE = 1  # Match the single raw connection used by each benchmark scenario
 DEFAULT_BENCH_ITERATIONS = 7
 DEFAULT_BENCH_WARMUP = 3
 NOISY_STDDEV_RATIO = 0.10
@@ -1154,7 +1154,8 @@ def sqlspec_mysqlconnector_json_rows() -> None:
     connection_config = _mysql_benchmark_connection_config()
     if Config is None or connection_config is None:
         _benchmark_unavailable()
-    config = Config(connection_config=connection_config, driver_features={"json_deserializer": json.loads})
+    pool_config = {**connection_config, "pool_size": 1}
+    config = Config(connection_config=pool_config, driver_features={"json_deserializer": json.loads})
     try:
         with config.provide_session() as session:
             session.execute(MYSQL_JSON_CREATE)
@@ -1830,6 +1831,7 @@ async def sqlalchemy_aiosqlite_repeated_queries() -> None:
 # Asyncpg implementations
 # These require asyncpg and optionally SQLAlchemy[asyncio] to be installed
 
+
 def _get_asyncpg() -> Any:
     """Import asyncpg lazily."""
     try:
@@ -1954,7 +1956,7 @@ async def sqlspec_asyncpg_initialization() -> None:
     if AsyncpgConfig is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn()})
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -1968,7 +1970,7 @@ async def sqlspec_asyncpg_write_heavy() -> None:
     if AsyncpgConfig is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn()})
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -1984,7 +1986,7 @@ async def sqlspec_asyncpg_read_heavy() -> None:
     if AsyncpgConfig is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn()})
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             rows = await session.fetch(SELECT_TEST_VALUES)
@@ -1998,7 +2000,7 @@ async def sqlspec_asyncpg_iterative_inserts() -> None:
     if AsyncpgConfig is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn()})
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -2014,7 +2016,7 @@ async def sqlspec_asyncpg_repeated_queries() -> None:
     if AsyncpgConfig is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn()})
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -2157,9 +2159,7 @@ def _run_sqlspec_sync_service_rows(dsn: str, *, driver: str) -> None:
     config_class = _get_sync_service_config(driver)
     if config_class is None:
         _benchmark_unavailable()
-    config = config_class(
-        connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)},
-    )
+    config = config_class(connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)})
     try:
         spec = SQLSpec()
         with spec.provide_session(config) as session:
@@ -2231,9 +2231,7 @@ async def _run_sqlspec_async_service_rows(dsn: str, *, driver: str) -> None:
     if config_class is None:
         _benchmark_unavailable()
     connection_key = "dsn" if "asyncpg" in driver else "conninfo"
-    config = config_class(
-        connection_config={connection_key: dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)},
-    )
+    config = config_class(connection_config={connection_key: dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)})
     try:
         spec = SQLSpec()
         async with spec.provide_session(config) as session:
