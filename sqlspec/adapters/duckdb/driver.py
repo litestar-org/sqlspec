@@ -81,7 +81,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     the sqlspec.core modules for statement processing and caching.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_transaction_active")
     dialect = "duckdb"
 
     def __init__(
@@ -98,6 +98,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: DuckDBDataDictionary | None = None
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -225,6 +226,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.Error as e:
             msg = f"Failed to begin DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = True
 
     def commit(self) -> None:
         """Commit the current transaction."""
@@ -233,6 +235,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.Error as e:
             msg = f"Failed to commit DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -241,6 +244,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.Error as e:
             msg = f"Failed to rollback DuckDB transaction: {e}"
             raise SQLSpecError(msg) from e
+        finally:
+            self._transaction_active = False
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set DuckDB search_path for migration SQL."""
@@ -532,12 +537,13 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
-        DuckDB uses explicit BEGIN TRANSACTION and does not expose transaction state.
+        DuckDB does not expose native transaction state, so it is tracked via a
+        flag toggled in begin/commit/rollback.
 
         Returns:
-            False - DuckDB requires explicit transaction management.
+            True when a transaction is active.
         """
-        return False
+        return self._transaction_active
 
 
 def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] | None") -> None:
