@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.extensions.adk.memory._types import MemoryRecord
 
-__all__ = ("PymssqlADKConfig", "PymssqlADKMemoryStore", "PymssqlADKStore", "PymssqlSyncADKStore")
+__all__ = ("PymssqlADKConfig", "PymssqlADKMemoryStore", "PymssqlADKStore")
 
 MSSQL_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
@@ -47,7 +47,7 @@ class PymssqlADKConfig(ADKConfig):
     """Force native SQL Server JSON columns when True, or NVARCHAR(MAX) when False."""
 
 
-class PymssqlSyncADKStore(BaseSyncADKStore["PymssqlConfig"]):
+class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
     """Synchronous pymssql ADK session/event store."""
 
     connector_name: ClassVar[str] = "pymssql"
@@ -840,6 +840,3 @@ def _escape_sql_literal(value: str) -> str:
 def _raise_session_not_found(session_id: str) -> None:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
-
-
-PymssqlADKStore = PymssqlSyncADKStore

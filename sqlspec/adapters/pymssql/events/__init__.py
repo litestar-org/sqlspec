@@ -1,5 +1,5 @@
 """pymssql event extension."""
 
-from sqlspec.adapters.pymssql.events.store import PymssqlEventQueueStore, PymssqlSyncEventQueueStore
+from sqlspec.adapters.pymssql.events.store import PymssqlEventQueueStore
 
-__all__ = ("PymssqlEventQueueStore", "PymssqlSyncEventQueueStore")
+__all__ = ("PymssqlEventQueueStore",)
