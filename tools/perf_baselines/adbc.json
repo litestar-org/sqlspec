@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 5,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:28:08+0000"
+  },
+  "results": [
+    {
+      "driver": "adbc",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.01042592606972903,
+      "times": [
+        0.006431582965888083,
+        0.010977113037370145,
+        0.01042592606972903
+      ],
+      "stddev": 0.0024806056899894045,
+      "iqr": 0.002272765035741031,
+      "noise_ratio": 0.2379266525965185,
+      "noisy": true
+    },
+    {
+      "driver": "adbc",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.011981514981016517,
+      "times": [
+        0.009798264014534652,
+        0.011981514981016517,
+        0.012234797002747655
+      ],
+      "stddev": 0.001339616211695623,
+      "iqr": 0.0012182664941065013,
+      "noise_ratio": 0.11180691371818235,
+      "noisy": true
+    }
+  ]
+}

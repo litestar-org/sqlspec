@@ -535,7 +535,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             self._pending_execute_options = previous_options
 
     def _execute_kwargs(self, *, for_read: bool = False) -> dict[str, Any]:
-        kwargs = {key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features}
+        kwargs: dict[str, Any] = {
+            key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features
+        }
         request_options = self.driver_features.get("request_options")
         if request_options is not None:
             kwargs["request_options"] = request_options

@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 5,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:42:57+0000"
+  },
+  "results": [
+    {
+      "driver": "cockroach_asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.30942424200475216,
+      "times": [
+        0.29487203096505255,
+        0.3182670440291986,
+        0.30942424200475216
+      ],
+      "stddev": 0.011813048082939709,
+      "iqr": 0.011697506532073021,
+      "noise_ratio": 0.03817751319807154,
+      "noisy": false
+    },
+    {
+      "driver": "cockroach_asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.30866462900303304,
+      "times": [
+        0.30866462900303304,
+        0.2972019789740443,
+        0.30954179307445884
+      ],
+      "stddev": 0.006885162483292899,
+      "iqr": 0.006169907050207257,
+      "noise_ratio": 0.02230628920952664,
+      "noisy": false
+    }
+  ]
+}

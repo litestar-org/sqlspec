@@ -321,6 +321,15 @@ bench-gate:                                         ## Run performance regressio
 	@uv run python tools/scripts/bench_gate.py
 	@echo "${OK} Performance gate complete"
 
+.PHONY: bench-gate-adapters
+DRIVERS ?= duckdb aiosqlite
+bench-gate-adapters:                                ## Compare selected adapter benchmarks with committed baselines
+	@mkdir -p /tmp/sqlspec-bench
+	@for driver in ${DRIVERS}; do \
+		uv run python tools/scripts/bench.py --driver "$${driver}" --extended --json-output "/tmp/sqlspec-bench/$${driver}.json"; \
+		uv run python tools/scripts/bench_compare.py "tools/perf_baselines/$${driver}.json" "/tmp/sqlspec-bench/$${driver}.json" --threshold "$${BENCHMARK_THRESHOLD:-30}"; \
+	done
+
 .PHONY: bench-subsystems
 bench-subsystems:                                   ## Run subsystem micro-benchmarks
 	@echo "${INFO} Running subsystem micro-benchmarks... 🔬"

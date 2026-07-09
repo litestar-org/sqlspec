@@ -1,0 +1,283 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 5,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:28:31+0000"
+  },
+  "results": [
+    {
+      "driver": "duckdb",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "initialization",
+      "time": 0.015833258046768606,
+      "times": [
+        0.016834501991979778,
+        0.015228876029141247,
+        0.015833258046768606
+      ],
+      "stddev": 0.0008109461340099916,
+      "iqr": 0.0008028129814192653,
+      "noise_ratio": 0.051217894107113145,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "initialization",
+      "time": 0.019770296989008784,
+      "times": [
+        0.016905804979614913,
+        0.019770296989008784,
+        0.02060711197555065
+      ],
+      "stddev": 0.0019410155104886565,
+      "iqr": 0.001850653497967869,
+      "noise_ratio": 0.09817836887163385,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "initialization",
+      "time": 0.017573133925907314,
+      "times": [
+        0.018767324974760413,
+        0.017573133925907314,
+        0.01724940096028149
+      ],
+      "stddev": 0.0007994778095654648,
+      "iqr": 0.0007589620072394609,
+      "noise_ratio": 0.04549432178325513,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "write_heavy",
+      "time": 0.5367110200459138,
+      "times": [
+        0.537319356109947,
+        0.5344808340305462,
+        0.5367110200459138
+      ],
+      "stddev": 0.0014944904385324562,
+      "iqr": 0.001419261039700359,
+      "noise_ratio": 0.0027845346615104115,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "write_heavy",
+      "time": 0.02278962905984372,
+      "times": [
+        0.02236126409843564,
+        0.02601351507473737,
+        0.02278962905984372
+      ],
+      "stddev": 0.0019964917050952964,
+      "iqr": 0.0018261254881508648,
+      "noise_ratio": 0.08760527430493366,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "write_heavy",
+      "time": 0.14276801503729075,
+      "times": [
+        0.14103493804577738,
+        0.15206888795364648,
+        0.14276801503729075
+      ],
+      "stddev": 0.005933771193123829,
+      "iqr": 0.00551697495393455,
+      "noise_ratio": 0.041562328870188035,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "read_heavy",
+      "time": 0.541237351950258,
+      "times": [
+        0.541237351950258,
+        0.5916435259860009,
+        0.5304276540409774
+      ],
+      "stddev": 0.03267265657957488,
+      "iqr": 0.03060793597251177,
+      "noise_ratio": 0.06036659602639109,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "read_heavy",
+      "time": 0.023211098043248057,
+      "times": [
+        0.023211098043248057,
+        0.024428004981018603,
+        0.019917411031201482
+      ],
+      "stddev": 0.002333620020791917,
+      "iqr": 0.0022552969749085605,
+      "noise_ratio": 0.10053897564190206,
+      "noisy": true
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "read_heavy",
+      "time": 0.1493664460722357,
+      "times": [
+        0.15420044597703964,
+        0.14584276103414595,
+        0.1493664460722357
+      ],
+      "stddev": 0.004195926773510507,
+      "iqr": 0.004178842471446842,
+      "noise_ratio": 0.02809149500337779,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "iterative_inserts",
+      "time": 0.7498466870747507,
+      "times": [
+        0.7498466870747507,
+        0.7365695349872112,
+        0.8047362040961161
+      ],
+      "stddev": 0.036138245262227274,
+      "iqr": 0.03408333455445245,
+      "noise_ratio": 0.048194178736999244,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "iterative_inserts",
+      "time": 0.7860760940238833,
+      "times": [
+        0.7936283749295399,
+        0.7662731109885499,
+        0.7860760940238833
+      ],
+      "stddev": 0.014127429285240791,
+      "iqr": 0.013677631970494986,
+      "noise_ratio": 0.01797208869808418,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "iterative_inserts",
+      "time": 0.39361947390716523,
+      "times": [
+        0.39102195494342595,
+        0.4010151829570532,
+        0.39361947390716523
+      ],
+      "stddev": 0.005185046178674526,
+      "iqr": 0.0049966140068136156,
+      "noise_ratio": 0.013172737942069945,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "repeated_queries",
+      "time": 0.7847390579991043,
+      "times": [
+        0.7847390579991043,
+        0.7702551479451358,
+        0.7920555169694126
+      ],
+      "stddev": 0.011094820953266868,
+      "iqr": 0.010900184512138367,
+      "noise_ratio": 0.014138229568381611,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "repeated_queries",
+      "time": 0.3108789490070194,
+      "times": [
+        0.3167608509538695,
+        0.3108789490070194,
+        0.30344696808606386
+      ],
+      "stddev": 0.006671963578281078,
+      "iqr": 0.00665694143390283,
+      "noise_ratio": 0.02146161262958474,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "repeated_queries",
+      "time": 0.4838213719194755,
+      "times": [
+        0.4838213719194755,
+        0.5051858589285985,
+        0.4721570409601554
+      ],
+      "stddev": 0.016750128050675127,
+      "iqr": 0.016514408984221518,
+      "noise_ratio": 0.03462047983581619,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "bulk",
+      "time": 0.1985583989880979,
+      "times": [
+        0.19433419802226126,
+        0.1985583989880979,
+        0.22344125888776034
+      ],
+      "stddev": 0.01572800889503538,
+      "iqr": 0.01455353043274954,
+      "noise_ratio": 0.07921099774771127,
+      "noisy": false
+    },
+    {
+      "driver": "duckdb",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "bulk",
+      "time": 0.027940055006183684,
+      "times": [
+        0.027940055006183684,
+        0.022768093971535563,
+        0.03505888197105378
+      ],
+      "stddev": 0.006171039187862136,
+      "iqr": 0.006145393999759108,
+      "noise_ratio": 0.2208671094776429,
+      "noisy": true
+    }
+  ]
+}

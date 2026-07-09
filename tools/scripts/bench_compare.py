@@ -18,6 +18,8 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+BenchmarkKey = tuple[str, str, str]
+
 __all__ = ("main", "print_comparison_table")
 
 
@@ -47,7 +49,7 @@ def _load_results(path: str) -> dict[str, Any]:
     return cast("dict[str, Any]", data)
 
 
-def _build_lookup(data: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
+def _build_lookup(data: dict[str, Any]) -> dict[BenchmarkKey, dict[str, Any]]:
     """Build a lookup table from benchmark results.
 
     Args:
@@ -56,11 +58,16 @@ def _build_lookup(data: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, 
     Returns:
         Dictionary mapping (driver, library, scenario) to result payload.
     """
-    lookup: dict[tuple[str, str, str], dict[str, Any]] = {}
+    lookup: dict[BenchmarkKey, dict[str, Any]] = {}
     for result in data["results"]:
-        key = (result["driver"], result["library"], result["scenario"])
+        key = (result["driver"], result.get("library_key", result["library"]), result["scenario"])
         lookup[key] = result
     return lookup
+
+
+def _missing_required_scenarios(data: dict[str, Any], required: set[BenchmarkKey]) -> set[BenchmarkKey]:
+    """Return required benchmark identities absent from a result payload."""
+    return required - set(_build_lookup(data))
 
 
 def _format_time(result: dict[str, Any]) -> str:
@@ -126,17 +133,25 @@ def print_comparison_table(baseline: dict[str, Any], current: dict[str, Any], *,
         driver, library, scenario = key
         baseline_result = baseline_lookup.get(key)
         current_result = current_lookup.get(key)
+        library_label = (current_result or baseline_result or {}).get("library", library)
 
         if baseline_result is None:
             assert current_result is not None
             table.add_row(
-                driver, library, scenario, "n/a", _format_time(current_result), "n/a", "n/a", "[dim]NEW[/dim]"
+                driver, library_label, scenario, "n/a", _format_time(current_result), "n/a", "n/a", "[dim]NEW[/dim]"
             )
             continue
 
         if current_result is None:
             table.add_row(
-                driver, library, scenario, _format_time(baseline_result), "n/a", "n/a", "n/a", "[dim]REMOVED[/dim]"
+                driver,
+                library_label,
+                scenario,
+                _format_time(baseline_result),
+                "n/a",
+                "n/a",
+                "n/a",
+                "[dim]REMOVED[/dim]",
             )
             continue
 
@@ -159,7 +174,7 @@ def print_comparison_table(baseline: dict[str, Any], current: dict[str, Any], *,
 
         table.add_row(
             driver,
-            library,
+            library_label,
             scenario,
             _format_time(baseline_result),
             _format_time(current_result),
@@ -220,6 +235,11 @@ def main(baseline: str, current: str, threshold: float) -> None:
     # Exit with non-zero if any regressions detected
     current_lookup = _build_lookup(current_data)
     baseline_lookup = _build_lookup(baseline_data)
+    missing = _missing_required_scenarios(current_data, set(baseline_lookup))
+    if missing:
+        missing_text = ", ".join("/".join(key) for key in sorted(missing))
+        click.secho(f"\nMissing required benchmark scenario(s): {missing_text}", fg="red")
+        sys.exit(1)
     regressions = 0
     for key in set(baseline_lookup.keys()) & set(current_lookup.keys()):
         bt = float(baseline_lookup[key]["time"])

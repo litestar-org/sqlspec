@@ -13,6 +13,36 @@ helper documents service-backed scenarios for the cache and fetch controls:
 
    uv run python tools/scripts/bench_tuning.py --list
 
+Cross-adapter benchmark snapshots
+==================================
+
+The main benchmark runner has extended scenarios for the optimized adapter
+paths. SQLite remains the default local gate; adapter-specific runs can compare
+against the committed JSON snapshots in ``tools/perf_baselines/``.
+
+.. code-block:: bash
+
+   make bench-gate
+   make bench-gate-adapters DRIVERS="duckdb aiosqlite"
+
+Service-backed runs use the same command after exporting connection values for
+the service under test. These cross-adapter comparisons are opt-in development
+and management checks, not an enabled CI gate: host, network, and service
+conditions can produce materially different timings. The scenario reads these
+variables and skips cleanly when the optional service is not configured; the
+comparison command then fails if a required baseline scenario is absent.
+
+The headline scenarios are ``spanner/strings``,
+``mysqlconnector/json_rows``, ``adbc/rows``, ``duckdb/bulk``, and
+``aiosqlite/worker_hops``. Oracle LOB scenarios remain under the Oracle-specific
+benchmark configuration.
+
+``bench_compare.py`` uses the stable ``library_key`` in result JSON, so a
+baseline captured from interpreted SQLSpec can be compared with a MyPyC run.
+The checked-in baseline snapshots themselves are interpreted/uncompiled only
+(``metadata.mypyc_compiled`` is ``false``); they are not compiled-performance
+references.
+
 Async bridge executor limits
 ============================
 

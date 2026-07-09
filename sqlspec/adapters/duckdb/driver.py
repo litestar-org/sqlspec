@@ -179,9 +179,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         config = statement_config or self.statement_config
         if isinstance(statement, str) and not filters and not kwargs and config is self.statement_config:
             prepared_statement = SQL(statement, tuple(parameters), statement_config=config, is_many=True)
-            _, prepared_parameters = self._compiled_sql(prepared_statement, config)
-            processed_state = prepared_statement.get_processed_state()
-            parsed_expression = processed_state.parsed_expression
+            cached_statement, prepared_parameters = self._compiled_statement(prepared_statement, config)
+            parsed_expression = cached_statement.expression
             if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
                 bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
                 if bulk_result is not None:
