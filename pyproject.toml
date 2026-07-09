@@ -133,7 +133,7 @@ lint = [
   "types-protobuf",
   "asyncpg-stubs",
   "pyarrow-stubs",
-  "pandas-stubs",
+  "pandas-stubs<3",
   "tomli>=2.0.0",
   "types-PyMySQL",
 ]
