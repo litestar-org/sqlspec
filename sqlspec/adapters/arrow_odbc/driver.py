@@ -22,6 +22,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -248,21 +249,24 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return ArrowOdbcExceptionHandler()
 
     def create_savepoint(self, name: str) -> None:
+        safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
-            self.execute_script(f"SAVE TRANSACTION {name}")
+            self.execute_script(f"SAVE TRANSACTION {safe_name}")
             return
-        self.execute_script(f"SAVEPOINT {name}")
+        self.execute_script(f"SAVEPOINT {safe_name}")
 
     def release_savepoint(self, name: str) -> None:
+        safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
             return
-        self.execute_script(f"RELEASE SAVEPOINT {name}")
+        self.execute_script(f"RELEASE SAVEPOINT {safe_name}")
 
     def rollback_to_savepoint(self, name: str) -> None:
+        safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
-            self.execute_script(f"ROLLBACK TRANSACTION {name}")
+            self.execute_script(f"ROLLBACK TRANSACTION {safe_name}")
             return
-        self.execute_script(f"ROLLBACK TO SAVEPOINT {name}")
+        self.execute_script(f"ROLLBACK TO SAVEPOINT {safe_name}")
 
     def select_to_arrow(
         self,
