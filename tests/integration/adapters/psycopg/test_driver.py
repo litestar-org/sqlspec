@@ -169,6 +169,25 @@ def test_psycopg_statement_stack_continue_on_error(psycopg_session: "PsycopgSync
     assert verify.get_data()[0]["total"] == 2
 
 
+def test_psycopg_statement_stack_fail_fast_reports_operation_index(psycopg_session: "PsycopgSyncDriver") -> None:
+    """Native pipeline fail-fast must surface StackExecutionError carrying the failing op index."""
+    from sqlspec.exceptions import StackExecutionError
+
+    psycopg_session.execute("DELETE FROM test_table_psycopg_sync")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (1, "first", 10))
+        .push_execute("INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (1, "dup", 20))
+        .push_execute("INSERT INTO test_table_psycopg_sync (id, name, value) VALUES (%s, %s, %s)", (2, "third", 30))
+    )
+
+    with pytest.raises(StackExecutionError) as excinfo:
+        psycopg_session.execute_stack(stack)
+
+    assert excinfo.value.operation_index == 1
+
+
 def test_psycopg_postgresql_specific_features(psycopg_session: "PsycopgSyncDriver") -> None:
     """Test PostgreSQL-specific features with psycopg."""
 

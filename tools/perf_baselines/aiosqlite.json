@@ -1,0 +1,283 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:51:17+0000"
+  },
+  "results": [
+    {
+      "driver": "aiosqlite",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "initialization",
+      "time": 0.002717631054110825,
+      "times": [
+        0.002773132990114391,
+        0.002717631054110825,
+        0.002691857982426882
+      ],
+      "stddev": 4.1533807512222796e-05,
+      "iqr": 4.063750384375453e-05,
+      "noise_ratio": 0.01528309276912209,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "initialization",
+      "time": 0.002668604953214526,
+      "times": [
+        0.003399751032702625,
+        0.002668604953214526,
+        0.0024395829532295465
+      ],
+      "stddev": 0.0005014891834770644,
+      "iqr": 0.0004800840397365391,
+      "noise_ratio": 0.18792185140516385,
+      "noisy": true
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "initialization",
+      "time": 0.004618455073796213,
+      "times": [
+        0.004618455073796213,
+        0.004851963021792471,
+        0.0037743370048701763
+      ],
+      "stddev": 0.0005669125606318043,
+      "iqr": 0.0005388130084611475,
+      "noise_ratio": 0.12274939380666562,
+      "noisy": true
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "write_heavy",
+      "time": 0.005042461096309125,
+      "times": [
+        0.004879332962445915,
+        0.005042461096309125,
+        0.005161065026186407
+      ],
+      "stddev": 0.00014145119062742995,
+      "iqr": 0.00014086603187024593,
+      "noise_ratio": 0.02805201426957293,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "write_heavy",
+      "time": 0.005528997047804296,
+      "times": [
+        0.005528997047804296,
+        0.0051234320271760225,
+        0.00662932894192636
+      ],
+      "stddev": 0.0007792024534777046,
+      "iqr": 0.0007529484573751688,
+      "noise_ratio": 0.14093016269327643,
+      "noisy": true
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "write_heavy",
+      "time": 0.010806650971062481,
+      "times": [
+        0.010487912921234965,
+        0.011826605070382357,
+        0.010806650971062481
+      ],
+      "stddev": 0.0006992849895090613,
+      "iqr": 0.0006693460745736957,
+      "noise_ratio": 0.06470876050143308,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "read_heavy",
+      "time": 0.006153721013106406,
+      "times": [
+        0.006340676103718579,
+        0.006153721013106406,
+        0.005774626974016428
+      ],
+      "stddev": 0.0002884083082529355,
+      "iqr": 0.0002830245648510754,
+      "noise_ratio": 0.04686730315506238,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "read_heavy",
+      "time": 0.0073613920249044895,
+      "times": [
+        0.007489705923944712,
+        0.006590571021661162,
+        0.0073613920249044895
+      ],
+      "stddev": 0.00048632517383475043,
+      "iqr": 0.00044956745114177465,
+      "noise_ratio": 0.06606429493083005,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "read_heavy",
+      "time": 0.010083899949677289,
+      "times": [
+        0.010083899949677289,
+        0.01029131596442312,
+        0.010013505001552403
+      ],
+      "stddev": 0.00014442748064092192,
+      "iqr": 0.00013890548143535852,
+      "noise_ratio": 0.014322581675906451,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "iterative_inserts",
+      "time": 0.04226128803566098,
+      "times": [
+        0.039598928997293115,
+        0.048317581997253,
+        0.04226128803566098
+      ],
+      "stddev": 0.004468067485541233,
+      "iqr": 0.004359326499979943,
+      "noise_ratio": 0.1057248298199284,
+      "noisy": true
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "iterative_inserts",
+      "time": 0.15077839605510235,
+      "times": [
+        0.14538006496150047,
+        0.1511205150745809,
+        0.15077839605510235
+      ],
+      "stddev": 0.003220036012231414,
+      "iqr": 0.002870225056540221,
+      "noise_ratio": 0.021356083474018676,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "iterative_inserts",
+      "time": 0.3442953589837998,
+      "times": [
+        0.3184149160515517,
+        0.3442953589837998,
+        0.34637885307893157
+      ],
+      "stddev": 0.015578404112130502,
+      "iqr": 0.013981968513689935,
+      "noise_ratio": 0.045247209134943685,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "repeated_queries",
+      "time": 0.27755877596791834,
+      "times": [
+        0.2943803749512881,
+        0.27755877596791834,
+        0.27284023095853627
+      ],
+      "stddev": 0.011322607639816268,
+      "iqr": 0.010770071996375918,
+      "noise_ratio": 0.040793549403478395,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "repeated_queries",
+      "time": 0.36091821803711355,
+      "times": [
+        0.356790196034126,
+        0.36091821803711355,
+        0.36353744997177273
+      ],
+      "stddev": 0.0034016265051633136,
+      "iqr": 0.0033736269688233733,
+      "noise_ratio": 0.009424923251764257,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "repeated_queries",
+      "time": 0.45875454996712506,
+      "times": [
+        0.4920030679786578,
+        0.45875454996712506,
+        0.4536135320086032
+      ],
+      "stddev": 0.0208392677718819,
+      "iqr": 0.019194767985027283,
+      "noise_ratio": 0.045425746237013384,
+      "noisy": false
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "worker_hops",
+      "time": 0.08135498594492674,
+      "times": [
+        0.08067048096563667,
+        0.0959955370053649,
+        0.08135498594492674
+      ],
+      "stddev": 0.008657093671673539,
+      "iqr": 0.007662528019864112,
+      "noise_ratio": 0.10641134739466318,
+      "noisy": true
+    },
+    {
+      "driver": "aiosqlite",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "worker_hops",
+      "time": 0.19313774502370507,
+      "times": [
+        0.19621139706578106,
+        0.18743419996462762,
+        0.19313774502370507
+      ],
+      "stddev": 0.004453780268288593,
+      "iqr": 0.004388598550576717,
+      "noise_ratio": 0.02306012358041123,
+      "noisy": false
+    }
+  ]
+}

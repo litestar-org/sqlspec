@@ -22,6 +22,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -109,6 +110,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_max_binary_size_val",
         "_max_text_size_val",
         "_query_timeout_sec_val",
+        "_transaction_active",
         "_use_concurrent_fetch",
         "dialect",
     )
@@ -139,6 +141,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
         self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
+        self._transaction_active = False
 
     @property
     def data_dictionary(self) -> "ArrowOdbcDataDictionary":
@@ -206,17 +209,21 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return 0
 
     def _connection_in_transaction(self) -> bool:
-        """Return whether the generic ODBC connection is in an active transaction.
+        """Return whether SQLSpec holds an explicit transaction on the connection.
 
-        arrow-odbc does not expose a portable transaction-state API, so stack
-        execution relies on SQLSpec's explicit transaction management.
+        arrow-odbc does not expose a portable transaction-state API, so the
+        driver tracks the boundary opened by begin() and closed by
+        commit()/rollback().
         """
-        return False
+        return self._transaction_active
 
     def begin(self) -> None:
-        if self._dialect == "mssql":
-            return
-        self.connection.execute("BEGIN")
+        try:
+            self.connection.execute("BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN")
+        except Exception as exc:
+            msg = f"Failed to begin transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+        self._transaction_active = True
 
     def commit(self) -> None:
         try:
@@ -224,6 +231,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except Exception as exc:
             msg = f"Failed to commit transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        self._transaction_active = False
 
     def rollback(self) -> None:
         try:
@@ -231,6 +239,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except Exception as exc:
             msg = f"Failed to rollback transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        finally:
+            self._transaction_active = False
 
     def with_cursor(self, connection: "ArrowOdbcConnection") -> "ArrowOdbcCursor":
         return ArrowOdbcCursor(connection)
@@ -239,21 +249,24 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return ArrowOdbcExceptionHandler()
 
     def create_savepoint(self, name: str) -> None:
+        safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
-            self.execute_script(f"SAVE TRANSACTION {name}")
+            self.execute_script(f"SAVE TRANSACTION {safe_name}")
             return
-        self.execute_script(f"SAVEPOINT {name}")
+        self.execute_script(f"SAVEPOINT {safe_name}")
 
     def release_savepoint(self, name: str) -> None:
+        safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
             return
-        self.execute_script(f"RELEASE SAVEPOINT {name}")
+        self.execute_script(f"RELEASE SAVEPOINT {safe_name}")
 
     def rollback_to_savepoint(self, name: str) -> None:
+        safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
-            self.execute_script(f"ROLLBACK TRANSACTION {name}")
+            self.execute_script(f"ROLLBACK TRANSACTION {safe_name}")
             return
-        self.execute_script(f"ROLLBACK TO SAVEPOINT {name}")
+        self.execute_script(f"ROLLBACK TO SAVEPOINT {safe_name}")
 
     def select_to_arrow(
         self,

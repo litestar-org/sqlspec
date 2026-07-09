@@ -2,11 +2,11 @@
 
 import re
 
-from sqlspec.adapters.mssql_python.config import MssqlPythonAsyncConfig, MssqlPythonConfig
+from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.text import split_qualified_identifier
 
-__all__ = ("MssqlPythonAsyncEventQueueStore", "MssqlPythonEventQueueStore", "MssqlPythonSyncEventQueueStore")
+__all__ = ("MssqlPythonEventQueueStore",)
 
 _NVARCHAR_MAX_THRESHOLD = 4000
 _QUALIFIED_IDENTIFIER_MIN_PARTS = 2
@@ -57,15 +57,6 @@ class MssqlPythonEventQueueStore(_MssqlPythonEventStoreMixin, BaseEventQueueStor
     """Event queue DDL for mssql-python sync configs."""
 
     __slots__ = ()
-
-
-class MssqlPythonAsyncEventQueueStore(_MssqlPythonEventStoreMixin, BaseEventQueueStore[MssqlPythonAsyncConfig]):
-    """Event queue DDL for mssql-python async configs."""
-
-    __slots__ = ()
-
-
-MssqlPythonSyncEventQueueStore = MssqlPythonEventQueueStore
 
 
 def _split_table_name(table_name: str) -> tuple[str, str]:

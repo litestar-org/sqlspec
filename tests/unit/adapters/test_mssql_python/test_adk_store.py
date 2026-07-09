@@ -4,12 +4,11 @@
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
-import pytest
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonAsyncADKStore, MssqlPythonSyncADKStore
+from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonADKStore
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore
+from sqlspec.extensions.adk import BaseSyncADKStore
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -18,14 +17,12 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
     return config
 
 
-def test_mssql_python_adk_exports_sync_and_async_store_types() -> None:
-    """The adapter exposes sync and async stores that implement the current ADK bases."""
+def test_mssql_python_adk_exports_sync_store_type() -> None:
+    """The adapter exposes a sync store that implements the current ADK base."""
 
-    sync_store = MssqlPythonSyncADKStore(_mock_config())
-    async_store = MssqlPythonAsyncADKStore(_mock_config())
+    sync_store = MssqlPythonADKStore(_mock_config())
 
     assert isinstance(sync_store, BaseSyncADKStore)
-    assert isinstance(async_store, BaseAsyncADKStore)
 
 
 def test_mssql_python_adk_config_extends_base_config_without_redeclaring_base_fields() -> None:
@@ -44,7 +41,7 @@ def test_mssql_python_adk_config_extends_base_config_without_redeclaring_base_fi
 def test_sync_store_reads_adk_table_names_from_extension_config() -> None:
     """Store table names come from extension_config['adk'], not driver features."""
 
-    store = MssqlPythonSyncADKStore(
+    store = MssqlPythonADKStore(
         _mock_config({
             "session_table": "custom_session",
             "events_table": "custom_event",
@@ -64,7 +61,7 @@ def test_sync_store_reads_adk_table_names_from_extension_config() -> None:
 def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() -> None:
     """The default MSSQL DDL uses idempotent sys.tables probes and NVARCHAR JSON storage."""
 
-    store = MssqlPythonSyncADKStore(_mock_config())
+    store = MssqlPythonADKStore(_mock_config())
 
     sessions_sql = store._sessions_table_ddl()
     events_sql = store._events_table_ddl()
@@ -89,7 +86,7 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
 def test_sync_store_can_force_native_json_from_extension_config() -> None:
     """MSSQL-native JSON is opt-in unless version detection proves support."""
 
-    store = MssqlPythonSyncADKStore(_mock_config({"native_json": True}))
+    store = MssqlPythonADKStore(_mock_config({"native_json": True}))
 
     assert "state JSON NOT NULL" in store._sessions_table_ddl()
     assert "event_data JSON NOT NULL" in store._events_table_ddl()
@@ -98,7 +95,7 @@ def test_sync_store_can_force_native_json_from_extension_config() -> None:
 def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
     """Write/read SQL uses MERGE for scoped upserts and TOP for limited reads."""
 
-    store = MssqlPythonSyncADKStore(_mock_config())
+    store = MssqlPythonADKStore(_mock_config())
 
     app_upsert = store._upsert_app_state_sql()
     events_sql, params = store._events_query("app", "user", "session", limit=5)
@@ -108,18 +105,3 @@ def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
     assert "SELECT TOP (?)" in events_sql
     assert params[0] == 5
     assert "LIMIT" not in events_sql
-
-
-@pytest.mark.anyio
-async def test_async_store_generates_same_tsql_schema() -> None:
-    """Async store DDL mirrors the sync store's T-SQL schema."""
-
-    store = MssqlPythonAsyncADKStore(_mock_config())
-
-    sessions_sql = await store._sessions_table_ddl()
-    events_sql = await store._events_table_ddl()
-
-    assert "IF NOT EXISTS (SELECT 1 FROM sys.tables" in sessions_sql
-    assert "row_id UNIQUEIDENTIFIER NOT NULL" in sessions_sql
-    assert "state NVARCHAR(MAX) NOT NULL" in sessions_sql
-    assert "ON DELETE CASCADE" in events_sql

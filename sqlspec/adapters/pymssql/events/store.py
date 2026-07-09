@@ -6,7 +6,7 @@ from sqlspec.adapters.pymssql.config import PymssqlConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.text import split_qualified_identifier
 
-__all__ = ("PymssqlEventQueueStore", "PymssqlSyncEventQueueStore")
+__all__ = ("PymssqlEventQueueStore",)
 
 _NVARCHAR_MAX_THRESHOLD = 4000
 _QUALIFIED_IDENTIFIER_MIN_PARTS = 2
@@ -57,9 +57,6 @@ class PymssqlEventQueueStore(_PymssqlEventStoreMixin, BaseEventQueueStore[Pymssq
     """Event queue DDL for pymssql sync configs."""
 
     __slots__ = ()
-
-
-PymssqlSyncEventQueueStore = PymssqlEventQueueStore
 
 
 def _split_table_name(table_name: str) -> tuple[str, str]:

@@ -21,7 +21,7 @@ from sqlspec.adapters.arrow_odbc import (
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.core import LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
-from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError, TransactionError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
@@ -223,6 +223,52 @@ def test_arrow_odbc_get_ddl_returns_unsupported_ddl_result() -> None:
     assert result.source == MetadataSource.DRIVER_METADATA
     assert result.ddl is None
     assert result.warnings
+
+
+UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
+
+
+@pytest.mark.parametrize("bad_name", UNSAFE_SAVEPOINT_NAMES)
+def test_arrow_odbc_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
+    """The savepoint overrides must reject unsafe identifiers before interpolation."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(TransactionError):
+        driver.create_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        driver.release_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        driver.rollback_to_savepoint(bad_name)
+
+
+def test_arrow_odbc_savepoint_overrides_accept_valid_name() -> None:
+    """A safe savepoint name should pass validation and reach the underlying execute path."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    driver.create_savepoint("sp1")
+    driver.release_savepoint("sp1")
+    driver.rollback_to_savepoint("sp1")
+
+    executed_sql = [call[0] for call in connection.executed]
+    assert "SAVEPOINT sp1" in executed_sql
+    assert "RELEASE SAVEPOINT sp1" in executed_sql
+    assert "ROLLBACK TO SAVEPOINT sp1" in executed_sql
+
+
+@pytest.mark.parametrize("bad_name", UNSAFE_SAVEPOINT_NAMES)
+def test_arrow_odbc_mssql_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
+    """The SQL Server savepoint overrides must reject unsafe identifiers before interpolation."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    with pytest.raises(TransactionError):
+        driver.create_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        driver.rollback_to_savepoint(bad_name)
 
 
 def test_resolve_dialect_from_dbms_name() -> None:
@@ -540,16 +586,28 @@ def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
     assert not hasattr(driver, "_statement_dialect")
 
 
-def test_arrow_odbc_connection_in_transaction_uses_explicit_management_fallback() -> None:
-    """Generic ODBC connections do not expose a portable transaction-state API."""
+def test_arrow_odbc_connection_in_transaction_tracks_begin_commit_rollback() -> None:
+    """The transaction predicate should follow the real begin/commit/rollback state."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
 
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
+    driver.begin()
+    assert connection.executed == [("BEGIN", None)]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
 
-def test_arrow_odbc_mssql_begin_uses_driver_transaction_api() -> None:
-    """SQL Server ODBC transactions should rely on the connection commit API."""
+    driver.commit()
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+    driver.begin()
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+    driver.rollback()
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_arrow_odbc_mssql_begin_issues_tsql_and_tracks_state() -> None:
+    """SQL Server ODBC transactions should issue BEGIN TRANSACTION and drive the state predicate."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
@@ -557,7 +615,11 @@ def test_arrow_odbc_mssql_begin_uses_driver_transaction_api() -> None:
 
     driver.begin()
 
-    assert connection.executed == []
+    assert connection.executed == [("BEGIN TRANSACTION", None)]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+
+    driver.commit()
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
 def test_arrow_odbc_execute_marks_dml_rowcount_zero() -> None:

@@ -6,16 +6,16 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from sqlspec.builder import CreateTable, sql
-from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.migrations.tracker import SyncMigrationTracker
 from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver import SyncDriverAdapterBase
 
-__all__ = ("MssqlPythonAsyncMigrationTracker", "MssqlPythonSyncMigrationTracker")
+__all__ = ("MssqlPythonSyncMigrationTracker",)
 
 logger = get_logger("sqlspec.migrations.mssql_python")
 _QUALIFIED_IDENTIFIER_MIN_PARTS = 2
@@ -145,69 +145,6 @@ class MssqlPythonSyncMigrationTracker(MssqlPythonMigrationTrackerMixin, SyncMigr
         if add_column_sql is None:
             return
         driver.execute_script(add_column_sql)
-
-
-class MssqlPythonAsyncMigrationTracker(MssqlPythonMigrationTrackerMixin, AsyncMigrationTracker):
-    """T-SQL async migration tracker."""
-
-    async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
-        """Create the migration tracking table if it does not exist."""
-        await driver.execute_script(self._idempotent_tracking_table_ddl_text())
-        await driver.commit()
-        await self._migrate_schema_if_needed(driver)
-
-    async def record_migration(
-        self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
-    ) -> None:
-        """Record a successfully applied migration with T-SQL-compatible metadata."""
-        parsed_version = parse_version(version)
-        version_type = parsed_version.type.value
-        result = await driver.execute(self._next_execution_sequence_query())
-        next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
-        await driver.execute(
-            self._record_migration_statement(
-                version,
-                version_type,
-                next_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                os.environ.get("USER", "unknown"),
-            )
-        )
-        await driver.commit()
-
-    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
-        """Check and add missing tracking table columns through SQL Server catalog views."""
-        try:
-            rows = await driver.select(self._existing_columns_query())
-            existing_columns = {str(row["column_name"]).lower() for row in rows if row.get("column_name") is not None}
-            missing_columns = self._detect_missing_columns(existing_columns)
-            if not missing_columns:
-                return
-            for column_name in sorted(missing_columns):
-                await self._add_column(driver, column_name)
-            await driver.commit()
-        except Exception as exc:
-            with suppress(Exception):
-                await driver.rollback()
-            log_with_context(
-                logger,
-                logging.ERROR,
-                "migration.track",
-                db_system=resolve_db_system(type(driver).__name__),
-                table=self.version_table,
-                operation="schema_check",
-                status="failed",
-                error_type=type(exc).__name__,
-            )
-
-    async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
-        """Add a single missing migration tracking column."""
-        add_column_sql = self._add_column_statement_text(column_name)
-        if add_column_sql is None:
-            return
-        await driver.execute_script(add_column_sql)
 
 
 def _escape_sql_literal(value: str) -> str:

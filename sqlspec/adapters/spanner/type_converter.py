@@ -25,11 +25,6 @@ from sqlspec.core import TypedParameter
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_converters import should_json_encode_sequence
 
-_UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
-_uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
-if _uuid_utils_uuid is not None:
-    _UUID_TYPES = (UUID, _uuid_utils_uuid)
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -44,6 +39,11 @@ __all__ = (
     "spanner_to_uuid",
     "uuid_to_spanner",
 )
+
+_UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
+_uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
+if _uuid_utils_uuid is not None:
+    _UUID_TYPES = (UUID, _uuid_utils_uuid)
 
 UUID_BYTE_LENGTH: int = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None

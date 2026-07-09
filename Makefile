@@ -105,56 +105,6 @@ build-performance:                                 ## Build package with mypyc c
 	@HATCH_BUILD_HOOKS_ENABLE=1 uv build >/dev/null 2>&1
 	@echo "${OK} Performance package build complete 🚀"
 
-.PHONY: test-mypyc
-test-mypyc:                                        ## Test mypyc compilation on individual modules
-	@echo "${INFO} Testing mypyc compilation... 🔧"
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/base.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/text.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/sync_tools.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/env.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/utils/module_loader.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/cache.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/hashing.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/parameters/_processor.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/result/_base.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/core/splitter.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/driver/_query_cache.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/core.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/psqlpy/core.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/adapters/sqlite/pool.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_paths.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/storage/_utils.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/storage/backends/local.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/storage/backends/fsspec.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/storage/backends/obstore.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/_loader.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/bigquery.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/cockroachdb.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/duckdb.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/mysql.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/oracle.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/postgres.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/spanner.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/data_dictionary/dialects/sqlite.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_generators.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/postgres/_operators.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/dialects/spanner/_generators.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/prometheus/_observer.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/fastapi/providers.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/litestar/providers.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_hints.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_models.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_names.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_payload.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs --disable-error-code=overload-cannot-match sqlspec/extensions/events/_channel.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/events/_queue.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/_types.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/memory/_types.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/extensions/adk/artifact/_types.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/migrations/version.py
-	@uv run mypyc --check-untyped-defs --no-warn-unused-configs sqlspec/observability/_formatting.py
-	@echo "${OK} Mypyc compilation tests passed ✨"
-
 
 .PHONY: release
 release:                                           ## Bump version and create release tag
@@ -370,6 +320,15 @@ bench-gate:                                         ## Run performance regressio
 	@echo "${INFO} Running performance gate... 🚦"
 	@uv run python tools/scripts/bench_gate.py
 	@echo "${OK} Performance gate complete"
+
+.PHONY: bench-gate-adapters
+DRIVERS ?= duckdb aiosqlite
+bench-gate-adapters:                                ## Compare selected adapter benchmarks with committed baselines
+	@mkdir -p /tmp/sqlspec-bench
+	@for driver in ${DRIVERS}; do \
+		uv run python tools/scripts/bench.py --driver "$${driver}" --extended --json-output "/tmp/sqlspec-bench/$${driver}.json"; \
+		uv run python tools/scripts/bench_compare.py "tools/perf_baselines/$${driver}.json" "/tmp/sqlspec-bench/$${driver}.json" --threshold "$${BENCHMARK_THRESHOLD:-30}"; \
+	done
 
 .PHONY: bench-subsystems
 bench-subsystems:                                   ## Run subsystem micro-benchmarks

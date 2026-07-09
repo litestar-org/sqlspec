@@ -20,6 +20,7 @@ from sqlspec.driver._common import (
     _raise_database_exception,
     describe_stack_statement,
     handle_single_row_error,
+    validate_savepoint_name,
 )
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
@@ -526,6 +527,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     @abstractmethod
     def rollback(self) -> None:
         """Rollback the current transaction on the current connection."""
+
+    def create_savepoint(self, name: str) -> None:
+        """Create a savepoint within the current transaction."""
+        self.execute_script(f"SAVEPOINT {validate_savepoint_name(name)}")
+
+    def release_savepoint(self, name: str) -> None:
+        """Release a previously created savepoint."""
+        self.execute_script(f"RELEASE SAVEPOINT {validate_savepoint_name(name)}")
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Roll back the current transaction to a previously created savepoint."""
+        self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:

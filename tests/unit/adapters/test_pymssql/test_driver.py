@@ -6,13 +6,46 @@ import pytest
 
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
 from sqlspec.core import SQL
-from sqlspec.exceptions import SQLSpecError, UniqueViolationError
+from sqlspec.exceptions import SQLSpecError, TransactionError, UniqueViolationError
 from tests.unit.adapters.test_pymssql.conftest import (
     FakeConnection,
     FakeCursor,
     FakePymssqlIntegrityError,
     FakePymssqlModule,
 )
+
+UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
+
+
+@pytest.mark.parametrize("bad_name", UNSAFE_SAVEPOINT_NAMES)
+def test_pymssql_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
+    """The T-SQL savepoint overrides must reject unsafe identifiers before interpolation."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection()))
+
+    with pytest.raises(TransactionError):
+        driver.create_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        driver.release_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        driver.rollback_to_savepoint(bad_name)
+
+
+def test_pymssql_savepoint_overrides_accept_valid_name() -> None:
+    """A safe savepoint name should pass validation and reach the underlying execute path."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    driver.create_savepoint("sp1")
+    driver.rollback_to_savepoint("sp1")
+
+    executed_sql = [call[0] for call in cursor.calls]
+    assert "SAVE TRANSACTION sp1" in executed_sql
+    assert "ROLLBACK TRANSACTION sp1" in executed_sql
 
 
 def test_dispatch_execute_select_compiles_to_pyformat_and_collects_rows() -> None:

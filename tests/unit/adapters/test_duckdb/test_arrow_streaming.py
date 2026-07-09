@@ -78,6 +78,24 @@ def test_execute_many_uses_bulk_insert_fast_path() -> None:
         ]
 
 
+def test_execute_many_bulk_path_survives_a_previous_driver() -> None:
+    first_config = DuckDBConfig(connection_config={"database": ":memory:"})
+    with first_config.provide_session() as driver:
+        driver.execute("CREATE OR REPLACE TABLE repeated_driver (id INTEGER)")
+        driver.execute_many("INSERT INTO repeated_driver (id) VALUES (?)", [(1,), (2,)])
+    first_config.close_pool()
+
+    second_config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with second_config.provide_session() as driver:
+            driver.execute("CREATE OR REPLACE TABLE repeated_driver (id INTEGER)")
+            result = driver.execute_many("INSERT INTO repeated_driver (id) VALUES (?)", [(1,), (2,)])
+
+        assert result.rows_affected == 2
+    finally:
+        second_config.close_pool()
+
+
 def test_select_arrow_path_restores_uuid_columns_only() -> None:
     uuid_value = "550e8400-e29b-41d4-a716-446655440000"
     with _seed_driver() as driver:

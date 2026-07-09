@@ -98,3 +98,24 @@ async def test_psycopg_async_statement_stack_continue_on_error(psycopg_async_ses
     verify = await psycopg_async_session.execute("SELECT COUNT(*) AS total FROM test_table_psycopg_async")
     assert verify.data is not None
     assert verify.get_data()[0]["total"] == 2
+
+
+async def test_psycopg_async_statement_stack_fail_fast_reports_operation_index(
+    psycopg_async_session: PsycopgAsyncDriver,
+) -> None:
+    """Async native pipeline fail-fast must surface StackExecutionError with the failing op index."""
+    from sqlspec.exceptions import StackExecutionError
+
+    await psycopg_async_session.execute_script("DELETE FROM test_table_psycopg_async")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table_psycopg_async (id, name, value) VALUES (%s, %s, %s)", (1, "first", 10))
+        .push_execute("INSERT INTO test_table_psycopg_async (id, name, value) VALUES (%s, %s, %s)", (1, "dup", 20))
+        .push_execute("INSERT INTO test_table_psycopg_async (id, name, value) VALUES (%s, %s, %s)", (2, "third", 30))
+    )
+
+    with pytest.raises(StackExecutionError) as excinfo:
+        await psycopg_async_session.execute_stack(stack)
+
+    assert excinfo.value.operation_index == 1

@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:52:37+0000"
+  },
+  "results": [
+    {
+      "driver": "mysqlconnector",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "json_rows",
+      "time": 0.10155304905492812,
+      "times": [
+        0.12758919794578105,
+        0.05623632192146033,
+        0.10155304905492812
+      ],
+      "stddev": 0.03610798555282456,
+      "iqr": 0.03567643801216036,
+      "noise_ratio": 0.3555578674284258,
+      "noisy": true
+    },
+    {
+      "driver": "mysqlconnector",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "json_rows",
+      "time": 0.11409787402953953,
+      "times": [
+        0.11409787402953953,
+        0.10591203405056149,
+        0.1397610710700974
+      ],
+      "stddev": 0.017660525500174322,
+      "iqr": 0.01692451850976795,
+      "noise_ratio": 0.15478400145827498,
+      "noisy": true
+    }
+  ]
+}

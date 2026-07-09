@@ -82,7 +82,7 @@ class _FakeBatchTransaction:
 
 @pytest.fixture
 def batch_write_driver(monkeypatch: pytest.MonkeyPatch) -> SpannerSyncDriver:
-    monkeypatch.setattr(spanner_driver, "Transaction", _FakeBatchTransaction)
+    monkeypatch.setattr(spanner_driver, "SpannerTransaction", _FakeBatchTransaction)
     return SpannerSyncDriver(
         cast("Any", _FakeBatchTransaction()),
         driver_features={"storage_capabilities": CAPABILITIES, "enable_batch_write_api": True},

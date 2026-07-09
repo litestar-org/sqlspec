@@ -1,0 +1,171 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:52:45+0000"
+  },
+  "results": [
+    {
+      "driver": "oracle",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "lob_fetch_1k",
+      "time": 0.11334440193604678,
+      "times": [
+        0.09634258400183171,
+        0.11334440193604678,
+        0.12572037801146507
+      ],
+      "stddev": 0.014749471051306513,
+      "iqr": 0.014688897004816681,
+      "noise_ratio": 0.13012968262542624,
+      "noisy": true
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "lob_fetch_1k",
+      "time": 0.10900005104485899,
+      "times": [
+        0.11071688507217914,
+        0.09607100102584809,
+        0.10900005104485899
+      ],
+      "stddev": 0.008006349282184572,
+      "iqr": 0.007322942023165524,
+      "noise_ratio": 0.07345271131010349,
+      "noisy": false
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec fetch_lobs=True",
+      "library_key": "sqlspec_fetch_lobs_true",
+      "scenario": "lob_fetch_1k",
+      "time": 0.16698699200060219,
+      "times": [
+        0.13185496896039695,
+        0.1696973090292886,
+        0.16698699200060219
+      ],
+      "stddev": 0.021109427448350895,
+      "iqr": 0.018921170034445822,
+      "noise_ratio": 0.1264136038109769,
+      "noisy": true
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec async",
+      "library_key": "sqlspec_async",
+      "scenario": "lob_fetch_1k",
+      "time": 0.09288392309099436,
+      "times": [
+        0.09288392309099436,
+        0.08804141101427376,
+        0.10262110095936805
+      ],
+      "stddev": 0.007425518107048319,
+      "iqr": 0.007289844972547144,
+      "noise_ratio": 0.07994406200709094,
+      "noisy": false
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec async fetch_lobs=True",
+      "library_key": "sqlspec_async_fetch_lobs_true",
+      "scenario": "lob_fetch_1k",
+      "time": 0.12941001495346427,
+      "times": [
+        0.11710295605007559,
+        0.1819777189521119,
+        0.12941001495346427
+      ],
+      "stddev": 0.03445664441037059,
+      "iqr": 0.032437381451018155,
+      "noise_ratio": 0.2662594886706502,
+      "noisy": true
+    },
+    {
+      "driver": "oracle",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "lob_fetch_100k",
+      "time": 0.3411060890648514,
+      "times": [
+        0.3130992379738018,
+        0.3942504409933463,
+        0.3411060890648514
+      ],
+      "stddev": 0.04121937974920549,
+      "iqr": 0.04057560150977224,
+      "noise_ratio": 0.12084035164018671,
+      "noisy": true
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "lob_fetch_100k",
+      "time": 0.4587748399935663,
+      "times": [
+        0.4587748399935663,
+        0.7968855670187622,
+        0.4368935209931806
+      ],
+      "stddev": 0.2018216741963012,
+      "iqr": 0.17999602301279083,
+      "noise_ratio": 0.4399144342770225,
+      "noisy": true
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec fetch_lobs=True",
+      "library_key": "sqlspec_fetch_lobs_true",
+      "scenario": "lob_fetch_100k",
+      "time": 0.4545840279897675,
+      "times": [
+        0.5374515409348533,
+        0.4545840279897675,
+        0.412251268979162
+      ],
+      "stddev": 0.06368437182037287,
+      "iqr": 0.06260013597784564,
+      "noise_ratio": 0.14009372942994464,
+      "noisy": true
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec async",
+      "library_key": "sqlspec_async",
+      "scenario": "lob_fetch_100k",
+      "time": 0.37876010907348245,
+      "times": [
+        0.37467916298191994,
+        0.37876010907348245,
+        0.42228385794442147
+      ],
+      "stddev": 0.026385532081223424,
+      "iqr": 0.023802347481250763,
+      "noise_ratio": 0.06966291182502649,
+      "noisy": false
+    },
+    {
+      "driver": "oracle",
+      "library": "sqlspec async fetch_lobs=True",
+      "library_key": "sqlspec_async_fetch_lobs_true",
+      "scenario": "lob_fetch_100k",
+      "time": 0.3802608890691772,
+      "times": [
+        0.43898606300354004,
+        0.3802608890691772,
+        0.3690725869964808
+      ],
+      "stddev": 0.03755377984588838,
+      "iqr": 0.03495673800352961,
+      "noise_ratio": 0.09875793415887318,
+      "noisy": false
+    }
+  ]
+}

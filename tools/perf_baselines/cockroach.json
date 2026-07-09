@@ -1,0 +1,107 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:52:56+0000"
+  },
+  "results": [
+    {
+      "driver": "cockroach_psycopg_sync",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.2867365989368409,
+      "times": [
+        0.2970891110599041,
+        0.274287246982567,
+        0.2867365989368409
+      ],
+      "stddev": 0.01141698936337793,
+      "iqr": 0.011400932038668543,
+      "noise_ratio": 0.03981699373470192,
+      "noisy": false
+    },
+    {
+      "driver": "cockroach_psycopg_sync",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.27794851502403617,
+      "times": [
+        0.28213272406719625,
+        0.273463032906875,
+        0.27794851502403617
+      ],
+      "stddev": 0.004335717932776287,
+      "iqr": 0.004334845580160618,
+      "noise_ratio": 0.015598996571006492,
+      "noisy": false
+    },
+    {
+      "driver": "cockroach_psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.3874657809501514,
+      "times": [
+        0.3874657809501514,
+        0.3817575089633465,
+        0.43266566994134337
+      ],
+      "stddev": 0.027890426039691663,
+      "iqr": 0.025454080488998443,
+      "noise_ratio": 0.07198164950540457,
+      "noisy": false
+    },
+    {
+      "driver": "cockroach_psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.4746586799155921,
+      "times": [
+        0.4746586799155921,
+        0.46225499699357897,
+        0.5698350700549781
+      ],
+      "stddev": 0.05885840170823879,
+      "iqr": 0.05379003653069958,
+      "noise_ratio": 0.12400152825332406,
+      "noisy": true
+    },
+    {
+      "driver": "cockroach_asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.29335300996899605,
+      "times": [
+        0.33496424509212375,
+        0.25324055401142687,
+        0.29335300996899605
+      ],
+      "stddev": 0.04086413605937224,
+      "iqr": 0.04086184554034844,
+      "noise_ratio": 0.13930021056777667,
+      "noisy": true
+    },
+    {
+      "driver": "cockroach_asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.2785562730859965,
+      "times": [
+        0.2785562730859965,
+        0.26730081997811794,
+        0.305019996012561
+      ],
+      "stddev": 0.019363841287801237,
+      "iqr": 0.01885958801722154,
+      "noise_ratio": 0.06951500705145919,
+      "noisy": false
+    }
+  ]
+}

@@ -31,6 +31,7 @@ from sqlspec.driver import (
     SyncRowStream,
     rows_to_dicts,
 )
+from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -215,13 +216,13 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return SyncRowStream(PymssqlStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def create_savepoint(self, name: str) -> None:
-        self.execute_script(f"SAVE TRANSACTION {name}")
+        self.execute_script(f"SAVE TRANSACTION {validate_savepoint_name(name)}")
 
     def release_savepoint(self, name: str) -> None:
-        return None
+        validate_savepoint_name(name)
 
     def rollback_to_savepoint(self, name: str) -> None:
-        self.execute_script(f"ROLLBACK TRANSACTION {name}")
+        self.execute_script(f"ROLLBACK TRANSACTION {validate_savepoint_name(name)}")
 
     @property
     def data_dictionary(self) -> "PymssqlSyncDataDictionary":

@@ -85,6 +85,61 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.psycopg")
 
 
+def pipeline_operation_failed(cursor: Any, statement: "SQL") -> bool:
+    """Return True when a synced pipeline cursor reflects a failed non-select operation.
+
+    After a pipeline sync raises, the failing operation and every operation queued
+    behind it report a negative rowcount, while operations that committed report a
+    non-negative one. Row-returning operations surface their failure when the result
+    is fetched, so they are excluded here.
+    """
+    if statement.returns_rows():
+        return False
+    try:
+        rowcount = cursor.rowcount
+    except Exception:
+        return True
+    return isinstance(rowcount, int) and rowcount < 0
+
+
+def _attribute_pipeline_failure(
+    pending: "list[PipelineCursorEntry]", current: "PreparedStackOperation"
+) -> "PreparedStackOperation":
+    """Resolve which prepared operation owns an error raised while queueing pipeline commands.
+
+    Cursor execute calls in pipeline mode only queue commands, so an exception
+    raised there can belong to an earlier queued operation whose error result
+    was processed while the current command was being sent. The first queued
+    cursor that reports failure owns the error; when none does, the error is a
+    client-side failure belonging to the current operation.
+    """
+    for entry in pending:
+        if pipeline_operation_failed(entry.cursor, entry.prepared.statement):
+            return entry.prepared
+    return current
+
+
+def _stack_operation_error(
+    adapter: str, prepared: "PreparedStackOperation", cause: "Exception"
+) -> "StackExecutionError":
+    """Build a fail-fast StackExecutionError attributed to a specific pipeline operation."""
+    return StackExecutionError(
+        prepared.operation_index,
+        describe_stack_statement(prepared.operation.statement),
+        cause,
+        adapter=adapter,
+        mode="fail-fast",
+        native_pipeline=True,
+    )
+
+
+def _stack_pipeline_sync_error(adapter: str, cause: "Exception") -> "StackExecutionError":
+    """Build a fail-fast StackExecutionError for an unattributed pipeline sync failure."""
+    return StackExecutionError(
+        -1, "psycopg pipeline sync failed", cause, adapter=adapter, mode="fail-fast", native_pipeline=True
+    )
+
+
 class PsycopgPipelineMixin:
     """Shared helpers for psycopg sync/async pipeline execution."""
 
@@ -414,7 +469,8 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     ) -> "tuple[StackResult, ...]":
         def _raise_pending_exception(exception_ctx: "PsycopgSyncExceptionHandler") -> None:
             if exception_ctx.pending_exception is not None:
-                raise exception_ctx.pending_exception from None
+                stack_error = _stack_pipeline_sync_error(type(self).__name__, exception_ctx.pending_exception)
+                raise stack_error from exception_ctx.pending_exception
 
         results: list[StackResult] = []
         started_transaction = False
@@ -443,9 +499,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                             else:
                                 cursor.execute(sql)
                         except Exception as exc:
+                            owner = _attribute_pipeline_failure(pending, prepared)
                             stack_error = StackExecutionError(
-                                prepared.operation_index,
-                                describe_stack_statement(prepared.operation.statement),
+                                owner.operation_index,
+                                describe_stack_statement(owner.operation.statement),
                                 exc,
                                 adapter=type(self).__name__,
                                 mode="fail-fast",
@@ -454,16 +511,13 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
                         pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
-                    pipeline.sync()
-                    for entry in pending:
-                        statement = entry.prepared.statement
-                        cursor = entry.cursor
+                    sync_error: Exception | None = None
+                    try:
+                        pipeline.sync()
+                    except Exception as exc:
+                        sync_error = exc
 
-                        execution_result = build_pipeline_execution_result(
-                            statement, cursor, column_name_resolver=self._resolve_column_names
-                        )
-                        sql_result = self.build_statement_result(statement, execution_result)
-                        results.append(StackResult.from_sql_result(sql_result))
+                    results = self._collect_pipeline_results(pending, sync_error)
 
                 for exception_ctx in exception_handlers:
                     _raise_pending_exception(exception_ctx)
@@ -479,6 +533,29 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 raise
 
         return tuple(results)
+
+    def _collect_pipeline_results(
+        self, pending: "list[PipelineCursorEntry]", sync_error: "Exception | None"
+    ) -> "list[StackResult]":
+        """Drain synced pipeline cursors, attributing any failure to its operation index."""
+        results: list[StackResult] = []
+        for entry in pending:
+            statement = entry.prepared.statement
+            cursor = entry.cursor
+            if sync_error is not None and pipeline_operation_failed(cursor, statement):
+                raise _stack_operation_error(type(self).__name__, entry.prepared, sync_error) from sync_error
+            try:
+                execution_result = build_pipeline_execution_result(
+                    statement, cursor, column_name_resolver=self._resolve_column_names
+                )
+            except Exception as exc:
+                raise _stack_operation_error(type(self).__name__, entry.prepared, exc) from exc
+            sql_result = self.build_statement_result(statement, execution_result)
+            results.append(StackResult.from_sql_result(sql_result))
+
+        if sync_error is not None:
+            raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
+        return results
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
@@ -900,7 +977,8 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     ) -> "tuple[StackResult, ...]":
         def _raise_pending_exception(exception_ctx: "PsycopgAsyncExceptionHandler") -> None:
             if exception_ctx.pending_exception is not None:
-                raise exception_ctx.pending_exception from None
+                stack_error = _stack_pipeline_sync_error(type(self).__name__, exception_ctx.pending_exception)
+                raise stack_error from exception_ctx.pending_exception
 
         results: list[StackResult] = []
         started_transaction = False
@@ -929,9 +1007,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                             else:
                                 await cursor.execute(sql)
                         except Exception as exc:
+                            owner = _attribute_pipeline_failure(pending, prepared)
                             stack_error = StackExecutionError(
-                                prepared.operation_index,
-                                describe_stack_statement(prepared.operation.statement),
+                                owner.operation_index,
+                                describe_stack_statement(owner.operation.statement),
                                 exc,
                                 adapter=type(self).__name__,
                                 mode="fail-fast",
@@ -940,16 +1019,13 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
                         pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
-                    await pipeline.sync()
-                    for entry in pending:
-                        statement = entry.prepared.statement
-                        cursor = entry.cursor
+                    sync_error: Exception | None = None
+                    try:
+                        await pipeline.sync()
+                    except Exception as exc:
+                        sync_error = exc
 
-                        execution_result = await build_async_pipeline_execution_result(
-                            statement, cursor, column_name_resolver=self._resolve_column_names
-                        )
-                        sql_result = self.build_statement_result(statement, execution_result)
-                        results.append(StackResult.from_sql_result(sql_result))
+                    results = await self._collect_pipeline_results(pending, sync_error)
 
                 for exception_ctx in exception_handlers:
                     _raise_pending_exception(exception_ctx)
@@ -965,6 +1041,29 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 raise
 
         return tuple(results)
+
+    async def _collect_pipeline_results(
+        self, pending: "list[PipelineCursorEntry]", sync_error: "Exception | None"
+    ) -> "list[StackResult]":
+        """Drain synced pipeline cursors, attributing any failure to its operation index."""
+        results: list[StackResult] = []
+        for entry in pending:
+            statement = entry.prepared.statement
+            cursor = entry.cursor
+            if sync_error is not None and pipeline_operation_failed(cursor, statement):
+                raise _stack_operation_error(type(self).__name__, entry.prepared, sync_error) from sync_error
+            try:
+                execution_result = await build_async_pipeline_execution_result(
+                    statement, cursor, column_name_resolver=self._resolve_column_names
+                )
+            except Exception as exc:
+                raise _stack_operation_error(type(self).__name__, entry.prepared, exc) from exc
+            sql_result = self.build_statement_result(statement, execution_result)
+            results.append(StackResult.from_sql_result(sql_result))
+
+        if sync_error is not None:
+            raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
+        return results
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS

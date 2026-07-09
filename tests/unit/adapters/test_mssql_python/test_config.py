@@ -7,7 +7,6 @@ import pytest
 
 import sqlspec.adapters.mssql_python.pool as _mssql_pool
 from sqlspec.adapters.mssql_python.config import (
-    MssqlPythonAsyncConfig,
     MssqlPythonConfig,
     MssqlPythonConnectionParams,
     _normalize_mssql_python_init,
@@ -274,18 +273,13 @@ def test_normalize_mssql_python_init_returns_config_features_and_hook() -> None:
     assert len(seen) == 1
 
 
-def test_sync_and_async_config_delegate_to_shared_init_helper() -> None:
+def test_sync_config_delegates_to_shared_init_helper() -> None:
     def hook(_connection: Any) -> None:
         return None
 
     sync_config = MssqlPythonConfig(
         connection_config={"server": "localhost"}, driver_features={"on_connection_create": hook}
     )
-    async_config = MssqlPythonAsyncConfig(
-        connection_config={"server": "localhost"}, driver_features={"on_connection_create": hook}
-    )
 
     assert sync_config.connection_config == {"server": "localhost"}
-    assert async_config.connection_config == {"server": "localhost"}
     assert sync_config._user_connection_hook is hook
-    assert async_config._user_connection_hook is hook

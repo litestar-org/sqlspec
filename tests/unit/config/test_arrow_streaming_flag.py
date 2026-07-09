@@ -18,7 +18,6 @@ def test_base_default_is_false() -> None:
         ("sqlspec.adapters.oracledb.config", "OracleSyncConfig"),
         ("sqlspec.adapters.oracledb.config", "OracleAsyncConfig"),
         ("sqlspec.adapters.mssql_python.config", "MssqlPythonConfig"),
-        ("sqlspec.adapters.mssql_python.config", "MssqlPythonAsyncConfig"),
         ("sqlspec.adapters.arrow_odbc.config", "ArrowOdbcConfig"),
     ],
 )

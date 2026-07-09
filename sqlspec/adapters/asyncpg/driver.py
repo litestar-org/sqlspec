@@ -355,12 +355,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     mode="continue-on-error" if continue_on_error else "fail-fast",
                 )
                 if continue_on_error:
+                    await self._rollback_failed_stack()
                     observer.record_operation_error(stack_error)
                     results.append(StackResult.from_error(stack_error))
                     continue
                 raise stack_error from exc
 
             results.append(stack_result)
+            if continue_on_error:
+                await self._commit_stack_success()
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         prepared = await self._get_prepared_statement(normalized.sql)

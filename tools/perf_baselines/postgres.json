@@ -1,0 +1,347 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:53:14+0000"
+  },
+  "results": [
+    {
+      "driver": "psycopg_sync",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.04123174399137497,
+      "times": [
+        0.04123174399137497,
+        0.04227600106969476,
+        0.03454155509825796
+      ],
+      "stddev": 0.0041966406159427505,
+      "iqr": 0.0038672229857183993,
+      "noise_ratio": 0.10178178776092085,
+      "noisy": true
+    },
+    {
+      "driver": "psycopg_sync",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.05376478098332882,
+      "times": [
+        0.044566972996108234,
+        0.05376478098332882,
+        0.05916502000764012
+      ],
+      "stddev": 0.007380890075507703,
+      "iqr": 0.007299023505765945,
+      "noise_ratio": 0.13728113349510976,
+      "noisy": true
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.20733329094946384,
+      "times": [
+        0.20733329094946384,
+        0.1942386640002951,
+        0.2190431049093604
+      ],
+      "stddev": 0.01240866153623211,
+      "iqr": 0.012402220454532653,
+      "noise_ratio": 0.059848862087741816,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.214356982964091,
+      "times": [
+        0.1982118720188737,
+        0.214356982964091,
+        0.2291014059446752
+      ],
+      "stddev": 0.015450058913679468,
+      "iqr": 0.015444766962900758,
+      "noise_ratio": 0.07207630327707895,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "initialization",
+      "time": 0.044801491079851985,
+      "times": [
+        0.03780574502889067,
+        0.044801491079851985,
+        0.05556856491602957
+      ],
+      "stddev": 0.008947887200769595,
+      "iqr": 0.008881409943569452,
+      "noise_ratio": 0.19972297763084088,
+      "noisy": true
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "initialization",
+      "time": 0.03986536001320928,
+      "times": [
+        0.045165335992351174,
+        0.03986536001320928,
+        0.0387102939421311
+      ],
+      "stddev": 0.0034421769003095118,
+      "iqr": 0.003227521025110036,
+      "noise_ratio": 0.08634505995101902,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "initialization",
+      "time": 0.04134847305249423,
+      "times": [
+        0.04227136599365622,
+        0.03727546101436019,
+        0.04134847305249423
+      ],
+      "stddev": 0.002658327325148475,
+      "iqr": 0.0024979524896480143,
+      "noise_ratio": 0.0642908221005786,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "write_heavy",
+      "time": 0.0446074609644711,
+      "times": [
+        0.0446074609644711,
+        0.04706162097863853,
+        0.040620596962980926
+      ],
+      "stddev": 0.0032507634055145293,
+      "iqr": 0.003220512007828802,
+      "noise_ratio": 0.07287488091069998,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "write_heavy",
+      "time": 0.05116820405237377,
+      "times": [
+        0.05116820405237377,
+        0.048695035045966506,
+        0.05957270704675466
+      ],
+      "stddev": 0.005701987718821413,
+      "iqr": 0.005438836000394076,
+      "noise_ratio": 0.11143615111026922,
+      "noisy": true
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "write_heavy",
+      "time": 0.04844018898438662,
+      "times": [
+        0.04844018898438662,
+        0.04814719106070697,
+        0.05589364701882005
+      ],
+      "stddev": 0.0043902821542836,
+      "iqr": 0.003873227979056537,
+      "noise_ratio": 0.09063305173517569,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "read_heavy",
+      "time": 0.03530651098117232,
+      "times": [
+        0.036079684970900416,
+        0.03530651098117232,
+        0.0308308299863711
+      ],
+      "stddev": 0.0028337253758446428,
+      "iqr": 0.002624427492264658,
+      "noise_ratio": 0.0802607025473507,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "read_heavy",
+      "time": 0.03375874599441886,
+      "times": [
+        0.03375874599441886,
+        0.03446531796362251,
+        0.03358696599025279
+      ],
+      "stddev": 0.0004655202298894747,
+      "iqr": 0.0004391759866848588,
+      "noise_ratio": 0.013789618547040713,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "read_heavy",
+      "time": 0.03504969098139554,
+      "times": [
+        0.03504969098139554,
+        0.03519547206815332,
+        0.03410959802567959
+      ],
+      "stddev": 0.0005893710385884947,
+      "iqr": 0.0005429370212368667,
+      "noise_ratio": 0.01681529913919453,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "iterative_inserts",
+      "time": 0.3479909528978169,
+      "times": [
+        0.3479909528978169,
+        0.337999137933366,
+        0.40759251394774765
+      ],
+      "stddev": 0.03762849193308965,
+      "iqr": 0.034796688007190824,
+      "noise_ratio": 0.1081306615006706,
+      "noisy": true
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "iterative_inserts",
+      "time": 0.4137253829976544,
+      "times": [
+        0.4137253829976544,
+        0.41692268394399434,
+        0.41216089599765837
+      ],
+      "stddev": 0.002427103121023548,
+      "iqr": 0.0023808939731679857,
+      "noise_ratio": 0.005866459300703114,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "iterative_inserts",
+      "time": 0.343022566055879,
+      "times": [
+        0.3223919089650735,
+        0.35162515798583627,
+        0.343022566055879
+      ],
+      "stddev": 0.01502337871575329,
+      "iqr": 0.01461662451038137,
+      "noise_ratio": 0.043797056527487915,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "repeated_queries",
+      "time": 0.21294607897289097,
+      "times": [
+        0.21294607897289097,
+        0.23929880699142814,
+        0.21020107390359044
+      ],
+      "stddev": 0.016065902805323058,
+      "iqr": 0.014548866543918848,
+      "noise_ratio": 0.07544587288394412,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "repeated_queries",
+      "time": 0.4103268129983917,
+      "times": [
+        0.3971549429697916,
+        0.4103268129983917,
+        0.4249703430105001
+      ],
+      "stddev": 0.013914187068663035,
+      "iqr": 0.013907700020354241,
+      "noise_ratio": 0.033910011795201825,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlalchemy",
+      "library_key": "sqlalchemy",
+      "scenario": "repeated_queries",
+      "time": 0.5083378970157355,
+      "times": [
+        0.5083378970157355,
+        0.5062282889848575,
+        0.5189653070410714
+      ],
+      "stddev": 0.006826711248896642,
+      "iqr": 0.006368509028106928,
+      "noise_ratio": 0.013429475333186348,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.04551889596041292,
+      "times": [
+        0.04551889596041292,
+        0.04794929292984307,
+        0.044716733042150736
+      ],
+      "stddev": 0.0016832378621755362,
+      "iqr": 0.0016162799438461661,
+      "noise_ratio": 0.03697888155370513,
+      "noisy": false
+    },
+    {
+      "driver": "asyncpg",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.05420948297251016,
+      "times": [
+        0.05420948297251016,
+        0.05423876002896577,
+        0.05306137597654015
+      ],
+      "stddev": 0.0006714710253287391,
+      "iqr": 0.0005886920262128115,
+      "noise_ratio": 0.012386597113815763,
+      "noisy": false
+    }
+  ]
+}

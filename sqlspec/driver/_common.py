@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 from collections import OrderedDict
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
@@ -58,6 +59,7 @@ from sqlspec.exceptions import (
     SQLFileNotFoundError,
     SQLSpecError,
     StorageCapabilityError,
+    TransactionError,
 )
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import StatementProtocol
@@ -79,7 +81,6 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    import re
     from collections import abc
     from collections.abc import Awaitable, Callable
     from types import TracebackType
@@ -118,10 +119,13 @@ __all__ = (
     "parameter_values_need_processing",
     "resolve_db_system",
     "type_coercion_fallbacks",
+    "validate_savepoint_name",
 )
 
 
 logger = get_logger("sqlspec.driver")
+
+_SAVEPOINT_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
@@ -307,6 +311,14 @@ def describe_stack_statement(statement: "StatementProtocol | str") -> str:
     if isinstance(statement, StatementProtocol):
         return statement.raw_sql or repr(statement)
     return repr(statement)
+
+
+def validate_savepoint_name(name: str) -> str:
+    """Return the savepoint name when it is a safe SQL identifier."""
+    if not _SAVEPOINT_NAME_PATTERN.fullmatch(name):
+        msg = f"Invalid savepoint name: {name!r}"
+        raise TransactionError(msg)
+    return name
 
 
 def handle_single_row_error(error: ValueError) -> "NoReturn":

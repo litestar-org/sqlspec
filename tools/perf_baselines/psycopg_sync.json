@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "mypyc_compiled": false,
+    "timestamp": "2026-07-09T20:52:32+0000"
+  },
+  "results": [
+    {
+      "driver": "psycopg_sync",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.050552292028442025,
+      "times": [
+        0.050552292028442025,
+        0.04806464398279786,
+        0.05370596796274185
+      ],
+      "stddev": 0.0028272071302574155,
+      "iqr": 0.0028206619899719954,
+      "noise_ratio": 0.055926388632720266,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_sync",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.06116347201168537,
+      "times": [
+        0.06116347201168537,
+        0.057821188936941326,
+        0.07057346904184669
+      ],
+      "stddev": 0.006612356465150814,
+      "iqr": 0.0063761400524526834,
+      "noise_ratio": 0.10810956683243086,
+      "noisy": true
+    }
+  ]
+}

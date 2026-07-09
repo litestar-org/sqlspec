@@ -330,6 +330,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
+        "_transaction_active",
     )
     dialect = "oracle"
 
@@ -350,6 +351,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -483,9 +485,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin a database transaction.
 
-        Oracle handles transactions automatically, so this is a no-op.
+        Oracle starts a transaction implicitly on the first DML, so no explicit
+        statement is issued; the active-transaction flag is set here.
         """
-        # Oracle handles transactions implicitly
+        self._transaction_active = True
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -499,6 +502,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         except OracleError as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -512,6 +516,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         except OracleError as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+        finally:
+            self._transaction_active = False
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set Oracle CURRENT_SCHEMA for migration SQL."""
@@ -841,8 +847,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
+        """Check if connection is in transaction.
+
+        Oracle does not expose native transaction state through this predicate,
+        so it is tracked via a flag toggled in begin/commit/rollback.
+        """
+        return self._transaction_active
 
     def _detect_oracle_version(self) -> "VersionInfo | None":
         if self._oracle_version is not None:
@@ -926,27 +936,28 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self._add_pipeline_operation(pipeline, compiled)
 
         results: list[StackResult] = []
-        started_transaction = False
+        owns_transaction = not self._connection_in_transaction()
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
             try:
-                if not continue_on_error and not self._connection_in_transaction():
+                if owns_transaction and not continue_on_error:
                     self.begin()
-                    started_transaction = True
 
-                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=True)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer
                 )
 
-                if started_transaction:
+                if owns_transaction:
                     self.commit()
             except Exception as exc:
-                if started_transaction:
+                if owns_transaction:
                     try:
                         self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
+                if isinstance(exc, StackExecutionError):
+                    raise
                 raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
 
         return tuple(results)
@@ -978,6 +989,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
+        "_transaction_active",
     )
     dialect = "oracle"
 
@@ -998,6 +1010,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._pipeline_support_reason: str | None = None
         self._oracle_version: VersionInfo | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -1133,9 +1146,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction.
 
-        Oracle handles transactions automatically, so this is a no-op.
+        Oracle starts a transaction implicitly on the first DML, so no explicit
+        statement is issued; the active-transaction flag is set here.
         """
-        # Oracle handles transactions implicitly
+        self._transaction_active = True
 
     async def commit(self) -> None:
         """Commit the current transaction.
@@ -1149,6 +1163,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         except OracleError as e:
             msg = f"Failed to commit Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -1162,6 +1177,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         except OracleError as e:
             msg = f"Failed to rollback Oracle transaction: {e}"
             raise SQLSpecError(msg) from e
+        finally:
+            self._transaction_active = False
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set Oracle CURRENT_SCHEMA for migration SQL."""
@@ -1505,8 +1522,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return False
+        """Check if connection is in transaction.
+
+        Oracle does not expose native transaction state through this predicate,
+        so it is tracked via a flag toggled in begin/commit/rollback.
+        """
+        return self._transaction_active
 
     async def _detect_oracle_version(self) -> "VersionInfo | None":
         if self._oracle_version is not None:
@@ -1592,27 +1613,28 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._add_pipeline_operation(pipeline, compiled)
 
         results: list[StackResult] = []
-        started_transaction = False
+        owns_transaction = not self._connection_in_transaction()
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
             try:
-                if not continue_on_error and not self._connection_in_transaction():
+                if owns_transaction and not continue_on_error:
                     await self.begin()
-                    started_transaction = True
 
-                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=True)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer
                 )
 
-                if started_transaction:
+                if owns_transaction:
                     await self.commit()
             except Exception as exc:
-                if started_transaction:
+                if owns_transaction:
                     try:
                         await self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
+                if isinstance(exc, StackExecutionError):
+                    raise
                 raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
 
         return tuple(results)

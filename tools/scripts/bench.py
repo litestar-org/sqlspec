@@ -6,6 +6,7 @@ Originally contributed by euri10 (Benoit Barthelet) in PR #354.
 import asyncio
 import cProfile
 import gc
+import importlib
 import inspect
 import json
 import os
@@ -17,7 +18,8 @@ import time
 from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, NoReturn, TypedDict
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import anyio
 import click
@@ -33,17 +35,29 @@ from sqlspec.utils.text import camelize
 __all__ = (
     "main",
     "print_benchmark_table",
+    "raw_adbc_rows",
     "raw_aiosqlite_worker_hops",
     "raw_asyncpg_initialization",
+    "raw_asyncpg_iterative_inserts",
     "raw_asyncpg_read_heavy",
+    "raw_asyncpg_repeated_queries",
+    "raw_asyncpg_rows",
     "raw_asyncpg_write_heavy",
+    "raw_cockroach_asyncpg_rows",
+    "raw_cockroach_psycopg_async_rows",
+    "raw_cockroach_psycopg_sync_rows",
+    "raw_duckdb_bulk",
     "raw_duckdb_initialization",
     "raw_duckdb_iterative_inserts",
     "raw_duckdb_read_heavy",
     "raw_duckdb_repeated_queries",
     "raw_duckdb_write_heavy",
+    "raw_mysqlconnector_json_rows",
     "raw_oracle_lob_fetch_1k",
     "raw_oracle_lob_fetch_100k",
+    "raw_psycopg_async_rows",
+    "raw_psycopg_sync_rows",
+    "raw_spanner_strings",
     "raw_sqlite_complex_parameters",
     "raw_sqlite_dict_key_transform",
     "raw_sqlite_initialization",
@@ -57,7 +71,9 @@ __all__ = (
     "run_benchmark",
     "run_extended_benchmark",
     "sqlalchemy_asyncpg_initialization",
+    "sqlalchemy_asyncpg_iterative_inserts",
     "sqlalchemy_asyncpg_read_heavy",
+    "sqlalchemy_asyncpg_repeated_queries",
     "sqlalchemy_asyncpg_write_heavy",
     "sqlalchemy_duckdb_initialization",
     "sqlalchemy_duckdb_iterative_inserts",
@@ -69,15 +85,24 @@ __all__ = (
     "sqlalchemy_sqlite_read_heavy",
     "sqlalchemy_sqlite_repeated_queries",
     "sqlalchemy_sqlite_write_heavy",
+    "sqlspec_adbc_rows",
     "sqlspec_aiosqlite_worker_hops",
     "sqlspec_asyncpg_initialization",
+    "sqlspec_asyncpg_iterative_inserts",
     "sqlspec_asyncpg_read_heavy",
+    "sqlspec_asyncpg_repeated_queries",
+    "sqlspec_asyncpg_rows",
     "sqlspec_asyncpg_write_heavy",
+    "sqlspec_cockroach_asyncpg_rows",
+    "sqlspec_cockroach_psycopg_async_rows",
+    "sqlspec_cockroach_psycopg_sync_rows",
+    "sqlspec_duckdb_bulk",
     "sqlspec_duckdb_initialization",
     "sqlspec_duckdb_iterative_inserts",
     "sqlspec_duckdb_read_heavy",
     "sqlspec_duckdb_repeated_queries",
     "sqlspec_duckdb_write_heavy",
+    "sqlspec_mysqlconnector_json_rows",
     "sqlspec_oracle_lob_fetch_1k",
     "sqlspec_oracle_lob_fetch_100k",
     "sqlspec_oracle_lob_fetch_async_1k",
@@ -86,6 +111,9 @@ __all__ = (
     "sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k",
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_1k",
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_100k",
+    "sqlspec_psycopg_async_rows",
+    "sqlspec_psycopg_sync_rows",
+    "sqlspec_spanner_strings",
     "sqlspec_sqlite_complex_parameters",
     "sqlspec_sqlite_dict_key_transform",
     "sqlspec_sqlite_initialization",
@@ -102,6 +130,14 @@ __all__ = (
 _leaked_pools: list[str] = []
 
 
+class BenchmarkUnavailableError(RuntimeError):
+    """Signal that an optional benchmark dependency or service is unavailable."""
+
+
+def _benchmark_unavailable() -> NoReturn:
+    raise BenchmarkUnavailableError
+
+
 def _is_compiled() -> bool:
     """Detect if sqlspec driver modules are mypyc-compiled."""
     try:
@@ -116,7 +152,7 @@ SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 
 ROWS_TO_INSERT = 10_000
-POOL_SIZE = 5  # Default pool size for async adapters
+POOL_SIZE = 1  # Match the single raw connection used by each benchmark scenario
 DEFAULT_BENCH_ITERATIONS = 7
 DEFAULT_BENCH_WARMUP = 3
 NOISY_STDDEV_RATIO = 0.10
@@ -131,6 +167,8 @@ ORACLE_LOB_ENV_VARS = (
     "SQLSPEC_BENCH_ORACLE_USER",
     "SQLSPEC_BENCH_ORACLE_PASSWORD",
 )
+POSTGRES_DSN_ENV = "SQLSPEC_BENCH_POSTGRES_DSN"
+COCKROACH_DSN_ENV = "SQLSPEC_BENCH_COCKROACH_DSN"
 SQLITE_EXTENDED_SCENARIOS = (
     ("raw", "dict_key_transform"),
     ("sqlspec", "dict_key_transform"),
@@ -156,10 +194,25 @@ ORACLE_EXTENDED_SCENARIOS = (
     ("sqlspec_async_fetch_lobs_true", "lob_fetch_100k"),
 )
 AIOSQLITE_EXTENDED_SCENARIOS = (("raw", "worker_hops"), ("sqlspec", "worker_hops"))
+SPANNER_EXTENDED_SCENARIOS = (("raw", "strings"), ("sqlspec", "strings"))
+MYSQLCONNECTOR_EXTENDED_SCENARIOS = (("raw", "json_rows"), ("sqlspec", "json_rows"))
+ADBC_EXTENDED_SCENARIOS = (("raw", "rows"), ("sqlspec", "rows"))
+DUCKDB_EXTENDED_SCENARIOS = (("raw", "bulk"), ("sqlspec", "bulk"))
+SERVICE_ROWS_SCENARIOS = (("raw", "rows"), ("sqlspec", "rows"))
 EXTENDED_SCENARIOS_BY_DRIVER = {
     "sqlite": SQLITE_EXTENDED_SCENARIOS,
     "aiosqlite": AIOSQLITE_EXTENDED_SCENARIOS,
+    "spanner": SPANNER_EXTENDED_SCENARIOS,
+    "mysqlconnector": MYSQLCONNECTOR_EXTENDED_SCENARIOS,
+    "adbc": ADBC_EXTENDED_SCENARIOS,
+    "duckdb": DUCKDB_EXTENDED_SCENARIOS,
     "oracle": ORACLE_EXTENDED_SCENARIOS,
+    "psycopg_sync": SERVICE_ROWS_SCENARIOS,
+    "psycopg_async": SERVICE_ROWS_SCENARIOS,
+    "asyncpg": SERVICE_ROWS_SCENARIOS,
+    "cockroach_psycopg_sync": SERVICE_ROWS_SCENARIOS,
+    "cockroach_psycopg_async": SERVICE_ROWS_SCENARIOS,
+    "cockroach_asyncpg": SERVICE_ROWS_SCENARIOS,
 }
 
 
@@ -250,6 +303,8 @@ def main(
         for leak in _leaked_pools:
             click.secho(f"  - {leak}", fg="yellow")
         _leaked_pools.clear()
+    if errors:
+        raise click.exceptions.Exit(1)
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
 
 
@@ -371,7 +426,16 @@ def run_benchmark(
                 times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
                 stats = _summarize_times(times)
                 label = _benchmark_library_label(lib)
-                results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
+                results.append({
+                    "driver": driver,
+                    "library": label,
+                    "library_key": lib,
+                    "scenario": scenario,
+                    "times": times,
+                    **stats,
+                })
+            except BenchmarkUnavailableError:
+                continue
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -430,6 +494,7 @@ def run_benchmark_profiled(
                 results.append({
                     "driver": driver,
                     "library": _benchmark_library_label(lib),
+                    "library_key": lib,
                     "scenario": scenario,
                     "times": times,
                     **summary,
@@ -447,6 +512,8 @@ def run_benchmark_profiled(
                 profile_stats.sort_stats("cumulative")
                 profile_stats.print_stats(20)
 
+            except BenchmarkUnavailableError:
+                continue
             except Exception as exc:
                 errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -471,7 +538,7 @@ def run_extended_benchmark(
     Returns:
         List of benchmark result dictionaries
     """
-    scenario_entries = EXTENDED_SCENARIOS_BY_DRIVER.get(driver, SQLITE_EXTENDED_SCENARIOS)
+    scenario_entries = EXTENDED_SCENARIOS_BY_DRIVER.get(driver, ())
     results: list[dict[str, Any]] = []
 
     for lib, scenario in scenario_entries:
@@ -486,7 +553,16 @@ def run_extended_benchmark(
             times = _run_benchmark_iterations(func, is_async=is_async, iterations=iterations, warmup=warmup)
             stats = _summarize_times(times)
             label = _benchmark_library_label(lib)
-            results.append({"driver": driver, "library": label, "scenario": scenario, "times": times, **stats})
+            results.append({
+                "driver": driver,
+                "library": label,
+                "library_key": lib,
+                "scenario": scenario,
+                "times": times,
+                **stats,
+            })
+        except BenchmarkUnavailableError:
+            continue
         except Exception as exc:
             errors.append(f"{lib}/{driver}/{scenario}: {exc}")
 
@@ -517,6 +593,7 @@ def _write_json_results(
             {
                 "driver": r["driver"],
                 "library": r["library"],
+                "library_key": r.get("library_key", r["library"]),
                 "scenario": r["scenario"],
                 "time": r["time"],
                 "times": r.get("times", [r["time"]]),
@@ -872,6 +949,288 @@ def sqlspec_duckdb_repeated_queries() -> None:
             tmp_path.unlink()
 
 
+def raw_duckdb_bulk() -> None:
+    """Insert a batch of rows through the native DuckDB driver."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(DUCKDB_BULK_CREATE)
+        conn.executemany(DUCKDB_BULK_INSERT, [(index, f"value_{index}") for index in range(BENCHMARK_ROWS)])
+        result = conn.execute(DUCKDB_BULK_COUNT).fetchone()
+        assert result is not None
+        assert result[0] == BENCHMARK_ROWS
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_bulk() -> None:
+    """Insert a batch of rows through SQLSpec's DuckDB bulk path."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    tmp_path.unlink()
+    config = DuckDBConfig(connection_config={"database": str(tmp_path)})
+    try:
+        spec = SQLSpec()
+        with spec.provide_session(config) as session:
+            session.execute(DUCKDB_BULK_CREATE)
+            session.execute_many(DUCKDB_BULK_INSERT, [(index, f"value_{index}") for index in range(BENCHMARK_ROWS)])
+            result = session.fetch_one(DUCKDB_BULK_COUNT)
+            assert result is not None
+            assert (
+                result[0]
+                if isinstance(result, tuple)
+                else result["count_star()"]
+                if "count_star()" in result
+                else next(iter(result.values()))
+            ) == BENCHMARK_ROWS
+    finally:
+        config.close_pool()
+        with suppress(OSError):
+            tmp_path.unlink()
+
+
+def _get_adbc_dbapi() -> Any:
+    """Import the ADBC DB-API lazily."""
+    try:
+        from adbc_driver_manager import dbapi
+    except ImportError:
+        return None
+    else:
+        return dbapi
+
+
+def _get_adbc_config() -> Any:
+    """Import AdbcConfig lazily."""
+    try:
+        from sqlspec.adapters.adbc import AdbcConfig
+    except ImportError:
+        return None
+    else:
+        return AdbcConfig
+
+
+def _adbc_benchmark_connection_config() -> dict[str, Any] | None:
+    """Build an ADBC benchmark connection from service-provided environment values."""
+    uri = os.environ.get("SQLSPEC_BENCH_ADBC_URI")
+    driver_name = os.environ.get("SQLSPEC_BENCH_ADBC_DRIVER_NAME")
+    if not uri or not driver_name:
+        return None
+    config: dict[str, Any] = {"uri": uri, "driver_name": driver_name}
+    for env_name, config_name in (
+        ("SQLSPEC_BENCH_ADBC_USERNAME", "username"),
+        ("SQLSPEC_BENCH_ADBC_PASSWORD", "password"),
+        ("SQLSPEC_BENCH_ADBC_GIZMOSQL_BACKEND", "gizmosql_backend"),
+    ):
+        value = os.environ.get(env_name)
+        if value:
+            config[config_name] = value
+    if os.environ.get("SQLSPEC_BENCH_ADBC_TLS_SKIP_VERIFY") == "1":
+        config["tls_skip_verify"] = True
+    return config
+
+
+def _adbc_benchmark_rows() -> list[tuple[int, str]]:
+    """Return the stable row payload used by the ADBC benchmark."""
+    return [(index, f"value_{index}") for index in range(BENCHMARK_ROWS)]
+
+
+def _connect_adbc(dbapi: Any, config: dict[str, Any]) -> Any:
+    driver_name = config["driver_name"]
+    if driver_name in {"adbc_driver_sqlite", "adbc_driver_duckdb"}:
+        module = importlib.import_module(f"{driver_name}.dbapi")
+        return module.connect(uri=config["uri"], autocommit=True)
+    db_kwargs = {
+        key: config[key] for key in ("username", "password", "gizmosql_backend", "tls_skip_verify") if key in config
+    }
+    return dbapi.connect(driver=driver_name, uri=config["uri"], db_kwargs=db_kwargs, autocommit=True)
+
+
+def raw_adbc_rows() -> None:
+    """Fetch rows through the native ADBC DB-API path."""
+    dbapi = _get_adbc_dbapi()
+    config = _adbc_benchmark_connection_config()
+    if dbapi is None or config is None:
+        _benchmark_unavailable()
+    with _connect_adbc(dbapi, config) as connection, connection.cursor() as cursor:
+        cursor.execute(ADBC_ROWS_CREATE)
+        cursor.execute(ADBC_ROWS_TRUNCATE)
+        cursor.executemany(ADBC_ROWS_INSERT, _adbc_benchmark_rows())
+        cursor.execute(ADBC_ROWS_SELECT)
+        rows = cursor.fetchall()
+    assert len(rows) == BENCHMARK_ROWS
+
+
+def sqlspec_adbc_rows() -> None:
+    """Fetch rows through SQLSpec's ADBC Arrow-backed path."""
+    AdbcConfig = _get_adbc_config()  # noqa: N806
+    config_values = _adbc_benchmark_connection_config()
+    if AdbcConfig is None or config_values is None:
+        _benchmark_unavailable()
+    config = AdbcConfig(connection_config=config_values)
+    try:
+        with config.provide_session() as session:
+            session.execute(ADBC_ROWS_CREATE)
+            session.execute(ADBC_ROWS_TRUNCATE)
+            session.execute_many(ADBC_ROWS_INSERT, _adbc_benchmark_rows())
+            rows = session.fetch(ADBC_ROWS_SELECT)
+            assert len(rows) == BENCHMARK_ROWS
+    finally:
+        config.close_pool()
+
+
+def _get_mysql_connector() -> Any:
+    """Import mysql-connector lazily."""
+    try:
+        import mysql.connector
+    except ImportError:
+        return None
+    else:
+        return mysql.connector
+
+
+def _get_mysql_connector_config() -> Any:
+    """Import MysqlConnectorSyncConfig lazily."""
+    try:
+        from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncConfig
+    except ImportError:
+        return None
+    else:
+        return MysqlConnectorSyncConfig
+
+
+def _mysql_benchmark_connection_config() -> dict[str, Any] | None:
+    """Build a MySQL benchmark connection from service-provided environment values."""
+    required: dict[str, Any] = {
+        "host": os.environ.get("SQLSPEC_BENCH_MYSQL_HOST"),
+        "port": os.environ.get("SQLSPEC_BENCH_MYSQL_PORT"),
+        "user": os.environ.get("SQLSPEC_BENCH_MYSQL_USER"),
+        "password": os.environ.get("SQLSPEC_BENCH_MYSQL_PASSWORD"),
+        "database": os.environ.get("SQLSPEC_BENCH_MYSQL_DATABASE"),
+    }
+    if any(value is None for value in required.values()):
+        return None
+    required["port"] = int(required["port"])
+    required["use_pure"] = True
+    required["autocommit"] = True
+    return required
+
+
+def _json_benchmark_rows() -> list[tuple[int, str]]:
+    """Return the stable JSON payload used by the MySQL benchmark."""
+    return [(index, json.dumps({"index": index, "values": [index, index + 1]})) for index in range(BENCHMARK_ROWS)]
+
+
+def _json_row_payload(row: Any) -> Any:
+    payload = row.get("payload") if isinstance(row, dict) else row[1]
+    return json.loads(payload) if isinstance(payload, str) else payload
+
+
+def raw_mysqlconnector_json_rows() -> None:
+    """Fetch JSON rows through the native MySQL connector."""
+    connector = _get_mysql_connector()
+    connection_config = _mysql_benchmark_connection_config()
+    if connector is None or connection_config is None:
+        _benchmark_unavailable()
+    connection = connector.connect(**connection_config)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(MYSQL_JSON_CREATE)
+            cursor.execute(f"TRUNCATE TABLE {MYSQL_JSON_TABLE}")
+            cursor.executemany(MYSQL_JSON_INSERT_RAW, _json_benchmark_rows())
+            cursor.execute(MYSQL_JSON_SELECT)
+            rows = cursor.fetchall()
+    finally:
+        connection.close()
+    assert len(rows) == BENCHMARK_ROWS
+    assert _json_row_payload(rows[0])["values"] == [0, 1]
+
+
+def sqlspec_mysqlconnector_json_rows() -> None:
+    """Fetch JSON rows through SQLSpec's MySQL connector path."""
+    Config = _get_mysql_connector_config()  # noqa: N806
+    connection_config = _mysql_benchmark_connection_config()
+    if Config is None or connection_config is None:
+        _benchmark_unavailable()
+    pool_config = {**connection_config, "pool_size": 1}
+    config = Config(connection_config=pool_config, driver_features={"json_deserializer": json.loads})
+    try:
+        with config.provide_session() as session:
+            session.execute(MYSQL_JSON_CREATE)
+            session.execute(f"TRUNCATE TABLE {MYSQL_JSON_TABLE}")
+            session.execute_many(MYSQL_JSON_INSERT, _json_benchmark_rows())
+            rows = session.fetch(MYSQL_JSON_SELECT)
+    finally:
+        config.close_pool()
+    assert len(rows) == BENCHMARK_ROWS
+    assert _json_row_payload(rows[0])["values"] == [0, 1]
+
+
+def _spanner_benchmark_config() -> dict[str, Any] | None:
+    """Build a Spanner benchmark connection from service-provided environment values."""
+    required: dict[str, Any] = {
+        "project": os.environ.get("SQLSPEC_BENCH_SPANNER_PROJECT"),
+        "instance_id": os.environ.get("SQLSPEC_BENCH_SPANNER_INSTANCE_ID"),
+        "database_id": os.environ.get("SQLSPEC_BENCH_SPANNER_DATABASE_ID"),
+        "api_endpoint": os.environ.get("SQLSPEC_BENCH_SPANNER_API_ENDPOINT"),
+    }
+    if any(value is None for value in required.values()):
+        return None
+    return required
+
+
+def raw_spanner_strings() -> None:
+    """Fetch string rows through the native Google Cloud Spanner client."""
+    try:
+        from google.auth.credentials import AnonymousCredentials
+        from google.cloud import spanner
+    except ImportError:
+        _benchmark_unavailable()
+    connection_config = _spanner_benchmark_config()
+    if connection_config is None:
+        _benchmark_unavailable()
+    client = spanner.Client(
+        project=connection_config["project"],
+        credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        client_options={"api_endpoint": connection_config["api_endpoint"]},
+    )
+    try:
+        database = client.instance(connection_config["instance_id"]).database(connection_config["database_id"])  # type: ignore[no-untyped-call]
+        with database.snapshot() as snapshot:
+            rows = list(snapshot.execute_sql(SPANNER_STRINGS_SELECT))
+    finally:
+        client.close()  # type: ignore[no-untyped-call]
+    assert len(rows) == BENCHMARK_ROWS
+
+
+def sqlspec_spanner_strings() -> None:
+    """Fetch string rows through SQLSpec's Spanner column-plan path."""
+    try:
+        from sqlspec.adapters.spanner import SpannerSyncConfig
+    except ImportError:
+        _benchmark_unavailable()
+    connection_config = _spanner_benchmark_config()
+    if connection_config is None:
+        _benchmark_unavailable()
+    config = SpannerSyncConfig(
+        connection_config={
+            "project": connection_config["project"],
+            "instance_id": connection_config["instance_id"],
+            "database_id": connection_config["database_id"],
+            "client_options": {"api_endpoint": connection_config["api_endpoint"]},
+            "size": POOL_SIZE,
+        }
+    )
+    try:
+        with config.provide_read_session() as session:
+            rows = session.fetch(SPANNER_STRINGS_SELECT)
+    finally:
+        config.close_pool()
+    assert len(rows) == BENCHMARK_ROWS
+
+
 def _get_duckdb_engine() -> tuple[Any, Any]:
     """Import SQLAlchemy with duckdb_engine lazily."""
     try:
@@ -1034,6 +1393,7 @@ def sqlalchemy_sqlite_iterative_inserts() -> None:
 # Query cache scenarios - tests repeated single-row operations
 # These stress the query preparation/caching path
 SELECT_BY_VALUE = "SELECT * FROM test WHERE value = ?;"
+SELECT_BY_VALUE_ASYNCPG = "SELECT * FROM test WHERE value = $1;"
 SELECT_BY_VALUE_SQLA = "SELECT * FROM test WHERE value = :value;"
 
 
@@ -1471,8 +1831,6 @@ async def sqlalchemy_aiosqlite_repeated_queries() -> None:
 # Asyncpg implementations
 # These require asyncpg and optionally SQLAlchemy[asyncio] to be installed
 
-ASYNCPG_DSN = "postgresql://postgres:postgres@localhost/postgres"
-
 
 def _get_asyncpg() -> Any:
     """Import asyncpg lazily."""
@@ -1505,11 +1863,37 @@ def _get_async_sqlalchemy() -> tuple[Any, Any]:
         return create_async_engine, text
 
 
+def _postgres_benchmark_dsn() -> str:
+    dsn = os.environ.get(POSTGRES_DSN_ENV)
+    if not dsn:
+        _benchmark_unavailable()
+    return dsn
+
+
+def _cockroach_benchmark_dsn() -> str:
+    dsn = os.environ.get(COCKROACH_DSN_ENV)
+    if not dsn:
+        _benchmark_unavailable()
+    return dsn
+
+
+def _asyncpg_connect_kwargs(dsn: str) -> dict[str, Any]:
+    """Adapt a service DSN to asyncpg's keyword set."""
+    parsed = urlsplit(dsn)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    sslmode = query.pop("sslmode", None)
+    clean_dsn = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+    kwargs: dict[str, Any] = {"dsn": clean_dsn}
+    if sslmode == "disable":
+        kwargs["ssl"] = False
+    return kwargs
+
+
 async def raw_asyncpg_initialization() -> None:
     connect = _get_asyncpg()
     if connect is None:
-        return
-    conn = await connect(dsn=ASYNCPG_DSN)
+        _benchmark_unavailable()
+    conn = await connect(**_asyncpg_connect_kwargs(_postgres_benchmark_dsn()))
     await conn.execute(DROP_TEST_TABLE)
     await conn.execute(CREATE_TEST_TABLE)
     await conn.close()
@@ -1518,8 +1902,8 @@ async def raw_asyncpg_initialization() -> None:
 async def raw_asyncpg_write_heavy() -> None:
     connect = _get_asyncpg()
     if connect is None:
-        return
-    conn = await connect(dsn=ASYNCPG_DSN)
+        _benchmark_unavailable()
+    conn = await connect(**_asyncpg_connect_kwargs(_postgres_benchmark_dsn()))
     await conn.execute(DROP_TEST_TABLE)
     await conn.execute(CREATE_TEST_TABLE)
     # Use executemany for fair comparison
@@ -1531,53 +1915,125 @@ async def raw_asyncpg_write_heavy() -> None:
 async def raw_asyncpg_read_heavy() -> None:
     connect = _get_asyncpg()
     if connect is None:
-        return
-    conn = await connect(dsn=ASYNCPG_DSN)
+        _benchmark_unavailable()
+    conn = await connect(**_asyncpg_connect_kwargs(_postgres_benchmark_dsn()))
     rows = await conn.fetch(SELECT_TEST_VALUES)
     assert len(rows) == ROWS_TO_INSERT
     await conn.close()
 
 
+async def raw_asyncpg_iterative_inserts() -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        _benchmark_unavailable()
+    conn = await connect(**_asyncpg_connect_kwargs(_postgres_benchmark_dsn()))
+    try:
+        await conn.execute(DROP_TEST_TABLE)
+        await conn.execute(CREATE_TEST_TABLE)
+        for i in range(ROWS_TO_INSERT):
+            await conn.execute(INSERT_TEST_VALUE_ASYNCPG, f"value_{i}")
+    finally:
+        await conn.close()
+
+
+async def raw_asyncpg_repeated_queries() -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        _benchmark_unavailable()
+    conn = await connect(**_asyncpg_connect_kwargs(_postgres_benchmark_dsn()))
+    try:
+        await conn.execute(DROP_TEST_TABLE)
+        await conn.execute(CREATE_TEST_TABLE)
+        await conn.executemany(INSERT_TEST_VALUE_ASYNCPG, [(f"value_{i}",) for i in range(ROWS_TO_INSERT)])
+        for i in range(ROWS_TO_INSERT):
+            await conn.fetchrow(SELECT_BY_VALUE_ASYNCPG, f"value_{i % 100}")
+    finally:
+        await conn.close()
+
+
 async def sqlspec_asyncpg_initialization() -> None:
     AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
     if AsyncpgConfig is None:
-        return
+        _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": ASYNCPG_DSN})
-    async with spec.provide_session(config) as session:
-        await session.execute(DROP_TEST_TABLE)
-        await session.execute(CREATE_TEST_TABLE)
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+    finally:
+        await config.close_pool()
 
 
 async def sqlspec_asyncpg_write_heavy() -> None:
     AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
     if AsyncpgConfig is None:
-        return
+        _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": ASYNCPG_DSN})
-    async with spec.provide_session(config) as session:
-        await session.execute(DROP_TEST_TABLE)
-        await session.execute(CREATE_TEST_TABLE)
-        data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
-        await session.execute_many(INSERT_TEST_VALUE_ASYNCPG, data)
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            await session.execute_many(INSERT_TEST_VALUE_ASYNCPG, data)
+    finally:
+        await config.close_pool()
 
 
 async def sqlspec_asyncpg_read_heavy() -> None:
     AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
     if AsyncpgConfig is None:
-        return
+        _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": ASYNCPG_DSN})
-    async with spec.provide_session(config) as session:
-        rows = await session.fetch(SELECT_TEST_VALUES)
-        assert len(rows) == ROWS_TO_INSERT
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    try:
+        async with spec.provide_session(config) as session:
+            rows = await session.fetch(SELECT_TEST_VALUES)
+            assert len(rows) == ROWS_TO_INSERT
+    finally:
+        await config.close_pool()
+
+
+async def sqlspec_asyncpg_iterative_inserts() -> None:
+    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
+    if AsyncpgConfig is None:
+        _benchmark_unavailable()
+    spec = SQLSpec()
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+            for i in range(ROWS_TO_INSERT):
+                await session.execute(INSERT_TEST_VALUE_ASYNCPG, (f"value_{i}",))
+    finally:
+        await config.close_pool()
+
+
+async def sqlspec_asyncpg_repeated_queries() -> None:
+    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
+    if AsyncpgConfig is None:
+        _benchmark_unavailable()
+    spec = SQLSpec()
+    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute(DROP_TEST_TABLE)
+            await session.execute(CREATE_TEST_TABLE)
+            await session.execute_many(INSERT_TEST_VALUE_ASYNCPG, [(f"value_{i}",) for i in range(ROWS_TO_INSERT)])
+            for i in range(ROWS_TO_INSERT):
+                await session.fetch_one_or_none(SELECT_BY_VALUE_ASYNCPG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
 
 
 async def sqlalchemy_asyncpg_initialization() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
-        return
-    engine = create_async_engine(f"postgresql+asyncpg://{ASYNCPG_DSN.split('://')[1]}")
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    engine = create_async_engine(dsn.replace("postgresql://", "postgresql+asyncpg://", 1))
     async with engine.connect() as conn:
         await conn.execute(text(DROP_TEST_TABLE))
         await conn.execute(text(CREATE_TEST_TABLE))
@@ -1588,8 +2044,9 @@ async def sqlalchemy_asyncpg_initialization() -> None:
 async def sqlalchemy_asyncpg_write_heavy() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
-        return
-    engine = create_async_engine(f"postgresql+asyncpg://{ASYNCPG_DSN.split('://')[1]}")
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    engine = create_async_engine(dsn.replace("postgresql://", "postgresql+asyncpg://", 1))
     async with engine.connect() as conn:
         await conn.execute(text(DROP_TEST_TABLE))
         await conn.execute(text(CREATE_TEST_TABLE))
@@ -1602,13 +2059,238 @@ async def sqlalchemy_asyncpg_write_heavy() -> None:
 async def sqlalchemy_asyncpg_read_heavy() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
-        return
-    engine = create_async_engine(f"postgresql+asyncpg://{ASYNCPG_DSN.split('://')[1]}")
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    engine = create_async_engine(dsn.replace("postgresql://", "postgresql+asyncpg://", 1))
     async with engine.begin() as conn:
         result = await conn.execute(text(SELECT_TEST_VALUES))
         rows = result.fetchall()
         assert len(rows) == ROWS_TO_INSERT
     await engine.dispose()
+
+
+async def sqlalchemy_asyncpg_iterative_inserts() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    engine = create_async_engine(dsn.replace("postgresql://", "postgresql+asyncpg://", 1))
+    async with engine.connect() as conn:
+        await conn.execute(text(DROP_TEST_TABLE))
+        await conn.execute(text(CREATE_TEST_TABLE))
+        for i in range(ROWS_TO_INSERT):
+            await conn.execute(text(INSERT_TEST_VALUE_SQLA), {"value": f"value_{i}"})
+        await conn.commit()
+    await engine.dispose()
+
+
+async def sqlalchemy_asyncpg_repeated_queries() -> None:
+    create_async_engine, text = _get_async_sqlalchemy()
+    if create_async_engine is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    engine = create_async_engine(dsn.replace("postgresql://", "postgresql+asyncpg://", 1))
+    async with engine.connect() as conn:
+        await conn.execute(text(DROP_TEST_TABLE))
+        await conn.execute(text(CREATE_TEST_TABLE))
+        await conn.execute(text(INSERT_TEST_VALUE_SQLA), [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)])
+        await conn.commit()
+        for i in range(ROWS_TO_INSERT):
+            result = await conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
+            result.fetchone()
+    await engine.dispose()
+
+
+SERVICE_ROWS_CREATE = "CREATE TABLE IF NOT EXISTS sqlspec_bench_rows (id INTEGER PRIMARY KEY, payload TEXT)"
+SERVICE_ROWS_DROP = "DROP TABLE IF EXISTS sqlspec_bench_rows"
+SERVICE_ROWS_INSERT_PG = "INSERT INTO sqlspec_bench_rows (id, payload) VALUES (%s, %s)"
+SERVICE_ROWS_INSERT_ASYNCPG = "INSERT INTO sqlspec_bench_rows (id, payload) VALUES ($1, $2)"
+SERVICE_ROWS_SELECT = "SELECT id, payload FROM sqlspec_bench_rows ORDER BY id"
+
+
+def _service_benchmark_rows() -> list[tuple[int, str]]:
+    return [(index, f"value_{index}") for index in range(BENCHMARK_ROWS)]
+
+
+def _get_psycopg() -> Any:
+    try:
+        import psycopg
+    except ImportError:
+        return None
+    else:
+        return psycopg
+
+
+def _run_raw_psycopg_sync_rows(dsn: str, *, cockroach: bool) -> None:
+    psycopg = _get_psycopg()
+    if psycopg is None:
+        _benchmark_unavailable()
+    if cockroach:
+        from psycopg import crdb
+
+        connect = crdb.connect
+    else:
+        connect = psycopg.connect
+    with connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(SERVICE_ROWS_DROP)
+            cursor.execute(SERVICE_ROWS_CREATE)
+            cursor.executemany(SERVICE_ROWS_INSERT_PG, _service_benchmark_rows())
+            cursor.execute(SERVICE_ROWS_SELECT)
+            rows = cursor.fetchall()
+        connection.commit()
+    assert len(rows) == BENCHMARK_ROWS
+
+
+def _get_sync_service_config(driver: str) -> Any:
+    try:
+        if driver == "psycopg_sync":
+            from sqlspec.adapters.psycopg import PsycopgSyncConfig
+
+            return PsycopgSyncConfig
+        from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncConfig
+    except ImportError:
+        return None
+    else:
+        return CockroachPsycopgSyncConfig
+
+
+def _run_sqlspec_sync_service_rows(dsn: str, *, driver: str) -> None:
+    config_class = _get_sync_service_config(driver)
+    if config_class is None:
+        _benchmark_unavailable()
+    config = config_class(connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)})
+    try:
+        spec = SQLSpec()
+        with spec.provide_session(config) as session:
+            session.execute(SERVICE_ROWS_DROP)
+            session.execute(SERVICE_ROWS_CREATE)
+            session.execute_many(SERVICE_ROWS_INSERT_PG, _service_benchmark_rows())
+            rows = session.fetch(SERVICE_ROWS_SELECT)
+        assert len(rows) == BENCHMARK_ROWS
+    finally:
+        config.close_pool()
+
+
+async def _run_raw_psycopg_async_rows(dsn: str) -> None:
+    psycopg = _get_psycopg()
+    if psycopg is None:
+        _benchmark_unavailable()
+    connection = await psycopg.AsyncConnection.connect(dsn)
+    try:
+        async with connection.cursor() as cursor:
+            await cursor.execute(SERVICE_ROWS_DROP)
+            await cursor.execute(SERVICE_ROWS_CREATE)
+            await cursor.executemany(SERVICE_ROWS_INSERT_PG, _service_benchmark_rows())
+            await cursor.execute(SERVICE_ROWS_SELECT)
+            rows = await cursor.fetchall()
+        await connection.commit()
+    finally:
+        await connection.close()
+    assert len(rows) == BENCHMARK_ROWS
+
+
+async def _run_raw_asyncpg_rows(dsn: str) -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        _benchmark_unavailable()
+    connection = await connect(**_asyncpg_connect_kwargs(dsn))
+    try:
+        await connection.execute(SERVICE_ROWS_DROP)
+        await connection.execute(SERVICE_ROWS_CREATE)
+        await connection.executemany(SERVICE_ROWS_INSERT_ASYNCPG, _service_benchmark_rows())
+        rows = await connection.fetch(SERVICE_ROWS_SELECT)
+    finally:
+        await connection.close()
+    assert len(rows) == BENCHMARK_ROWS
+
+
+def _get_async_service_config(driver: str) -> Any:
+    try:
+        if driver in {"psycopg_async", "cockroach_psycopg_async"}:
+            if driver == "psycopg_async":
+                from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+
+                return PsycopgAsyncConfig
+            from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncConfig
+
+            return CockroachPsycopgAsyncConfig
+        if driver == "asyncpg":
+            from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+            return AsyncpgConfig
+        from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
+    except ImportError:
+        return None
+    else:
+        return CockroachAsyncpgConfig
+
+
+async def _run_sqlspec_async_service_rows(dsn: str, *, driver: str) -> None:
+    config_class = _get_async_service_config(driver)
+    if config_class is None:
+        _benchmark_unavailable()
+    connection_key = "dsn" if "asyncpg" in driver else "conninfo"
+    config = config_class(connection_config={connection_key: dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)})
+    try:
+        spec = SQLSpec()
+        async with spec.provide_session(config) as session:
+            await session.execute(SERVICE_ROWS_DROP)
+            await session.execute(SERVICE_ROWS_CREATE)
+            insert_sql = SERVICE_ROWS_INSERT_ASYNCPG if "asyncpg" in driver else SERVICE_ROWS_INSERT_PG
+            await session.execute_many(insert_sql, _service_benchmark_rows())
+            rows = await session.fetch(SERVICE_ROWS_SELECT)
+        assert len(rows) == BENCHMARK_ROWS
+    finally:
+        await config.close_pool()
+
+
+def raw_psycopg_sync_rows() -> None:
+    _run_raw_psycopg_sync_rows(_postgres_benchmark_dsn(), cockroach=False)
+
+
+def sqlspec_psycopg_sync_rows() -> None:
+    _run_sqlspec_sync_service_rows(_postgres_benchmark_dsn(), driver="psycopg_sync")
+
+
+async def raw_psycopg_async_rows() -> None:
+    await _run_raw_psycopg_async_rows(_postgres_benchmark_dsn())
+
+
+async def sqlspec_psycopg_async_rows() -> None:
+    await _run_sqlspec_async_service_rows(_postgres_benchmark_dsn(), driver="psycopg_async")
+
+
+async def raw_asyncpg_rows() -> None:
+    await _run_raw_asyncpg_rows(_postgres_benchmark_dsn())
+
+
+async def sqlspec_asyncpg_rows() -> None:
+    await _run_sqlspec_async_service_rows(_postgres_benchmark_dsn(), driver="asyncpg")
+
+
+def raw_cockroach_psycopg_sync_rows() -> None:
+    _run_raw_psycopg_sync_rows(_cockroach_benchmark_dsn(), cockroach=True)
+
+
+def sqlspec_cockroach_psycopg_sync_rows() -> None:
+    _run_sqlspec_sync_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_psycopg_sync")
+
+
+async def raw_cockroach_psycopg_async_rows() -> None:
+    await _run_raw_psycopg_async_rows(_cockroach_benchmark_dsn())
+
+
+async def sqlspec_cockroach_psycopg_async_rows() -> None:
+    await _run_sqlspec_async_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_psycopg_async")
+
+
+async def raw_cockroach_asyncpg_rows() -> None:
+    await _run_raw_asyncpg_rows(_cockroach_benchmark_dsn())
+
+
+async def sqlspec_cockroach_asyncpg_rows() -> None:
+    await _run_sqlspec_async_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_asyncpg")
 
 
 # ===========================================================================
@@ -1650,6 +2332,24 @@ CREATE_COMPLEX_TABLE = """CREATE TABLE complex_test (
 INSERT_COMPLEX_ROW = "INSERT INTO complex_test (uuid_val, created_at, payload) VALUES (?, ?, ?);"
 
 SELECT_COMPLEX_ALL = "SELECT * FROM complex_test;"
+
+BENCHMARK_ROWS = 1_000
+DUCKDB_BULK_TABLE = "sqlspec_bench_bulk"
+DUCKDB_BULK_CREATE = f"CREATE TABLE {DUCKDB_BULK_TABLE} (id INTEGER, payload VARCHAR)"
+DUCKDB_BULK_INSERT = f"INSERT INTO {DUCKDB_BULK_TABLE} (id, payload) VALUES (?, ?)"
+DUCKDB_BULK_COUNT = f"SELECT COUNT(*) FROM {DUCKDB_BULK_TABLE}"
+ADBC_ROWS_TABLE = "sqlspec_bench_adbc_rows"
+ADBC_ROWS_CREATE = f"CREATE TABLE IF NOT EXISTS {ADBC_ROWS_TABLE} (id INTEGER, payload VARCHAR)"
+ADBC_ROWS_TRUNCATE = f"DELETE FROM {ADBC_ROWS_TABLE}"
+ADBC_ROWS_INSERT = f"INSERT INTO {ADBC_ROWS_TABLE} (id, payload) VALUES (?, ?)"
+ADBC_ROWS_SELECT = f"SELECT id, payload FROM {ADBC_ROWS_TABLE} ORDER BY id"
+MYSQL_JSON_TABLE = "sqlspec_bench_json_rows"
+MYSQL_JSON_CREATE = f"CREATE TABLE IF NOT EXISTS {MYSQL_JSON_TABLE} (id INT PRIMARY KEY, payload JSON NOT NULL)"
+MYSQL_JSON_INSERT_RAW = f"INSERT INTO {MYSQL_JSON_TABLE} (id, payload) VALUES (%s, %s)"
+MYSQL_JSON_INSERT = f"INSERT INTO {MYSQL_JSON_TABLE} (id, payload) VALUES (?, ?)"
+MYSQL_JSON_SELECT = f"SELECT id, payload FROM {MYSQL_JSON_TABLE} ORDER BY id"
+SPANNER_STRINGS_TABLE = "sqlspec_bench_strings"
+SPANNER_STRINGS_SELECT = f"SELECT id, payload FROM {SPANNER_STRINGS_TABLE} ORDER BY id"
 
 
 class WideRowDict(TypedDict):
@@ -2176,16 +2876,43 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "aiosqlite", "repeated_queries"): sqlalchemy_aiosqlite_repeated_queries,
     ("raw", "aiosqlite", "worker_hops"): raw_aiosqlite_worker_hops,
     ("sqlspec", "aiosqlite", "worker_hops"): sqlspec_aiosqlite_worker_hops,
+    ("raw", "spanner", "strings"): raw_spanner_strings,
+    ("sqlspec", "spanner", "strings"): sqlspec_spanner_strings,
+    ("raw", "mysqlconnector", "json_rows"): raw_mysqlconnector_json_rows,
+    ("sqlspec", "mysqlconnector", "json_rows"): sqlspec_mysqlconnector_json_rows,
+    ("raw", "adbc", "rows"): raw_adbc_rows,
+    ("sqlspec", "adbc", "rows"): sqlspec_adbc_rows,
+    ("raw", "duckdb", "bulk"): raw_duckdb_bulk,
+    ("sqlspec", "duckdb", "bulk"): sqlspec_duckdb_bulk,
+    # PostgreSQL and CockroachDB service row scenarios
+    ("raw", "psycopg_sync", "rows"): raw_psycopg_sync_rows,
+    ("sqlspec", "psycopg_sync", "rows"): sqlspec_psycopg_sync_rows,
+    ("raw", "psycopg_async", "rows"): raw_psycopg_async_rows,
+    ("sqlspec", "psycopg_async", "rows"): sqlspec_psycopg_async_rows,
+    ("raw", "asyncpg", "rows"): raw_asyncpg_rows,
+    ("sqlspec", "asyncpg", "rows"): sqlspec_asyncpg_rows,
+    ("raw", "cockroach_psycopg_sync", "rows"): raw_cockroach_psycopg_sync_rows,
+    ("sqlspec", "cockroach_psycopg_sync", "rows"): sqlspec_cockroach_psycopg_sync_rows,
+    ("raw", "cockroach_psycopg_async", "rows"): raw_cockroach_psycopg_async_rows,
+    ("sqlspec", "cockroach_psycopg_async", "rows"): sqlspec_cockroach_psycopg_async_rows,
+    ("raw", "cockroach_asyncpg", "rows"): raw_cockroach_asyncpg_rows,
+    ("sqlspec", "cockroach_asyncpg", "rows"): sqlspec_cockroach_asyncpg_rows,
     # Asyncpg scenarios
     ("raw", "asyncpg", "initialization"): raw_asyncpg_initialization,
     ("raw", "asyncpg", "write_heavy"): raw_asyncpg_write_heavy,
     ("raw", "asyncpg", "read_heavy"): raw_asyncpg_read_heavy,
+    ("raw", "asyncpg", "iterative_inserts"): raw_asyncpg_iterative_inserts,
+    ("raw", "asyncpg", "repeated_queries"): raw_asyncpg_repeated_queries,
     ("sqlspec", "asyncpg", "initialization"): sqlspec_asyncpg_initialization,
     ("sqlspec", "asyncpg", "write_heavy"): sqlspec_asyncpg_write_heavy,
     ("sqlspec", "asyncpg", "read_heavy"): sqlspec_asyncpg_read_heavy,
+    ("sqlspec", "asyncpg", "iterative_inserts"): sqlspec_asyncpg_iterative_inserts,
+    ("sqlspec", "asyncpg", "repeated_queries"): sqlspec_asyncpg_repeated_queries,
     ("sqlalchemy", "asyncpg", "initialization"): sqlalchemy_asyncpg_initialization,
     ("sqlalchemy", "asyncpg", "write_heavy"): sqlalchemy_asyncpg_write_heavy,
     ("sqlalchemy", "asyncpg", "read_heavy"): sqlalchemy_asyncpg_read_heavy,
+    ("sqlalchemy", "asyncpg", "iterative_inserts"): sqlalchemy_asyncpg_iterative_inserts,
+    ("sqlalchemy", "asyncpg", "repeated_queries"): sqlalchemy_asyncpg_repeated_queries,
     # Extended SQLite scenarios (raw vs sqlspec only)
     ("raw", "sqlite", "dict_key_transform"): raw_sqlite_dict_key_transform,
     ("sqlspec", "sqlite", "dict_key_transform"): sqlspec_sqlite_dict_key_transform,

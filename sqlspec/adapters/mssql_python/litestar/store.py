@@ -4,136 +4,21 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.mssql_python.config import MssqlPythonAsyncConfig
+    from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 
 __all__ = ("MssqlPythonStore",)
 
 
-class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonAsyncConfig"]):
-    """SQL Server-backed session store using mssql-python async sessions."""
+class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
+    """SQL Server-backed session store using mssql-python sync sessions."""
 
     __slots__ = ()
 
-    def __init__(self, config: "MssqlPythonAsyncConfig") -> None:
+    def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
-
-    async def create_table(self) -> None:
-        """Create the session table if it doesn't exist."""
-        async with self._config.provide_session() as session:
-            await session.execute_script(self._table_ddl())
-        self._log_table_created()
-
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key."""
-        async with self._config.provide_session() as session:
-            row = await session.select_one_or_none(
-                f"SELECT data, expires_at FROM {self._table_name} WHERE session_id = ?", (key,)
-            )
-            if row is None:
-                return None
-
-            expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if expires_at is not None and expires_at < datetime.now(timezone.utc):
-                await self.delete(key)
-                return None
-
-            if renew_for is not None and expires_at is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
-                    await session.execute(
-                        f"""
-                        UPDATE {self._table_name}
-                        SET expires_at = ?, updated_at = SYSUTCDATETIME()
-                        WHERE session_id = ?
-                        """,
-                        (new_expires_at, key),
-                    )
-                    await session.commit()
-
-            return _coerce_bytes(_row_value(row, "data", 0))
-
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value."""
-        data = self._value_to_bytes(value)
-        expires_at = self._calculate_expires_at(expires_in)
-        async with self._config.provide_session() as session:
-            await session.execute(
-                f"""
-                MERGE INTO {self._table_name} AS target
-                USING (SELECT ? AS session_id, ? AS data, ? AS expires_at) AS src
-                   ON target.session_id = src.session_id
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        data = src.data,
-                        expires_at = src.expires_at,
-                        updated_at = SYSUTCDATETIME()
-                WHEN NOT MATCHED THEN
-                    INSERT (session_id, data, expires_at)
-                    VALUES (src.session_id, src.data, src.expires_at);
-                """,
-                (key, data, expires_at),
-            )
-            await session.commit()
-
-    async def delete(self, key: str) -> None:
-        """Delete a session by key."""
-        async with self._config.provide_session() as session:
-            await session.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
-            await session.commit()
-
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        async with self._config.provide_session() as session:
-            await session.execute_script(f"TRUNCATE TABLE {self._table_name}")
-            await session.commit()
-        self._log_delete_all()
-
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired."""
-        async with self._config.provide_session() as session:
-            row = await session.select_one_or_none(
-                f"""
-                SELECT 1 AS exists_flag
-                FROM {self._table_name}
-                WHERE session_id = ?
-                  AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
-                """,
-                (key,),
-            )
-            return row is not None
-
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires."""
-        async with self._config.provide_session() as session:
-            row = await session.select_one_or_none(
-                f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,)
-            )
-            if row is None:
-                return None
-            expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
-            if expires_at is None:
-                return None
-            remaining = expires_at - datetime.now(timezone.utc)
-            return max(0, int(remaining.total_seconds()))
-
-    async def delete_expired(self) -> int:
-        """Delete all expired sessions."""
-        async with self._config.provide_session() as session:
-            result = await session.execute(
-                f"""
-                DELETE FROM {self._table_name}
-                WHERE expires_at IS NOT NULL
-                  AND expires_at < SYSUTCDATETIME()
-                """
-            )
-            await session.commit()
-
-        count = int(getattr(result, "rows_affected", 0) or 0)
-        if count > 0:
-            self._log_delete_expired(count)
-        return count
 
     def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
@@ -162,6 +47,174 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonAsyncConfig"]):
     def _drop_table_sql(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         return [f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};"]
+
+    def _create_table(self) -> None:
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._table_ddl())
+            driver.commit()
+        self._log_table_created()
+
+    async def create_table(self) -> None:
+        """Create the session table if it doesn't exist."""
+        await async_(self._create_table)()
+
+    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        sql = f"""
+        SELECT data, expires_at FROM {self._table_name}
+        WHERE session_id = %s
+          AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (key,))
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+
+            if row is None:
+                return None
+
+            expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
+            if renew_for is not None and expires_at is not None:
+                new_expires_at = self._calculate_expires_at(renew_for)
+                if new_expires_at is not None:
+                    update_cursor = conn.cursor()
+                    try:
+                        update_cursor.execute(
+                            f"""
+                            UPDATE {self._table_name}
+                            SET expires_at = %s, updated_at = SYSUTCDATETIME()
+                            WHERE session_id = %s
+                            """,
+                            (new_expires_at, key),
+                        )
+                    finally:
+                        update_cursor.close()
+                    conn.commit()
+
+            return _coerce_bytes(_row_value(row, "data", 0))
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Get a session value by key."""
+        return await async_(self._get)(key, renew_for)
+
+    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        data = self._value_to_bytes(value)
+        expires_at = self._calculate_expires_at(expires_in)
+        sql = f"""
+        MERGE INTO {self._table_name} AS target
+        USING (SELECT %s AS session_id, %s AS data, %s AS expires_at) AS src
+           ON target.session_id = src.session_id
+        WHEN MATCHED THEN
+            UPDATE SET
+                data = src.data,
+                expires_at = src.expires_at,
+                updated_at = SYSUTCDATETIME()
+        WHEN NOT MATCHED THEN
+            INSERT (session_id, data, expires_at)
+            VALUES (src.session_id, src.data, src.expires_at);
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (key, data, expires_at))
+            finally:
+                cursor.close()
+            conn.commit()
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Store a session value."""
+        await async_(self._set)(key, value, expires_in)
+
+    def _delete(self, key: str) -> None:
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = %s", (key,))
+            finally:
+                cursor.close()
+            conn.commit()
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key."""
+        await async_(self._delete)(key)
+
+    def _delete_all(self) -> None:
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(f"TRUNCATE TABLE {self._table_name}")
+            finally:
+                cursor.close()
+            conn.commit()
+        self._log_delete_all()
+
+    async def delete_all(self) -> None:
+        """Delete all sessions from the store."""
+        await async_(self._delete_all)()
+
+    def _exists(self, key: str) -> bool:
+        sql = f"""
+        SELECT 1
+        FROM {self._table_name}
+        WHERE session_id = %s
+          AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (key,))
+                return cursor.fetchone() is not None
+            finally:
+                cursor.close()
+
+    async def exists(self, key: str) -> bool:
+        """Check if a session key exists and is not expired."""
+        return await async_(self._exists)(key)
+
+    def _expires_in(self, key: str) -> "int | None":
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = %s", (key,))
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+
+        if row is None:
+            return None
+        expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
+        if expires_at is None:
+            return None
+        remaining = expires_at - datetime.now(timezone.utc)
+        return max(0, int(remaining.total_seconds()))
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Get the time in seconds until the session expires."""
+        return await async_(self._expires_in)(key)
+
+    def _delete_expired(self) -> int:
+        sql = f"""
+        DELETE FROM {self._table_name}
+        WHERE expires_at IS NOT NULL
+          AND expires_at < SYSUTCDATETIME()
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql)
+                count = int(getattr(cursor, "rowcount", 0) or 0)
+            finally:
+                cursor.close()
+            conn.commit()
+        if count > 0:
+            self._log_delete_expired(count)
+        return count
+
+    async def delete_expired(self) -> int:
+        """Delete all expired sessions."""
+        return await async_(self._delete_expired)()
 
 
 def _row_value(row: object, key: str, index: int) -> Any:

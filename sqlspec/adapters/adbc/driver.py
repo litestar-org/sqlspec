@@ -165,6 +165,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         "_is_flightsql",
         "_is_postgres",
         "_json_serializer",
+        "_transaction_active",
         "dialect",
     )
 
@@ -190,6 +191,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._json_serializer = cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json))
         self._data_dictionary: AdbcDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -347,6 +349,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         ADBC connections operate with autocommit disabled and manage the
         active transaction internally, so no explicit statement is issued.
         """
+        self._transaction_active = True
 
     def commit(self) -> None:
         """Commit database transaction."""
@@ -355,6 +358,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         except Exception as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback database transaction."""
@@ -363,6 +367,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         except Exception as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+        finally:
+            self._transaction_active = False
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL when using ADBC PostgreSQL."""
@@ -708,12 +714,13 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
-        ADBC uses explicit BEGIN and does not expose reliable transaction state.
+        ADBC does not expose reliable native transaction state, so it is tracked
+        via a flag toggled in begin/commit/rollback.
 
         Returns:
-            False - ADBC requires explicit transaction management.
+            True when a transaction is active.
         """
-        return False
+        return self._transaction_active
 
     @staticmethod
     def _detect_flightsql_connection(connection: "AdbcConnection") -> bool:

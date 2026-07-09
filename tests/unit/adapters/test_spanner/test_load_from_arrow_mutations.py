@@ -35,7 +35,7 @@ class _FakeTransaction:
 
 @pytest.fixture
 def mutations_driver(monkeypatch: pytest.MonkeyPatch) -> SpannerSyncDriver:
-    monkeypatch.setattr(spanner_driver, "Transaction", _FakeTransaction)
+    monkeypatch.setattr(spanner_driver, "SpannerTransaction", _FakeTransaction)
     return SpannerSyncDriver(cast("Any", _FakeTransaction()), driver_features={"storage_capabilities": CAPABILITIES})
 
 
