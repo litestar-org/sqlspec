@@ -1,6 +1,6 @@
 """ADBC database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -126,7 +126,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_paradedb: NotRequired[bool]
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class AdbcConnectionContext(SyncPoolConnectionContext):

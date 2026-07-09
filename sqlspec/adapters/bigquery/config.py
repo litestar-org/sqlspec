@@ -1,6 +1,6 @@
 """BigQuery database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
@@ -114,7 +114,7 @@ class BigQueryDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     job_retry_deadline: NotRequired[float]
     job_result_timeout: NotRequired[float]
     use_query_and_wait: NotRequired[bool]

@@ -6,19 +6,21 @@ Pub/sub event channel system with database-backed queue support. Provides
 both sync and async channels with listener management and native backend
 integration for databases that support LISTEN/NOTIFY.
 
-Backend names
-=============
+Transport selection
+===================
 
-``events.backend`` uses transport names that describe durability and wakeup
-behavior:
+Choose a transport by delivery semantics:
 
-* ``notify`` is a transient native notification. It is a worker wakeup hint,
-  not a task or event ledger.
-* ``notify_queue`` is a durable table queue with a native notification wakeup
-  hint. The table is the source of truth.
-* ``poll_queue`` is a durable table queue discovered by polling.
-* ``aq`` is Oracle Advanced Queuing.
-* ``txeventq`` is Oracle Transactional Event Queues.
+* ``notify`` — transient native notification with no replay or retry.
+* ``notify_queue`` — durable competing-consumer queue with a native wakeup hint.
+* ``poll_queue`` — durable competing-consumer queue discovered by polling.
+* ``aq`` — Oracle Advanced Queuing, with explicit provisioning and privileges.
+* ``txeventq`` — Oracle Transactional Event Queues, with explicit provisioning
+  and privileges.
+
+The durable queue is the source of truth for ``notify_queue``; native
+notifications only prompt consumers to check it. Durable event queues are not
+browser fan-out transports.
 
 ``polling`` is not a SQLSpec backend name. Litestar Queues uses it for the
 fallback worker mode where no push wakeup transport is available and the
@@ -46,8 +48,7 @@ queue-handle cache backed by a single dedicated session per backend instance.
 the caller's polling cadence is respected.
 
 ``ack`` / ``nack`` semantics are unchanged. ``notify`` remains
-fire-and-forget; ``notify_queue`` acknowledges through the durable table
-queue.
+fire-and-forget; ``notify_queue`` acknowledges through the durable table queue.
 
 Oracle native event backends
 ============================

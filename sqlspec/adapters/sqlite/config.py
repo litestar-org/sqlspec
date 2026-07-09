@@ -130,7 +130,7 @@ class SqliteDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     on_connection_create: "NotRequired[Callable[[SqliteConnection], None]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     custom_functions: "NotRequired[Sequence[SqliteFunctionConfig]]"
     custom_collations: "NotRequired[Sequence[SqliteCollationConfig]]"
     custom_aggregates: "NotRequired[Sequence[SqliteAggregateConfig]]"

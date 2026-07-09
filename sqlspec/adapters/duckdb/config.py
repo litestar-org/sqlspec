@@ -1,7 +1,7 @@
 """DuckDB database configuration with connection pooling."""
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -175,7 +175,7 @@ class DuckDBDriverFeatures(TypedDict):
     enable_uuid_conversion: NotRequired[bool]
     extension_flags: NotRequired["dict[str, Any]"]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class DuckDBConnectionContext(SyncPoolConnectionContext):

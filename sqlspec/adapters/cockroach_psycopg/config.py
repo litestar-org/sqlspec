@@ -1,6 +1,6 @@
 """CockroachDB configuration using psycopg."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from psycopg import crdb as psycopg_crdb
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -117,7 +117,7 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):

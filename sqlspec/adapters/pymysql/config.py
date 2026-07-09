@@ -2,7 +2,7 @@
 
 import ssl
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -138,7 +138,7 @@ class PyMysqlDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[PyMysqlConnection], None]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     enable_local_infile_bulk_load: NotRequired[bool]
     enable_cloud_sql: NotRequired[bool]
     cloud_sql_instance: NotRequired[str]

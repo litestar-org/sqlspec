@@ -1,6 +1,6 @@
 """Spanner configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -161,7 +161,7 @@ class SpannerDriverFeatures(TypedDict):
     directed_read_options: "NotRequired[DirectedReadOptions | None]"
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
-    events_backend: "NotRequired[str]"
+    events_backend: "NotRequired[Literal['poll_queue']]"
     enable_batch_write_api: "NotRequired[bool]"
 
 

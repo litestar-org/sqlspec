@@ -150,7 +150,7 @@ class AiosqliteDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     on_connection_create: "NotRequired[Callable[[AiosqliteConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     custom_functions: "NotRequired[Sequence[AiosqliteFunctionConfig]]"
     custom_collations: "NotRequired[Sequence[AiosqliteCollationConfig]]"
     custom_aggregates: "NotRequired[Sequence[AiosqliteAggregateConfig]]"

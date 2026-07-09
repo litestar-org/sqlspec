@@ -1,7 +1,7 @@
 """pymssql database configuration."""
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -72,7 +72,7 @@ class PymssqlDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[PymssqlConnection], None]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class PymssqlConnectionContext(SyncPoolConnectionContext):

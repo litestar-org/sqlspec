@@ -111,7 +111,7 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[CockroachAsyncpgConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):

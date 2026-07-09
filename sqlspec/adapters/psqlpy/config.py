@@ -1,6 +1,6 @@
 """Psqlpy database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
@@ -108,12 +108,12 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
      Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using poll_queue backend.
+     Requires extension_config["events"] for migration setup when using poll_queue or notify_queue.
     events_backend: Event channel backend selection.
-     Options: "notify", "poll_queue", "notify_queue"
-     - "notify": PostgreSQL LISTEN/NOTIFY wakeups (transient, not a durable ledger)
-     - "poll_queue": Durable table-backed queue discovered by polling
-     - "notify_queue": Durable table-backed queue with LISTEN/NOTIFY wakeups
+     Options: "notify", "notify_queue", "poll_queue"
+     - "notify": Transient PostgreSQL LISTEN/NOTIFY with no replay or retry
+     - "notify_queue": Durable queue plus a PostgreSQL notification wakeup hint
+     - "poll_queue": Durable queue discovered by polling
      Defaults to "notify".
     """
 
@@ -124,7 +124,7 @@ class PsqlpyDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
 
 
 class _PsqlpySessionFactory(AsyncPoolSessionFactory):

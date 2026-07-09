@@ -189,7 +189,7 @@ class MysqlConnectorDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     cursor_options: NotRequired[MysqlConnectorCursorParams]
     enable_local_infile_bulk_load: NotRequired[bool]
 

@@ -1,6 +1,6 @@
 """aiomysql database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
 
 from mypy_extensions import mypyc_attr
@@ -154,7 +154,7 @@ class AiomysqlDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[AiomysqlConnection], Awaitable[None]]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     enable_local_infile_bulk_load: NotRequired[bool]
 
 
