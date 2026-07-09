@@ -64,13 +64,14 @@ def test_inventory_cli_markdown_summary_includes_surface_column() -> None:
     assert "sqlspec/utils/serializers.py" not in completed.stdout
 
 
-def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
-    """The smoke target should compile representative live modules only."""
-    makefile = (PROJECT_ROOT / "Makefile").read_text()
-    target_match = re.search("^test-mypyc:.*?(?=^\\S)", makefile, flags=re.MULTILINE | re.DOTALL)
-    assert target_match is not None
-    smoke_invocations = re.findall(r"uv run mypyc .*? (sqlspec/\S+\.py)", target_match.group(0))
-    assert smoke_invocations == [
+def test_pyproject_mypyc_include_patterns_cover_smoke_critical_modules() -> None:
+    """The hatch-mypyc include patterns should keep compiling the smoke-critical modules."""
+    script_path = PROJECT_ROOT / "tools" / "scripts" / "mypyc_inventory.py"
+    completed = subprocess.run(
+        [sys.executable, str(script_path)], check=True, cwd=PROJECT_ROOT, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+    smoke_critical_modules = [
         "sqlspec/base.py",
         "sqlspec/utils/text.py",
         "sqlspec/utils/sync_tools.py",
@@ -117,7 +118,8 @@ def test_makefile_test_mypyc_targets_live_smoke_modules() -> None:
         "sqlspec/migrations/version.py",
         "sqlspec/observability/_formatting.py",
     ]
-    assert all((PROJECT_ROOT / path).is_file() for path in smoke_invocations)
+    assert all((PROJECT_ROOT / path).is_file() for path in smoke_critical_modules)
+    assert all(path in payload["compiled_modules"] for path in smoke_critical_modules)
 
 
 def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
