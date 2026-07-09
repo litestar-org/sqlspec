@@ -31,6 +31,30 @@ def test_sync_execute_script_tracks_all_successful_statements(sqlite_sync_driver
 
 
 @requires_interpreted
+def test_sync_execute_script_with_parameters_runs_every_statement(sqlite_sync_driver) -> None:
+    """A parameterized multi-statement script embeds its params and lands every row."""
+    result = sqlite_sync_driver.execute_script(
+        "INSERT INTO users (name) VALUES (:n); INSERT INTO users (name) VALUES (:n)", n="scripted"
+    )
+    assert result.successful_statements == 2
+
+    inserted = sqlite_sync_driver.execute("SELECT COUNT(*) FROM users WHERE name = :n", n="scripted").data
+    assert inserted[0][0] == 2
+
+
+@requires_interpreted
+async def test_async_execute_script_with_parameters_runs_every_statement(aiosqlite_async_driver) -> None:
+    """A parameterized multi-statement script embeds its params and lands every row on async drivers."""
+    result = await aiosqlite_async_driver.execute_script(
+        "INSERT INTO users (name) VALUES (:n); INSERT INTO users (name) VALUES (:n)", n="scripted"
+    )
+    assert result.successful_statements == 2
+
+    inserted = (await aiosqlite_async_driver.execute("SELECT COUNT(*) FROM users WHERE name = :n", n="scripted")).data
+    assert inserted[0][0] == 2
+
+
+@requires_interpreted
 async def test_async_execute_script_tracks_all_successful_statements(aiosqlite_async_driver) -> None:
     """Async execute_script should report all statements as successful."""
     result = await aiosqlite_async_driver.execute_script(

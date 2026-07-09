@@ -22,7 +22,6 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
-from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
@@ -288,11 +287,12 @@ class _Driver(PsqlpyDriver):
 
 
 @pytest.mark.anyio
-async def test_driver_psqlpy_execute_script_rejects_multi_statement_parameters() -> None:
+async def test_driver_psqlpy_execute_script_multi_statement_with_params_executes_all() -> None:
     driver = _Driver("INSERT INTO t VALUES ($1); INSERT INTO t VALUES ($1)", [1])
     statement = SimpleNamespace(statement_config=default_statement_config)
-    with pytest.raises(SQLSpecError, match="multi-statement"):
-        await driver.dispatch_execute_script(cast("PsqlpyConnection", _Cursor()), cast("SQL", statement))
+    result = await driver.dispatch_execute_script(cast("PsqlpyConnection", _Cursor()), cast("SQL", statement))
+    assert result.statement_count == 2
+    assert result.successful_statements == 2
 
 
 @pytest.mark.anyio

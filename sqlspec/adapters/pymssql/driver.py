@@ -170,9 +170,6 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def dispatch_execute_script(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        if prepared_parameters and len(statements) > 1:
-            msg = "execute_script with parameters is not supported for multi-statement scripts; use execute or execute_many for parameterized statements"
-            raise SQLSpecError(msg)
 
         successful_count = 0
         for stmt in statements:

@@ -241,11 +241,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        if len(statements) > 1 and prepared_parameters:
-            msg = (
-                "Parameterized multi-statement scripts are not supported; use execute_many or individual execute calls"
-            )
-            raise SQLSpecError(msg)
 
         successful_count = 0
         last_cursor = cursor
@@ -722,11 +717,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        if len(statements) > 1 and prepared_parameters:
-            msg = (
-                "Parameterized multi-statement scripts are not supported; use execute_many or individual execute calls"
-            )
-            raise SQLSpecError(msg)
 
         successful_count = 0
         last_cursor = cursor
