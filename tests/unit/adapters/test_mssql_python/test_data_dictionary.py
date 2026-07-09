@@ -3,13 +3,7 @@
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
-
-from sqlspec.adapters.mssql_python.data_dictionary import (
-    MssqlPythonAsyncDataDictionary,
-    MssqlPythonSyncDataDictionary,
-    MssqlVersionInfo,
-)
+from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary, MssqlVersionInfo
 
 MSSQL_QUERY_DIR = Path("sqlspec/data_dictionary/sql/mssql")
 EXPECTED_MSSQL_QUERY_FILES = {"columns.sql", "foreign_keys.sql", "indexes.sql", "tables.sql", "version.sql"}
@@ -38,25 +32,6 @@ class FakeSyncDriver:
         if len(self.select_calls) == 2:
             return [{"schema_name": "dbo", "table_name": "parent"}, {"schema_name": "dbo", "table_name": "orphan"}]
         return []
-
-
-class FakeAsyncDriver:
-    """Minimal async driver for data dictionary tests."""
-
-    def __init__(self) -> None:
-        self.select_calls: list[tuple[Any, dict[str, Any]]] = []
-
-    async def select_one_or_none(self, _statement: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {
-            "version_string": "Microsoft SQL Azure - 12.0.2000.8",
-            "product_version": "12.0.2000.8",
-            "edition": "Azure SQL Database",
-            "engine_edition": "5",
-        }
-
-    async def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        self.select_calls.append((statement, kwargs))
-        return [{"index_name": "ix_app_id", "table_name": "app", "columns": "id"}]
 
 
 def test_mssql_query_files_follow_dialect_category_layout() -> None:
@@ -110,31 +85,4 @@ def test_sync_data_dictionary_selects_columns_by_table() -> None:
 
     assert columns == [{"column_name": "id"}]
     assert driver.select_calls[0][1]["schema_name"] == "custom"
-    assert driver.select_calls[0][1]["table_name"] == "app"
-
-
-@pytest.mark.anyio
-async def test_async_data_dictionary_builds_azure_version_info() -> None:
-    """The async dictionary should parse Azure SQL engine editions."""
-    driver = FakeAsyncDriver()
-    data_dictionary = MssqlPythonAsyncDataDictionary()
-
-    version = await data_dictionary.get_version(cast(Any, driver))
-
-    assert isinstance(version, MssqlVersionInfo)
-    assert version.major == 12
-    assert version.is_azure_sql is True
-    assert await data_dictionary.get_feature_flag(cast(Any, driver), "supports_native_json") is True
-
-
-@pytest.mark.anyio
-async def test_async_data_dictionary_selects_indexes_by_table() -> None:
-    """The async dictionary should use table-scoped index queries when a table is supplied."""
-    driver = FakeAsyncDriver()
-    data_dictionary = MssqlPythonAsyncDataDictionary()
-
-    indexes = await data_dictionary.get_indexes(cast(Any, driver), table="app")
-
-    assert indexes == [{"index_name": "ix_app_id", "table_name": "app", "columns": "id"}]
-    assert driver.select_calls[0][1]["schema_name"] == "dbo"
     assert driver.select_calls[0][1]["table_name"] == "app"

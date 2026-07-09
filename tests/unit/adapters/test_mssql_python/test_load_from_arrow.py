@@ -3,9 +3,8 @@
 from typing import Any, cast
 
 import pyarrow as pa
-import pytest
 
-from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
+from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 
 _CAPS: dict[str, Any] = {
     "arrow_export_enabled": True,
@@ -79,31 +78,6 @@ def test_sync_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
     driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
 
     driver.load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
-
-    assert conn._cursor.execute_calls == ['DELETE FROM "dbo.schema"."orders.table"']
-    assert conn._cursor.bulkcopy_calls
-
-
-@pytest.mark.anyio
-async def test_async_load_from_arrow_uses_bulkcopy() -> None:
-    conn = _FakeConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
-
-    job = await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
-
-    assert job.telemetry["rows_processed"] == 2
-    target, rows, kwargs = conn._cursor.bulkcopy_calls[0]
-    assert target == "orders"
-    assert rows == [(1, "a"), (2, "b")]
-    assert kwargs["column_mappings"] == ["id", "name"]
-
-
-@pytest.mark.anyio
-async def test_async_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
-    conn = _FakeConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
-
-    await driver.load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
 
     assert conn._cursor.execute_calls == ['DELETE FROM "dbo.schema"."orders.table"']
     assert conn._cursor.bulkcopy_calls

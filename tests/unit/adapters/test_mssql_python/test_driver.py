@@ -2,10 +2,8 @@
 
 from typing import Any, cast
 
-import pytest
-
-from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonAsyncDataDictionary, MssqlPythonSyncDataDictionary
-from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
+from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
+from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.core import StatementStack
 
 
@@ -52,16 +50,8 @@ def test_sync_driver_lazily_initializes_data_dictionary() -> None:
     assert driver.data_dictionary is driver.data_dictionary
 
 
-def test_async_driver_lazily_initializes_data_dictionary() -> None:
-    """The async driver should expose the MSSQL async data dictionary."""
-    driver = MssqlPythonAsyncDriver(cast("Any", DummyConnection()))
-
-    assert isinstance(driver.data_dictionary, MssqlPythonAsyncDataDictionary)
-    assert driver.data_dictionary is driver.data_dictionary
-
-
 def test_sync_driver_execute_stack_uses_explicit_transaction_fallback() -> None:
-    """mssql-python lacks transaction-state introspection but stack execution should still work."""
+    """Stack execution should open an explicit BEGIN TRANSACTION and commit it."""
     connection = DummyConnection()
     driver = MssqlPythonDriver(cast("Any", connection))
     stack = StatementStack().push_execute("UPDATE queue SET state = ? WHERE id = ?", "ready", 1)
@@ -69,21 +59,9 @@ def test_sync_driver_execute_stack_uses_explicit_transaction_fallback() -> None:
     results = driver.execute_stack(stack)
 
     assert len(results) == 1
-    assert connection.cursor_obj.executed == [("UPDATE queue SET state = ? WHERE id = ?", ["ready", 1])]
-    assert connection.commits == 1
-    assert connection.rollbacks == 0
-
-
-@pytest.mark.anyio
-async def test_async_driver_execute_stack_uses_explicit_transaction_fallback() -> None:
-    """The async wrapper should not inherit the base transaction-state error."""
-    connection = DummyConnection()
-    driver = MssqlPythonAsyncDriver(cast("Any", connection))
-    stack = StatementStack().push_execute("UPDATE queue SET state = ? WHERE id = ?", "ready", 1)
-
-    results = await driver.execute_stack(stack)
-
-    assert len(results) == 1
-    assert connection.cursor_obj.executed == [("UPDATE queue SET state = ? WHERE id = ?", ["ready", 1])]
+    assert connection.cursor_obj.executed == [
+        ("BEGIN TRANSACTION", None),
+        ("UPDATE queue SET state = ? WHERE id = ?", ["ready", 1]),
+    ]
     assert connection.commits == 1
     assert connection.rollbacks == 0

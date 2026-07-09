@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonAsyncDataDictionary, MssqlPythonSyncDataDictionary
+from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
 from sqlspec.adapters.pymssql.data_dictionary import PymssqlSyncDataDictionary
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
@@ -54,18 +54,6 @@ class FakeSyncDriver:
             return []
         if "sqlspec:mssql:dmv_exec_requests" in query_text:
             return [{"session_id": 57, "login_name": "sa", "sql_text": "SELECT secret"}]
-        return []
-
-
-class FakeAsyncDriver:
-    """Minimal async driver for SQL Server metadata behavior tests."""
-
-    def __init__(self, driver_features: dict[str, Any] | None = None) -> None:
-        self.driver_features = driver_features or {}
-        self.select_calls: list[tuple[Any, dict[str, Any]]] = []
-
-    async def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        self.select_calls.append((statement, kwargs))
         return []
 
 
@@ -186,15 +174,6 @@ def test_mssql_dmvs_redact_sensitive_columns_by_default() -> None:
     assert row["sql_text"] == "[REDACTED]"
     assert row["login_name"] == "[REDACTED]"
     assert row["session_id"] == 57
-
-
-@pytest.mark.anyio
-async def test_async_data_dictionary_reports_same_sql_server_capabilities() -> None:
-    """The async mssql-python dictionary should expose the same replacement capability tiers."""
-    profile = await MssqlPythonAsyncDataDictionary().get_metadata_capabilities(cast(Any, FakeAsyncDriver()))
-
-    assert profile.get("ddl").fidelity == MetadataFidelity.GENERATED
-    assert MetadataRisk.PRIVILEGED in profile.get("system").risks
 
 
 def _ddl_table_rows() -> list[dict[str, Any]]:

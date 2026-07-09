@@ -36,17 +36,17 @@ from sqlspec.data_dictionary.dialects.mssql import (
     resolve_mssql_feature_flag,
     validate_mssql_system_metadata_options,
 )
-from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
     from sqlspec.core import SQL
     from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
 
-__all__ = ("MssqlPythonAsyncDataDictionary", "MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
+__all__ = ("MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
 
 logger = get_logger("sqlspec.adapters.mssql_python.data_dictionary")
 
@@ -328,203 +328,6 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             return denied
         query = self.get_domain_query("system", metadata_request.domain)
         rows = driver.select(query)
-        return build_mssql_system_metadata_result(metadata_request, rows)
-
-
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class MssqlPythonAsyncDataDictionary(_MssqlDataDictionaryMixin, AsyncDataDictionaryBase):
-    """MSSQL async data dictionary."""
-
-    dialect: ClassVar[str] = "mssql"
-
-    def __init__(self) -> None:
-        super().__init__()
-
-    async def get_metadata_capabilities(
-        self, driver: "MssqlPythonAsyncDriver", domains: "Sequence[str] | None" = None
-    ) -> "MetadataCapabilityProfile":
-        """Get SQL Server replacement data-dictionary capability profile."""
-        return build_mssql_metadata_capability_profile(type(self).__name__, domains)
-
-    async def get_system_metadata_capabilities(
-        self, driver: "MssqlPythonAsyncDriver", domains: "Sequence[str] | None" = None
-    ) -> tuple[SystemMetadataCapability, ...]:
-        """Get SQL Server opt-in system metadata capability disclosures."""
-        _ = driver
-        requested_domains = ("dmv_exec_requests", "query_store_runtime") if domains is None else tuple(domains)
-        return tuple(build_mssql_system_metadata_capability(domain) for domain in requested_domains)
-
-    async def get_version(self, driver: "MssqlPythonAsyncDriver") -> MssqlVersionInfo | None:
-        """Get SQL Server version information."""
-        driver_id = id(driver)
-        if driver_id in self._version_fetch_attempted:
-            return cast("MssqlVersionInfo | None", self._version_cache.get(driver_id))
-
-        row = await driver.select_one_or_none(self.get_query_text("version"))
-        if not row:
-            self._log_version_unavailable(type(self).dialect, "missing")
-            self.cache_version(driver_id, None)
-            return None
-
-        version_value = extract_mssql_version_value(
-            _row_value(row, "product_version") or _row_value(row, "version_string", "version")
-        )
-        edition_value = _row_value(row, "edition")
-        edition = str(edition_value) if edition_value is not None else None
-        version_info = self._build_version_info(version_value, edition, _row_value(row, "engine_edition"))
-        if version_info is None:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(driver_id, None)
-            return None
-
-        self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(driver_id, version_info)
-        return version_info
-
-    async def get_feature_flag(self, driver: "MssqlPythonAsyncDriver", feature: str) -> bool:
-        """Check whether SQL Server supports a feature."""
-        version_info = await self.get_version(driver)
-        return resolve_mssql_feature_flag(
-            feature,
-            major=version_info.major if version_info is not None else 0,
-            is_azure_sql=bool(version_info and version_info.is_azure_sql),
-            config=self.get_dialect_config(),
-            version_info=version_info,
-        )
-
-    async def get_optimal_type(self, driver: "MssqlPythonAsyncDriver", type_category: str) -> str:
-        """Get optimal SQL Server type for a category."""
-        return self._get_optimal_type_from_version(await self.get_version(driver), type_category)
-
-    async def get_tables(self, driver: "MssqlPythonAsyncDriver", schema: str | None = None) -> list[TableMetadata]:
-        """Get tables sorted by dependency order with catalog fallback."""
-        schema_name = self.resolve_schema(schema)
-        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        ordered = cast(
-            "list[TableMetadata]",
-            await driver.select(
-                self.get_domain_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
-            ),
-        )
-        all_rows = cast(
-            "list[TableMetadata]",
-            await driver.select(
-                self.get_domain_query("tables", "all_by_schema"), schema_name=schema_name, schema_type=TableMetadata
-            ),
-        )
-        return merge_mssql_table_lists(ordered, all_rows)
-
-    async def get_columns(
-        self, driver: "MssqlPythonAsyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[ColumnMetadata]:
-        """Get column information for a table or schema."""
-        schema_name = self.resolve_schema(schema)
-        if table is None:
-            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
-            return cast(
-                "list[ColumnMetadata]",
-                await driver.select(
-                    self.get_domain_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
-                ),
-            )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
-        return cast(
-            "list[ColumnMetadata]",
-            await driver.select(
-                self.get_domain_query("columns", "by_table"),
-                schema_name=schema_name,
-                table_name=table,
-                schema_type=ColumnMetadata,
-            ),
-        )
-
-    async def get_indexes(
-        self, driver: "MssqlPythonAsyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[IndexMetadata]:
-        """Get index metadata for a table or schema."""
-        schema_name = self.resolve_schema(schema)
-        if table is None:
-            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
-            return cast(
-                "list[IndexMetadata]",
-                await driver.select(
-                    self.get_domain_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
-                ),
-            )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
-        return cast(
-            "list[IndexMetadata]",
-            await driver.select(
-                self.get_domain_query("indexes", "by_table"),
-                schema_name=schema_name,
-                table_name=table,
-                schema_type=IndexMetadata,
-            ),
-        )
-
-    async def get_foreign_keys(
-        self, driver: "MssqlPythonAsyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[ForeignKeyMetadata]:
-        """Get foreign key metadata."""
-        schema_name = self.resolve_schema(schema)
-        if table is None:
-            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            return cast(
-                "list[ForeignKeyMetadata]",
-                await driver.select(
-                    self.get_domain_query("constraints", "foreign_keys_by_schema"),
-                    schema_name=schema_name,
-                    schema_type=ForeignKeyMetadata,
-                ),
-            )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
-        return cast(
-            "list[ForeignKeyMetadata]",
-            await driver.select(
-                self.get_domain_query("constraints", "foreign_keys_by_table"),
-                schema_name=schema_name,
-                table_name=table,
-                schema_type=ForeignKeyMetadata,
-            ),
-        )
-
-    async def get_ddl(
-        self,
-        driver: "MssqlPythonAsyncDriver",
-        object_name: str,
-        schema: str | None = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Generate SQL Server table DDL from sys catalog rows."""
-        _ = include_dependencies, prefer_native, redact
-        schema_name = self.resolve_schema(schema)
-        columns = await driver.select(
-            self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
-        )
-        indexes = await driver.select(
-            self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
-        )
-        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes, object_type=object_type)
-
-    async def get_system_metadata(
-        self, driver: "MssqlPythonAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
-    ) -> SystemMetadataResult:
-        """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
-        metadata_request = ensure_system_metadata_request(request, **kwargs)
-        capability = build_mssql_system_metadata_capability(metadata_request.domain)
-        gate_result = system_metadata_gated_result(metadata_request, capability)
-        if gate_result.capability.support != MetadataSupport.SUPPORTED:
-            return gate_result
-        options = get_mssql_data_dictionary_options(driver)
-        denied = validate_mssql_system_metadata_options(metadata_request, options)
-        if denied is not None:
-            return denied
-        query = self.get_domain_query("system", metadata_request.domain)
-        rows = await driver.select(query)
         return build_mssql_system_metadata_result(metadata_request, rows)
 
 

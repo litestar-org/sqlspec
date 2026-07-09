@@ -1,25 +1,24 @@
 """mssql-python ADK stores for Google Agent Development Kit session storage."""
 
-import asyncio
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonAsyncCursor, MssqlPythonCursor
+from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonCursor
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from datetime import timedelta
 
-    from sqlspec.adapters.mssql_python.config import MssqlPythonAsyncConfig, MssqlPythonConfig
-    from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
+    from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 
-__all__ = ("MssqlPythonADKConfig", "MssqlPythonAsyncADKStore", "MssqlPythonSyncADKStore")
+__all__ = ("MssqlPythonADKConfig", "MssqlPythonADKStore")
 
 MSSQL_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
@@ -38,7 +37,7 @@ class MssqlPythonADKConfig(ADKConfig):
     """Force native SQL Server JSON columns when True, or NVARCHAR(MAX) when False."""
 
 
-class MssqlPythonSyncADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
+class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     """Synchronous mssql-python ADK session/event store."""
 
     connector_name: ClassVar[str] = "mssql_python"
@@ -386,363 +385,6 @@ class MssqlPythonSyncADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return rowcount
 
 
-class MssqlPythonAsyncADKStore(BaseAsyncADKStore["MssqlPythonAsyncConfig"]):
-    """Asynchronous mssql-python ADK session/event store."""
-
-    connector_name: ClassVar[str] = "mssql_python"
-    __slots__ = ("_json_column_type", "_native_json")
-
-    def __init__(self, config: "MssqlPythonAsyncConfig") -> None:
-        super().__init__(config)
-        adk_config = _adk_config(config)
-        native_json = adk_config.get("native_json")
-        self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
-        self._json_column_type: str | None = None
-
-    async def create_tables(self) -> None:
-        """Create all ADK session tables if they do not exist."""
-        async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._sessions_table_ddl())
-            await driver.execute_script(await self._events_table_ddl())
-            await driver.execute_script(await self._app_states_table_ddl())
-            await driver.execute_script(await self._user_states_table_ddl())
-            await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
-            await driver.commit()
-
-    async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new ADK session."""
-        owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
-        owner_param = ", ?" if self._owner_id_column_name else ""
-        sql = f"""
-        INSERT INTO {_table_ref(self._session_table)} (
-            id, app_name, user_id{owner_column}, state, create_time, update_time
-        )
-        OUTPUT inserted.id, inserted.app_name, inserted.user_id, inserted.state, inserted.create_time, inserted.update_time
-        VALUES (?, ?, ?{owner_param}, ?, SYSUTCDATETIME(), SYSUTCDATETIME())
-        """
-        params: tuple[Any, ...]
-        if self._owner_id_column_name:
-            params = (session_id, app_name, user_id, owner_id, to_json(state))
-        else:
-            params = (session_id, app_name, user_id, to_json(state))
-        row = await self._execute_fetchone(sql, params, commit=True)
-        if row is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return _session_record_from_row(row)
-
-    async def get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Return a scoped session or ``None`` if absent."""
-        try:
-            if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-                await self._execute(
-                    f"""
-                    UPDATE {_table_ref(self._session_table)}
-                    SET update_time = SYSUTCDATETIME()
-                    WHERE app_name = ? AND user_id = ? AND id = ?
-                    """,
-                    (app_name, user_id, session_id),
-                    commit=True,
-                )
-            row = await self._execute_fetchone(
-                f"""
-                SELECT TOP (1) id, app_name, user_id, state, create_time, update_time
-                FROM {_table_ref(self._session_table)}
-                WHERE app_name = ? AND user_id = ? AND id = ?
-                """,
-                (app_name, user_id, session_id),
-            )
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return None
-            raise
-        return _session_record_from_row(row) if row is not None else None
-
-    async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        """Replace a session's durable state."""
-        await self._execute(
-            f"""
-            UPDATE {_table_ref(self._session_table)}
-            SET state = ?, update_time = SYSUTCDATETIME()
-            WHERE app_name = ? AND user_id = ? AND id = ?
-            """,
-            (to_json(state), app_name, user_id, session_id),
-            commit=True,
-        )
-
-    async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
-        """List ADK sessions for an application, optionally scoped to a user."""
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {_table_ref(self._session_table)}
-            WHERE app_name = ?
-            ORDER BY update_time DESC
-            """
-            params: tuple[Any, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {_table_ref(self._session_table)}
-            WHERE app_name = ? AND user_id = ?
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
-        try:
-            rows = await self._execute_fetchall(sql, params)
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return []
-            raise
-        return [_session_record_from_row(row) for row in rows]
-
-    async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete a session. Event rows cascade through the FK."""
-        await self._execute(
-            f"DELETE FROM {_table_ref(self._session_table)} WHERE app_name = ? AND user_id = ? AND id = ?",
-            (app_name, user_id, session_id),
-            commit=True,
-        )
-
-    async def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        await self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
-
-    async def append_event_and_update_state(
-        self,
-        event_record: EventRecord,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
-        """Atomically append an event and update durable session/scoped state."""
-        update_sql = f"""
-        UPDATE {_table_ref(self._session_table)}
-        SET state = ?, update_time = SYSUTCDATETIME()
-        OUTPUT inserted.id, inserted.app_name, inserted.user_id, inserted.state, inserted.create_time, inserted.update_time
-        WHERE app_name = ? AND user_id = ? AND id = ?
-        """
-        async with self._config.provide_connection() as conn, MssqlPythonAsyncCursor(conn) as cursor:
-            try:
-                await asyncio.to_thread(cursor.execute, update_sql, (to_json(state), app_name, user_id, session_id))
-                row = await asyncio.to_thread(cursor.fetchone)
-                if row is None:
-                    _raise_session_not_found(session_id)
-                await asyncio.to_thread(
-                    cursor.execute, _insert_event_sql(self._events_table), _event_insert_params(event_record)
-                )
-                if app_state is not None:
-                    await asyncio.to_thread(
-                        cursor.execute, self._upsert_app_state_sql(), (app_name, to_json(app_state))
-                    )
-                if user_state is not None:
-                    await asyncio.to_thread(
-                        cursor.execute, self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state))
-                    )
-            except Exception:
-                await asyncio.to_thread(conn.rollback)
-                raise
-            await asyncio.to_thread(conn.commit)
-        return _session_record_from_row(row)
-
-    async def get_events(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[EventRecord]":
-        """Return events for a scoped session ordered by event timestamp."""
-        if limit == 0:
-            return []
-        sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
-        try:
-            rows = await self._execute_fetchall(sql, params)
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return []
-            raise
-        return [_event_record_from_row(row) for row in rows]
-
-    async def delete_expired_events(self, before: datetime) -> int:
-        """Delete events older than ``before``."""
-        try:
-            return await self._execute(
-                f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < ?", (before,), commit=True
-            )
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return 0
-            raise
-
-    async def delete_idle_sessions(self, updated_before: datetime) -> int:
-        """Delete sessions whose update_time is older than ``updated_before``."""
-        try:
-            return await self._execute(
-                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?", (updated_before,), commit=True
-            )
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return 0
-            raise
-
-    async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        """Return app-scoped state."""
-        try:
-            row = await self._execute_fetchone(
-                f"SELECT TOP (1) state FROM {_table_ref(self._app_state_table)} WHERE app_name = ?", (app_name,)
-            )
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return None
-            raise
-        return _json_dict(row[0]) if row is not None else None
-
-    async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        """Return user-scoped state."""
-        try:
-            row = await self._execute_fetchone(
-                f"""
-                SELECT TOP (1) state
-                FROM {_table_ref(self._user_state_table)}
-                WHERE app_name = ? AND user_id = ?
-                """,
-                (app_name, user_id),
-            )
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return None
-            raise
-        return _json_dict(row[0]) if row is not None else None
-
-    async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        """Insert or replace app-scoped state."""
-        await self._execute(self._upsert_app_state_sql(), (app_name, to_json(state)), commit=True)
-
-    async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        """Insert or replace user-scoped state."""
-        await self._execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(state)), commit=True)
-
-    async def get_metadata(self, key: str) -> "str | None":
-        """Return an ADK metadata value."""
-        try:
-            row = await self._execute_fetchone(
-                f"SELECT TOP (1) value FROM {_table_ref(self._metadata_table)} WHERE [key] = ?", (key,)
-            )
-        except MSSQL_ERROR as exc:
-            if _is_mssql_table_missing(exc):
-                return None
-            raise
-        return str(row[0]) if row is not None else None
-
-    async def set_metadata(self, key: str, value: str) -> None:
-        """Set an ADK metadata value."""
-        await self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
-
-    async def _sessions_table_ddl(self) -> str:
-        """Return T-SQL DDL for the ADK session table."""
-        return _sessions_table_ddl(self._session_table, await self._json_column_type_async(), self._owner_id_column_ddl)
-
-    async def _events_table_ddl(self) -> str:
-        """Return T-SQL DDL for the ADK event table."""
-        return _events_table_ddl(self._events_table, self._session_table, await self._json_column_type_async())
-
-    async def _app_states_table_ddl(self) -> str:
-        """Return T-SQL DDL for the app-scoped state table."""
-        return _app_states_table_ddl(self._app_state_table, await self._json_column_type_async())
-
-    async def _user_states_table_ddl(self) -> str:
-        """Return T-SQL DDL for the user-scoped state table."""
-        return _user_states_table_ddl(self._user_state_table, await self._json_column_type_async())
-
-    async def _metadata_table_ddl(self) -> str:
-        """Return T-SQL DDL for the ADK metadata table."""
-        return _metadata_table_ddl(self._metadata_table)
-
-    async def _metadata_seed_sql(self) -> str:
-        """Return T-SQL to seed schema-version metadata."""
-        return _metadata_seed_sql(self._metadata_table)
-
-    def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {_table_ref(self._app_state_table)}"
-
-    def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {_table_ref(self._user_state_table)}"
-
-    def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {_table_ref(self._metadata_table)}"
-
-    def _drop_tables_sql(self) -> "list[str]":
-        return [
-            self._drop_metadata_table_sql(),
-            self._drop_user_states_table_sql(),
-            self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {_table_ref(self._events_table)}",
-            f"DROP TABLE IF EXISTS {_table_ref(self._session_table)}",
-        ]
-
-    def _upsert_app_state_sql(self) -> str:
-        return _upsert_state_sql(self._app_state_table, ("app_name",), ("?",))
-
-    def _upsert_user_state_sql(self) -> str:
-        return _upsert_state_sql(self._user_state_table, ("app_name", "user_id"), ("?", "?"))
-
-    def _events_query(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "tuple[str, tuple[Any, ...]]":
-        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
-
-    async def _json_column_type_async(self) -> str:
-        if self._json_column_type is not None:
-            return self._json_column_type
-        configured = _configured_json_column_type(self._native_json)
-        if configured is not None:
-            self._json_column_type = configured
-            return configured
-        async with self._config.provide_session() as driver:
-            self._json_column_type = await _json_column_type_from_async_driver(driver)
-        return self._json_column_type
-
-    async def _execute_fetchone(
-        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False
-    ) -> "Any | None":
-        async with self._config.provide_connection() as conn, MssqlPythonAsyncCursor(conn) as cursor:
-            await asyncio.to_thread(cursor.execute, sql, params)
-            row = await asyncio.to_thread(cursor.fetchone)
-            if commit:
-                await asyncio.to_thread(conn.commit)
-            return row
-
-    async def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        async with self._config.provide_connection() as conn, MssqlPythonAsyncCursor(conn) as cursor:
-            await asyncio.to_thread(cursor.execute, sql, params)
-            rows = await asyncio.to_thread(cursor.fetchall)
-            return list(rows)
-
-    async def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        async with self._config.provide_connection() as conn, MssqlPythonAsyncCursor(conn) as cursor:
-            await asyncio.to_thread(cursor.execute, sql, params)
-            rowcount = _cursor_rowcount(cursor)
-            if commit:
-                await asyncio.to_thread(conn.commit)
-            return rowcount
-
-
 def _adk_config(config: Any) -> MssqlPythonADKConfig:
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):
@@ -763,13 +405,6 @@ def _configured_json_column_type(native_json: "bool | None") -> "str | None":
 
 def _json_column_type_from_sync_driver(driver: "MssqlPythonDriver") -> str:
     version_info = driver.data_dictionary.get_version(driver)
-    if isinstance(version_info, MssqlVersionInfo) and version_info.supports_native_json():
-        return JSON_NATIVE_COLUMN_TYPE
-    return JSON_FALLBACK_COLUMN_TYPE
-
-
-async def _json_column_type_from_async_driver(driver: "MssqlPythonAsyncDriver") -> str:
-    version_info = await driver.data_dictionary.get_version(driver)
     if isinstance(version_info, MssqlVersionInfo) and version_info.supports_native_json():
         return JSON_NATIVE_COLUMN_TYPE
     return JSON_FALLBACK_COLUMN_TYPE

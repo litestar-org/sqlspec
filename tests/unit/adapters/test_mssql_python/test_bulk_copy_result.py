@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver, _coerce_bulk_copy_result
+from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver, _coerce_bulk_copy_result
 
 
 class _FakeCursor:
@@ -30,7 +30,7 @@ def test_coerce_bulk_copy_result_copies_dict_not_aliases() -> None:
     assert stats["rows_copied"] == 3
 
 
-@pytest.mark.parametrize("driver_cls", [MssqlPythonDriver, MssqlPythonAsyncDriver])
+@pytest.mark.parametrize("driver_cls", [MssqlPythonDriver])
 def test_bulk_copy_defaults_match_upstream(driver_cls: Any) -> None:
     pytest.importorskip("mssql_python")
     from mssql_python.cursor import Cursor

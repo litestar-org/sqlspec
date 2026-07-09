@@ -1,21 +1,15 @@
 """mssql-python database configuration."""
 
-import asyncio
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python._typing import (
-    MssqlPythonAsyncSessionContext,
-    MssqlPythonConnection,
-    MssqlPythonSessionContext,
-)
+from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext
 from sqlspec.adapters.mssql_python.core import apply_driver_features, build_connection_config, default_statement_config
-from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
-from sqlspec.adapters.mssql_python.migrations import MssqlPythonAsyncMigrationTracker, MssqlPythonSyncMigrationTracker
+from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
+from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
-from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
@@ -28,7 +22,6 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 __all__ = (
-    "MssqlPythonAsyncConfig",
     "MssqlPythonConfig",
     "MssqlPythonConnectionParams",
     "MssqlPythonConnectionPool",
@@ -145,31 +138,6 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
         return None
 
 
-class MssqlPythonAsyncConnectionContext(AsyncPoolConnectionContext):
-    """Async context manager for mssql-python connections via to_thread."""
-
-    __slots__ = ("_conn",)
-
-    def __init__(self, config: "MssqlPythonAsyncConfig") -> None:
-        super().__init__(config)
-        self._conn: MssqlPythonConnection | None = None
-
-    async def __aenter__(self) -> "MssqlPythonConnection":
-        pool = await self._config.provide_pool()
-        conn = await asyncio.to_thread(pool.acquire)
-        self._conn = conn
-        return cast("MssqlPythonConnection", conn)
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        if self._conn is not None:
-            pool = await self._config.provide_pool()
-            await asyncio.to_thread(pool.release, self._conn)
-            self._conn = None
-        return None
-
-
 class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ("_conn",)
 
@@ -187,27 +155,6 @@ class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
         if self._conn is None:
             return
         self._config.provide_pool().release(self._conn)
-        self._conn = None
-
-
-class _MssqlPythonAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ("_conn",)
-
-    def __init__(self, config: "MssqlPythonAsyncConfig") -> None:
-        super().__init__(config)
-        self._conn: MssqlPythonConnection | None = None
-
-    async def acquire_connection(self) -> "MssqlPythonConnection":
-        pool = await self._config.provide_pool()
-        conn = await asyncio.to_thread(pool.acquire)
-        self._conn = conn
-        return cast("MssqlPythonConnection", conn)
-
-    async def release_connection(self, _conn: "MssqlPythonConnection", **kwargs: Any) -> None:
-        if self._conn is None:
-            return
-        pool = await self._config.provide_pool()
-        await asyncio.to_thread(pool.release, self._conn)
         self._conn = None
 
 
@@ -288,92 +235,6 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
             self.connection_instance.close()
-
-
-class MssqlPythonAsyncConfig(
-    AsyncDatabaseConfig[MssqlPythonConnection, MssqlPythonConnectionPool, MssqlPythonAsyncDriver]
-):
-    """Configuration for mssql-python async database connections."""
-
-    __slots__ = ("_user_connection_hook",)
-
-    driver_type: "ClassVar[type[MssqlPythonAsyncDriver]]" = MssqlPythonAsyncDriver
-    connection_type: "ClassVar[type[MssqlPythonConnection]]" = MssqlPythonConnection
-    migration_tracker_type: "ClassVar[type[MssqlPythonAsyncMigrationTracker]]" = MssqlPythonAsyncMigrationTracker
-    supports_transactional_ddl: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = True
-    supports_native_arrow_import: "ClassVar[bool]" = True
-    supports_arrow_streaming: "ClassVar[bool]" = True
-    supports_native_row_streaming: "ClassVar[bool]" = True
-    supports_native_parquet_export: "ClassVar[bool]" = False
-    supports_native_parquet_import: "ClassVar[bool]" = False
-    _connection_context_class: "ClassVar[type[MssqlPythonAsyncConnectionContext]]" = MssqlPythonAsyncConnectionContext
-    _session_factory_class: "ClassVar[type[_MssqlPythonAsyncSessionConnectionHandler]]" = (
-        _MssqlPythonAsyncSessionConnectionHandler
-    )
-    _session_context_class: "ClassVar[type[MssqlPythonAsyncSessionContext]]" = MssqlPythonAsyncSessionContext
-    _default_statement_config = default_statement_config
-
-    def __init__(
-        self,
-        *,
-        connection_config: "MssqlPythonPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "MssqlPythonConnectionPool | None" = None,
-        migration_config: "dict[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        driver_features: "MssqlPythonDriverFeatures | dict[str, Any] | None" = None,
-        bind_key: "str | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        **kwargs: Any,
-    ) -> None:
-        normalized, features_dict, user_connection_hook = _normalize_mssql_python_init(
-            connection_config, driver_features
-        )
-        self._user_connection_hook = user_connection_hook
-        statement_config = _apply_json_serializer_override(statement_config or default_statement_config, features_dict)
-        super().__init__(
-            bind_key=bind_key,
-            connection_config=normalized,
-            connection_instance=connection_instance,
-            migration_config=migration_config,
-            statement_config=statement_config,
-            driver_features=features_dict,
-            extension_config=extension_config,
-            observability_config=observability_config,
-            **kwargs,
-        )
-
-    async def create_connection(self) -> "MssqlPythonConnection":
-        pool = await self.provide_pool()
-        return await asyncio.to_thread(pool.acquire)
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "MssqlPythonAsyncConfig": MssqlPythonAsyncConfig,
-            "MssqlPythonAsyncConnectionContext": MssqlPythonAsyncConnectionContext,
-            "MssqlPythonAsyncDriver": MssqlPythonAsyncDriver,
-            "MssqlPythonAsyncSessionContext": MssqlPythonAsyncSessionContext,
-            "MssqlPythonConfig": MssqlPythonConfig,
-            "MssqlPythonConnection": MssqlPythonConnection,
-            "MssqlPythonConnectionParams": MssqlPythonConnectionParams,
-            "MssqlPythonConnectionPool": MssqlPythonConnectionPool,
-            "MssqlPythonDriver": MssqlPythonDriver,
-            "MssqlPythonDriverFeatures": MssqlPythonDriverFeatures,
-            "MssqlPythonPoolParams": MssqlPythonPoolParams,
-            "MssqlPythonSessionContext": MssqlPythonSessionContext,
-        })
-        return namespace
-
-    async def _create_pool(self) -> "MssqlPythonConnectionPool":
-        return await asyncio.to_thread(
-            _create_mssql_python_pool, dict(self.connection_config), self.driver_features, self._user_connection_hook
-        )
-
-    async def _close_pool(self) -> None:
-        if self.connection_instance is not None:
-            await asyncio.to_thread(self.connection_instance.close)
 
 
 def _create_mssql_python_pool(

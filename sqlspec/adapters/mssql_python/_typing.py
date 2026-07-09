@@ -1,6 +1,5 @@
 """mssql-python adapter type definitions and mypyc-excluded context managers."""
 
-import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
@@ -11,11 +10,11 @@ from mssql_python.cursor import Cursor  # pyright: ignore
 MSSQL_PYTHON_MODULE: Any = _mssql_python
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
-    from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver, MssqlPythonDriver
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
     from sqlspec.core import StatementConfig
 
     MssqlPythonConnection: TypeAlias = Connection
@@ -27,8 +26,6 @@ if not TYPE_CHECKING:
 
 __all__ = (
     "MSSQL_PYTHON_MODULE",
-    "MssqlPythonAsyncCursor",
-    "MssqlPythonAsyncSessionContext",
     "MssqlPythonConnection",
     "MssqlPythonCursor",
     "MssqlPythonRawCursor",
@@ -53,25 +50,6 @@ class MssqlPythonCursor:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()
-
-
-class MssqlPythonAsyncCursor:
-    """Async context manager for mssql-python cursor management."""
-
-    __slots__ = ("connection", "cursor")
-
-    def __init__(self, connection: "MssqlPythonConnection") -> None:
-        self.connection = connection
-        self.cursor: MssqlPythonRawCursor | None = None
-
-    async def __aenter__(self) -> "MssqlPythonRawCursor":
-        self.cursor = await asyncio.to_thread(self.connection.cursor)
-        return self.cursor
-
-    async def __aexit__(self, *_: object) -> None:
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(self.cursor.close)
 
 
 class MssqlPythonSessionContext:
@@ -117,52 +95,5 @@ class MssqlPythonSessionContext:
     ) -> "bool | None":
         if self._connection is not None:
             self._release_connection(self._connection)
-            self._connection = None
-        return None
-
-
-class MssqlPythonAsyncSessionContext:
-    """Async session context bridging compiled driver and interpreted config."""
-
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Awaitable[MssqlPythonConnection]]",
-        release_connection: "Callable[[MssqlPythonConnection], Awaitable[None]]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[MssqlPythonAsyncDriver], MssqlPythonAsyncDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: MssqlPythonConnection | None = None
-        self._driver: MssqlPythonAsyncDriver | None = None
-
-    async def __aenter__(self) -> "MssqlPythonAsyncDriver":
-        from sqlspec.adapters.mssql_python.driver import MssqlPythonAsyncDriver
-
-        self._connection = await self._acquire_connection()
-        self._driver = MssqlPythonAsyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection)
             self._connection = None
         return None
