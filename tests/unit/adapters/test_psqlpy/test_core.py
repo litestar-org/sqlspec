@@ -315,7 +315,7 @@ async def test_driver_psqlpy_execute_script_passes_single_statement_parameters()
 
 @pytest.mark.parametrize("tag", ["", "NOT A COMMAND TAG", "SELECT"])
 def test_extract_rows_affected_returns_zero_for_unparseable_tag(tag: str) -> None:
-    """Unparseable command tags should report zero rows affected, not the -1 sentinel."""
+    """Unparsable command tags should report zero rows affected, not the -1 sentinel."""
     assert psqlpy_core.extract_rows_affected(tag) == 0
 
 

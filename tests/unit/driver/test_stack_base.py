@@ -5,7 +5,7 @@ import types
 import pytest
 
 from sqlspec import StatementStack
-from sqlspec.exceptions import StackExecutionError
+from sqlspec.exceptions import StackExecutionError, TransactionError
 from tests.conftest import requires_interpreted
 
 
@@ -127,3 +127,68 @@ def test_sync_execute_stack_execute_arrow(sqlite_sync_driver) -> None:
 
     assert len(results) == 1
     assert results[0].result is sentinel
+
+
+def test_base_drivers_expose_savepoint_contract() -> None:
+    """Both base driver classes must expose the savepoint methods."""
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+
+    for method in ("create_savepoint", "release_savepoint", "rollback_to_savepoint"):
+        assert callable(getattr(SyncDriverAdapterBase, method))
+        assert callable(getattr(AsyncDriverAdapterBase, method))
+
+
+@pytest.mark.parametrize("bad_name", ["1; DROP TABLE users", "sp1; DROP TABLE t", "sp-1", "sp 1", "", '"sp"'])
+@requires_interpreted
+def test_sync_savepoint_rejects_unsafe_names(sqlite_sync_driver, bad_name) -> None:
+    """Savepoint helpers must reject names that are not safe SQL identifiers."""
+    with pytest.raises(TransactionError):
+        sqlite_sync_driver.create_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        sqlite_sync_driver.release_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        sqlite_sync_driver.rollback_to_savepoint(bad_name)
+
+
+@pytest.mark.parametrize("bad_name", ["1; DROP TABLE users", "sp1; DROP TABLE t", "sp-1", "sp 1", "", '"sp"'])
+@requires_interpreted
+async def test_async_savepoint_rejects_unsafe_names(aiosqlite_async_driver, bad_name) -> None:
+    """Async savepoint helpers must reject names that are not safe SQL identifiers."""
+    with pytest.raises(TransactionError):
+        await aiosqlite_async_driver.create_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        await aiosqlite_async_driver.release_savepoint(bad_name)
+    with pytest.raises(TransactionError):
+        await aiosqlite_async_driver.rollback_to_savepoint(bad_name)
+
+
+@requires_interpreted
+def test_sync_savepoint_round_trip(sqlite_sync_driver) -> None:
+    """Default savepoint DDL should roll back only the work after the savepoint."""
+    sqlite_sync_driver.execute("CREATE TABLE sp (id INTEGER)")
+    sqlite_sync_driver.begin()
+    sqlite_sync_driver.execute("INSERT INTO sp (id) VALUES (1)")
+    sqlite_sync_driver.create_savepoint("sp1")
+    sqlite_sync_driver.execute("INSERT INTO sp (id) VALUES (2)")
+    sqlite_sync_driver.rollback_to_savepoint("sp1")
+    sqlite_sync_driver.release_savepoint("sp1")
+    sqlite_sync_driver.commit()
+
+    rows = sqlite_sync_driver.execute("SELECT id FROM sp ORDER BY id")
+    assert [row["id"] for row in rows.get_data()] == [1]
+
+
+@requires_interpreted
+async def test_async_savepoint_round_trip(aiosqlite_async_driver) -> None:
+    """Default async savepoint DDL should roll back only the work after the savepoint."""
+    await aiosqlite_async_driver.execute("CREATE TABLE sp (id INTEGER)")
+    await aiosqlite_async_driver.begin()
+    await aiosqlite_async_driver.execute("INSERT INTO sp (id) VALUES (1)")
+    await aiosqlite_async_driver.create_savepoint("sp1")
+    await aiosqlite_async_driver.execute("INSERT INTO sp (id) VALUES (2)")
+    await aiosqlite_async_driver.rollback_to_savepoint("sp1")
+    await aiosqlite_async_driver.release_savepoint("sp1")
+    await aiosqlite_async_driver.commit()
+
+    rows = await aiosqlite_async_driver.execute("SELECT id FROM sp ORDER BY id")
+    assert [row["id"] for row in rows.get_data()] == [1]

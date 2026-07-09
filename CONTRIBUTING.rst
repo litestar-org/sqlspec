@@ -62,8 +62,12 @@ before opening a pull request:
 
 .. code-block:: console
 
-   make test-mypyc
+   make install-compiled && make test
    uv run python tools/scripts/mypyc_inventory.py
+
+``make install-compiled`` compiles the full mypyc include set (so it catches
+compile errors in any compiled module), and the test suite automatically skips
+the cases that cannot run against a compiled build.
 
 For pull requests that change build hooks, wheel workflows, or compiled import
 boundaries, also run:
