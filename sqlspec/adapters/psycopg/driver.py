@@ -102,6 +102,23 @@ def pipeline_operation_failed(cursor: Any, statement: "SQL") -> bool:
     return isinstance(rowcount, int) and rowcount < 0
 
 
+def _attribute_pipeline_failure(
+    pending: "list[PipelineCursorEntry]", current: "PreparedStackOperation"
+) -> "PreparedStackOperation":
+    """Resolve which prepared operation owns an error raised while queueing pipeline commands.
+
+    Cursor execute calls in pipeline mode only queue commands, so an exception
+    raised there can belong to an earlier queued operation whose error result
+    was processed while the current command was being sent. The first queued
+    cursor that reports failure owns the error; when none does, the error is a
+    client-side failure belonging to the current operation.
+    """
+    for entry in pending:
+        if pipeline_operation_failed(entry.cursor, entry.prepared.statement):
+            return entry.prepared
+    return current
+
+
 def _stack_operation_error(
     adapter: str, prepared: "PreparedStackOperation", cause: "Exception"
 ) -> "StackExecutionError":
@@ -482,9 +499,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                             else:
                                 cursor.execute(sql)
                         except Exception as exc:
+                            owner = _attribute_pipeline_failure(pending, prepared)
                             stack_error = StackExecutionError(
-                                prepared.operation_index,
-                                describe_stack_statement(prepared.operation.statement),
+                                owner.operation_index,
+                                describe_stack_statement(owner.operation.statement),
                                 exc,
                                 adapter=type(self).__name__,
                                 mode="fail-fast",
@@ -989,9 +1007,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                             else:
                                 await cursor.execute(sql)
                         except Exception as exc:
+                            owner = _attribute_pipeline_failure(pending, prepared)
                             stack_error = StackExecutionError(
-                                prepared.operation_index,
-                                describe_stack_statement(prepared.operation.statement),
+                                owner.operation_index,
+                                describe_stack_statement(owner.operation.statement),
                                 exc,
                                 adapter=type(self).__name__,
                                 mode="fail-fast",
