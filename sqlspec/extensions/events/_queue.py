@@ -161,6 +161,22 @@ class _BaseTableEventQueue:
         return datetime.now(timezone.utc)
 
     @staticmethod
+    def _claim_verified(row: "dict[str, Any] | None", leased_until: "datetime") -> bool:
+        """Confirm claim ownership by matching the stored lease against the claimer's token.
+
+        Drivers that cannot report rows affected return zero for a successful
+        claim UPDATE, so a zero rowcount alone cannot distinguish a won claim
+        from a lost race. The persisted ``lease_expires_at`` value identifies
+        the winning claimer.
+        """
+        if row is None:
+            return False
+        lease_value = row.get("lease_expires_at")
+        if lease_value is None:
+            return False
+        return parse_event_timestamp(lease_value) == leased_until
+
+    @staticmethod
     def _hydrate_event(row: "dict[str, Any]", lease_expires_at: "datetime | None") -> EventMessage:
         payload_raw = row.get("payload_json")
         metadata_raw = row.get("metadata_json")
@@ -256,6 +272,8 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     "lease_reentry_cutoff": now,
                 },
             )
+            if not claimed:
+                claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 return self._hydrate_event(row, leased_until)
         return None
@@ -277,6 +295,8 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 "lease_reentry_cutoff": now,
             },
         )
+        if not claimed:
+            claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
             return self._hydrate_event(row, leased_until)
         return None
@@ -340,6 +360,15 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._execute_with_driver(
                     driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
                 )
+                if not claimed:
+                    verify_row = driver.select_one_or_none(
+                        SQL(
+                            self._select_by_id_statement,
+                            {"event_id": row["event_id"]},
+                            statement_config=self._statement_config,
+                        )
+                    )
+                    claimed = self._claim_verified(verify_row, leased_until)
                 if not claimed:
                     driver.rollback()
                     return None
@@ -450,6 +479,8 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     "lease_reentry_cutoff": now,
                 },
             )
+            if not claimed:
+                claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 return self._hydrate_event(row, leased_until)
         return None
@@ -471,6 +502,8 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 "lease_reentry_cutoff": now,
             },
         )
+        if not claimed:
+            claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
             return self._hydrate_event(row, leased_until)
         return None
@@ -538,6 +571,15 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 claimed = await self._execute_with_driver(
                     driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
                 )
+                if not claimed:
+                    verify_row = await driver.select_one_or_none(
+                        SQL(
+                            self._select_by_id_statement,
+                            {"event_id": row["event_id"]},
+                            statement_config=self._statement_config,
+                        )
+                    )
+                    claimed = self._claim_verified(verify_row, leased_until)
                 if not claimed:
                     await driver.rollback()
                     return None
