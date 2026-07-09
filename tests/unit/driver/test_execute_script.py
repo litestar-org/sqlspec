@@ -2,8 +2,23 @@
 
 from typing import Any
 
+from sqlspec.adapters.sqlite.core import default_statement_config
 from sqlspec.core import SQL
 from tests.conftest import requires_interpreted
+
+
+def test_as_script_embeds_parameters_statically() -> None:
+    """as_script() should force static parameter embedding regardless of the adapter default."""
+    assert default_statement_config.parameter_config.needs_static_script_compilation is False
+
+    sql = SQL(
+        "INSERT INTO t (a) VALUES (:a); INSERT INTO t (a) VALUES (:a)", a=5, statement_config=default_statement_config
+    ).as_script()
+    compiled_sql, params = sql.compile()
+
+    assert params is None
+    assert ":a" not in compiled_sql
+    assert "5" in compiled_sql
 
 
 @requires_interpreted
@@ -13,6 +28,30 @@ def test_sync_execute_script_tracks_all_successful_statements(sqlite_sync_driver
     assert result.total_statements == 3
     assert result.successful_statements == 3
     assert result.is_success() is True
+
+
+@requires_interpreted
+def test_sync_execute_script_with_parameters_runs_every_statement(sqlite_sync_driver) -> None:
+    """A parameterized multi-statement script embeds its params and lands every row."""
+    result = sqlite_sync_driver.execute_script(
+        "INSERT INTO users (name) VALUES (:n); INSERT INTO users (name) VALUES (:n)", n="scripted"
+    )
+    assert result.successful_statements == 2
+
+    inserted = sqlite_sync_driver.execute("SELECT COUNT(*) FROM users WHERE name = :n", n="scripted").data
+    assert inserted[0][0] == 2
+
+
+@requires_interpreted
+async def test_async_execute_script_with_parameters_runs_every_statement(aiosqlite_async_driver) -> None:
+    """A parameterized multi-statement script embeds its params and lands every row on async drivers."""
+    result = await aiosqlite_async_driver.execute_script(
+        "INSERT INTO users (name) VALUES (:n); INSERT INTO users (name) VALUES (:n)", n="scripted"
+    )
+    assert result.successful_statements == 2
+
+    inserted = (await aiosqlite_async_driver.execute("SELECT COUNT(*) FROM users WHERE name = :n", n="scripted")).data
+    assert inserted[0][0] == 2
 
 
 @requires_interpreted

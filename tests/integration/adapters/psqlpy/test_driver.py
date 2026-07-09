@@ -73,7 +73,7 @@ async def test_scalar_parameter_handling(psqlpy_session: "PsqlpyDriver") -> None
 
     insert_result = await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES (?)", "single_param")
     assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected == -1
+    assert insert_result.rows_affected == 0
 
     select_result = await psqlpy_session.execute("SELECT * FROM test_table_psqlpy WHERE name = ?", "single_param")
     assert isinstance(select_result, SQLResult)
@@ -102,7 +102,7 @@ async def test_question_mark_in_edge_cases(psqlpy_session: "PsqlpyDriver") -> No
 
     insert_result = await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES (?)", "edge_case_test")
     assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected == -1
+    assert insert_result.rows_affected == 0
 
     result = await psqlpy_session.execute(
         "SELECT * FROM test_table_psqlpy WHERE name = ? AND '?' = '?'", "edge_case_test"

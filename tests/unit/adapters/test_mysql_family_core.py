@@ -14,7 +14,6 @@ from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
 from sqlspec.adapters.pymysql.driver import PyMysqlDriver
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
-from sqlspec.exceptions import SQLSpecError
 
 MODULE_PATHS = (
     "sqlspec.adapters.aiomysql.core",
@@ -158,7 +157,6 @@ def test_asyncmy_collect_rows_uses_canonical_tuple_json_helper(monkeypatch: pyte
     assert calls == [(rows, [0])]
 
 
-_ERROR_MESSAGE = "execute_script with parameters is not supported for multi-statement scripts"
 _MULTI_STMT_SQL = "SELECT 1; SELECT 2"
 
 
@@ -185,14 +183,14 @@ def _make_async_cursor() -> AsyncMock:
 
 
 @pytest.mark.parametrize("driver_factory", [PyMysqlDriver, MysqlConnectorSyncDriver])
-def test_mysql_execute_script_sync_mysql_execute_script_multi_statement_with_params_raises(
-    driver_factory: type[Any],
-) -> None:
+def test_mysql_execute_script_sync_multi_statement_with_params_executes_all(driver_factory: type[Any]) -> None:
     driver = driver_factory(connection=MagicMock())
     statement = _make_statement(driver)
+    cursor = _make_sync_cursor()
     with patch.object(driver_factory, "_compiled_sql", return_value=(_MULTI_STMT_SQL, (42,))):
-        with pytest.raises(SQLSpecError, match=_ERROR_MESSAGE):
-            driver.dispatch_execute_script(_make_sync_cursor(), statement)
+        result = driver.dispatch_execute_script(cursor, statement)
+    assert result.statement_count == 2
+    assert result.successful_statements == 2
 
 
 @pytest.mark.parametrize("driver_factory", [PyMysqlDriver, MysqlConnectorSyncDriver])
@@ -223,14 +221,14 @@ def test_mysql_execute_script_sync_mysql_execute_script_multi_statement_without_
 
 
 @pytest.mark.parametrize("driver_factory", [AiomysqlDriver, AsyncmyDriver, MysqlConnectorAsyncDriver])
-async def test_mysql_execute_script_async_mysql_execute_script_multi_statement_with_params_raises(
-    driver_factory: type[Any],
-) -> None:
+async def test_mysql_execute_script_async_multi_statement_with_params_executes_all(driver_factory: type[Any]) -> None:
     driver = driver_factory(connection=AsyncMock())
     statement = _make_statement(driver)
+    cursor = _make_async_cursor()
     with patch.object(driver_factory, "_compiled_sql", return_value=(_MULTI_STMT_SQL, (42,))):
-        with pytest.raises(SQLSpecError, match=_ERROR_MESSAGE):
-            await driver.dispatch_execute_script(_make_async_cursor(), statement)
+        result = await driver.dispatch_execute_script(cursor, statement)
+    assert result.statement_count == 2
+    assert result.successful_statements == 2
 
 
 @pytest.mark.parametrize("driver_factory", [AiomysqlDriver, AsyncmyDriver, MysqlConnectorAsyncDriver])
