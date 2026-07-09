@@ -483,6 +483,33 @@ async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "Async
     assert verify.get_data()[0]["total"] == 2
 
 
+async def test_asyncpg_statement_stack_continue_on_error_inside_transaction(asyncpg_session: "AsyncpgDriver") -> None:
+    """Continue-on-error inside a user transaction must isolate the failing op via a savepoint."""
+
+    await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
+
+    await asyncpg_session.begin()
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "initial", 5))
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "duplicate", 10))
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (2, "final", 15))
+    )
+
+    results = await asyncpg_session.execute_stack(stack, continue_on_error=True)
+
+    assert results[0].error is None
+    assert results[1].error is not None
+    assert results[2].error is None
+
+    verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table_asyncpg")
+    assert verify.get_data()[0]["total"] == 2
+    await asyncpg_session.commit()
+
+    persisted = await asyncpg_session.execute("SELECT id FROM test_table_asyncpg ORDER BY id")
+    assert [row["id"] for row in persisted.get_data()] == [1, 2]
+
+
 async def test_asyncpg_statement_stack_marks_prepared(asyncpg_session: "AsyncpgDriver") -> None:
     """Prepared statement metadata should be attached to stack results."""
 
