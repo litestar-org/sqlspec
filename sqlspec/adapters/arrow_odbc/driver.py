@@ -109,6 +109,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_max_binary_size_val",
         "_max_text_size_val",
         "_query_timeout_sec_val",
+        "_transaction_active",
         "_use_concurrent_fetch",
         "dialect",
     )
@@ -139,6 +140,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
         self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
+        self._transaction_active = False
 
     @property
     def data_dictionary(self) -> "ArrowOdbcDataDictionary":
@@ -206,17 +208,21 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return 0
 
     def _connection_in_transaction(self) -> bool:
-        """Return whether the generic ODBC connection is in an active transaction.
+        """Return whether SQLSpec holds an explicit transaction on the connection.
 
-        arrow-odbc does not expose a portable transaction-state API, so stack
-        execution relies on SQLSpec's explicit transaction management.
+        arrow-odbc does not expose a portable transaction-state API, so the
+        driver tracks the boundary opened by begin() and closed by
+        commit()/rollback().
         """
-        return False
+        return self._transaction_active
 
     def begin(self) -> None:
-        if self._dialect == "mssql":
-            return
-        self.connection.execute("BEGIN")
+        try:
+            self.connection.execute("BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN")
+        except Exception as exc:
+            msg = f"Failed to begin transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+        self._transaction_active = True
 
     def commit(self) -> None:
         try:
@@ -224,6 +230,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except Exception as exc:
             msg = f"Failed to commit transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        self._transaction_active = False
 
     def rollback(self) -> None:
         try:
@@ -231,6 +238,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except Exception as exc:
             msg = f"Failed to rollback transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        finally:
+            self._transaction_active = False
 
     def with_cursor(self, connection: "ArrowOdbcConnection") -> "ArrowOdbcCursor":
         return ArrowOdbcCursor(connection)

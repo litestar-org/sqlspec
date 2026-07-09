@@ -540,16 +540,28 @@ def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
     assert not hasattr(driver, "_statement_dialect")
 
 
-def test_arrow_odbc_connection_in_transaction_uses_explicit_management_fallback() -> None:
-    """Generic ODBC connections do not expose a portable transaction-state API."""
+def test_arrow_odbc_connection_in_transaction_tracks_begin_commit_rollback() -> None:
+    """The transaction predicate should follow the real begin/commit/rollback state."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
 
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
+    driver.begin()
+    assert connection.executed == [("BEGIN", None)]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
 
-def test_arrow_odbc_mssql_begin_uses_driver_transaction_api() -> None:
-    """SQL Server ODBC transactions should rely on the connection commit API."""
+    driver.commit()
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+    driver.begin()
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+    driver.rollback()
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_arrow_odbc_mssql_begin_issues_tsql_and_tracks_state() -> None:
+    """SQL Server ODBC transactions should issue BEGIN TRANSACTION and drive the state predicate."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
@@ -557,7 +569,11 @@ def test_arrow_odbc_mssql_begin_uses_driver_transaction_api() -> None:
 
     driver.begin()
 
-    assert connection.executed == []
+    assert connection.executed == [("BEGIN TRANSACTION", None)]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+
+    driver.commit()
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
 def test_arrow_odbc_execute_marks_dml_rowcount_zero() -> None:
