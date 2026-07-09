@@ -96,7 +96,7 @@ class SyncRowStream(Generic[RowT]):
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
-        self.close()
+        self._close(error=exc_type is not None)
 
     def __iter__(self) -> "SyncRowStream[RowT]":
         return self
@@ -186,7 +186,7 @@ class AsyncRowStream(Generic[RowT]):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
-        await self.aclose()
+        await self._aclose(error=exc_type is not None)
 
     async def __anext__(self) -> RowT:
         if self._closed:

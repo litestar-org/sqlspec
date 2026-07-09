@@ -35,6 +35,7 @@ class FakeSyncSource:
         self.start_calls = 0
         self.fetch_calls = 0
         self.close_calls = 0
+        self.close_errors: list[bool] = []
 
     def start(self) -> None:
         self.start_calls += 1
@@ -47,6 +48,7 @@ class FakeSyncSource:
 
     def close(self, error: bool = False) -> None:
         self.close_calls += 1
+        self.close_errors.append(error)
 
 
 class FakeAsyncSource:
@@ -57,6 +59,7 @@ class FakeAsyncSource:
         self.start_calls = 0
         self.fetch_calls = 0
         self.close_calls = 0
+        self.close_errors: list[bool] = []
 
     async def start(self) -> None:
         self.start_calls += 1
@@ -69,6 +72,7 @@ class FakeAsyncSource:
 
     async def close(self, error: bool = False) -> None:
         self.close_calls += 1
+        self.close_errors.append(error)
 
 
 # --------------------------------------------------------------------------- #
@@ -149,6 +153,7 @@ def test_sync_context_manager_normal_exit_closes() -> None:
     with _sync_stream(source) as stream:
         assert next(iter(stream)) == {"id": 0}
     assert source.close_calls == 1
+    assert source.close_errors == [False]
 
 
 def test_sync_context_manager_exception_exit_closes() -> None:
@@ -156,6 +161,7 @@ def test_sync_context_manager_exception_exit_closes() -> None:
     with pytest.raises(ValueError, match="boom"), _sync_stream(source):
         raise ValueError("boom")
     assert source.close_calls == 1
+    assert source.close_errors == [True]
 
 
 # --------------------------------------------------------------------------- #
@@ -237,6 +243,7 @@ async def test_async_context_manager_normal_exit_closes() -> None:
     async with _async_stream(source) as stream:
         assert await stream.__aiter__().__anext__() == {"id": 0}
     assert source.close_calls == 1
+    assert source.close_errors == [False]
 
 
 async def test_async_context_manager_exception_exit_closes() -> None:
@@ -245,6 +252,7 @@ async def test_async_context_manager_exception_exit_closes() -> None:
         async with _async_stream(source):
             raise ValueError("boom")
     assert source.close_calls == 1
+    assert source.close_errors == [True]
 
 
 # --------------------------------------------------------------------------- #
