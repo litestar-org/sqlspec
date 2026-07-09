@@ -57,7 +57,7 @@ OracleProtocol = Literal["tcp", "tcps"]
 OracleServerType = Literal["dedicated", "shared", "pooled"]
 OraclePoolBoundary = Literal["statement", "transaction"]
 OracleVectorReturnFormat = Literal["array", "list", "numpy"]
-OracleEventsBackend = Literal["aq", "table_queue", "txeventq"]
+OracleEventsBackend = Literal["aq", "poll_queue", "txeventq"]
 
 
 class OracleConnectionParams(TypedDict):
@@ -188,16 +188,16 @@ class OracleDriverFeatures(TypedDict):
     enable_events: Enable SQLSpec event queue support.
      Defaults to True when extension_config["events"] is configured.
      Provides pub/sub capabilities via Oracle Advanced Queuing or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using table_queue backend.
+     Requires extension_config["events"] for migration setup when using poll_queue backend.
      This is separate from connection_config["events"], which enables python-oracledb
      Thick mode database event notifications for HA and continuous query notification.
     events_backend: Event channel backend selection.
-     Options: "aq", "table_queue", "txeventq"
+     Options: "aq", "poll_queue", "txeventq"
      - "aq": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
      - "txeventq": Oracle Transactional Event Queues (native messaging, requires
        DBMS_AQADM privileges; provisioned via DBMS_AQADM.CREATE_TRANSACTIONAL_EVENT_QUEUE)
-     - "table_queue": Durable table-backed queue with retries and exactly-once delivery
-     Defaults to "table_queue" (works on all Oracle editions without special privileges).
+     - "poll_queue": Durable table-backed queue with retries and exactly-once delivery
+     Defaults to "poll_queue" (works on all Oracle editions without special privileges).
     enable_direct_path_load: Route load_from_arrow through Connection.direct_path_load.
      Thin-mode only; falls back to executemany when the API is absent or the
      connection is in Thick mode. Defaults to True; set to False to force

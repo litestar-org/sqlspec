@@ -132,7 +132,7 @@ class AdbcSelectStreamSource:
             if rows:
                 return rows
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         self._reader = None
         cursor_manager = self._cursor_manager
         self._cursor_manager = None

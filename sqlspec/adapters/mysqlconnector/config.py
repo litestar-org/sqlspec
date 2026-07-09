@@ -180,7 +180,7 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
     events_backend: Event channel backend selection.
-     Only option: "table_queue".
+     Only option: "poll_queue".
     cursor_options: Cursor keyword arguments SQLSpec forwards to
      ``connection.cursor()`` for statement execution.
     """

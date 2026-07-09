@@ -229,12 +229,19 @@ class MysqlConnectorSyncStreamSource:
         deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
         return collect_stream_rows(rows, self._row_plan, deserializer)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
+        connection = self._driver.connection
+        raw_connection = getattr(connection, "_cnx", None) or connection
+        if getattr(raw_connection, "unread_result", False):
+            with contextlib.suppress(Exception):
+                raw_connection.shutdown()
+                raw_connection.unread_result = False
+                raw_connection.reconnect()
 
 
 class MysqlConnectorAsyncStreamSource:
@@ -292,12 +299,19 @@ class MysqlConnectorAsyncStreamSource:
         deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
         return collect_stream_rows(rows, self._row_plan, deserializer)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
             with contextlib.suppress(Exception):
                 await cursor.close()
+        connection = self._driver.connection
+        raw_connection = getattr(connection, "_cnx", None) or connection
+        if getattr(raw_connection, "unread_result", False):
+            with contextlib.suppress(Exception):
+                await raw_connection.shutdown()
+                raw_connection.unread_result = False
+                await raw_connection.reconnect()
 
 
 def normalize_execute_many_parameters(parameters: Any) -> Any:

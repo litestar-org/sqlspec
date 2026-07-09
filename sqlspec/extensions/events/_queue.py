@@ -221,7 +221,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
 
     supports_sync: ClassVar[bool] = True
     supports_async: ClassVar[bool] = False
-    backend_name: ClassVar[str] = "table_queue"
+    backend_name: ClassVar[str] = "poll_queue"
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex
@@ -428,7 +428,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     supports_sync: ClassVar[bool] = False
     supports_async: ClassVar[bool] = True
-    backend_name: ClassVar[str] = "table_queue"
+    backend_name: ClassVar[str] = "poll_queue"
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         event_id = uuid4().hex

@@ -149,6 +149,7 @@ class SyncRowStream(Generic[RowT]):
         except Exception:
             return
 
+
 class AsyncRowStream(Generic[RowT]):
     """Async bounded-memory iterator backed by an async chunk source."""
 
@@ -234,6 +235,7 @@ class AsyncRowStream(Generic[RowT]):
                 await self._source.close()
         except Exception:
             return
+
 
 class EagerSyncRowSource:
     """Chunk source over pre-materialized rows (eager fallback; not bounded-memory)."""

@@ -84,9 +84,9 @@ class BigQueryDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
-            BigQuery does not have native pub/sub, so table_queue is the only backend.
-            Defaults to "table_queue".
+        Only option: "poll_queue" (durable table-backed queue with retries and exactly-once delivery).
+            BigQuery does not have native pub/sub, so poll_queue is the only backend.
+            Defaults to "poll_queue".
         job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
             Values <= 0 disable retries entirely: API requests are not retried and ``job_retry`` is
             withheld from ``client.query()``, which also bypasses the client's built-in

@@ -34,7 +34,7 @@ class AsyncpgHybridEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "listen_notify_durable"
+    backend_name = "notify_queue"
 
     def __init__(self, config: "AsyncpgConfig", queue: "AsyncTableEventQueue") -> None:
         if not config.is_async:
@@ -124,7 +124,7 @@ class AsyncpgEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "listen_notify"
+    backend_name = "notify"
 
     def __init__(self, config: "AsyncpgConfig") -> None:
         if not config.is_async:
@@ -183,12 +183,12 @@ def create_event_backend(
 ) -> AsyncpgEventsBackend | AsyncpgHybridEventsBackend | None:
     """EventChannel factory for the native backend."""
     match backend_name:
-        case "listen_notify":
+        case "notify":
             try:
                 return AsyncpgEventsBackend(config)
             except ImproperConfigurationError:
                 return None
-        case "listen_notify_durable":
+        case "notify_queue":
             queue_backend = cast(
                 "AsyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="asyncpg")
             )

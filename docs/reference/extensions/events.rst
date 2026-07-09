@@ -6,6 +6,24 @@ Pub/sub event channel system with database-backed queue support. Provides
 both sync and async channels with listener management and native backend
 integration for databases that support LISTEN/NOTIFY.
 
+Backend names
+=============
+
+``events.backend`` uses transport names that describe durability and wakeup
+behavior:
+
+* ``notify`` is a transient native notification. It is a worker wakeup hint,
+  not a task or event ledger.
+* ``notify_queue`` is a durable table queue with a native notification wakeup
+  hint. The table is the source of truth.
+* ``poll_queue`` is a durable table queue discovered by polling.
+* ``aq`` is Oracle Advanced Queuing.
+* ``txeventq`` is Oracle Transactional Event Queues.
+
+``polling`` is not a SQLSpec backend name. Litestar Queues uses it for the
+fallback worker mode where no push wakeup transport is available and the
+worker waits for its configured polling interval.
+
 Native LISTEN/NOTIFY model
 ==========================
 
@@ -27,15 +45,15 @@ queue-handle cache backed by a single dedicated session per backend instance.
 ``dequeue`` honors ``min(poll_interval, aq_wait_seconds)`` as its wait bound so
 the caller's polling cadence is respected.
 
-``ack`` / ``nack`` semantics are unchanged. Native backends remain
-fire-and-forget; hybrid (``listen_notify_durable``) backends acknowledge
-through the durable table queue.
+``ack`` / ``nack`` semantics are unchanged. ``notify`` remains
+fire-and-forget; ``notify_queue`` acknowledges through the durable table
+queue.
 
 Oracle native event backends
 ============================
 
 Oracle provides two **native** messaging backends in addition to the default
-``table_queue``:
+``poll_queue``:
 
 * ``aq`` — classic Oracle Advanced Queuing (AQ).
 * ``txeventq`` — Oracle Transactional Event Queues (TxEventQ).
@@ -52,7 +70,7 @@ underlying queue is provisioned. Select one via ``events.backend``:
         extension_config={"events": {"backend": "txeventq"}},
     )
 
-The default remains ``table_queue``, which works on every Oracle edition
+The default remains ``poll_queue``, which works on every Oracle edition
 without extra privileges; both native backends are opt-in.
 
 Requirements

@@ -45,7 +45,7 @@ class FakeSyncSource:
             return self._chunks.pop(0)
         return []
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         self.close_calls += 1
 
 
@@ -67,7 +67,7 @@ class FakeAsyncSource:
             return self._chunks.pop(0)
         return []
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         self.close_calls += 1
 
 

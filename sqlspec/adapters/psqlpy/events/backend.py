@@ -36,7 +36,7 @@ class PsqlpyEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "listen_notify"
+    backend_name = "notify"
 
     def __init__(self, config: "PsqlpyConfig") -> None:
         if "psqlpy" not in type(config).__module__:
@@ -97,7 +97,7 @@ class PsqlpyHybridEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "listen_notify_durable"
+    backend_name = "notify_queue"
 
     def __init__(self, config: "PsqlpyConfig", queue: "AsyncTableEventQueue") -> None:
         if "psqlpy" not in type(config).__module__:
@@ -185,12 +185,12 @@ def create_event_backend(
 ) -> PsqlpyEventsBackend | PsqlpyHybridEventsBackend | None:
     """EventChannel factory for the native psqlpy backend."""
     match backend_name:
-        case "listen_notify":
+        case "notify":
             try:
                 return PsqlpyEventsBackend(config)
             except ImproperConfigurationError:
                 return None
-        case "listen_notify_durable":
+        case "notify_queue":
             queue = cast("AsyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="psqlpy"))
             try:
                 return PsqlpyHybridEventsBackend(config, queue)

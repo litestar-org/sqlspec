@@ -1,6 +1,18 @@
 """Configuration-related tests for extension auto-migration inclusion."""
 
+from typing import get_args, get_type_hints
+
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.config import EventsConfig
+
+
+def test_events_backend_literal_uses_canonical_transport_names() -> None:
+    """The SQLSpec selector excludes the Litestar Queues-only polling mode."""
+
+    backend_hint = get_type_hints(EventsConfig)["backend"]
+    backend_literal = get_args(backend_hint)[0]
+
+    assert set(get_args(backend_literal)) == {"notify", "notify_queue", "poll_queue", "aq", "txeventq"}
 
 
 def test_events_extension_auto_includes_migrations(tmp_path) -> None:
@@ -36,7 +48,7 @@ def test_exclude_extensions_prevents_auto_inclusion(tmp_path) -> None:
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "events_skip.db")},
         migration_config={"script_location": "migrations", "exclude_extensions": ["events"]},
-        extension_config={"events": {"backend": "listen_notify"}},
+        extension_config={"events": {"backend": "notify"}},
     )
 
     include_extensions = config.migration_config.get("include_extensions")
@@ -107,7 +119,7 @@ def test_multiple_extensions_auto_include_migrations(tmp_path) -> None:
         extension_config={
             "litestar": {"session_table": True},  # Needs session_table for migrations
             "adk": {},
-            "events": {"backend": "table_queue"},
+            "events": {"backend": "poll_queue"},
         },
     )
 
@@ -124,7 +136,7 @@ def test_exclude_extensions_partial(tmp_path) -> None:
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "partial.db")},
         migration_config={"script_location": "migrations", "exclude_extensions": ["events"]},
-        extension_config={"litestar": {"session_table": True}, "events": {"backend": "listen_notify"}},
+        extension_config={"litestar": {"session_table": True}, "events": {"backend": "notify"}},
     )
 
     include_extensions = config.migration_config.get("include_extensions")

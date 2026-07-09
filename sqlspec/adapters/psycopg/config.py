@@ -134,13 +134,13 @@ class PsycopgDriverFeatures(TypedDict):
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
      Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using table_queue backend.
+     Requires extension_config["events"] for migration setup when using poll_queue backend.
     events_backend: Event channel backend selection.
-     Options: "listen_notify", "table_queue", "listen_notify_durable"
-     - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time) - coming soon
-     - "table_queue": Durable table-backed queue with retries and exactly-once delivery (current default)
-     - "listen_notify_durable": Hybrid - real-time + durable (available when native support lands)
-     Defaults to "table_queue" until native LISTEN/NOTIFY support is implemented.
+     Options: "notify", "poll_queue", "notify_queue"
+     - "notify": PostgreSQL LISTEN/NOTIFY wakeups (transient, not a durable ledger)
+     - "poll_queue": Durable table-backed queue discovered by polling
+     - "notify_queue": Durable table-backed queue with LISTEN/NOTIFY wakeups
+     Defaults to "notify".
     enable_alloydb: Enable sync-only Google AlloyDB connector integration.
      Requires google-cloud-alloydb-connector. Defaults to False.
     alloydb_instance_uri: AlloyDB instance URI in projects/... resource path form.

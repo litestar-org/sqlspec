@@ -438,9 +438,9 @@ def test_cockroach_psycopg_driver_features_typed_dict_accepts_json_features() ->
 
 def test_cockroach_psycopg_driver_features_typed_dict_accepts_event_features() -> None:
     """TypedDict should accept event backend features."""
-    features: CockroachPsycopgDriverFeatures = {"enable_events": True, "events_backend": "table_queue"}
+    features: CockroachPsycopgDriverFeatures = {"enable_events": True, "events_backend": "poll_queue"}
     assert features["enable_events"] is True
-    assert features["events_backend"] == "table_queue"
+    assert features["events_backend"] == "poll_queue"
 
 
 def test_cockroach_psycopg_driver_features_rejects_unused_uuid_preference() -> None:

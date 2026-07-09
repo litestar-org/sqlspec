@@ -41,7 +41,7 @@ class PsycopgSyncEventsBackend:
 
     supports_sync = True
     supports_async = False
-    backend_name = "listen_notify"
+    backend_name = "notify"
 
     def __init__(self, config: "PsycopgSyncConfig") -> None:
         if "psycopg" not in type(config).__module__:
@@ -108,7 +108,7 @@ class PsycopgAsyncEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "listen_notify"
+    backend_name = "notify"
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
         if "psycopg" not in type(config).__module__:
@@ -166,7 +166,7 @@ class PsycopgSyncHybridEventsBackend:
 
     supports_sync = True
     supports_async = False
-    backend_name = "listen_notify_durable"
+    backend_name = "notify_queue"
 
     def __init__(self, config: "PsycopgSyncConfig", queue: "SyncTableEventQueue") -> None:
         if "psycopg" not in type(config).__module__:
@@ -264,7 +264,7 @@ class PsycopgAsyncHybridEventsBackend:
 
     supports_sync = False
     supports_async = True
-    backend_name = "listen_notify_durable"
+    backend_name = "notify_queue"
 
     def __init__(self, config: "PsycopgAsyncConfig", queue: "AsyncTableEventQueue") -> None:
         if "psycopg" not in type(config).__module__:
@@ -358,17 +358,17 @@ def create_event_backend(
     """EventChannel factory for the native psycopg backend."""
     is_async = config.is_async
     match (backend_name, is_async):
-        case ("listen_notify", False):
+        case ("notify", False):
             try:
                 return PsycopgSyncEventsBackend(config)  # type: ignore[arg-type]
             except ImproperConfigurationError:
                 return None
-        case ("listen_notify", True):
+        case ("notify", True):
             try:
                 return PsycopgAsyncEventsBackend(config)  # type: ignore[arg-type]
             except ImproperConfigurationError:
                 return None
-        case ("listen_notify_durable", False):
+        case ("notify_queue", False):
             sync_queue = cast(
                 "SyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="psycopg")
             )
@@ -376,7 +376,7 @@ def create_event_backend(
                 return PsycopgSyncHybridEventsBackend(config, sync_queue)  # type: ignore[arg-type]
             except ImproperConfigurationError:
                 return None
-        case ("listen_notify_durable", True):
+        case ("notify_queue", True):
             async_queue = cast(
                 "AsyncTableEventQueue", build_queue_backend(config, extension_settings, adapter_name="psycopg")
             )

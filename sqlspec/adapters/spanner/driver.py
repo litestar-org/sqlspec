@@ -227,7 +227,7 @@ class _SpannerSelectStreamSource:
         self._column_names = resolved_column_names
         return rows_to_dicts(converted_rows, resolved_column_names)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         result_set = self._result_set
         if result_set is not None:
             close = getattr(result_set, "close", None)

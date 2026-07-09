@@ -26,7 +26,7 @@ async def test_psqlpy_concurrent_same_channel_subscribers(postgres_service: "Any
 
     config = PsqlpyConfig(
         connection_config=PsqlpyPoolParams(dsn=_dsn(postgres_service)),
-        extension_config={"events": {"backend": "listen_notify"}},
+        extension_config={"events": {"backend": "notify"}},
     )
 
     spec = SQLSpec()
@@ -78,7 +78,7 @@ async def test_psqlpy_listen_notify_hybrid(postgres_service: "Any", tmp_path) ->
     config = PsqlpyConfig(
         connection_config=PsqlpyPoolParams(dsn=_dsn(postgres_service)),
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {"backend": "listen_notify_durable"}},
+        extension_config={"events": {"backend": "notify_queue"}},
     )
 
     await AsyncMigrationCommands(config).upgrade()

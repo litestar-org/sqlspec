@@ -134,7 +134,7 @@ v0.52.0 - SQL Server adapters, ADK profiles, and cloud connectors
 **Changed:**
 
 * Standardized Oracle native event backend names to ``aq`` and ``txeventq``;
-  ``table_queue`` remains the default backend.
+  ``poll_queue`` remains the default backend.
 * Moved ADK optimization and storage tuning options into adapter-local config
   types instead of the shared global config surface.
 * Tightened adapter typing and core pipeline internals for the compiler,

@@ -161,14 +161,13 @@ class AsyncpgDriverFeatures(TypedDict):
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
      Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using table_queue backend.
+     Requires extension_config["events"] for migration setup when using poll_queue backend.
     events_backend: Event channel backend selection.
-     Options: "listen_notify", "table_queue", "listen_notify_durable"
-     - "listen_notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time)
-     - "table_queue": Durable table-backed queue with retries and exactly-once delivery
-     - "listen_notify_durable": Hybrid - combines real-time LISTEN/NOTIFY with table durability (recommended for production)
-     Defaults to "listen_notify" for backward compatibility.
-     Note: "listen_notify_durable" provides best of both worlds - <100ms latency with full durability.
+     Options: "notify", "poll_queue", "notify_queue"
+     - "notify": Zero-copy PostgreSQL LISTEN/NOTIFY (ephemeral, real-time)
+     - "poll_queue": Durable table-backed queue with retries and exactly-once delivery
+     - "notify_queue": Hybrid - combines real-time LISTEN/NOTIFY with table durability (recommended for production)
+     Defaults to "notify". Select "notify_queue" when the event table must remain the source of truth.
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]

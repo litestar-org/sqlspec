@@ -687,7 +687,7 @@ class OracleSyncStreamSource:
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
@@ -746,7 +746,7 @@ class OracleAsyncStreamSource:
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:

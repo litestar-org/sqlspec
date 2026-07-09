@@ -40,7 +40,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
     config = AsyncpgConfig(
         connection_config={"dsn": _dsn(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {"backend": "listen_notify_durable"}},
+        extension_config={"events": {"backend": "notify_queue"}},
     )
 
     await AsyncMigrationCommands(config).upgrade()
@@ -49,7 +49,7 @@ async def test_asyncpg_hybrid_listen_notify_durable(postgres_service: "Any", tmp
     spec.add_config(config)
     channel = spec.event_channel(config)
 
-    assert channel._backend_name == "listen_notify_durable"
+    assert channel._backend_name == "notify_queue"
 
     received: list[Any] = []
 
@@ -87,7 +87,7 @@ async def test_asyncpg_concurrent_multi_channel_subscribe(postgres_service: "Any
     """
 
     config = AsyncpgConfig(
-        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "listen_notify"}}
+        connection_config={"dsn": _dsn(postgres_service)}, extension_config={"events": {"backend": "notify"}}
     )
 
     spec = SQLSpec()

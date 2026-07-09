@@ -289,6 +289,45 @@ async def test_async_dispatch_select_stream_uses_driver_cursor_options(monkeypat
     connection.cursor.assert_awaited_once_with(prepared=True, buffered=False)
 
 
+def test_sync_stream_close_reconnects_instead_of_draining_unread_rows() -> None:
+    """Early close discards the dirty protocol session without fetching remaining rows."""
+    connection = MagicMock()
+    connection.unread_result = True
+    connection._cnx = None
+    cursor = MagicMock()
+    cursor.close.side_effect = RuntimeError("Unread result found")
+    driver = MagicMock(connection=connection, driver_features={})
+    source = MysqlConnectorSyncStreamSource(driver, "SELECT 1", None, 10, set())
+    source._cursor = cursor
+
+    source.close()
+
+    cursor.fetchall.assert_not_called()
+    connection.shutdown.assert_called_once_with()
+    connection.reconnect.assert_called_once_with()
+
+
+@pytest.mark.anyio
+async def test_async_stream_close_reconnects_instead_of_draining_unread_rows() -> None:
+    """Async early close replaces the dirty protocol session without fetching remaining rows."""
+    connection = MagicMock()
+    connection.unread_result = True
+    connection._cnx = None
+    connection.shutdown = AsyncMock()
+    connection.reconnect = AsyncMock()
+    cursor = MagicMock()
+    cursor.close = AsyncMock(side_effect=RuntimeError("Unread result found"))
+    driver = MagicMock(connection=connection, driver_features={})
+    source = MysqlConnectorAsyncStreamSource(driver, "SELECT 1", None, 10, set())
+    source._cursor = cursor
+
+    await source.close()
+
+    cursor.fetchall.assert_not_called()
+    connection.shutdown.assert_awaited_once_with()
+    connection.reconnect.assert_awaited_once_with()
+
+
 def test_sync_create_connection_forwards_local_infile_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connection creation should forward mysql-connector's local infile gate."""
     calls: list[dict[str, Any]] = []

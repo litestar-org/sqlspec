@@ -19,8 +19,8 @@ def test_table_event_queue_classes_are_final_with_classvar_flags() -> None:
     assert SyncTableEventQueue.supports_async is False
     assert AsyncTableEventQueue.supports_sync is False
     assert AsyncTableEventQueue.supports_async is True
-    assert SyncTableEventQueue.backend_name == "table_queue"
-    assert AsyncTableEventQueue.backend_name == "table_queue"
+    assert SyncTableEventQueue.backend_name == "poll_queue"
+    assert AsyncTableEventQueue.backend_name == "poll_queue"
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:
@@ -327,7 +327,7 @@ def test_parse_event_timestamp_none() -> None:
 
 def test_sync_table_event_queue_backend_name() -> None:
     """SyncTableEventQueue has correct backend_name."""
-    assert SyncTableEventQueue.backend_name == "table_queue"
+    assert SyncTableEventQueue.backend_name == "poll_queue"
 
 
 def test_sync_table_event_queue_supports_sync() -> None:

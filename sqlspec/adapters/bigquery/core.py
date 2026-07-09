@@ -868,7 +868,7 @@ class BigQueryStreamSource:
             if rows:
                 return rows
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         job = self._job
         self._job = None
         self._pages = None

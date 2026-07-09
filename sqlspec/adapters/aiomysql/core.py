@@ -214,7 +214,7 @@ class AiomysqlStreamSource:
         deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
         return collect_stream_rows(rows, self._row_plan, deserializer)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
