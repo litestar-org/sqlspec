@@ -22,8 +22,6 @@ from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFacto
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
 
-logger = get_logger("sqlspec.adapters.sqlite")
-
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
@@ -38,6 +36,8 @@ __all__ = (
     "SqliteDriverFeatures",
     "SqliteFunctionConfig",
 )
+
+logger = get_logger("sqlspec.adapters.sqlite")
 
 
 class SqliteConnectionParams(TypedDict):

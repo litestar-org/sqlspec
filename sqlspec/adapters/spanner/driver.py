@@ -39,13 +39,6 @@ from sqlspec.driver import (
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
-_READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
-    "Cannot execute DML in a read-only Snapshot context. "
-    "SpannerSyncConfig.provide_session() opens a write-capable Transaction by default; "
-    "the current session must have been opened via SpannerSyncConfig.provide_read_session()."
-)
-Transaction = SpannerTransaction
-
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -66,6 +59,12 @@ __all__ = (
     "SpannerSessionContext",
     "SpannerSyncCursor",
     "SpannerSyncDriver",
+)
+
+_READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
+    "Cannot execute DML in a read-only Snapshot context. "
+    "SpannerSyncConfig.provide_session() opens a write-capable Transaction by default; "
+    "the current session must have been opened via SpannerSyncConfig.provide_read_session()."
 )
 
 
@@ -396,18 +395,14 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def commit(self) -> None:
-        from sqlspec.adapters.spanner.driver import Transaction
-
-        if isinstance(self.connection, Transaction):
+        if isinstance(self.connection, SpannerTransaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             if writer.committed is not None:
                 return
             writer.commit()
 
     def rollback(self) -> None:
-        from sqlspec.adapters.spanner.driver import Transaction
-
-        if isinstance(self.connection, Transaction):
+        if isinstance(self.connection, SpannerTransaction):
             writer = cast("_SpannerWriteProtocol", self.connection)
             writer.rollback()
 
@@ -619,11 +614,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
 
-        from sqlspec.adapters.spanner.driver import Transaction
-
         if overwrite:
             delete_sql = f"DELETE FROM {table} WHERE TRUE"
-            if isinstance(self.connection, Transaction):
+            if isinstance(self.connection, SpannerTransaction):
                 writer = cast("_SpannerWriteProtocol", self.connection)
                 writer.execute_update(delete_sql)
             else:
@@ -633,7 +626,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             conn = self.connection
-            if not isinstance(conn, Transaction):
+            if not isinstance(conn, SpannerTransaction):
                 msg = "Arrow import requires a Transaction context."
                 raise SQLConversionError(msg)
             chunks = self._chunk_mutation_rows(columns, records)

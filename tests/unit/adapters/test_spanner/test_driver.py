@@ -321,7 +321,7 @@ def test_load_from_arrow_uses_mutations_not_batch_update(
         infer_call_count += 1
         return {}
 
-    monkeypatch.setattr("sqlspec.adapters.spanner.driver.Transaction", type(mock_transaction))
+    monkeypatch.setattr("sqlspec.adapters.spanner.driver.SpannerTransaction", type(mock_transaction))
     monkeypatch.setattr("sqlspec.adapters.spanner.driver.infer_param_types", _mock_infer_param_types)
     arrow_table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
 
