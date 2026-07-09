@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal, Protocol, TypeAlias
 
 from typing_extensions import TypeVar
 
+from sqlspec import _typing
 from sqlspec._typing import (
     ALLOYDB_CONNECTOR_INSTALLED,
     ATTRS_INSTALLED,
@@ -33,50 +34,21 @@ from sqlspec._typing import (
     PYDANTIC_INSTALLED,
     UNSET,
     UUID_UTILS_INSTALLED,
-    ArrowRecordBatch,
-    ArrowRecordBatchReader,
-    ArrowRecordBatchReaderProtocol,
-    ArrowSchema,
-    ArrowSchemaProtocol,
-    ArrowTable,
-    AttrsInstance,
     AttrsInstanceStub,
-    BaseModel,
     BaseModelStub,
-    Counter,
     DataclassProtocol,
-    DTOData,
     Empty,
     EmptyEnum,
     EmptyType,
-    FailFast,
-    Gauge,
-    Histogram,
     MsgspecValidationError,
-    NumpyArray,
-    PandasDataFrame,
-    PolarsDataFrame,
-    Span,
-    Status,
-    StatusCode,
     Struct,
     StructStub,
-    Tracer,
-    TypeAdapter,
     UnsetType,
-    attrs_asdict,
-    attrs_define,
-    attrs_field,
-    attrs_fields,
-    attrs_has,
-    cattrs_structure,
-    cattrs_unstructure,
     convert,
     import_optional,
     import_optional_attr,
     module_available,
     msgspec_fields,
-    trace,
 )
 
 __all__ = (
@@ -151,6 +123,29 @@ __all__ = (
     "msgspec_fields",
     "trace",
 )
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve lazy typing exports on demand."""
+
+    if name not in __all__:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+
+    try:
+        value = getattr(_typing, name)
+    except AttributeError:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg) from None
+
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> "list[str]":
+    """Expose the public surface for autocomplete and ``dir()``."""
+
+    return sorted(set(globals()) | set(__all__))
 
 
 class DictLike(Protocol):
