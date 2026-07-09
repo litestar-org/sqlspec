@@ -936,23 +936,22 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self._add_pipeline_operation(pipeline, compiled)
 
         results: list[StackResult] = []
-        started_transaction = False
+        owns_transaction = not self._connection_in_transaction()
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
             try:
-                if not continue_on_error and not self._connection_in_transaction():
+                if owns_transaction and not continue_on_error:
                     self.begin()
-                    started_transaction = True
 
                 pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer
                 )
 
-                if started_transaction:
+                if owns_transaction:
                     self.commit()
             except Exception as exc:
-                if started_transaction:
+                if owns_transaction:
                     try:
                         self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
@@ -1612,23 +1611,22 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._add_pipeline_operation(pipeline, compiled)
 
         results: list[StackResult] = []
-        started_transaction = False
+        owns_transaction = not self._connection_in_transaction()
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
             try:
-                if not continue_on_error and not self._connection_in_transaction():
+                if owns_transaction and not continue_on_error:
                     await self.begin()
-                    started_transaction = True
 
                 pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer
                 )
 
-                if started_transaction:
+                if owns_transaction:
                     await self.commit()
             except Exception as exc:
-                if started_transaction:
+                if owns_transaction:
                     try:
                         await self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
