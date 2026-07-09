@@ -943,7 +943,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 if owns_transaction and not continue_on_error:
                     self.begin()
 
-                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=True)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer
                 )
@@ -956,6 +956,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                         self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
+                if isinstance(exc, StackExecutionError):
+                    raise
                 raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
 
         return tuple(results)
@@ -1618,7 +1620,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 if owns_transaction and not continue_on_error:
                     await self.begin()
 
-                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=True)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer
                 )
@@ -1631,6 +1633,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                         await self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
+                if isinstance(exc, StackExecutionError):
+                    raise
                 raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
 
         return tuple(results)

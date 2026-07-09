@@ -55,3 +55,33 @@ async def test_async_native_stack_continue_on_error_commits_successes(oracle_asy
         async with oracle_async_config.provide_session() as cleanup:
             await _drop_table(cleanup)
             await cleanup.commit()
+
+
+async def test_async_native_stack_fail_fast_reports_operation_index(oracle_async_config: OracleAsyncConfig) -> None:
+    """Native pipeline fail-fast must surface StackExecutionError carrying the failing op index."""
+    from sqlspec.exceptions import StackExecutionError
+
+    async with oracle_async_config.provide_session() as setup:
+        if not await setup._pipeline_native_supported():
+            pytest.skip("Oracle native pipeline path unavailable (thin async mode required)")
+        await _drop_table(setup)
+        await setup.execute_script(f"CREATE TABLE {_TABLE} (id NUMBER PRIMARY KEY, name VARCHAR2(50))")
+        await setup.commit()
+
+    try:
+        async with oracle_async_config.provide_session() as driver:
+            stack = (
+                StatementStack()
+                .push_execute(f"INSERT INTO {_TABLE} (id, name) VALUES (:1, :2)", (1, "first"))
+                .push_execute(f"INSERT INTO {_TABLE} (id, name) VALUES (:1, :2)", (1, "duplicate"))
+                .push_execute(f"INSERT INTO {_TABLE} (id, name) VALUES (:1, :2)", (2, "third"))
+            )
+
+            with pytest.raises(StackExecutionError) as excinfo:
+                await driver.execute_stack(stack)
+
+            assert excinfo.value.operation_index == 1
+    finally:
+        async with oracle_async_config.provide_session() as cleanup:
+            await _drop_table(cleanup)
+            await cleanup.commit()

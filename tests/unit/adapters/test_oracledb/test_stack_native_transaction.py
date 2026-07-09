@@ -65,6 +65,23 @@ async def test_native_stack_continue_on_error_commits_successes() -> None:
 
 
 @pytest.mark.anyio
+async def test_native_stack_fail_fast_reports_operation_index() -> None:
+    """Fail-fast execution must raise StackExecutionError carrying the failing op index."""
+    from sqlspec.exceptions import StackExecutionError
+
+    results = [_FakeOpResult(), _FakeOpResult(ValueError("duplicate")), _FakeOpResult()]
+    connection = _FakePipelineConnection(results)
+    driver = OracleAsyncDriver(cast("Any", connection))
+
+    with pytest.raises(StackExecutionError) as excinfo:
+        await driver._execute_stack_native(_stack(), continue_on_error=False)
+
+    assert excinfo.value.operation_index == 1
+    assert connection.rollback_count == 1
+    assert connection.commit_count == 0
+
+
+@pytest.mark.anyio
 async def test_native_stack_inside_user_transaction_does_not_commit() -> None:
     """When already inside a user transaction the stack must not commit for the user."""
     results = [_FakeOpResult(), _FakeOpResult(ValueError("duplicate")), _FakeOpResult()]
