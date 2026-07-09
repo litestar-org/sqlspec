@@ -734,6 +734,21 @@ def test_any_factory_still_returns_any_expression() -> None:
     assert isinstance(result.expression, exp.Any)
 
 
+def test_any_factory_values_render_via_sql() -> None:
+    """Test SQLFactory.any list values render to SQL without raising."""
+    result = SQLFactory.any([1, 2, 3])
+    rendered = result.expression.sql().upper()
+    assert "ANY" in rendered
+    assert "1" in rendered and "2" in rendered and "3" in rendered
+
+
+def test_not_any_factory_values_render_via_sql() -> None:
+    """Test SQLFactory.not_any_ list values render to SQL without raising."""
+    rendered = SQLFactory.not_any_([1, 2, 3]).expression.sql().upper()
+    assert "NOT" in rendered
+    assert "ANY" in rendered
+
+
 def test_not_any_factory_where_clause_contains_not() -> None:
     """Test not_any_ emits NOT when composed into a WHERE clause."""
     query = sql.select("*").from_("users").where(SQLFactory.not_any_("SELECT id FROM blocked_users").expression)

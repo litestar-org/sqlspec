@@ -88,6 +88,26 @@ def test_load_uncached_file_accepts_pre_read_content(monkeypatch, tmp_path: Path
     assert loader.has_query("from_memory")
 
 
+def test_load_uncached_file_returns_parsed_statements(tmp_path: Path) -> None:
+    """_load_uncached_file returns the file's statements keyed by un-namespaced name."""
+    sql_file = tmp_path / "widgets.sql"
+    sql_file.write_text("-- name: get_widget\nSELECT 1;\n\n-- name: list_widgets\nSELECT 2;\n")
+    loader = SQLFileLoader()
+
+    result = loader._load_uncached_file(sql_file, "ns")
+
+    assert set(result) == {"get_widget", "list_widgets"}
+
+
+def test_load_uncached_file_returns_empty_dict_without_statements(tmp_path: Path) -> None:
+    """_load_uncached_file returns an empty dict when the file has no named statements."""
+    sql_file = tmp_path / "empty.sql"
+    sql_file.write_text("SELECT 1;\n")
+    loader = SQLFileLoader()
+
+    assert loader._load_uncached_file(sql_file, None) == {}
+
+
 def test_load_single_file_reads_once_on_stale_cache(monkeypatch, tmp_path: Path) -> None:
     """A stale cache entry should not cause a checksum read and a parse read."""
     sql_file = tmp_path / "queries.sql"

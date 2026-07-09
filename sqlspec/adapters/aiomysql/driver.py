@@ -403,12 +403,10 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
-        aiomysql does not expose reliable transaction state.
-
         Returns:
-            False - aiomysql requires explicit transaction management.
+            True when the server reports an open transaction.
         """
-        return False
+        return bool(self.connection.get_transaction_status())
 
 
 register_driver_profile("aiomysql", driver_profile)

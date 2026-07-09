@@ -1220,7 +1220,7 @@ class SQLFactory:
             ANY expression.
         """
         if isinstance(values, list):
-            literals = [SQLFactory.to_literal(v) for v in values]
+            literals = [SQLFactory.to_literal(v).expression for v in values]
             return FunctionExpression(exp.Any(this=exp.Array(expressions=literals)))
         if isinstance(values, str):
             parsed: exp.Expr = exp.maybe_parse(values)

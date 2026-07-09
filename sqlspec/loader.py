@@ -624,36 +624,34 @@ class SQLFileLoader:
                     runtime.increment_metric("loader.cache.hit")
                 return True
 
-            self._load_uncached_file(file_path, namespace, content=file_content)
+            loaded_statements = self._load_uncached_file(file_path, namespace, content=file_content)
         else:
-            self._load_uncached_file(file_path, namespace)
+            loaded_statements = self._load_uncached_file(file_path, namespace)
 
         if path_str in self._files:
             sql_file = self._files[path_str]
-            file_statements: dict[str, NamedStatement] = {}
-            for query_name, query_path in self._query_to_file.items():
-                if query_path == path_str:
-                    stored_name = query_name
-                    if namespace and query_name.startswith(f"{namespace}."):
-                        stored_name = query_name[len(namespace) + 1 :]
-                    file_statements[stored_name] = self._queries[query_name]
-
-            cached_file_data = SQLFileCacheEntry(sql_file=sql_file, parsed_statements=file_statements)
+            cached_file_data = SQLFileCacheEntry(sql_file=sql_file, parsed_statements=loaded_statements)
             cache.put_file(cache_key_str, cached_file_data)
             if runtime is not None:
                 runtime.increment_metric("loader.cache.miss")
                 runtime.increment_metric("loader.files.loaded")
-                runtime.increment_metric("loader.statements.loaded", len(file_statements))
+                runtime.increment_metric("loader.statements.loaded", len(loaded_statements))
 
         return True
 
-    def _load_uncached_file(self, file_path: str | Path, namespace: "str | None", content: "str | None" = None) -> None:
+    def _load_uncached_file(
+        self, file_path: str | Path, namespace: "str | None", content: "str | None" = None
+    ) -> "dict[str, NamedStatement]":
         """Load a single SQL file without using cache.
 
         Args:
             file_path: Path to the SQL file.
             namespace: Optional namespace prefix for queries.
             content: Pre-read file content. If provided, skips the disk read.
+
+        Returns:
+            The file's parsed statements keyed by un-namespaced name, or an empty
+            dict when the file contains no named statements.
         """
         path_str = str(file_path)
         runtime = self._runtime
@@ -665,7 +663,7 @@ class SQLFileLoader:
             log_with_context(
                 logger, logging.DEBUG, "sql.load", file_path=path_str, status="skipped", reason="no_named_statements"
             )
-            return
+            return {}
 
         sql_file = SQLFile(content=content, path=path_str)
         self._files[path_str] = sql_file
@@ -688,6 +686,7 @@ class SQLFileLoader:
         if runtime is not None:
             runtime.increment_metric("loader.files.loaded")
             runtime.increment_metric("loader.statements.loaded", len(statements))
+        return statements
 
     def add_named_sql(
         self,

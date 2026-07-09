@@ -78,7 +78,7 @@ class MigrationFixer:
 
             for old_path in matching_files:
                 suffix = old_path.suffix
-                description = old_path.stem.replace(f"{old_version}_", "")
+                description = old_path.stem.removeprefix(f"{old_version}_")
 
                 new_filename = f"{new_version}_{description}{suffix}"
                 new_path = self.migrations_path / new_filename

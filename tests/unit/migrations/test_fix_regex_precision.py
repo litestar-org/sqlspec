@@ -16,6 +16,17 @@ def temp_migrations_dir(tmp_path: Path) -> Path:
     return migrations_dir
 
 
+def test_plan_renames_preserves_version_digits_embedded_in_description(temp_migrations_dir: Path) -> None:
+    """plan_renames must strip only the leading version prefix, not later occurrences."""
+    fixer = MigrationFixer(temp_migrations_dir)
+    (temp_migrations_dir / "0001_add_0001_series_column.sql").write_text("-- name: migrate-0001-up\n")
+
+    renames = fixer.plan_renames({"0001": "0002"})
+
+    assert len(renames) == 1
+    assert renames[0].new_path.name == "0002_add_0001_series_column.sql"
+
+
 def test_update_file_content_only_replaces_specific_version(temp_migrations_dir: Path) -> None:
     """Test only specific old_version is replaced, not other versions."""
     fixer = MigrationFixer(temp_migrations_dir)

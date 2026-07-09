@@ -160,7 +160,12 @@ def _train_serialization() -> None:
     """Exercise JSON encode/decode paths."""
     from datetime import datetime, timezone
 
-    from sqlspec._serialization import convert_date_to_iso, convert_datetime_to_gmt_iso, decode_json, encode_json
+    from sqlspec.utils.serializers._json import (
+        convert_date_to_iso,
+        convert_datetime_to_gmt_iso,
+        decode_json,
+        encode_json,
+    )
 
     small_obj = {"key": "value", "num": 42}
     medium_obj = {f"field_{i}": i * 1.5 for i in range(20)}

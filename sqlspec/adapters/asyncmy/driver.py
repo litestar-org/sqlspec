@@ -386,12 +386,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
-        AsyncMy uses explicit BEGIN and does not expose reliable transaction state.
-
         Returns:
-            False - AsyncMy requires explicit transaction management.
+            True when the server reports an open transaction.
         """
-        return False
+        return bool(self.connection.get_transaction_status())
 
 
 register_driver_profile("asyncmy", driver_profile)

@@ -135,3 +135,14 @@ def test_create_mapped_exception_repeated_calls_consistent() -> None:
     assert type(first) is type(second)
     assert isinstance(first, NotFoundError)
     assert isinstance(second, NotFoundError)
+
+
+def test_handle_exception_propagates_non_native_error() -> None:
+    """Non-native exceptions propagate unchanged and are not mapped to a DB error."""
+    from sqlspec.adapters.duckdb.driver import DuckDBExceptionHandler
+
+    handler = DuckDBExceptionHandler()
+    with pytest.raises(KeyError):
+        with handler:
+            raise KeyError("internal bug")
+    assert handler.pending_exception is None

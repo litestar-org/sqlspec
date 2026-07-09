@@ -213,6 +213,25 @@ async def test_psycopg_async_minimal_pool_omits_prepare_threshold(monkeypatch: p
     assert pool_kwargs["kwargs"] == {}
 
 
+@pytest.mark.parametrize(
+    ("open_value", "expect_open_call"), [({}, True), ({"open": True}, True), ({"open": False}, False)]
+)
+async def test_psycopg_async_pool_always_constructs_closed(
+    monkeypatch: pytest.MonkeyPatch, open_value: "dict[str, Any]", expect_open_call: bool
+) -> None:
+    """The async pool is always constructed with open=False; pool.open() is awaited only when open resolves truthy."""
+    _CapturedAsyncPool.calls.clear()
+    _CapturedAsyncPool.open_calls = 0
+    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
+
+    connection_config = {"conninfo": "postgresql://user:pass@localhost/db", **open_value}
+    await PsycopgAsyncConfig(connection_config=cast("Any", connection_config))._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    _, pool_kwargs = _CapturedAsyncPool.calls[-1]
+    assert pool_kwargs["open"] is False
+    assert _CapturedAsyncPool.open_calls == (1 if expect_open_call else 0)
+
+
 @pytest.mark.anyio
 async def test_psycopg_async_pool_preserves_conninfo_with_explicit_connection_kwargs(
     monkeypatch: pytest.MonkeyPatch,

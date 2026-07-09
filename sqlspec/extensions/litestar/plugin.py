@@ -448,15 +448,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             The annotation for the configuration.
         """
-        for state in self._plugin_configs:
-            if key in {state.config, state.annotation} or key in {state.connection_key, state.pool_key}:
-                return cast(
-                    "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
-                    state.annotation,
-                )
-
-        msg = f"No configuration found for {key}"
-        raise KeyError(msg)
+        state = self._get_plugin_state(key)
+        return cast(
+            "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
+            state.annotation,
+        )
 
     @overload
     def get_config(
@@ -487,17 +483,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             The configuration instance for the specified name.
         """
-        if isinstance(name, str):
-            for state in self._plugin_configs:
-                if name in {state.connection_key, state.pool_key, state.session_key}:
-                    return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
-
-        for state in self._plugin_configs:
-            if name in {state.config, state.annotation}:
-                return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
-
-        msg = f"No database configuration found for name '{name}'. Available keys: {self._get_available_keys()}"
-        raise KeyError(msg)
+        state = self._get_plugin_state(name)
+        return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
     def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
         """Ensure a connection exists in scope, creating one from the pool if needed (sync)."""

@@ -8,6 +8,7 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from adbc_driver_manager import Error as _AdbcNativeError
 from adbc_driver_manager.dbapi import Connection
 from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
 
@@ -23,12 +24,14 @@ if TYPE_CHECKING:
 
     AdbcConnection: TypeAlias = _AdbcConnection
     AdbcRawCursor: TypeAlias = _AdbcRawCursor
+    AdbcNativeError: TypeAlias = _AdbcNativeError
 
 if not TYPE_CHECKING:
     AdbcConnection = _AdbcConnection
     AdbcRawCursor = _AdbcRawCursor
+    AdbcNativeError = _AdbcNativeError
 
-__all__ = ("AdbcConnection", "AdbcCursor", "AdbcRawCursor", "AdbcSessionContext")
+__all__ = ("AdbcConnection", "AdbcCursor", "AdbcNativeError", "AdbcRawCursor", "AdbcSessionContext")
 
 
 class AdbcCursor:

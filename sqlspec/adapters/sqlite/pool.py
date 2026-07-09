@@ -258,7 +258,12 @@ class SqliteConnectionPool:
         connection = self._get_thread_connection()
         try:
             yield connection
-        finally:
+        except Exception:
+            with contextlib.suppress(Exception):
+                if connection.in_transaction:
+                    connection.rollback()
+            raise
+        else:
             with contextlib.suppress(Exception):
                 if connection.in_transaction:
                     connection.commit()

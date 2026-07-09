@@ -14,6 +14,15 @@ def test_adbc_driver_classes_are_final() -> None:
     assert getattr(AdbcDriver, "__final__", False) is True
 
 
+def test_handle_exception_propagates_non_native_error() -> None:
+    """Non-native exceptions propagate unchanged and are not mapped to a DB error."""
+    handler = AdbcExceptionHandler()
+    with pytest.raises(KeyError):
+        with handler:
+            raise KeyError("internal bug")
+    assert handler.pending_exception is None
+
+
 def test_dispatch_execute_many_non_postgres_uses_compiled_parameter_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
     connection.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}

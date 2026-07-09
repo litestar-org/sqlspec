@@ -654,8 +654,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Create the actual async connection pool."""
 
         all_config = dict(self.connection_config)
-        open_provided = "open" in all_config
-        open_setting = all_config.pop("open", None)
 
         pool_parameters = {
             "connection_class": all_config.pop("connection_class", None),
@@ -669,11 +667,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
             "reconnect_failed": all_config.pop("reconnect_failed", None),
             "num_workers": all_config.pop("num_workers", 3),
-            "open": open_setting if open_provided else False,
             "check": all_config.pop("check", None),
             "reset": all_config.pop("reset", None),
             "close_returns": all_config.pop("close_returns", False),
         }
+        open_pool = all_config.pop("open", True)
+        pool_parameters["open"] = False if open_pool is True else open_pool
 
         pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
 
@@ -687,7 +686,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         else:
             pool = AsyncConnectionPool("", kwargs=all_config, **pool_parameters)
 
-        if not open_provided:
+        if open_pool is True:
             await pool.open()
 
         return pool

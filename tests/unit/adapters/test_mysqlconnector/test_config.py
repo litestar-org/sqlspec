@@ -43,6 +43,45 @@ def test_async_config_uses_connector_python_host_default_and_disables_local_infi
     assert config.connection_config["allow_local_infile"] is False
 
 
+def test_acquire_sync_connection_lazily_creates_pool_once(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """_acquire_sync_connection routes through the SQLSpec pool (created once) and never leaks pool kwargs into connect()."""
+    from sqlspec.adapters.mysqlconnector import config as cfg_module
+
+    created_pools: list[Any] = []
+    connect_calls: list[dict[str, Any]] = []
+
+    class _FakePool:
+        def __init__(self, **kwargs: Any) -> None:
+            self.init_kwargs = kwargs
+            created_pools.append(self)
+
+        def get_connection(self) -> Any:
+            return MagicMock()
+
+    def _fake_connect(**kwargs: Any) -> Any:
+        connect_calls.append(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(cfg_module, "MysqlConnectorConnectionPool", _FakePool)
+    monkeypatch.setattr(cfg_module.mysql.connector, "connect", _fake_connect)
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={"pool_name": "sqlspec", "pool_size": 3, "pool_reset_session": True}
+    )
+
+    first = config._acquire_sync_connection()
+    second = config._acquire_sync_connection()
+
+    assert len(created_pools) == 1
+    assert config.connection_instance is created_pools[0]
+    assert first is not None
+    assert second is not None
+    for call in connect_calls:
+        assert "pool_name" not in call
+        assert "pool_size" not in call
+        assert "pool_reset_session" not in call
+
+
 @pytest.mark.parametrize("config_cls", [MysqlConnectorSyncConfig, MysqlConnectorAsyncConfig])
 def test_local_infile_uses_connector_python_security_gate(config_cls: type[Any]) -> None:
     """LOAD DATA LOCAL INFILE should use mysql-connector's native consent gate."""

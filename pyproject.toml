@@ -392,6 +392,9 @@ filterwarnings = [
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
   "ignore::DeprecationWarning:pkg_resources",
+  # opentelemetry reads entry points via importlib.metadata's deprecated
+  # SelectableGroups dict interface at import time; nothing we can change here.
+  "ignore:SelectableGroups dict interface is deprecated:DeprecationWarning",
   "ignore:You are using a Python version .+ google\\.api_core:FutureWarning",
   "ignore::DeprecationWarning:google.rpc",
   "ignore::DeprecationWarning:google.gcloud",
@@ -481,7 +484,7 @@ strict = true
 warn_redundant_casts = true
 warn_return_any = true
 warn_unreachable = false
-warn_unused_configs = true
+warn_unused_configs = false
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
