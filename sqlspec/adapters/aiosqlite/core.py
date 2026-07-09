@@ -204,8 +204,8 @@ class AiosqliteStreamSource:
         async with handler:
             cursor = await self._driver.connection.cursor()
             cursor.arraysize = self._chunk_size
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":

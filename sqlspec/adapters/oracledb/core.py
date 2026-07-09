@@ -661,13 +661,13 @@ class OracleSyncStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             cursor = self._driver.connection.cursor()
+            self._cursor = cursor
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
             fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
             if self._fetch_lobs is not None:
                 fetch_kwargs["fetch_lobs"] = self._fetch_lobs
             cast("Any", cursor).execute(self._sql, self._parameters or {}, **fetch_kwargs)
-            self._cursor = cursor
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -720,13 +720,13 @@ class OracleAsyncStreamSource:
         handler = self._driver.handle_database_exceptions()
         async with handler:
             cursor = self._driver.connection.cursor()
+            self._cursor = cursor
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
             fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
             if self._fetch_lobs is not None:
                 fetch_kwargs["fetch_lobs"] = self._fetch_lobs
             await cast("Any", cursor).execute(self._sql, self._parameters or {}, **fetch_kwargs)
-            self._cursor = cursor
         self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":

@@ -341,7 +341,7 @@ class PsqlpyStreamSource:
             return []
         return cast("list[dict[str, Any]]", query_result.result())
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
@@ -351,7 +351,10 @@ class PsqlpyStreamSource:
         self._transaction = None
         if transaction is not None:
             try:
-                await transaction.commit()
+                if error:
+                    await transaction.rollback()
+                else:
+                    await transaction.commit()
             except Exception:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()

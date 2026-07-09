@@ -18,7 +18,6 @@ from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     coerce_params,
     collect_rows,
-    create_arrow_data,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
@@ -28,7 +27,7 @@ from sqlspec.adapters.spanner.core import (
     supports_write,
 )
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
-from sqlspec.core import StatementConfig, create_arrow_result, register_driver_profile
+from sqlspec.core import StatementConfig, register_driver_profile
 from sqlspec.driver import (
     BaseSyncExceptionHandler,
     ExecutionResult,
@@ -51,7 +50,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.core.statement import SQL
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
+    from sqlspec.typing import SchemaT, StatementParameters
 
 __all__ = (
     "SpannerDataDictionary",
@@ -569,13 +568,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # ARROW API METHODS
     # ─────────────────────────────────────────────────────────────────────────────
-
-    def select_to_arrow(self, statement: "Any", /, *parameters: "Any", **kwargs: Any) -> "ArrowResult":
-        result = self.execute(statement, *parameters, **kwargs)
-
-        return_format = cast("ArrowReturnFormat", kwargs.get("return_format", "table"))
-        arrow_data = create_arrow_data(result.get_data(), return_format)
-        return create_arrow_result(result.statement, arrow_data, rows_affected=result.rows_affected)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS

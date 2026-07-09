@@ -168,8 +168,8 @@ class AsyncmyStreamSource:
         handler = self._driver.handle_database_exceptions()
         async with handler:
             cursor = self._driver.connection.cursor(SSCursor)
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
         self._driver._check_pending_exception(handler)
 

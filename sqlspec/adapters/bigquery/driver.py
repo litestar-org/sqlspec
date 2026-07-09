@@ -435,7 +435,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ArrowResult with native Arrow data (if Storage API available) or converted data
 
         Raises:
-            MissingDependencyError: If pyarrow not installed, or if Storage API not available and native_only=True
+            MissingDependencyError: If pyarrow is not installed.
         """
         ensure_pyarrow()
 
@@ -486,9 +486,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     "3. Grant permissions: roles/bigquery.dataViewer\n"
                     "4. Use a real BigQuery endpoint instead of the local emulator"
                 )
-                raise MissingDependencyError(
-                    package="google-cloud-bigquery-storage", install_package="google-cloud-bigquery-storage"
-                ) from RuntimeError(msg)
+                raise ImproperConfigurationError(msg) from RuntimeError(msg)
 
             # Fallback to conversion path
             result: ArrowResult = super().select_to_arrow(

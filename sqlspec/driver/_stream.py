@@ -43,7 +43,7 @@ class SyncRowSource(Protocol):
 
     def fetch_chunk(self) -> "list[dict[str, Any]]": ...
 
-    def close(self) -> None: ...
+    def close(self, error: bool = False) -> None: ...
 
 
 class AsyncRowSource(Protocol):
@@ -53,7 +53,7 @@ class AsyncRowSource(Protocol):
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]": ...
 
-    async def close(self) -> None: ...
+    async def close(self, error: bool = False) -> None: ...
 
 
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
@@ -109,13 +109,13 @@ class SyncRowStream(Generic[RowT]):
             try:
                 self._source.start()
             except BaseException:
-                self.close()
+                self._close(error=True)
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
                 chunk = self._source.fetch_chunk()
             except BaseException:
-                self.close()
+                self._close(error=True)
                 raise
             if not chunk:
                 self.close()
@@ -133,14 +133,21 @@ class SyncRowStream(Generic[RowT]):
         return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
 
     def close(self) -> None:
+        self._close(error=False)
+
+    def _close(self, error: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
-        with contextlib.suppress(Exception):
-            self._source.close()
-
+        try:
+            self._source.close(error=error)
+        except TypeError:
+            with contextlib.suppress(Exception):
+                self._source.close()
+        except Exception:
+            return
 
 class AsyncRowStream(Generic[RowT]):
     """Async bounded-memory iterator backed by an async chunk source."""
@@ -188,13 +195,13 @@ class AsyncRowStream(Generic[RowT]):
             try:
                 await self._source.start()
             except BaseException:
-                await self.aclose()
+                await self._aclose(error=True)
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
                 chunk = await self._source.fetch_chunk()
             except BaseException:
-                await self.aclose()
+                await self._aclose(error=True)
                 raise
             if not chunk:
                 await self.aclose()
@@ -212,14 +219,21 @@ class AsyncRowStream(Generic[RowT]):
         return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
 
     async def aclose(self) -> None:
+        await self._aclose(error=False)
+
+    async def _aclose(self, error: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
-        with contextlib.suppress(Exception):
-            await self._source.close()
-
+        try:
+            await self._source.close(error=error)
+        except TypeError:
+            with contextlib.suppress(Exception):
+                await self._source.close()
+        except Exception:
+            return
 
 class EagerSyncRowSource:
     """Chunk source over pre-materialized rows (eager fallback; not bounded-memory)."""
@@ -239,7 +253,7 @@ class EagerSyncRowSource:
         self._position += len(chunk)
         return chunk
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         self._rows = []
 
 
@@ -261,7 +275,7 @@ class EagerAsyncRowSource:
         self._position += len(chunk)
         return chunk
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         self._rows = []
 
 
@@ -286,5 +300,5 @@ class _LazyEagerAsyncRowSource:
         self._position += len(chunk)
         return chunk
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         self._rows = []

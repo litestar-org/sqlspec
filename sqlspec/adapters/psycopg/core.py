@@ -327,7 +327,7 @@ class PsycopgSyncStreamSource:
             self._column_names = [column.name for column in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
@@ -337,7 +337,10 @@ class PsycopgSyncStreamSource:
         self._transaction = None
         if transaction is not None:
             with contextlib.suppress(Exception):
-                transaction.__exit__(None, None, None)
+                if error:
+                    transaction.__exit__(RuntimeError, RuntimeError("stream failed"), None)
+                else:
+                    transaction.__exit__(None, None, None)
 
 
 class PsycopgAsyncStreamSource:
@@ -388,7 +391,7 @@ class PsycopgAsyncStreamSource:
             self._column_names = [column.name for column in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
@@ -398,7 +401,10 @@ class PsycopgAsyncStreamSource:
         self._transaction = None
         if transaction is not None:
             with contextlib.suppress(Exception):
-                await transaction.__aexit__(None, None, None)
+                if error:
+                    await transaction.__aexit__(RuntimeError, RuntimeError("stream failed"), None)
+                else:
+                    await transaction.__aexit__(None, None, None)
 
 
 def resolve_rowcount(cursor: Any) -> int:

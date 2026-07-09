@@ -193,8 +193,8 @@ class PymysqlStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             cursor = self._driver.connection.cursor(SSCursor)
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
         self._driver._check_pending_exception(handler)
 
