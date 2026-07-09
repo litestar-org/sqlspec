@@ -10,7 +10,7 @@ import enum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 from typing_extensions import Self, TypeVar, dataclass_transform
 
@@ -21,6 +21,28 @@ from sqlspec.utils.module_loader import (
     module_available,
     resolve_optional_attr,
 )
+
+if TYPE_CHECKING:
+    from attrs import AttrsInstance
+    from attrs import asdict as attrs_asdict
+    from attrs import define as attrs_define
+    from attrs import field as attrs_field
+    from attrs import fields as attrs_fields
+    from attrs import has as attrs_has
+    from cattrs import structure as cattrs_structure
+    from cattrs import unstructure as cattrs_unstructure
+    from litestar.dto.data_structures import DTOData
+    from numpy import ndarray as NumpyArray  # noqa: N812
+    from opentelemetry import trace
+    from opentelemetry.trace import Span, Status, StatusCode, Tracer
+    from pandas import DataFrame as PandasDataFrame
+    from polars import DataFrame as PolarsDataFrame
+    from prometheus_client import Counter, Gauge, Histogram
+    from pyarrow import RecordBatch as ArrowRecordBatch
+    from pyarrow import RecordBatchReader as ArrowRecordBatchReader
+    from pyarrow import Schema as ArrowSchema
+    from pyarrow import Table as ArrowTable
+    from pydantic import BaseModel, FailFast, TypeAdapter
 
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
@@ -514,7 +536,7 @@ class NumpyArrayStub(Protocol):
 _NUMPY_ARRAY_SHIM = NumpyArrayStub
 
 
-class Span:
+class _SpanShim:
     def set_attribute(self, key: str, value: Any) -> None:
         return None
 
@@ -540,11 +562,12 @@ class Span:
         return None
 
 
-_SPAN_SHIM = Span
-del Span
+_SPAN_SHIM = _SpanShim
+_SPAN_SHIM.__name__ = "Span"
+_SPAN_SHIM.__qualname__ = "Span"
 
 
-class Tracer:
+class _TracerShim:
     def start_span(
         self,
         name: str,
@@ -555,12 +578,13 @@ class Tracer:
         start_time: Any = None,
         record_exception: bool = True,
         set_status_on_exception: bool = True,
-    ) -> "_SPAN_SHIM":
-        return _SPAN_SHIM()  # type: ignore[abstract]
+    ) -> "_SpanShim":
+        return _SPAN_SHIM()
 
 
-_TRACER_SHIM = Tracer
-del Tracer
+_TRACER_SHIM = _TracerShim
+_TRACER_SHIM.__name__ = "Tracer"
+_TRACER_SHIM.__qualname__ = "Tracer"
 
 
 class _TraceModule:
@@ -570,8 +594,8 @@ class _TraceModule:
         instrumenting_library_version: "str | None" = None,
         schema_url: "str | None" = None,
         tracer_provider: Any = None,
-    ) -> "_TRACER_SHIM":
-        return _TRACER_SHIM()  # type: ignore[abstract] # pragma: no cover
+    ) -> "_TracerShim":
+        return _TRACER_SHIM()  # pragma: no cover
 
     def get_tracer_provider(self) -> Any:  # pragma: no cover
         return None
@@ -620,31 +644,34 @@ class _MetricInstance:
         return None
 
 
-class Counter(_Metric):  # type: ignore[no-redef]
+class _CounterShim(_Metric):
     def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
         return _MetricInstance()  # pragma: no cover
 
 
-_COUNTER_SHIM = Counter
-del Counter
+_COUNTER_SHIM = _CounterShim
+_COUNTER_SHIM.__name__ = "Counter"
+_COUNTER_SHIM.__qualname__ = "Counter"
 
 
-class Gauge(_Metric):  # type: ignore[no-redef]
+class _GaugeShim(_Metric):
     def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
         return _MetricInstance()  # pragma: no cover
 
 
-_GAUGE_SHIM = Gauge
-del Gauge
+_GAUGE_SHIM = _GaugeShim
+_GAUGE_SHIM.__name__ = "Gauge"
+_GAUGE_SHIM.__qualname__ = "Gauge"
 
 
-class Histogram(_Metric):  # type: ignore[no-redef]
+class _HistogramShim(_Metric):
     def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
         return _MetricInstance()  # pragma: no cover
 
 
-_HISTOGRAM_SHIM = Histogram
-del Histogram
+_HISTOGRAM_SHIM = _HistogramShim
+_HISTOGRAM_SHIM.__name__ = "Histogram"
+_HISTOGRAM_SHIM.__qualname__ = "Histogram"
 
 
 ATTRS_INSTALLED = dependency_flag("attrs")
@@ -679,14 +706,6 @@ _ATTRS_FIELDS_SHIM = attrs_fields_stub
 _ATTRS_HAS_SHIM = attrs_has_stub
 _CATTRS_STRUCTURE_SHIM = cattrs_structure_stub
 _CATTRS_UNSTRUCTURE_SHIM = cattrs_unstructure_stub
-_ARROW_TABLE_SHIM = ArrowTableResult
-_ARROW_RECORD_BATCH_SHIM = ArrowRecordBatchResult
-_ARROW_SCHEMA_SHIM = ArrowSchemaProtocol
-_ARROW_RECORD_BATCH_READER_SHIM = ArrowRecordBatchReaderProtocol
-_PANDAS_DATAFRAME_SHIM = PandasDataFrameProtocol
-_POLARS_DATAFRAME_SHIM = PolarsDataFrameProtocol
-_NUMPY_ARRAY_SHIM = NumpyArrayStub
-
 _LAZY_EXPORTS: "dict[str, tuple[str, str, Any]]" = {
     "ArrowRecordBatch": ("pyarrow", "RecordBatch", _ARROW_RECORD_BATCH_SHIM),
     "ArrowRecordBatchReader": ("pyarrow", "RecordBatchReader", _ARROW_RECORD_BATCH_READER_SHIM),

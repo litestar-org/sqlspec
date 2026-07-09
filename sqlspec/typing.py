@@ -8,7 +8,7 @@ API.
 
 from collections.abc import Iterator, Mapping
 from functools import lru_cache
-from typing import Annotated, Any, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol, TypeAlias
 
 from typing_extensions import TypeVar
 
@@ -50,6 +50,39 @@ from sqlspec._typing import (
     module_available,
     msgspec_fields,
 )
+
+if TYPE_CHECKING:
+    from sqlspec._typing import (
+        ArrowRecordBatch,
+        ArrowRecordBatchReader,
+        ArrowRecordBatchReaderProtocol,
+        ArrowSchema,
+        ArrowSchemaProtocol,
+        ArrowTable,
+        AttrsInstance,
+        BaseModel,
+        Counter,
+        DTOData,
+        FailFast,
+        Gauge,
+        Histogram,
+        NumpyArray,
+        PandasDataFrame,
+        PolarsDataFrame,
+        Span,
+        Status,
+        StatusCode,
+        Tracer,
+        TypeAdapter,
+        attrs_asdict,
+        attrs_define,
+        attrs_field,
+        attrs_fields,
+        attrs_has,
+        cattrs_structure,
+        cattrs_unstructure,
+        trace,
+    )
 
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
@@ -218,6 +251,8 @@ def get_type_adapter(f: "type[T]") -> Any:
     Returns:
         :class:`pydantic.TypeAdapter`[:class:`typing.TypeVar`[T]]
     """
+    type_adapter = _typing.TypeAdapter
     if PYDANTIC_USE_FAILFAST:
-        return TypeAdapter(Annotated[f, FailFast()])
-    return TypeAdapter(f)
+        fail_fast = _typing.FailFast
+        return type_adapter(Annotated[f, fail_fast()])
+    return type_adapter(f)
