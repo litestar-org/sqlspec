@@ -14,11 +14,11 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 
 async def test_psqlpy_execute_rows_affected_deviation(psqlpy_session: PsqlpyDriver) -> None:
-    """PSQLPy single execute DML reports -1, while execute_many reports actual affected rows."""
+    """PSQLPy single execute DML reports zero rows, while execute_many reports actual affected rows."""
     insert_result = await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES (?)", ("single",))
     many_result = await psqlpy_session.execute_many(
         "INSERT INTO test_table_psqlpy (name) VALUES ($1)", [("batch1",), ("batch2",), ("batch3",)]
     )
 
-    assert insert_result.rows_affected == -1
+    assert insert_result.rows_affected == 0
     assert many_result.rows_affected == 3
