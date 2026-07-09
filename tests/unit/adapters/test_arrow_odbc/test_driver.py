@@ -560,14 +560,14 @@ def test_arrow_odbc_mssql_begin_uses_driver_transaction_api() -> None:
     assert connection.executed == []
 
 
-def test_arrow_odbc_execute_marks_dml_rowcount_unknown() -> None:
-    """arrow-odbc does not expose portable rows-affected metadata for DML."""
+def test_arrow_odbc_execute_marks_dml_rowcount_zero() -> None:
+    """arrow-odbc has no portable DML rows-affected metadata; it reports zero, not the -1 sentinel."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
 
     result = driver.execute("DELETE FROM items WHERE id = ?", (1,))
 
-    assert result.rows_affected == -1
+    assert result.rows_affected == 0
     assert connection.executed == [("DELETE FROM items WHERE id = ?", ["1"])]
 
 

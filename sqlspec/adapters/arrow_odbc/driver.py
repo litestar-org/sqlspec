@@ -167,7 +167,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             )
 
         cursor.execute(query=sql, parameters=parameters)
-        return self.create_execution_result(cursor, rowcount_override=-1)
+        return self.create_execution_result(cursor, rowcount_override=0)
 
     def dispatch_execute_many(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         msg = "arrow-odbc does not expose a row-oriented executemany API; use bulk_insert_arrow() for Arrow ingestion."

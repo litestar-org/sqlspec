@@ -311,3 +311,15 @@ async def test_driver_psqlpy_execute_script_passes_single_statement_parameters()
     cursor = _Cursor()
     await driver.dispatch_execute_script(cast("PsqlpyConnection", cursor), cast("SQL", statement))
     assert cursor.execute_calls == [("INSERT INTO t VALUES ($1)", [1])]
+
+
+@pytest.mark.parametrize("tag", ["", "NOT A COMMAND TAG", "SELECT"])
+def test_extract_rows_affected_returns_zero_for_unparseable_tag(tag: str) -> None:
+    """Unparseable command tags should report zero rows affected, not the -1 sentinel."""
+    assert psqlpy_core.extract_rows_affected(tag) == 0
+
+
+def test_extract_rows_affected_parses_valid_tag() -> None:
+    """A well-formed command tag should still report the parsed row count."""
+    assert psqlpy_core.extract_rows_affected("INSERT 0 3") == 3
+    assert psqlpy_core.extract_rows_affected("UPDATE 5") == 5

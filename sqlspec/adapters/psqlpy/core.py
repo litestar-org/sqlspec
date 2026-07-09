@@ -464,10 +464,10 @@ def _parse_psqlpy_command_tag(tag: str) -> int:
         tag: PostgreSQL command tag string.
 
     Returns:
-        Number of rows affected, -1 if unable to parse.
+        Number of rows affected, 0 if unable to parse.
     """
     if not tag:
-        return -1
+        return 0
 
     match = PSQLPY_STATUS_REGEX.match(tag.strip())
     if match:
@@ -476,7 +476,7 @@ def _parse_psqlpy_command_tag(tag: str) -> int:
             return int(match.group(3))
         if command in {"UPDATE", "DELETE"} and match.group(3):
             return int(match.group(3))
-    return -1
+    return 0
 
 
 def extract_rows_affected(result: Any) -> int:
@@ -491,7 +491,7 @@ def extract_rows_affected(result: Any) -> int:
             return _parse_psqlpy_command_tag(result)
     except Exception as error:
         logger.debug("Failed to parse psqlpy command tag: %s", error)
-    return -1
+    return 0
 
 
 def get_parameter_casts(statement: Any) -> "dict[int, str]":
