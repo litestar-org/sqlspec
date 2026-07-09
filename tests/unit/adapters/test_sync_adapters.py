@@ -192,13 +192,9 @@ def test_sync_driver_execute_many(sqlite_sync_driver: SqliteDriver) -> None:
 
 
 def test_sync_driver_execute_many_no_parameters(sqlite_sync_driver: SqliteDriver) -> None:
-    """Test _execute_many method fails without parameters."""
-    statement = SQL(
-        "INSERT INTO users (name) VALUES (?)", statement_config=sqlite_sync_driver.statement_config, is_many=True
-    )
-    with sqlite_sync_driver.with_cursor(sqlite_sync_driver.connection) as cursor:
-        with pytest.raises(ValueError, match="execute_many requires parameters"):
-            sqlite_sync_driver.dispatch_execute_many(cursor, statement)
+    """Empty execute_many should be a silent no-op returning rows_affected=0."""
+    result = sqlite_sync_driver.execute_many("INSERT INTO users (name) VALUES (?)", [])
+    assert result.rows_affected == 0
 
 
 def test_sync_driver_execute_script(sqlite_sync_driver: SqliteDriver) -> None:

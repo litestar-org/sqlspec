@@ -81,12 +81,11 @@ def test_create_mapped_exception_maps_tsql_error_numbers(message: str, expected_
     assert "SQL Server error" in str(exc)
 
 
-def test_normalize_execute_many_parameters_requires_payload() -> None:
-    """execute_many should reject missing batch parameters before hitting pymssql."""
+def test_normalize_execute_many_parameters_passes_through() -> None:
+    """normalize_execute_many_parameters returns the batch payload unchanged."""
     from sqlspec.adapters.pymssql.core import normalize_execute_many_parameters
 
-    with pytest.raises(ValueError, match="execute_many requires parameters"):
-        normalize_execute_many_parameters([])
+    assert normalize_execute_many_parameters([]) == []
 
     rows: list[tuple[Any, ...]] = [(1,), (2,)]
     assert normalize_execute_many_parameters(rows) is rows

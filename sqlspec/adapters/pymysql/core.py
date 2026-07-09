@@ -221,9 +221,6 @@ class PymysqlStreamSource:
 
 def normalize_execute_many_parameters(parameters: Any) -> Any:
     """Normalize parameters for PyMySQL executemany calls."""
-    if not parameters:
-        msg = "execute_many requires parameters"
-        raise ValueError(msg)
     return parameters
 
 

@@ -89,9 +89,6 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 
 def normalize_execute_many_parameters(parameters: Any) -> Any:
     """Normalize parameters for pymssql executemany calls."""
-    if not parameters:
-        msg = "execute_many requires parameters"
-        raise ValueError(msg)
     return parameters
 
 

@@ -251,13 +251,7 @@ def normalize_execute_many_parameters_sync(parameters: Any) -> Any:
 
     Returns:
         Normalized parameters payload.
-
-    Raises:
-        ValueError: When parameters are missing for executemany.
     """
-    if not parameters:
-        msg = "execute_many requires parameters"
-        raise ValueError(msg)
     if isinstance(parameters, tuple):
         return list(parameters)
     return parameters
@@ -271,13 +265,7 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
 
     Returns:
         Normalized parameters payload.
-
-    Raises:
-        ValueError: When parameters are missing for executemany.
     """
-    if not parameters:
-        msg = "execute_many requires parameters"
-        raise ValueError(msg)
     if isinstance(parameters, tuple):
         return list(parameters)
     return parameters

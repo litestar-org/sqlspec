@@ -237,7 +237,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         execution_result = await self.dispatch_execute_script(cursor, statement)
                         result = self.build_statement_result(statement, execution_result)
                     elif statement.is_many:
-                        execution_result = await self.dispatch_execute_many(cursor, statement)
+                        if execution_parameters:
+                            execution_result = await self.dispatch_execute_many(cursor, statement)
+                        else:
+                            execution_result = self.create_execution_result(
+                                cursor, rowcount_override=0, is_many_result=True
+                            )
                         result = self.build_statement_result(statement, execution_result)
                     else:
                         execution_result = await self.dispatch_execute(cursor, statement)
@@ -274,7 +279,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         execution_result = await self.dispatch_execute_script(cursor, statement)
                         result = self.build_statement_result(statement, execution_result)
                     elif statement.is_many:
-                        execution_result = await self.dispatch_execute_many(cursor, statement)
+                        if execution_parameters:
+                            execution_result = await self.dispatch_execute_many(cursor, statement)
+                        else:
+                            execution_result = self.create_execution_result(
+                                cursor, rowcount_override=0, is_many_result=True
+                            )
                         result = self.build_statement_result(statement, execution_result)
                     else:
                         execution_result = await self.dispatch_execute(cursor, statement)

@@ -311,8 +311,7 @@ def test_normalize_execute_many_normalize_execute_many_parameters_async_tuple_to
 @pytest.mark.parametrize(
     "normalizer", [normalize_execute_many_parameters_sync, normalize_execute_many_parameters_async]
 )
-def test_normalize_execute_many_normalize_execute_many_parameters_rejects_empty(
+def test_normalize_execute_many_normalize_execute_many_parameters_passes_empty_through(
     normalizer: Callable[[object], object],
 ) -> None:
-    with pytest.raises(ValueError, match="execute_many requires parameters"):
-        normalizer([])
+    assert normalizer([]) == []

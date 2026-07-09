@@ -113,13 +113,9 @@ async def test_async_driver_execute_many(aiosqlite_async_driver: AiosqliteDriver
 
 
 async def test_async_driver_execute_many_no_parameters(aiosqlite_async_driver: AiosqliteDriver) -> None:
-    """Test async _execute_many method fails without parameters."""
-    statement = SQL(
-        "INSERT INTO users (name) VALUES (?)", statement_config=aiosqlite_async_driver.statement_config, is_many=True
-    )
-    async with aiosqlite_async_driver.with_cursor(aiosqlite_async_driver.connection) as cursor:
-        with pytest.raises(ValueError, match="execute_many requires parameters"):
-            await aiosqlite_async_driver.dispatch_execute_many(cursor, statement)
+    """Empty execute_many should be a silent no-op returning rows_affected=0."""
+    result = await aiosqlite_async_driver.execute_many("INSERT INTO users (name) VALUES (?)", [])
+    assert result.rows_affected == 0
 
 
 async def test_async_driver_execute_script(aiosqlite_async_driver: AiosqliteDriver) -> None:

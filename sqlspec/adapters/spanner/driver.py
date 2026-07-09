@@ -326,8 +326,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
-        if not prepared_parameters or not isinstance(prepared_parameters, list):
-            msg = "execute_many requires at least one parameter set"
+        if not isinstance(prepared_parameters, list):
+            msg = "execute_many requires a list of parameter sets"
             raise SQLConversionError(msg)
 
         _coerce = self._coerce_params
