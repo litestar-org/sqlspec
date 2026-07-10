@@ -6,7 +6,7 @@ import inspect
 import logging
 import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
@@ -253,6 +253,31 @@ def _end_event_span(
     runtime.end_span(span, error=error)
 
 
+@contextmanager
+def _event_span(
+    runtime: "ObservabilityRuntime",
+    operation: str,
+    backend_name: str,
+    adapter_name: "str | None",
+    channel: "str | None" = None,
+    *,
+    mode: str = "sync",
+    result: str,
+) -> "Iterator[Any]":
+    """Manage an observability span around one event operation.
+
+    Starts a span, ends it with ``error`` when the wrapped operation raises,
+    and ends it with ``result`` when the operation completes.
+    """
+    span = _start_event_span(runtime, operation, backend_name, adapter_name, channel, mode=mode)
+    try:
+        yield span
+    except Exception as error:
+        _end_event_span(runtime, span, error=error)
+        raise
+    _end_event_span(runtime, span, result=result)
+
+
 def _record_event_delivery(
     runtime: "ObservabilityRuntime",
     backend_name: str,
@@ -454,13 +479,10 @@ class SyncEventChannel:
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync publishing"
             raise ImproperConfigurationError(msg)
-        span = _start_event_span(self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="sync")
-        try:
+        with _event_span(
+            self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="sync", result="published"
+        ):
             event_id = self._backend.publish(channel, payload, metadata)
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="published")
         log_with_context(
             logger,
             logging.DEBUG,
@@ -490,9 +512,10 @@ class SyncEventChannel:
             msg = "Current events backend does not support sync publishing"
             raise ImproperConfigurationError(msg)
         started_at = perf_counter()
-        span = _start_event_span(self._runtime, "publish_many", self._backend_name, self._adapter_name, mode="sync")
-        publish_many = getattr(cast("Any", self._backend), "publish_many", None)
-        try:
+        with _event_span(
+            self._runtime, "publish_many", self._backend_name, self._adapter_name, mode="sync", result="published"
+        ):
+            publish_many = getattr(cast("Any", self._backend), "publish_many", None)
             if publish_many is None:
                 self._runtime.increment_metric("events.publish.batch_fallback")
                 event_ids = [
@@ -500,10 +523,6 @@ class SyncEventChannel:
                 ]
             else:
                 event_ids = cast("list[str]", publish_many(normalized))
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="published")
         self._runtime.increment_metric("events.publish.batch")
         self._runtime.increment_metric("events.publish.batch_size", len(normalized))
         self._runtime.record_metric("events.publish.batch_latency_ms", (perf_counter() - started_at) * 1000)
@@ -597,26 +616,16 @@ class SyncEventChannel:
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync ack"
             raise ImproperConfigurationError(msg)
-        span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="sync")
-        try:
+        with _event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="sync", result="acked"):
             self._backend.ack(event_id)
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="acked")
 
     def nack(self, event_id: str) -> None:
         """Return an event to the queue for redelivery."""
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync nack"
             raise ImproperConfigurationError(msg)
-        span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="sync")
-        try:
+        with _event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="sync", result="nacked"):
             self._backend.nack(event_id)
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="nacked")
 
     def shutdown(self) -> None:
         """Shutdown the event channel and release backend resources."""
@@ -757,15 +766,10 @@ class AsyncEventChannel:
         if not self._backend.supports_async:
             msg = "Current events backend does not support async publishing"
             raise ImproperConfigurationError(msg)
-        span = _start_event_span(
-            self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="async"
-        )
-        try:
+        with _event_span(
+            self._runtime, "publish", self._backend_name, self._adapter_name, channel, mode="async", result="published"
+        ):
             event_id = await self._backend.publish(channel, payload, metadata)
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="published")
         log_with_context(
             logger,
             logging.DEBUG,
@@ -795,9 +799,10 @@ class AsyncEventChannel:
             msg = "Current events backend does not support async publishing"
             raise ImproperConfigurationError(msg)
         started_at = perf_counter()
-        span = _start_event_span(self._runtime, "publish_many", self._backend_name, self._adapter_name, mode="async")
-        publish_many = getattr(cast("Any", self._backend), "publish_many", None)
-        try:
+        with _event_span(
+            self._runtime, "publish_many", self._backend_name, self._adapter_name, mode="async", result="published"
+        ):
+            publish_many = getattr(cast("Any", self._backend), "publish_many", None)
             if publish_many is None:
                 self._runtime.increment_metric("events.publish.batch_fallback")
                 event_ids = [
@@ -805,10 +810,6 @@ class AsyncEventChannel:
                 ]
             else:
                 event_ids = cast("list[str]", await publish_many(normalized))
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="published")
         self._runtime.increment_metric("events.publish.batch")
         self._runtime.increment_metric("events.publish.batch_size", len(normalized))
         self._runtime.record_metric("events.publish.batch_latency_ms", (perf_counter() - started_at) * 1000)
@@ -900,26 +901,16 @@ class AsyncEventChannel:
         if not self._backend.supports_async:
             msg = "Current events backend does not support async ack"
             raise ImproperConfigurationError(msg)
-        span = _start_event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="async")
-        try:
+        with _event_span(self._runtime, "ack", self._backend_name, self._adapter_name, mode="async", result="acked"):
             await self._backend.ack(event_id)
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="acked")
 
     async def nack(self, event_id: str) -> None:
         """Return an event to the queue for redelivery."""
         if not self._backend.supports_async:
             msg = "Current events backend does not support async nack"
             raise ImproperConfigurationError(msg)
-        span = _start_event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="async")
-        try:
+        with _event_span(self._runtime, "nack", self._backend_name, self._adapter_name, mode="async", result="nacked"):
             await self._backend.nack(event_id)
-        except Exception as error:
-            _end_event_span(self._runtime, span, error=error)
-            raise
-        _end_event_span(self._runtime, span, result="nacked")
 
     async def shutdown(self) -> None:
         """Shutdown the event channel and release backend resources."""
