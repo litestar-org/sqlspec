@@ -273,8 +273,6 @@ class AiosqliteConnectionPool:
         "_pool_size",
         "_queue_instance",
         "_runtime_setup",
-        "_wal_initialized",
-        "_wal_initialized_event",
         "_warmed",
     )
 
@@ -320,14 +318,12 @@ class AiosqliteConnectionPool:
         self._runtime_setup = runtime_setup
 
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
-        self._wal_initialized = False
         self._warmed = False
         self._pool_id = uuid4().hex[:8]  # Short ID for logging
 
         self._queue_instance: asyncio.Queue[AiosqlitePoolConnection] | None = None
         self._lock_instance: asyncio.Lock | None = None
         self._closed_event_instance: asyncio.Event | None = None
-        self._wal_initialized_event: asyncio.Event | None = None
 
     @property
     def _queue(self) -> "asyncio.Queue[AiosqlitePoolConnection]":
@@ -349,13 +345,6 @@ class AiosqliteConnectionPool:
         if self._closed_event_instance is None:
             self._closed_event_instance = asyncio.Event()
         return self._closed_event_instance
-
-    @property
-    def _wal_ready_event(self) -> asyncio.Event:
-        """Lazy initialization of WAL-ready event for Python 3.9 compatibility."""
-        if self._wal_initialized_event is None:
-            self._wal_initialized_event = asyncio.Event()
-        return self._wal_initialized_event
 
     @property
     def is_closed(self) -> bool:
@@ -505,10 +494,6 @@ class AiosqliteConnectionPool:
                 if pragma_lines:
                     await connection.executescript(";\n".join(pragma_lines) + ";")
                     await connection.commit()
-
-                if is_shared_cache:
-                    self._wal_initialized = True
-                    self._wal_ready_event.set()
 
             except Exception:
                 log_with_context(

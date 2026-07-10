@@ -308,7 +308,7 @@ class _FakeConnectProxy:
         return _resolve().__await__()
 
 
-async def test_pool_acquire_acquire_does_not_sleep_when_wal_not_initialized(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pool_acquire_does_not_sleep_on_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlspec.adapters.aiosqlite import pool as pool_module
 
     proxy = _FakeConnectProxy(_FakeConnection())
@@ -316,7 +316,6 @@ async def test_pool_acquire_acquire_does_not_sleep_when_wal_not_initialized(monk
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: proxy)
     pool_conn = await pool._create_connection()
     pool._queue.put_nowait(pool_conn)
-    pool._wal_initialized = False
     start = time.monotonic()
     connection = await pool.acquire()
     elapsed = time.monotonic() - start
@@ -337,8 +336,6 @@ async def test_pool_acquire_acquire_multiple_concurrent_no_sleep_serialization(m
     for _ in range(pool_size):
         pool_conn = await pool._create_connection()
         pool._queue.put_nowait(pool_conn)
-    pool._wal_initialized = False
-
     async def _acquire_and_release() -> float:
         t0 = time.monotonic()
         connection = await pool.acquire()
@@ -350,35 +347,6 @@ async def test_pool_acquire_acquire_multiple_concurrent_no_sleep_serialization(m
     times = await asyncio.gather(*[_acquire_and_release() for _ in range(pool_size)])
     total = time.monotonic() - start
     assert total < pool_size * 0.005, f"total={total:.4f}s per-call={times}"
-
-
-async def test_pool_acquire_wal_ready_event_set_after_shared_cache_create_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
-    pool = AiosqliteConnectionPool({"database": "file:wal_event_test?mode=memory&cache=shared", "uri": True})
-    monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FakeConnectProxy(_FakeConnection()))
-    assert not pool._wal_ready_event.is_set()
-    pool_conn = await pool._create_connection()
-    try:
-        assert pool._wal_initialized is True
-        assert pool._wal_ready_event.is_set()
-    finally:
-        await pool._retire_connection(pool_conn, reason="test_cleanup")
-
-
-async def test_pool_acquire_wal_ready_event_not_set_for_non_shared_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
-    pool = AiosqliteConnectionPool({"database": ":memory:"})
-    monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FakeConnectProxy(_FakeConnection()))
-    pool_conn = await pool._create_connection()
-    try:
-        assert pool._wal_initialized is False
-        assert not pool._wal_ready_event.is_set()
-    finally:
-        await pool._retire_connection(pool_conn, reason="test_cleanup")
 
 
 def test_profile_build_profile_includes_named_colon_in_supported_styles() -> None:
