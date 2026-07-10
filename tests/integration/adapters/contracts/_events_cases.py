@@ -134,19 +134,25 @@ SYNC_EVENTS_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for 
 ASYNC_EVENTS_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in ASYNC_EVENTS_CASES)
 
 SYNC_LISTEN_NOTIFY_CASES = (
-    ListenNotifyCase("psycopg-sync", "notify_config_psycopg_sync", "psycopg", "sync", marks=(POSTGRES_XDIST_MARK,)),
+    ListenNotifyCase(
+        "psycopg-sync", "listen_notify_config_psycopg_sync", "psycopg", "sync", marks=(POSTGRES_XDIST_MARK,)
+    ),
 )
 
 ASYNC_LISTEN_NOTIFY_CASES = (
     ListenNotifyCase(
-        "asyncpg-async", "notify_config_asyncpg", "asyncpg", "async", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)
+        "asyncpg-async",
+        "listen_notify_config_asyncpg",
+        "asyncpg",
+        "async",
+        marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
     ),
     ListenNotifyCase(
-        "psqlpy-async", "notify_config_psqlpy", "psqlpy", "async", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)
+        "psqlpy-async", "listen_notify_config_psqlpy", "psqlpy", "async", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)
     ),
     ListenNotifyCase(
         "psycopg-async",
-        "notify_config_psycopg_async",
+        "listen_notify_config_psycopg_async",
         "psycopg",
         "async",
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
