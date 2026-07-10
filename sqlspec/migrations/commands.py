@@ -244,16 +244,38 @@ def _with_command_span(
     return decorator
 
 
-def _upgrade_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+def _command_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """Build span metadata (revision, dry_run) shared by upgrade and downgrade commands."""
     revision = cast("str | None", args.get("revision"))
     metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
     return revision, metadata
 
 
-def _downgrade_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
-    revision = cast("str | None", args.get("revision"))
-    metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
-    return revision, metadata
+def _report_no_pending_migrations(use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool) -> None:
+    """Report that there are no pending migrations.
+
+    Args:
+        use_logger: Whether to output to logger instead of console.
+        echo: Whether to echo output to the console.
+        summary_only: Whether summary-only logging is enabled.
+        has_migrations: Whether any migrations exist at all.
+    """
+    if not has_migrations:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "No migrations found. Create your first migration with 'sqlspec create-migration'.",
+            rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
+        )
+    else:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Already at latest version",
+            rich_message="[green]Already at latest version[/]",
+        )
 
 
 class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
@@ -406,35 +428,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if result:
                 file_checksums[result[0]] = result[1]
         return file_checksums
-
-    # Keep in sync with AsyncMigrationCommands._report_no_pending_migrations.
-    def _report_no_pending_migrations(
-        self, use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool
-    ) -> None:
-        """Report that there are no pending migrations.
-
-        Args:
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-            has_migrations: Whether any migrations exist at all.
-        """
-        if not has_migrations:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "No migrations found. Create your first migration with 'sqlspec create-migration'.",
-                rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
-            )
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Already at latest version",
-                rich_message="[green]Already at latest version[/]",
-            )
 
     def _apply_single_migration(
         self,
@@ -635,7 +628,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         return updated_count
 
-    @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
+    @_with_command_span("upgrade", metadata_fn=_command_metadata)
     def upgrade(
         self,
         revision: str = "head",
@@ -710,7 +703,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
                 if not pending:
-                    self._report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
+                    _report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
                     return
 
                 migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
@@ -784,7 +777,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         elif applied_count:
             self._record_command_metric("applied", float(applied_count))
 
-    @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
+    @_with_command_span("downgrade", metadata_fn=_command_metadata)
     def downgrade(
         self,
         revision: str = "-1",
@@ -1303,35 +1296,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    # Keep in sync with SyncMigrationCommands._report_no_pending_migrations.
-    def _report_no_pending_migrations(
-        self, use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool
-    ) -> None:
-        """Report that there are no pending migrations.
-
-        Args:
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-            has_migrations: Whether any migrations exist at all.
-        """
-        if not has_migrations:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "No migrations found. Create your first migration with 'sqlspec create-migration'.",
-                rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
-            )
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Already at latest version",
-                rich_message="[green]Already at latest version[/]",
-            )
-
     async def _apply_single_migration(
         self,
         driver: Any,
@@ -1531,7 +1495,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         return updated_count
 
-    @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
+    @_with_command_span("upgrade", metadata_fn=_command_metadata)
     async def upgrade(
         self,
         revision: str = "head",
@@ -1606,7 +1570,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
                 if not pending:
-                    self._report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
+                    _report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
                     return
 
                 migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
@@ -1682,7 +1646,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         elif applied_count:
             self._record_command_metric("applied", float(applied_count))
 
-    @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
+    @_with_command_span("downgrade", metadata_fn=_command_metadata)
     async def downgrade(
         self,
         revision: str = "-1",
