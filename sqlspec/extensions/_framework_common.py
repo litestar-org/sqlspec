@@ -4,9 +4,24 @@ This module is interpreted (not mypyc-compiled). It holds framework-agnostic
 logic that the per-framework extension modules delegate to.
 """
 
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
-__all__ = ("extract_extension_settings", "should_commit", "should_rollback")
+from sqlspec.exceptions import ImproperConfigurationError
+
+if TYPE_CHECKING:
+    from sqlspec.config import DatabaseConfigProtocol
+
+__all__ = (
+    "BaseConfigState",
+    "CommitMode",
+    "extract_extension_settings",
+    "should_commit",
+    "should_rollback",
+    "validate_extra_statuses",
+)
+
+CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
@@ -15,6 +30,50 @@ DEFAULT_COMMIT_MODE = "manual"
 HTTP_200_OK = 200
 HTTP_300_MULTIPLE_CHOICES = 300
 HTTP_400_BAD_REQUEST = 400
+
+
+def validate_extra_statuses(
+    extra_commit_statuses: "set[int] | None", extra_rollback_statuses: "set[int] | None"
+) -> None:
+    """Validate that extra commit and rollback statuses do not overlap.
+
+    Args:
+        extra_commit_statuses: Status codes that always commit.
+        extra_rollback_statuses: Status codes that always roll back.
+
+    Raises:
+        ImproperConfigurationError: If both sets share any status codes.
+    """
+    if (extra_commit_statuses or set()) & (extra_rollback_statuses or set()):
+        msg = "Extra rollback statuses and commit statuses must not share any status codes"
+        raise ImproperConfigurationError(msg)
+
+
+@dataclass
+class BaseConfigState:
+    """Shared per-configuration state for the Starlette and Sanic extensions.
+
+    Tracks the keys and behavior needed to bind one SQLSpec config into a
+    framework application and its request context.
+    """
+
+    config: "DatabaseConfigProtocol[Any, Any, Any]"
+    connection_key: str
+    pool_key: str
+    session_key: str
+    commit_mode: "CommitMode"
+    extra_commit_statuses: "set[int] | None"
+    extra_rollback_statuses: "set[int] | None"
+    disable_di: bool
+    enable_correlation_middleware: bool = False
+    correlation_header: str = "x-request-id"
+    correlation_headers: "tuple[str, ...] | None" = None
+    auto_trace_headers: bool = True
+    enable_sqlcommenter_middleware: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate status configuration."""
+        validate_extra_statuses(self.extra_commit_statuses, self.extra_rollback_statuses)
 
 
 def extract_extension_settings(config: Any, *, framework_key: str, sqlcommenter_framework: str) -> "dict[str, Any]":

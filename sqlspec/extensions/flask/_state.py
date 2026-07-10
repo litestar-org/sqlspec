@@ -3,8 +3,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._framework_common import should_commit, should_rollback
+from sqlspec.extensions._framework_common import should_commit, should_rollback, validate_extra_statuses
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -35,11 +34,7 @@ class FlaskConfigState:
 
     def __post_init__(self) -> None:
         """Validate status configuration."""
-        extra_commit_statuses = self.extra_commit_statuses or set()
-        extra_rollback_statuses = self.extra_rollback_statuses or set()
-        if extra_commit_statuses & extra_rollback_statuses:
-            msg = "Extra rollback statuses and commit statuses must not share any status codes"
-            raise ImproperConfigurationError(msg)
+        validate_extra_statuses(self.extra_commit_statuses, self.extra_rollback_statuses)
 
     def should_commit(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger commit.

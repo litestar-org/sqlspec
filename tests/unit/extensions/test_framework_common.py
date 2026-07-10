@@ -1,8 +1,66 @@
 """Tests for shared framework extension helpers."""
 
+from dataclasses import fields
+
 import pytest
 
 from sqlspec.extensions._framework_common import should_commit, should_rollback
+from sqlspec.extensions.flask._state import FlaskConfigState
+from sqlspec.extensions.sanic._state import SanicConfigState
+from sqlspec.extensions.starlette._state import SQLSpecConfigState
+
+_COMMON_FIELDS = [
+    "config",
+    "connection_key",
+    "pool_key",
+    "session_key",
+    "commit_mode",
+    "extra_commit_statuses",
+    "extra_rollback_statuses",
+    "disable_di",
+    "enable_correlation_middleware",
+    "correlation_header",
+    "correlation_headers",
+    "auto_trace_headers",
+    "enable_sqlcommenter_middleware",
+]
+
+
+def test_starlette_config_state_field_order() -> None:
+    """SQLSpecConfigState keeps its historical field set and order."""
+    assert [f.name for f in fields(SQLSpecConfigState)] == [*_COMMON_FIELDS, "sqlcommenter_framework"]
+
+
+def test_sanic_config_state_field_order() -> None:
+    """SanicConfigState keeps its historical field set and order."""
+    assert [f.name for f in fields(SanicConfigState)] == [*_COMMON_FIELDS, "sqlcommenter_framework"]
+
+
+def test_flask_config_state_field_order() -> None:
+    """FlaskConfigState keeps its historical field set and order."""
+    assert [f.name for f in fields(FlaskConfigState)] == [
+        "config",
+        "connection_key",
+        "session_key",
+        "commit_mode",
+        "extra_commit_statuses",
+        "extra_rollback_statuses",
+        "is_async",
+        "disable_di",
+        "enable_correlation_middleware",
+        "correlation_header",
+        "correlation_headers",
+        "auto_trace_headers",
+        "enable_sqlcommenter_middleware",
+    ]
+
+
+def test_sqlcommenter_framework_defaults() -> None:
+    """Each subclass keeps its framework-specific sqlcommenter default."""
+    starlette_default = next(f for f in fields(SQLSpecConfigState) if f.name == "sqlcommenter_framework").default
+    sanic_default = next(f for f in fields(SanicConfigState) if f.name == "sqlcommenter_framework").default
+    assert starlette_default == "starlette"
+    assert sanic_default == "sanic"
 
 
 @pytest.mark.parametrize("status_code", [200, 204, 299, 300, 302, 399, 400, 500])
