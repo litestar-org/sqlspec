@@ -356,7 +356,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
-    config = SqliteConfig(database=str(db_path))
+    config = SqliteConfig(connection_config={"database": str(db_path)})
 
     # We need to get a driver instance to test QC methods.
     # Use the session context to get the driver, but keep it alive.

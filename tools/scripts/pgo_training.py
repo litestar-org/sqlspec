@@ -145,7 +145,7 @@ def _train_hashable_keys() -> None:
     from sqlspec.core.statement import SQL
 
     spec = SQLSpec()
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     with spec.provide_session(config) as session:
         statements = (
             SQL("SELECT * FROM t WHERE id = ?", (1,), statement_config=session.statement_config),
@@ -217,7 +217,7 @@ def _train_sqlite_sync() -> None:
 
     try:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp_name)
+        config = SqliteConfig(connection_config={"database": tmp_name})
         with spec.provide_session(config) as session:
             session.execute(create_sql)
 
@@ -236,7 +236,7 @@ def _train_sqlite_sync() -> None:
         tmp_name = tmp.name
 
     try:
-        config2 = SqliteConfig(database=tmp_name)
+        config2 = SqliteConfig(connection_config={"database": tmp_name})
         with spec.provide_session(config2) as session:
             session.execute(create_sql)
             for i in range(500):
@@ -291,7 +291,7 @@ def _train_aiosqlite_async() -> None:
 
         try:
             spec = SQLSpec()
-            config = AiosqliteConfig(database=tmp_name)
+            config = AiosqliteConfig(connection_config={"database": tmp_name})
             async with spec.provide_session(config) as session:
                 await session.execute(create_sql)
                 data = [(i, f"value_{i}") for i in range(1000)]
