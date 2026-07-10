@@ -10,13 +10,13 @@ import aiosqlite
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.core import (
     AiosqliteStreamSource,
+    _execute_and_resolve_metadata,
+    _execute_fetchall_with_metadata,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
-    execute_and_resolve_rowcount,
-    execute_fetchall_with_description,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -80,7 +80,7 @@ class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
 class AiosqliteDriver(AsyncDriverAdapterBase):
     """AIOSQLite driver for async SQLite database operations."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_rowid_target_cache")
     dialect = "sqlite"
 
     def __init__(
@@ -96,6 +96,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
+        self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -104,12 +105,21 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        self._invalidate_rowid_target_cache(statement.operation_type)
         normalized_parameters = normalize_execute_parameters(prepared_parameters)
 
         if statement.returns_rows():
-            fetched_data, description = await run_on_worker_thread(
-                self.connection, execute_fetchall_with_description, self.connection, sql, normalized_parameters
+            fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
+                self.connection,
+                _execute_fetchall_with_metadata,
+                self.connection,
+                sql,
+                normalized_parameters,
+                statement.operation_type,
+                statement.expression,
+                self._rowid_target_cache,
             )
+            self._invalidate_rowid_target_cache(statement.operation_type)
             data, column_names, row_count = collect_rows(fetched_data, description)
             row_format = resolve_row_format(data)
 
@@ -120,18 +130,31 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 data_row_count=row_count,
                 is_select_result=True,
                 row_format=row_format,
+                last_inserted_id=last_inserted_id,
             )
 
-        affected_rows = await run_on_worker_thread(
-            self.connection, execute_and_resolve_rowcount, self.connection, sql, normalized_parameters
+        affected_rows, last_inserted_id = await run_on_worker_thread(
+            self.connection,
+            _execute_and_resolve_metadata,
+            self.connection,
+            sql,
+            normalized_parameters,
+            statement.operation_type,
+            statement.expression,
+            self._rowid_target_cache,
         )
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+        self._invalidate_rowid_target_cache(statement.operation_type)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
     async def dispatch_execute_many(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        self._invalidate_rowid_target_cache(statement.operation_type)
 
-        await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+        try:
+            await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+        finally:
+            self._invalidate_rowid_target_cache(statement.operation_type)
 
         affected_rows = resolve_rowcount(cursor)
 
@@ -139,15 +162,19 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def dispatch_execute_script(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script."""
+        self._rowid_target_cache.clear()
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_cursor = cursor
 
-        for stmt in statements:
-            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
+        try:
+            for stmt in statements:
+                await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+                successful_count += 1
+        finally:
+            self._rowid_target_cache.clear()
 
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -162,19 +189,29 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         direct_statement: SQL | None = None
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
+        self._invalidate_rowid_target_cache(cached.operation_type)
         try:
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                await cursor.execute(cached.compiled_sql, normalized_parameters)
+            async with exc_handler:
                 if cached.operation_profile.returns_rows:
-                    fetched_data = cast("list[Any]", await cursor.fetchall())
-                    data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                    fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
+                        self.connection,
+                        _execute_fetchall_with_metadata,
+                        self.connection,
+                        cached.compiled_sql,
+                        normalized_parameters,
+                        cached.operation_type,
+                        cached.processed_state.parsed_expression,
+                        self._rowid_target_cache,
+                    )
+                    data, column_names, row_count = collect_rows(fetched_data, description)
                     execution_result = self.create_execution_result(
-                        cursor,
+                        self.connection,
                         selected_data=data,
                         column_names=column_names,
                         data_row_count=row_count,
                         is_select_result=True,
                         row_format=resolve_row_format(data),
+                        last_inserted_id=last_inserted_id,
                     )
                     direct_statement = self._cached_statement(
                         sql,
@@ -186,13 +223,23 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                     )
                     result = self.build_statement_result(direct_statement, execution_result)
                 else:
-                    affected_rows = self.resolve_rowcount(cursor)
-                    result = DMLResult(cached.operation_type, affected_rows)
+                    affected_rows, last_inserted_id = await run_on_worker_thread(
+                        self.connection,
+                        _execute_and_resolve_metadata,
+                        self.connection,
+                        cached.compiled_sql,
+                        normalized_parameters,
+                        cached.operation_type,
+                        cached.processed_state.parsed_expression,
+                        self._rowid_target_cache,
+                    )
+                    result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
 
             self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
+            self._invalidate_rowid_target_cache(cached.operation_type)
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
 
@@ -223,8 +270,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             rowcount = cursor.rowcount
             affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
             operation = self._resolve_dml_operation_type(statement)
+            self._invalidate_rowid_target_cache(operation)
             return DMLResult(operation, affected_rows)
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+
+    def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
+        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
+            self._rowid_target_cache.clear()
 
     def _can_use_execute_many_thin_path(
         self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"

@@ -14,11 +14,62 @@ from sqlspec.adapters.aiosqlite.core import (
     build_statement_config,
     default_statement_config,
     driver_profile,
+    execute_and_resolve_rowcount,
+    execute_fetchall_with_description,
+    run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.core.result import DMLResult
+
+
+def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
+    from sqlspec.adapters.aiosqlite.core import _target_supports_rowid
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE rowid_target (id INTEGER PRIMARY KEY)")
+    connection.execute("CREATE TABLE without_rowid_target (id TEXT PRIMARY KEY) WITHOUT ROWID")
+    connection.execute("CREATE TABLE shadowed_without_rowid (rowid TEXT PRIMARY KEY) WITHOUT ROWID")
+
+    class LegacyConnection:
+        def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+            if sql == "PRAGMA table_list":
+                raise sqlite3.OperationalError
+            return connection.execute(sql, cast("Any", parameters))
+
+    legacy_connection = LegacyConnection()
+    try:
+        assert _target_supports_rowid(legacy_connection, (None, "rowid_target"))
+        assert not _target_supports_rowid(legacy_connection, (None, "without_rowid_target"))
+        assert not _target_supports_rowid(legacy_connection, (None, "shadowed_without_rowid"))
+    finally:
+        connection.close()
+
+
+async def test_execute_fetchall_with_description_preserves_exported_contract() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        result = await run_on_worker_thread(
+            connection, execute_fetchall_with_description, connection, "SELECT 1 AS value", ()
+        )
+        rows, description = result
+        assert rows == [(1,)]
+        assert description[0][0] == "value"
+    finally:
+        await connection.close()
+
+
+async def test_execute_and_resolve_rowcount_preserves_exported_contract() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        await connection.execute("CREATE TABLE helper_contract (id INTEGER PRIMARY KEY)")
+        result = await run_on_worker_thread(
+            connection, execute_and_resolve_rowcount, connection, "INSERT INTO helper_contract (id) VALUES (?)", (1,)
+        )
+        assert result == 1
+    finally:
+        await connection.close()
 
 
 async def test_cursor_lifecycle_cursor_closed_after_normal_exit() -> None:
@@ -130,6 +181,28 @@ async def test_dispatch_execute_detects_record_row_format(monkeypatch: pytest.Mo
     selected_data = result.selected_data
     assert selected_data is not None
     assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
+
+
+async def test_dispatch_execute_clears_rowid_cache_after_queued_ddl(monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = AiosqliteDriver(connection=cast("Any", _WorkerConnection()), statement_config=default_statement_config)
+
+    async def _run_on_worker_thread(
+        _connection: object, _function: Callable[..., object], *_args: object, **_kwargs: object
+    ) -> tuple[int, None]:
+        assert driver._rowid_target_cache == {}
+        driver._rowid_target_cache[(None, "stale_target")] = True
+        return 0, None
+
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.run_on_worker_thread", _run_on_worker_thread)
+    monkeypatch.setattr(
+        AiosqliteDriver, "_compiled_sql", lambda *_args, **_kwargs: ("CREATE TABLE queued_ddl (id)", [])
+    )
+
+    await driver.dispatch_execute(
+        cast("Any", object()), SQL("CREATE TABLE queued_ddl (id)", statement_config=default_statement_config)
+    )
+
+    assert driver._rowid_target_cache == {}
 
 
 async def test_execute_many_uses_thin_qmark_path() -> None:

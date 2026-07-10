@@ -957,13 +957,15 @@ class DMLResult(SQLResult):
 
     __slots__ = ()
 
-    def __init__(self, op_type: "OperationType", rows_affected: int = 0) -> None:
+    def __init__(
+        self, op_type: "OperationType", rows_affected: int = 0, last_inserted_id: int | str | None = None
+    ) -> None:
         # Fast-path initialization for DML results: assign slot values directly
         # instead of routing through SQLResult.__init__.
         self.statement = _EMPTY_RESULT_STATEMENT
         self.data = _EMPTY_RESULT_DATA
         self.rows_affected = rows_affected
-        self.last_inserted_id = None
+        self.last_inserted_id = last_inserted_id
         self.execution_time = None
         self.metadata = _DEFAULT_DML_METADATA
 

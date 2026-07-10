@@ -955,6 +955,7 @@ class CommonDriverAttributesMixin:
                 operation_type="SELECT",
                 metadata=execution_result.special_data or {},
                 row_format=execution_result.row_format,
+                last_inserted_id=execution_result.last_inserted_id,
             )
 
         # DML path (INSERT/UPDATE/DELETE): use _EMPTY_DML_DATA sentinel to avoid

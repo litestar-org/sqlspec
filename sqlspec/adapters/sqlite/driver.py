@@ -14,6 +14,7 @@ from sqlspec.adapters.sqlite.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    resolve_lastrowid,
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
@@ -73,7 +74,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     for SQLite databases using the standard sqlite3 module.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_rowid_target_cache")
     dialect = "sqlite"
 
     def __init__(
@@ -96,6 +97,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
+        self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -112,12 +114,22 @@ class SqliteDriver(SyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        self._invalidate_rowid_target_cache(statement.operation_type)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             data, column_names, row_count = collect_rows(fetched_data, cursor.description)
             row_format = resolve_row_format(data)
+            affected_rows = resolve_rowcount(cursor)
+            last_inserted_id = resolve_lastrowid(
+                self.connection,
+                cursor,
+                statement.operation_type,
+                affected_rows,
+                statement.expression,
+                self._rowid_target_cache,
+            )
 
             return self.create_execution_result(
                 cursor,
@@ -126,10 +138,19 @@ class SqliteDriver(SyncDriverAdapterBase):
                 data_row_count=row_count,
                 is_select_result=True,
                 row_format=row_format,
+                last_inserted_id=last_inserted_id,
             )
 
         affected_rows = resolve_rowcount(cursor)
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+        last_inserted_id = resolve_lastrowid(
+            self.connection,
+            cursor,
+            statement.operation_type,
+            affected_rows,
+            statement.expression,
+            self._rowid_target_cache,
+        )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
@@ -142,6 +163,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        self._invalidate_rowid_target_cache(statement.operation_type)
         cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -156,6 +178,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
+        self._rowid_target_cache.clear()
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -197,6 +220,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             rowcount = cursor.rowcount
             affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
             operation = self._resolve_dml_operation_type(statement)
+            self._invalidate_rowid_target_cache(operation)
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
@@ -210,6 +234,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         direct_statement: SQL | None = None
         returns_rows = cached.operation_profile.returns_rows
+        self._invalidate_rowid_target_cache(cached.operation_type)
         try:
             if not returns_rows:
                 try:
@@ -219,7 +244,15 @@ class SqliteDriver(SyncDriverAdapterBase):
 
                 rowcount = cursor.rowcount
                 affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-                return DMLResult(cached.operation_type, affected_rows)
+                last_inserted_id = resolve_lastrowid(
+                    self.connection,
+                    cursor,
+                    cached.operation_type,
+                    affected_rows,
+                    cached.processed_state.parsed_expression,
+                    self._rowid_target_cache,
+                )
+                return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
 
             try:
                 cursor = self.connection.execute(cached.compiled_sql, params)
@@ -227,6 +260,15 @@ class SqliteDriver(SyncDriverAdapterBase):
                 raise create_mapped_exception(exc) from exc
 
             fetched_data = cursor.fetchall()
+            affected_rows = resolve_rowcount(cursor)
+            last_inserted_id = resolve_lastrowid(
+                self.connection,
+                cursor,
+                cached.operation_type,
+                affected_rows,
+                cached.processed_state.parsed_expression,
+                self._rowid_target_cache,
+            )
             column_names = cached.column_names
             if column_names is None:
                 description = cursor.description
@@ -239,6 +281,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 data_row_count=len(fetched_data),
                 is_select_result=True,
                 row_format=row_format,
+                last_inserted_id=last_inserted_id,
             )
             direct_statement = self._cached_statement(
                 sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
@@ -249,6 +292,10 @@ class SqliteDriver(SyncDriverAdapterBase):
                 self._release_pooled_statement(direct_statement)
         msg = "unreachable"
         raise AssertionError(msg)  # pragma: no cover
+
+    def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
+        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
+            self._rowid_target_cache.clear()
 
     def _can_use_execute_many_thin_path(
         self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"

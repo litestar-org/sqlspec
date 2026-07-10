@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from sqlglot import parse_one
 
 from sqlspec.core import (
     SQL,
@@ -503,6 +504,50 @@ async def test_async_execute_cache_hit_uses_cursor_fast_path(aiosqlite_async_dri
 
 
 @pytest.mark.anyio
+async def test_aiosqlite_cached_dml_does_not_read_proxy_metadata(aiosqlite_async_driver: Any, monkeypatch: Any) -> None:
+    await aiosqlite_async_driver.execute("CREATE TABLE worker_metadata (id INTEGER PRIMARY KEY)")
+
+    class MetadataForbiddenCursor:
+        async def execute(self, _sql: str, _params: tuple[Any, ...]) -> None:
+            return None
+
+        @property
+        def rowcount(self) -> int:
+            raise AssertionError("proxy rowcount read on event-loop thread")
+
+        @property
+        def lastrowid(self) -> int:
+            raise AssertionError("proxy lastrowid read on event-loop thread")
+
+    class MetadataForbiddenContext:
+        async def __aenter__(self) -> MetadataForbiddenCursor:
+            return MetadataForbiddenCursor()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(aiosqlite_async_driver, "with_cursor", lambda _connection: MetadataForbiddenContext())
+    cached = _make_cached(
+        compiled_sql="INSERT INTO worker_metadata (id) VALUES (?)",
+        param_count=1,
+        operation_type="INSERT",
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+        processed_state=ProcessedState(
+            compiled_sql="INSERT INTO worker_metadata (id) VALUES (?)",
+            execution_parameters=[1],
+            parsed_expression=parse_one("INSERT INTO worker_metadata (id) VALUES (?)", read="sqlite"),
+            operation_type="INSERT",
+        ),
+    )
+
+    result = await aiosqlite_async_driver._execute_cache_hit(
+        "INSERT INTO worker_metadata (id) VALUES (?)", (1,), cached
+    )
+
+    assert result.last_inserted_id == 1
+
+
+@pytest.mark.anyio
 async def test_async_execute_cached_statement_re_raises_mapped_exception(
     aiosqlite_async_driver: Any, monkeypatch: Any
 ) -> None:
@@ -528,19 +573,10 @@ async def test_async_execute_cache_hit_re_raises_mapped_exception(
 
     await aiosqlite_async_driver.execute("CREATE TABLE t (id INTEGER)")
 
-    class FailingCursor:
-        async def execute(self, sql: str, params: tuple[Any, ...]) -> None:
-            _ = (sql, params)
-            raise aiosqlite.OperationalError("boom")
+    def fail_on_worker(*_args: object, **_kwargs: object) -> object:
+        raise aiosqlite.OperationalError("boom")
 
-    class FailingCursorContext:
-        async def __aenter__(self) -> FailingCursor:
-            return FailingCursor()
-
-        async def __aexit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: Any) -> None:
-            _ = (exc_type, exc, tb)
-
-    monkeypatch.setattr(aiosqlite_async_driver, "with_cursor", lambda _connection: FailingCursorContext())
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver._execute_and_resolve_metadata", fail_on_worker)
 
     cached = _make_cached(
         compiled_sql="INSERT INTO t (id) VALUES (?)",
