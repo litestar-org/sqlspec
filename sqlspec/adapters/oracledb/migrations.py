@@ -5,7 +5,7 @@ to handle Oracle's unique SQL syntax requirements.
 """
 
 import getpass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 from rich.console import Console
 
@@ -17,6 +17,7 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("OracleAsyncMigrationTracker", "OracleSyncMigrationTracker")
 
@@ -278,7 +279,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         data = result.get_data()
         return data[0]["version_num"] if data else None
 
-    def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[dict[str, Any]]":
+    def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[AppliedMigrationRecord]":
         """Get all applied migrations in order.
 
         Args:
@@ -288,7 +289,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             List of migration records as dictionaries with lowercase keys.
         """
         result = driver.execute(self._applied_migrations_query())
-        return result.get_data()
+        return cast("list[AppliedMigrationRecord]", result.get_data())
 
     def record_migration(
         self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -479,7 +480,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         data = result.get_data()
         return data[0]["version_num"] if data else None
 
-    async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase") -> "list[dict[str, Any]]":
+    async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase") -> "list[AppliedMigrationRecord]":
         """Get all applied migrations in order.
 
         Args:
@@ -489,7 +490,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             List of migration records as dictionaries with lowercase keys.
         """
         result = await driver.execute(self._applied_migrations_query())
-        return result.get_data()
+        return cast("list[AppliedMigrationRecord]", result.get_data())
 
     async def record_migration(
         self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str

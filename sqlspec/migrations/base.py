@@ -1,5 +1,6 @@
 """Base classes for SQLSpec migrations."""
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
@@ -8,7 +9,7 @@ from mypy_extensions import mypyc_attr
 from rich.console import Console
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
+from sqlspec.builder import AlterTable, CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
@@ -121,10 +122,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     def _should_echo(self) -> bool:
         """Return True when console output should be emitted."""
         return bool(self._output_policy.get("echo", True)) and not bool(self._output_policy.get("use_logger", False))
-
-    def _use_logger(self) -> bool:
-        """Return True when logger output is preferred."""
-        return bool(self._output_policy.get("use_logger", False))
 
     def _tracking_table_ddl(self) -> CreateTable:
         """Get SQL builder for creating the tracking table.
@@ -360,6 +357,44 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         existing_lower = {col.lower() for col in existing_columns}
         return target_columns - existing_lower
 
+    def _build_add_column_statement(self, column_name: str) -> "AlterTable | None":
+        """Return an ALTER TABLE builder that adds ``column_name``.
+
+        Args:
+            column_name: Name of the tracking-table column to add (lowercase).
+
+        Returns:
+            SQL builder for the ALTER TABLE, or None when the column is unknown.
+        """
+        target_create = self._tracking_table_ddl()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+        if not column_def:
+            return None
+        return sql.alter_table(self.version_table).add_column(
+            name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
+        )
+
+    def _derive_version_type(self, version: str) -> str:
+        """Return the version-format type ('sequential' or 'timestamp') for a version."""
+        return parse_version(version).type.value
+
+    def _applied_by(self) -> str:
+        """Return the user recorded as having applied a migration."""
+        return os.environ.get("USER", "unknown")
+
+    def _extract_next_sequence(self, result: Any) -> int:
+        """Return the next execution sequence from a sequence-query result."""
+        return result.get_data()[0]["next_seq"] if result.data else 1
+
+    def _extract_applied_versions(self, result: Any) -> "set[str]":
+        """Return the set of applied version numbers from a query result."""
+        return {row["version_num"] for row in result.get_data()} if result.data else set()
+
+    def _is_autocommit_error(self, exc: Exception) -> bool:
+        """Return True when an exception indicates an autocommit-managed transaction."""
+        exc_str = str(exc).lower()
+        return "autocommit" in exc_str or "cannot commit" in exc_str
+
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
         """Create the migration tracking table if it doesn't exist.
@@ -377,7 +412,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     @abstractmethod
     def get_applied_migrations(
         self, driver: DriverT
-    ) -> "list[AppliedMigrationRecord] | list[dict[str, Any]] | Awaitable[list[AppliedMigrationRecord]] | Awaitable[list[dict[str, Any]]]":
+    ) -> "list[AppliedMigrationRecord] | Awaitable[list[AppliedMigrationRecord]]":
         """Get all applied migrations in order."""
         ...
 
