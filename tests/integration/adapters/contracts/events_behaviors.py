@@ -41,7 +41,7 @@ def _events_extension_config(case: EventsCase, behavior: str) -> "tuple[str, dic
     token = f"{case.id}_{behavior}".replace("-", "_")
     queue_table = f"evq_{token}"
     events_config: dict[str, Any] = {"queue_table": queue_table}
-    if case.force_table_queue:
+    if case.force_poll_queue:
         events_config["backend"] = "poll_queue"
     return queue_table, {"events": events_config}, token
 
