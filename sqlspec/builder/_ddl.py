@@ -137,7 +137,7 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=pk_constraint)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[pk_constraint])
         return pk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_FOREIGN_KEY:
@@ -148,26 +148,31 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
             else:
                 fk_options.append("DEFERRABLE INITIALLY IMMEDIATE")
 
+        reference_options: list[str] = []
+        if constraint.on_delete:
+            reference_options.append(f"ON DELETE {constraint.on_delete}")
+        if constraint.on_update:
+            reference_options.append(f"ON UPDATE {constraint.on_update}")
+
         fk_constraint = exp.ForeignKey(
             expressions=[exp.to_identifier(col) for col in constraint.columns],
             reference=exp.Reference(
                 this=exp.to_table(constraint.references_table) if constraint.references_table else None,
                 expressions=[exp.to_identifier(col) for col in constraint.references_columns],
-                on_delete=constraint.on_delete,
-                on_update=constraint.on_update,
+                options=reference_options or None,
             ),
             options=fk_options or None,
         )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=fk_constraint)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[fk_constraint])
         return fk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_UNIQUE:
         unique_constraint = exp.UniqueKeyProperty(expressions=[exp.to_identifier(col) for col in constraint.columns])
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=unique_constraint)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[unique_constraint])
         return unique_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
@@ -180,7 +185,7 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=check_expr)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[check_expr])
         return check_expr
 
     return None
@@ -616,8 +621,6 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             if key != "engine":
                 props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.convert(value)))
 
-        properties_node = exp.Properties(expressions=props) if props else None
-
         if self._schema:
             table_identifier = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
         else:
@@ -625,18 +628,14 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
         schema_expr = exp.Schema(this=table_identifier, expressions=column_defs)
 
-        like_expr = None
+        if self._temporary:
+            props.append(exp.TemporaryProperty())
         if self._like_table:
-            like_expr = exp.to_table(self._like_table)
+            props.append(exp.LikeProperty(this=exp.to_table(self._like_table)))
+        properties_node = exp.Properties(expressions=props) if props else None
 
-        return exp.Create(
-            kind="TABLE",
-            this=schema_expr,
-            exists=self._if_not_exists,
-            temporary=self._temporary,
-            properties=properties_node,
-            like=like_expr,
-        )
+        create_target: exp.Expr = table_identifier if self._like_table and not column_defs else schema_expr
+        return exp.Create(kind="TABLE", this=create_target, exists=self._if_not_exists, properties=properties_node)
 
     def _has_primary_key_constraint(self) -> bool:
         """Check if table already has a primary key constraint."""
@@ -750,7 +749,7 @@ class DropIndex(_SingleObjectDropBuilder):
         return self
 
     def _drop_expression_args(self) -> "dict[str, Any]":
-        return {"table": exp.to_table(self._table_name) if self._table_name else None}
+        return {"cluster": exp.OnProperty(this=exp.to_identifier(self._table_name)) if self._table_name else None}
 
 
 class DropView(_SingleObjectDropBuilder):
@@ -939,7 +938,10 @@ class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
         if not self._table_name:
             self._raise_builder_error("Table name must be set for TRUNCATE TABLE.")
         identity_expr = exp.Var(this=self._identity) if self._identity else None
-        return exp.TruncateTable(this=exp.to_table(self._table_name), cascade=self._cascade, identity=identity_expr)
+        option_expr = exp.Var(this="CASCADE") if self._cascade else None
+        return exp.TruncateTable(
+            expressions=[exp.to_table(self._table_name)], option=option_expr, identity=identity_expr
+        )
 
 
 class AlterOperation:
@@ -1070,17 +1072,11 @@ class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
                     if has_with_method(select_expr):
                         select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
 
-        schema_expr = None
+        create_target: exp.Expr = exp.to_table(self._table_name)
         if self._columns:
-            schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
+            create_target = exp.Schema(this=create_target, expressions=[exp.to_identifier(c) for c in self._columns])
 
-        return exp.Create(
-            kind="TABLE",
-            this=exp.to_table(self._table_name),
-            exists=self._if_not_exists,
-            expression=select_expr,
-            schema=schema_expr,
-        )
+        return exp.Create(kind="TABLE", this=create_target, exists=self._if_not_exists, expression=select_expr)
 
 
 class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
@@ -1186,12 +1182,15 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
         properties_node = exp.Properties(expressions=props) if props else None
 
+        create_target: exp.Expr = exp.to_table(self._view_name)
+        if schema_expr is not None:
+            create_target = exp.Schema(this=create_target, expressions=schema_expr.expressions)
+
         return exp.Create(
             kind="MATERIALIZED_VIEW",
-            this=exp.to_identifier(self._view_name),
+            this=create_target,
             exists=self._if_not_exists,
             expression=select_expr,
-            schema=schema_expr,
             properties=properties_node,
         )
 
@@ -1248,12 +1247,15 @@ class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
         ]
         properties_node = exp.Properties(expressions=props) if props else None
 
+        create_target: exp.Expr = exp.to_table(self._view_name)
+        if schema_expr is not None:
+            create_target = exp.Schema(this=create_target, expressions=schema_expr.expressions)
+
         return exp.Create(
             kind="VIEW",
-            this=exp.to_identifier(self._view_name),
+            this=create_target,
             exists=self._if_not_exists,
             expression=select_expr,
-            schema=schema_expr,
             properties=properties_node,
         )
 
@@ -1492,7 +1494,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             if not op.constraint_definition:
                 self._raise_builder_error("Constraint definition required for ADD CONSTRAINT")
             constraint_expr = build_constraint_expression(op.constraint_definition)
-            return exp.AddConstraint(this=constraint_expr)
+            return exp.AddConstraint(expressions=[constraint_expr])
 
         if op_type == "DROP CONSTRAINT":
             return exp.Drop(this=exp.to_identifier(op.constraint_name), kind="CONSTRAINT", exists=True)
