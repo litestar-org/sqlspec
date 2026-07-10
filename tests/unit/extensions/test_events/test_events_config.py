@@ -14,9 +14,11 @@ def test_events_backend_literal_uses_canonical_transport_names() -> None:
     """The SQLSpec selector excludes the Litestar Queues-only polling mode."""
 
     backend_hint = get_type_hints(EventsConfig)["backend"]
-    backend_literal = get_args(backend_hint)[0]
+    backend_args = get_args(backend_hint)
+    backend_values = get_args(backend_args[0]) if len(backend_args) == 1 and get_args(backend_args[0]) else backend_args
 
-    assert set(get_args(backend_literal)) == {"notify", "notify_queue", "poll_queue", "aq", "txeventq"}
+    assert set(backend_values) == {"notify", "notify_queue", "poll_queue", "aq", "txeventq"}
+
 
 _POSTGRES_DRIVER_FEATURES = (
     ("sqlspec.adapters.asyncpg.config", "AsyncpgDriverFeatures"),
