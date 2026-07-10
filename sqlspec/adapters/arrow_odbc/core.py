@@ -1,9 +1,23 @@
 """arrow-odbc adapter core helpers."""
 
+import re
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, build_statement_config_from_profile
-from sqlspec.exceptions import ImproperConfigurationError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    DataError,
+    DeadlockError,
+    ForeignKeyViolationError,
+    ImproperConfigurationError,
+    NotNullViolationError,
+    OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -46,6 +60,22 @@ _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("duckdb", ("duckdb",)),
     ("snowflake", ("snowflake",)),
 )
+_ARROW_ODBC_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"Native error:\s*(-?\d+)")
+_SQL_SERVER_DIAGNOSTIC_MARKERS: Final[tuple[str, ...]] = ("sql server", "msodbcsql")
+_ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    2601: (UniqueViolationError, "unique constraint violation"),
+    2627: (UniqueViolationError, "unique constraint violation"),
+    547: (ForeignKeyViolationError, "foreign key or check constraint violation"),
+    515: (NotNullViolationError, "not-null constraint violation"),
+    18456: (PermissionDeniedError, "permission denied"),
+    4060: (DatabaseConnectionError, "database connection error"),
+    53: (DatabaseConnectionError, "database connection error"),
+    1205: (DeadlockError, "deadlock detected"),
+    -2: (QueryTimeoutError, "query timeout"),
+    8114: (DataError, "data conversion error"),
+    1105: (OperationalError, "operational error"),
+    102: (SQLParsingError, "syntax error"),
+}
 
 
 def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
@@ -63,7 +93,15 @@ def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> S
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
     del logger
     message = str(error)
-    if "Native error: 102" in message or "Incorrect syntax near" in message:
+    if _is_sql_server_diagnostic(message):
+        error_number = _extract_error_number(error)
+        if error_number is not None:
+            mapping = _ERROR_CODE_MAPPING.get(error_number)
+            if mapping is not None:
+                error_class, description = mapping
+                return error_class(f"ODBC SQL Server error {error_number}: {description}. Original error: {error}")
+
+    if "Incorrect syntax near" in message:
         return SQLParsingError(f"ODBC SQL parsing error. Original error: {error}")
     return SQLSpecError(f"ODBC database error. Original error: {error}")
 
@@ -161,8 +199,23 @@ def build_statement_config(*, dialect: str = "sqlite", json_serializer: "Any" = 
     )
 
 
+def _extract_error_number(error: Exception) -> "int | None":
+    match = _ARROW_ODBC_ERROR_NUMBER_PATTERN.search(str(error))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def _identity(value: Any) -> Any:
     return value
+
+
+def _is_sql_server_diagnostic(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _SQL_SERVER_DIAGNOSTIC_MARKERS)
 
 
 def _format_connection_value(value: Any) -> str:

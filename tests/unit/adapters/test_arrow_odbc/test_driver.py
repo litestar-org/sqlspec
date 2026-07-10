@@ -21,7 +21,21 @@ from sqlspec.adapters.arrow_odbc import (
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.core import LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
-from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError, TransactionError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    DataError,
+    DeadlockError,
+    ForeignKeyViolationError,
+    NotNullViolationError,
+    OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SQLFileNotFoundError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
@@ -572,6 +586,58 @@ def test_arrow_odbc_mssql_syntax_error_maps_to_sql_parsing_error() -> None:
     )
 
     assert isinstance(mapped, SQLParsingError)
+
+
+def test_arrow_odbc_syntax_fallback_without_native_error_number() -> None:
+    """Syntax diagnostics without a native error number retain the fallback mapping."""
+    mapped = create_mapped_exception(FakeOdbcError("Incorrect syntax near '*'."))
+
+    assert isinstance(mapped, SQLParsingError)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_type"),
+    [
+        (
+            "State: 23000, Native error: 2601, Message: [SQL Server]Cannot insert duplicate key row.",
+            UniqueViolationError,
+        ),
+        (
+            "State: 23000, Native error: 2627, Message: [SQL Server]Violation of UNIQUE KEY constraint.",
+            UniqueViolationError,
+        ),
+        (
+            "State: 23000, Native error: 547, Message: [SQL Server]FOREIGN KEY constraint conflict.",
+            ForeignKeyViolationError,
+        ),
+        ("State: 23000, Native error: 515, Message: [SQL Server]Cannot insert NULL.", NotNullViolationError),
+        ("State: 28000, Native error: 18456, Message: [SQL Server]Login failed.", PermissionDeniedError),
+        (
+            "State: 08001, Native error: 4060, Message: [SQL Server]Cannot open database requested by the login.",
+            DatabaseConnectionError,
+        ),
+        ("State: 08001, Native error: 53, Message: [SQL Server]Network path not found.", DatabaseConnectionError),
+        ("State: 40001, Native error: 1205, Message: [SQL Server]Transaction was deadlocked.", DeadlockError),
+        ("State: HYT00, Native error: -2, Message: [SQL Server]Query timeout expired.", QueryTimeoutError),
+        ("State: 22018, Native error: 8114, Message: [SQL Server]Conversion failed.", DataError),
+        ("State: HY000, Native error: 1105, Message: [SQL Server]Could not allocate space.", OperationalError),
+        ("State: 42000, Native error: 102, Message: [SQL Server]Incorrect syntax near '*'.", SQLParsingError),
+    ],
+)
+def test_arrow_odbc_error_number_maps_to_sqlspec_exception(message: str, expected_type: "type[SQLSpecError]") -> None:
+    """SQL Server native error numbers in arrow-odbc diagnostics map to SQLSpec exceptions."""
+    mapped = create_mapped_exception(FakeOdbcError(message))
+
+    assert isinstance(mapped, expected_type)
+
+
+def test_arrow_odbc_non_mssql_native_code_does_not_use_sql_server_mapping() -> None:
+    """Native error numbers from other ODBC vendors do not use the SQL Server table."""
+    mapped = create_mapped_exception(
+        FakeOdbcError("State: HY000, Native error: 1205, Message: [MySQL]Lock wait timeout exceeded.")
+    )
+
+    assert type(mapped) is SQLSpecError
 
 
 def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:
