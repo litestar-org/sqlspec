@@ -754,6 +754,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         self._storage_capabilities = None
 
+    def _reject_unexpected_kwargs(self, kwargs: "dict[str, Any]") -> None:
+        """Raise ``TypeError`` when construction receives unrecognized keyword arguments."""
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            msg = f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
+            raise TypeError(msg)
+
     def _init_config_state(
         self,
         *,
@@ -1488,6 +1495,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        self._reject_unexpected_kwargs(kwargs)
         self._init_config_state(
             connection_config=connection_config,
             connection_instance=connection_instance,
@@ -1592,6 +1600,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        self._reject_unexpected_kwargs(kwargs)
         self._init_config_state(
             connection_config=connection_config,
             connection_instance=connection_instance,
