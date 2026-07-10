@@ -377,34 +377,16 @@ class JoinBuilder:
         if self._as_of is not None:
             table_expr = _attach_as_of_version(table_expr, self._alias, self._as_of, self._as_of_type)
 
-        match self._join_type:
-            case "INNER JOIN" | "INNER" | "LATERAL JOIN":
-                join_expr = exp.Join(this=table_expr, on=condition_expr)
-            case "LEFT JOIN" | "LEFT":
-                join_expr = exp.Join(this=table_expr, on=condition_expr, side="LEFT")
-            case "RIGHT JOIN" | "RIGHT":
-                join_expr = exp.Join(this=table_expr, on=condition_expr, side="RIGHT")
-            case "FULL JOIN" | "FULL":
-                join_expr = exp.Join(this=table_expr, on=condition_expr, side="FULL", kind="OUTER")
-            case "CROSS JOIN" | "CROSS":
-                join_expr = exp.Join(this=table_expr, kind="CROSS")
-            case _:
-                join_expr = exp.Join(this=table_expr, on=condition_expr)
+        normalized_join_type = self._join_type.removesuffix(" JOIN")
+        if normalized_join_type == "LATERAL":
+            normalized_join_type = "INNER"
+        if normalized_join_type in {"INNER", "LEFT", "RIGHT", "FULL", "CROSS"}:
+            join_expr = _join_for_type(table_expr, condition_expr, normalized_join_type)
+        else:
+            join_expr = exp.Join(this=table_expr, on=condition_expr)
 
         if self._lateral or self._join_type == "LATERAL JOIN":
-            current_kind = join_expr.args.get("kind")
-            current_side = join_expr.args.get("side")
-
-            if current_kind == "CROSS":
-                join_expr.set("kind", "CROSS LATERAL")
-            elif current_kind == "OUTER" and current_side == "FULL":
-                join_expr.set("side", "FULL")
-                join_expr.set("kind", "OUTER LATERAL")
-            elif current_side:
-                join_expr.set("kind", f"{current_side} LATERAL")
-                join_expr.set("side", None)
-            else:
-                join_expr.set("kind", "LATERAL")
+            _apply_lateral_modifier(join_expr)
 
         return join_expr
 
