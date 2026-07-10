@@ -834,7 +834,9 @@ class WhereClauseMixin:
         column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         placeholder = exp.Placeholder(this=param_name)
         if escape is not None:
-            return exp.Like(this=column_expr, expression=placeholder, escape=exp.convert(str(escape)))
+            return exp.Escape(
+                this=exp.Like(this=column_expr, expression=placeholder), expression=exp.convert(str(escape))
+            )
         return column_expr.like(placeholder)
 
     def _build_is_null_condition(self, column: str | exp.Column) -> exp.Expr:

@@ -118,12 +118,20 @@ class _ScalarExpressionMixin:
     def any_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL = ANY(...) clause."""
         converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.EQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
+        return ColumnExpression(
+            exp.EQ(
+                this=self._expression, expression=exp.Any(this=exp.Paren(this=exp.Array(expressions=converted_values)))
+            )
+        )
 
     def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL <> ANY(...) clause."""
         converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
+        return ColumnExpression(
+            exp.NEQ(
+                this=self._expression, expression=exp.Any(this=exp.Paren(this=exp.Array(expressions=converted_values)))
+            )
+        )
 
     def cast(self, data_type: str) -> "FunctionColumn":
         """SQL CAST() function."""
@@ -178,12 +186,9 @@ class Column(_ScalarExpressionMixin):
 
     def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
         """SQL LIKE pattern matching."""
+        like_expr: exp.Expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
         if escape:
-            like_expr = exp.Like(
-                this=self._expression, expression=self._convert_value(pattern), escape=self._convert_value(escape)
-            )
-        else:
-            like_expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
+            like_expr = exp.Escape(this=like_expr, expression=self._convert_value(escape))
         return ColumnExpression(like_expr)
 
     def not_in(self, values: Iterable[Any]) -> ColumnExpression:
@@ -222,7 +227,7 @@ class Column(_ScalarExpressionMixin):
         """SQL ROUND() function."""
         if decimals == 0:
             return FunctionColumn(exp.Round(this=self._expression))
-        return FunctionColumn(exp.Round(this=self._expression, expression=exp.convert(decimals)))
+        return FunctionColumn(exp.Round(this=self._expression, decimals=exp.convert(decimals)))
 
     def floor(self) -> "FunctionColumn":
         """SQL FLOOR() function."""
@@ -234,10 +239,11 @@ class Column(_ScalarExpressionMixin):
 
     def substring(self, start: int, length: int | None = None) -> "FunctionColumn":
         """SQL SUBSTRING() function."""
-        args = [self._convert_value(start)]
-        if length is not None:
-            args.append(self._convert_value(length))
-        return FunctionColumn(exp.Substring(this=self._expression, expressions=args))
+        if length is None:
+            return FunctionColumn(exp.Substring(this=self._expression, start=self._convert_value(start)))
+        return FunctionColumn(
+            exp.Substring(this=self._expression, start=self._convert_value(start), length=self._convert_value(length))
+        )
 
     def coalesce(self, *values: Any) -> "FunctionColumn":
         """SQL COALESCE() function."""
