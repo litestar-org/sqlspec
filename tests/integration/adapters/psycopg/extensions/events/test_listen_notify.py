@@ -172,10 +172,22 @@ async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any
         if received:
             break
         await asyncio.sleep(0.05)
+
+    batch_ids = await channel.publish_many([
+        ("alerts", {"index": 1}, None),
+        ("alerts", {"index": 2}, {"source": "batch"}),
+    ])
+    for _ in range(200):
+        if len(received) >= 3:
+            break
+        await asyncio.sleep(0.05)
     await channel.stop_listener(listener.id)
 
-    assert received, "listener did not receive message"
+    assert len(received) >= 3, "listener did not receive the single event and complete batch"
     message = received[0]
 
     assert message.event_id == event_id
     assert message.payload["action"] == "hybrid-async"
+    assert [message.event_id for message in received[1:3]] == batch_ids
+    assert [message.payload["index"] for message in received[1:3]] == [1, 2]
+    assert received[2].metadata == {"source": "batch"}

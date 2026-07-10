@@ -11,14 +11,16 @@ queue (psycopg sync connections are not thread-safe).
 
 import asyncio
 import contextlib
+import logging
 import queue as stdlib_queue
 import threading
 from typing import TYPE_CHECKING, Any
 from weakref import WeakKeyDictionary
 
+from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -36,6 +38,7 @@ class PsycopgAsyncListenerHub:
     """Async psycopg persistent listener hub."""
 
     __slots__ = (
+        "_backend_name",
         "_config",
         "_connection",
         "_connection_cm",
@@ -47,7 +50,8 @@ class PsycopgAsyncListenerHub:
         "_stopping",
     )
 
-    def __init__(self, config: "PsycopgAsyncConfig") -> None:
+    def __init__(self, config: "PsycopgAsyncConfig", backend_name: str = "notify") -> None:
+        self._backend_name = backend_name
         self._config = config
         self._lock = asyncio.Lock()
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
@@ -66,12 +70,11 @@ class PsycopgAsyncListenerHub:
             if channel in self._queues:
                 return
             await self._ensure_connection_locked()
-            validated = normalize_event_channel_name(channel)
             connection = self._connection
             assert connection is not None
             self._queues[channel] = WeakKeyDictionary()
             try:
-                await connection.execute(f"LISTEN {validated}")
+                await connection.execute(_listen_statement(channel))
             except Exception:
                 self._queues.pop(channel, None)
                 raise
@@ -84,13 +87,14 @@ class PsycopgAsyncListenerHub:
             connection = self._connection
             if connection is None:
                 return
-            validated = normalize_event_channel_name(channel)
             with contextlib.suppress(Exception):
-                await connection.execute(f"UNLISTEN {validated}")
+                await connection.execute(_unlisten_statement(channel))
 
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
+        async with self._lock:
+            await self._ensure_connection_locked()
         queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
@@ -119,12 +123,12 @@ class PsycopgAsyncListenerHub:
                 await pump_task
         if connection is not None:
             for channel in channels:
-                validated = normalize_event_channel_name(channel)
                 with contextlib.suppress(Exception):
-                    await connection.execute(f"UNLISTEN {validated}")
+                    await connection.execute(_unlisten_statement(channel))
         if connection_cm is not None:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
+            _record_listener_lifecycle(self._config, self._backend_name, "release", is_async=True)
         self._shutting_down = False
         self._stopping = False
 
@@ -146,8 +150,27 @@ class PsycopgAsyncListenerHub:
         return queue
 
     async def _ensure_connection_locked(self) -> None:
-        if self._connection is not None:
+        if (
+            self._connection is not None
+            and not self._connection.closed
+            and self._pump_task is not None
+            and not self._pump_task.done()
+        ):
             return
+        reconnecting = self._connection_cm is not None
+        if self._pump_task is not None:
+            self._stopping = True
+            self._pump_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._pump_task
+        if self._connection_cm is not None:
+            with contextlib.suppress(Exception):
+                await self._connection_cm.__aexit__(None, None, None)
+            _record_listener_lifecycle(self._config, self._backend_name, "release", is_async=True)
+        self._connection = None
+        self._connection_cm = None
+        self._pump_task = None
+        self._stopping = False
         connection_cm = self._config.provide_connection()
         connection = await connection_cm.__aenter__()
         if connection is None:
@@ -159,7 +182,20 @@ class PsycopgAsyncListenerHub:
             await connection.set_autocommit(True)
         self._connection_cm = connection_cm
         self._connection = connection
+        try:
+            for channel in self._queues:
+                await connection.execute(_listen_statement(channel))
+        except Exception:
+            self._connection = None
+            self._connection_cm = None
+            with contextlib.suppress(Exception):
+                await connection_cm.__aexit__(None, None, None)
+            raise
         self._pump_task = asyncio.create_task(self._pump())
+        _record_listener_lifecycle(self._config, self._backend_name, "acquire", is_async=True)
+        if reconnecting:
+            _record_listener_lifecycle(self._config, self._backend_name, "reconnect", is_async=True)
+        _record_listener_lifecycle(self._config, self._backend_name, "ready", is_async=True)
         self._register_pool_destroying()
 
     def _register_pool_destroying(self) -> None:
@@ -211,6 +247,7 @@ class PsycopgSyncListenerHub:
     """
 
     __slots__ = (
+        "_backend_name",
         "_command_queue",
         "_config",
         "_connection",
@@ -223,7 +260,8 @@ class PsycopgSyncListenerHub:
         "_worker_thread",
     )
 
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
+    def __init__(self, config: "PsycopgSyncConfig", backend_name: str = "notify") -> None:
+        self._backend_name = backend_name
         self._config = config
         self._lock = threading.Lock()
         self._queues: dict[str, WeakKeyDictionary[threading.Thread, stdlib_queue.Queue[str]]] = {}
@@ -260,6 +298,8 @@ class PsycopgSyncListenerHub:
     def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             self.subscribe(channel)
+        with self._lock:
+            self._ensure_connection_locked()
         queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
@@ -291,7 +331,10 @@ class PsycopgSyncListenerHub:
         if connection_cm is not None:
             with contextlib.suppress(Exception):
                 connection_cm.__exit__(None, None, None)
+            _record_listener_lifecycle(self._config, self._backend_name, "release", is_async=False)
         self._connection = None
+        self._stopping = threading.Event()
+        self._command_queue = stdlib_queue.Queue()
         self._shutting_down = False
 
     def is_subscribed(self, channel: str) -> bool:
@@ -310,8 +353,29 @@ class PsycopgSyncListenerHub:
             return queue
 
     def _ensure_connection_locked(self) -> None:
-        if self._connection is not None:
+        if (
+            self._connection is not None
+            and not self._connection.closed
+            and self._worker_thread is not None
+            and self._worker_thread.is_alive()
+        ):
             return
+        previous_thread = self._worker_thread
+        previous_connection_cm = self._connection_cm
+        reconnecting = previous_connection_cm is not None
+        if previous_thread is not None:
+            self._stopping.set()
+            with contextlib.suppress(Exception):
+                previous_thread.join(timeout=3.0)
+        if previous_connection_cm is not None:
+            with contextlib.suppress(Exception):
+                previous_connection_cm.__exit__(None, None, None)
+            _record_listener_lifecycle(self._config, self._backend_name, "release", is_async=False)
+        self._connection = None
+        self._connection_cm = None
+        self._worker_thread = None
+        self._stopping = threading.Event()
+        self._command_queue = stdlib_queue.Queue()
         connection_cm = self._config.provide_connection()
         connection = connection_cm.__enter__()
         if connection is None:
@@ -322,8 +386,19 @@ class PsycopgSyncListenerHub:
         connection.autocommit = True
         self._connection_cm = connection_cm
         self._connection = connection
-        self._worker_thread = threading.Thread(target=self._worker, name="psycopg-sync-event-worker", daemon=True)
+        self._worker_thread = threading.Thread(
+            target=self._worker,
+            args=(self._stopping, self._command_queue),
+            name="psycopg-sync-event-worker",
+            daemon=True,
+        )
         self._worker_thread.start()
+        for channel in self._queues:
+            self._submit("listen", channel)
+        _record_listener_lifecycle(self._config, self._backend_name, "acquire", is_async=False)
+        if reconnecting:
+            _record_listener_lifecycle(self._config, self._backend_name, "reconnect", is_async=False)
+        _record_listener_lifecycle(self._config, self._backend_name, "ready", is_async=False)
         self._register_pool_destroying()
 
     def _register_pool_destroying(self) -> None:
@@ -341,41 +416,46 @@ class PsycopgSyncListenerHub:
         self._command_queue.put((op, channel, done))
         done.wait(timeout=timeout)
 
-    def _worker(self) -> None:
+    def _worker(
+        self, stopping: threading.Event, command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event]]"
+    ) -> None:
         connection = self._connection
         if connection is None:
             return
-        while not self._stopping.is_set():
-            self._drain_commands(connection)
-            if self._stopping.is_set():
+        while not stopping.is_set():
+            self._drain_commands(connection, command_queue, stopping)
+            if stopping.is_set():
                 return
             try:
                 for notify in connection.notifies(timeout=_PUMP_TIMEOUT, stop_after=_PUMP_BATCH):
-                    if self._stopping.is_set():
+                    if stopping.is_set():
                         return
                     self._dispatch(notify.channel, notify.payload)
             except Exception as exc:  # pragma: no cover
-                if self._stopping.is_set() or getattr(connection, "closed", False):
+                if stopping.is_set() or getattr(connection, "closed", False):
                     return
                 logger.warning("psycopg sync notify worker error: %s", exc)
-                self._stopping.wait(timeout=0.25)
+                stopping.wait(timeout=0.25)
 
-    def _drain_commands(self, connection: Any) -> None:
+    def _drain_commands(
+        self,
+        connection: Any,
+        command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event]]",
+        stopping: threading.Event,
+    ) -> None:
         while True:
             try:
-                op, channel, done = self._command_queue.get_nowait()
+                op, channel, done = command_queue.get_nowait()
             except stdlib_queue.Empty:
                 return
             try:
                 if op == "listen":
-                    validated = normalize_event_channel_name(channel)
-                    connection.execute(f"LISTEN {validated}")
+                    connection.execute(_listen_statement(channel))
                 elif op == "unlisten":
-                    validated = normalize_event_channel_name(channel)
                     with contextlib.suppress(Exception):
-                        connection.execute(f"UNLISTEN {validated}")
+                        connection.execute(_unlisten_statement(channel))
                 elif op == "stop":
-                    self._stopping.set()
+                    stopping.set()
             finally:
                 done.set()
 
@@ -387,3 +467,29 @@ class PsycopgSyncListenerHub:
             targets = list(queues.values())
         for queue in targets:
             queue.put_nowait(payload)
+
+
+def _record_listener_lifecycle(
+    config: "PsycopgAsyncConfig | PsycopgSyncConfig", backend_name: str, status: str, *, is_async: bool
+) -> None:
+    config.get_observability_runtime().increment_metric(f"events.listener.{status}")
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "event.listener.connection",
+        adapter_name="psycopg",
+        backend_name=backend_name,
+        connection_role="listener",
+        mode="async" if is_async else "sync",
+        status=status,
+    )
+
+
+def _listen_statement(channel: str) -> PsycopgComposed:
+    validated = normalize_event_channel_name(channel)
+    return PsycopgSQL("LISTEN {}").format(PsycopgIdentifier(validated))
+
+
+def _unlisten_statement(channel: str) -> PsycopgComposed:
+    validated = normalize_event_channel_name(channel)
+    return PsycopgSQL("UNLISTEN {}").format(PsycopgIdentifier(validated))

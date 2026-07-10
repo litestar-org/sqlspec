@@ -30,6 +30,7 @@ def test_asyncpg_factory_notify_queue_backend() -> None:
 
     assert isinstance(backend, AsyncpgHybridEventsBackend)
     assert backend.backend_name == "notify_queue"
+    assert backend._ensure_hub()._backend_name == "notify_queue"
 
 
 def test_asyncpg_factory_unknown_backend_returns_none() -> None:
@@ -42,6 +43,19 @@ def test_asyncpg_factory_unknown_backend_returns_none() -> None:
     backend = create_event_backend(config, "unknown_backend", {})
 
     assert backend is None
+
+
+def test_asyncpg_factory_rejects_single_connection_listener_pool() -> None:
+    """Asyncpg native listeners reserve capacity for a publisher session."""
+    pytest.importorskip("asyncpg")
+    from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+    from sqlspec.adapters.asyncpg.events.backend import create_event_backend
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test", "max_size": 1})
+
+    with pytest.raises(ImproperConfigurationError, match="max_size >= 2"):
+        create_event_backend(config, "notify", {})
 
 
 def test_asyncpg_factory_passes_extension_settings() -> None:
@@ -94,6 +108,7 @@ def test_psycopg_factory_hybrid_backend() -> None:
 
     assert isinstance(backend, PsycopgAsyncHybridEventsBackend)
     assert backend.backend_name == "notify_queue"
+    assert backend._ensure_hub()._backend_name == "notify_queue"
 
 
 def test_psycopg_factory_unknown_returns_none() -> None:
@@ -106,6 +121,19 @@ def test_psycopg_factory_unknown_returns_none() -> None:
     backend = create_event_backend(config, "unknown_backend", {})
 
     assert backend is None
+
+
+def test_psycopg_factory_rejects_single_connection_listener_pool() -> None:
+    """Psycopg native listeners reserve capacity for a publisher session."""
+    pytest.importorskip("psycopg")
+    from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
+    from sqlspec.adapters.psycopg.events.backend import create_event_backend
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = PsycopgAsyncConfig(connection_config={"dbname": "test", "max_size": 1})
+
+    with pytest.raises(ImproperConfigurationError, match="max_size >= 2"):
+        create_event_backend(config, "notify", {})
 
 
 def test_psqlpy_factory_notify_backend() -> None:
@@ -134,6 +162,7 @@ def test_psqlpy_factory_hybrid_backend() -> None:
 
     assert isinstance(backend, PsqlpyHybridEventsBackend)
     assert backend.backend_name == "notify_queue"
+    assert backend._ensure_hub()._backend_name == "notify_queue"
 
 
 def test_psqlpy_factory_hybrid_passes_settings() -> None:
@@ -159,6 +188,19 @@ def test_psqlpy_factory_unknown_returns_none() -> None:
     backend = create_event_backend(config, "unknown_backend", {})
 
     assert backend is None
+
+
+def test_psqlpy_factory_rejects_single_connection_listener_pool() -> None:
+    """Psqlpy native listeners reserve capacity for a publisher session."""
+    pytest.importorskip("psqlpy")
+    from sqlspec.adapters.psqlpy.config import PsqlpyConfig
+    from sqlspec.adapters.psqlpy.events.backend import create_event_backend
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test", "max_db_pool_size": 1})
+
+    with pytest.raises(ImproperConfigurationError, match="max_db_pool_size >= 2"):
+        create_event_backend(config, "notify", {})
 
 
 def test_oracle_factory_aq_backend() -> None:

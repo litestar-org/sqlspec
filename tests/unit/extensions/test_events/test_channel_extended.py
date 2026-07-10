@@ -2,6 +2,7 @@
 """Extended unit tests for EventChannel configuration and backend selection."""
 
 import asyncio
+import threading
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from sqlspec import ObservabilityRuntime
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
-from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+from sqlspec.extensions.events import AsyncEventChannel, AsyncEventListener, SyncEventChannel, SyncEventListener
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -33,6 +34,33 @@ def test_event_channel_adapter_name_resolution(tmp_path) -> None:
     assert channel._adapter_name == "sqlite"
 
 
+async def test_async_event_listener_stop_cancels_blocked_wait() -> None:
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(asyncio.Event().wait())
+    listener = AsyncEventListener("listener", "events", task, stop_event, 60.0)
+
+    await asyncio.wait_for(listener.stop(), timeout=0.1)
+
+    assert stop_event.is_set()
+    assert task.cancelled()
+
+
+def test_sync_event_listener_stop_uses_bounded_join(monkeypatch: pytest.MonkeyPatch) -> None:
+    blocker = threading.Event()
+    thread = threading.Thread(target=blocker.wait, daemon=True)
+    thread.start()
+    stop_event = threading.Event()
+    listener = SyncEventListener("listener", "events", thread, stop_event, 60.0)
+    monkeypatch.setattr("sqlspec.extensions.events._channel._LISTENER_SHUTDOWN_TIMEOUT", 0.01)
+
+    listener.stop()
+
+    assert stop_event.is_set()
+    assert thread.is_alive()
+    blocker.set()
+    thread.join(timeout=0.1)
+
+
 def test_event_channel_default_poll_interval(tmp_path) -> None:
     """EventChannel uses hint default poll interval."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
@@ -49,6 +77,22 @@ def test_event_channel_custom_poll_interval(tmp_path) -> None:
     channel = SyncEventChannel(config)
 
     assert channel._poll_interval_default == 0.5
+
+
+def test_event_channel_event_poll_interval_takes_precedence(tmp_path) -> None:
+    """The explicit event interval wins over the legacy poll_interval input."""
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "event_poll.db")},
+        extension_config={"events": {"event_poll_interval": 2.5, "poll_interval": 0.1}},
+    )
+
+    channel = SyncEventChannel(config)
+
+    assert channel._event_poll_interval == 2.5
+    assert channel._poll_interval_default == 2.5
+    snapshot = channel._runtime.metrics_snapshot()
+    assert snapshot["SqliteConfig.events.poll.interval"] == pytest.approx(2.5)
+    assert snapshot["SqliteConfig.events.backend.poll_queue.resolved"] == pytest.approx(1.0)
 
 
 def test_event_channel_backend_name_poll_queue(tmp_path) -> None:
@@ -198,6 +242,22 @@ def test_event_channel_resolve_poll_interval_negative_raises(tmp_path) -> None:
 
     with pytest.raises(ImproperConfigurationError, match="poll_interval must be greater than zero"):
         resolve_poll_interval(-1.0, 1.0)
+
+
+def test_event_channel_resolve_event_poll_interval_precedence() -> None:
+    """New setting, compatibility input, and adapter hint have deterministic precedence."""
+    from sqlspec.extensions.events import resolve_event_poll_interval
+
+    assert resolve_event_poll_interval(2.0, 0.1, 1.0) == 2.0
+    assert resolve_event_poll_interval(None, 0.1, 1.0) == 0.1
+    assert resolve_event_poll_interval(None, None, 1.0) == 1.0
+
+
+def test_event_channel_resolve_event_poll_interval_rejects_non_positive() -> None:
+    from sqlspec.extensions.events import resolve_event_poll_interval
+
+    with pytest.raises(ImproperConfigurationError, match="event_poll_interval must be greater than zero"):
+        resolve_event_poll_interval(0, None, 1.0)
 
 
 def test_event_channel_backend_supports_sync(tmp_path) -> None:

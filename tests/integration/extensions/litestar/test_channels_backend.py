@@ -18,6 +18,15 @@ async def _next_event(subscriber: "Any") -> bytes:
     raise RuntimeError(msg)
 
 
+class _RecordingEventChannel:
+    def __init__(self) -> None:
+        self.batches: list[list[tuple[str, dict[str, str], None]]] = []
+
+    async def publish_many(self, events: "list[tuple[str, dict[str, str], None]]") -> list[str]:
+        self.batches.append(events)
+        return [f"event-{index}" for index in range(len(events))]
+
+
 async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> None:
     migrations = tmp_path / "migrations"
     migrations.mkdir()
@@ -43,6 +52,42 @@ async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> 
             decoded = msgspec.json.decode(payload)
             assert decoded["action"] == "hello"
 
+            await backend.publish_many((b"first", b"second"), ("notifications",))
+            first = await asyncio.wait_for(_next_event(subscriber), timeout=3.0)
+            second = await asyncio.wait_for(_next_event(subscriber), timeout=3.0)
+            assert (first, second) == (b"first", b"second")
+
             await plugin.unsubscribe(subscriber)
 
         await config.close_pool()
+
+
+async def test_litestar_channels_backend_groups_multi_channel_publish() -> None:
+    event_channel = _RecordingEventChannel()
+    backend = SQLSpecChannelsBackend(cast("Any", event_channel), channel_prefix="litestar")
+
+    await backend.publish(b"payload", (channel for channel in ("alpha", "beta", "gamma")))
+
+    assert len(event_channel.batches) == 1
+    assert len(event_channel.batches[0]) == 3
+    assert [event[0] for event in event_channel.batches[0]] == [
+        backend._db_channel_name("alpha"),
+        backend._db_channel_name("beta"),
+        backend._db_channel_name("gamma"),
+    ]
+    assert {event[1]["data_b64"] for event in event_channel.batches[0]} == {"cGF5bG9hZA=="}
+
+
+async def test_litestar_channels_backend_groups_multiple_payloads_and_channels() -> None:
+    event_channel = _RecordingEventChannel()
+    backend = SQLSpecChannelsBackend(cast("Any", event_channel), channel_prefix="litestar")
+
+    await backend.publish_many((b"first", b"second"), (channel for channel in ("alpha", "beta")))
+
+    assert len(event_channel.batches) == 1
+    assert [(event[0], event[1]["data_b64"]) for event in event_channel.batches[0]] == [
+        (backend._db_channel_name("alpha"), "Zmlyc3Q="),
+        (backend._db_channel_name("beta"), "Zmlyc3Q="),
+        (backend._db_channel_name("alpha"), "c2Vjb25k"),
+        (backend._db_channel_name("beta"), "c2Vjb25k"),
+    ]

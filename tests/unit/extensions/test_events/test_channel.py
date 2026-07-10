@@ -64,6 +64,35 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
     assert snapshot.get("SqliteConfig.events.ack") == pytest.approx(1.0)
 
 
+def test_event_channel_publish_many_sync_roundtrip(tmp_path) -> None:
+    """A grouped table-queue publish preserves every independent event envelope."""
+    migrations_dir = tmp_path / "migrations_batch_sync"
+    migrations_dir.mkdir()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "events_batch_sync.db")},
+        migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
+    )
+    SyncMigrationCommands(config).upgrade()
+    channel = SyncEventChannel(config)
+    events = [("notifications", {"index": index}, {"source": "batch"}) for index in range(20)]
+
+    event_ids = channel.publish_many(events)
+    iterator = channel.iter_events("notifications", poll_interval=0.01)
+    messages = [next(iterator) for _ in events]
+    for message in messages:
+        channel.ack(message.event_id)
+
+    assert {message.event_id for message in messages} == set(event_ids)
+    assert {message.payload["index"] for message in messages} == set(range(20))
+    assert all(message.metadata == {"source": "batch"} for message in messages)
+    with config.provide_session() as driver:
+        acknowledged = driver.select_value(
+            "SELECT COUNT(*) FROM sqlspec_event_queue WHERE status = :status", {"status": "acked"}
+        )
+    assert acknowledged == 20
+    config.close_pool()
+
+
 async def test_event_channel_async_iteration(tmp_path) -> None:
     """Async adapters can publish and drain events via the iterator helper."""
     migrations_dir = tmp_path / "migrations"
@@ -90,6 +119,35 @@ async def test_event_channel_async_iteration(tmp_path) -> None:
             "SELECT status FROM sqlspec_event_queue WHERE event_id = :event_id", {"event_id": event_id}
         )
     assert row["status"] == "acked"
+    await config.close_pool()
+
+
+async def test_event_channel_publish_many_async_roundtrip(tmp_path) -> None:
+    """The async table queue consumes and acknowledges every grouped event."""
+    migrations_dir = tmp_path / "migrations_batch_async"
+    migrations_dir.mkdir()
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "events_batch_async.db")},
+        migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
+    )
+    await AsyncMigrationCommands(config).upgrade()
+    channel = AsyncEventChannel(config)
+    events = [("notifications", {"index": index}, None) for index in range(20)]
+
+    event_ids = await channel.publish_many(events)
+    iterator = channel.iter_events("notifications", poll_interval=0.01)
+    messages = [await iterator.__anext__() for _ in events]
+    await iterator.aclose()
+    for message in messages:
+        await channel.ack(message.event_id)
+
+    assert {message.event_id for message in messages} == set(event_ids)
+    assert {message.payload["index"] for message in messages} == set(range(20))
+    async with config.provide_session() as driver:
+        acknowledged = await driver.select_value(
+            "SELECT COUNT(*) FROM sqlspec_event_queue WHERE status = :status", {"status": "acked"}
+        )
+    assert acknowledged == 20
     await config.close_pool()
 
 

@@ -11,12 +11,13 @@ notifications into one queue per consumer task.
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any
+import logging
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import normalize_event_channel_name
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_add_listener
 
 if TYPE_CHECKING:
@@ -33,6 +34,7 @@ class AsyncpgListenerHub:
     """Per-channel persistent listener for asyncpg-based event backends."""
 
     __slots__ = (
+        "_backend_name",
         "_callbacks",
         "_config",
         "_connection",
@@ -43,7 +45,8 @@ class AsyncpgListenerHub:
         "_shutting_down",
     )
 
-    def __init__(self, config: "AsyncpgConfig") -> None:
+    def __init__(self, config: "AsyncpgConfig", backend_name: str = "notify") -> None:
+        self._backend_name = backend_name
         self._config = config
         self._lock = asyncio.Lock()
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
@@ -97,6 +100,8 @@ class AsyncpgListenerHub:
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
             await self.subscribe(channel)
+        async with self._lock:
+            await self._ensure_connection_locked()
         queue = self._get_consumer_queue(channel)
         if queue is None:
             return None
@@ -130,6 +135,7 @@ class AsyncpgListenerHub:
         if connection_cm is not None:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
+            _record_listener_lifecycle(self._config, self._backend_name, "release")
         self._shutting_down = False
 
     def is_subscribed(self, channel: str) -> bool:
@@ -150,8 +156,15 @@ class AsyncpgListenerHub:
         return queue
 
     async def _ensure_connection_locked(self) -> None:
-        if self._connection is not None:
+        if self._connection is not None and not self._connection.is_closed():
             return
+        reconnecting = self._connection_cm is not None
+        if self._connection_cm is not None:
+            with contextlib.suppress(Exception):
+                await self._connection_cm.__aexit__(None, None, None)
+            _record_listener_lifecycle(self._config, self._backend_name, "release")
+            self._connection = None
+            self._connection_cm = None
         connection_cm = self._config.provide_connection()
         connection = await connection_cm.__aenter__()
         if connection is None or not has_add_listener(connection):
@@ -161,6 +174,22 @@ class AsyncpgListenerHub:
             raise EventChannelError(msg)
         self._connection_cm = connection_cm
         self._connection = connection
+        listener_connection = cast("Any", connection)
+        try:
+            for channel, callback in self._callbacks.items():
+                validated = normalize_event_channel_name(channel)
+                await listener_connection.execute(f"LISTEN {validated}")
+                await listener_connection.add_listener(channel, callback)
+        except Exception:
+            self._connection = None
+            self._connection_cm = None
+            with contextlib.suppress(Exception):
+                await connection_cm.__aexit__(None, None, None)
+            raise
+        _record_listener_lifecycle(self._config, self._backend_name, "acquire")
+        if reconnecting:
+            _record_listener_lifecycle(self._config, self._backend_name, "reconnect")
+        _record_listener_lifecycle(self._config, self._backend_name, "ready")
         self._register_pool_destroying()
 
     def _register_pool_destroying(self) -> None:
@@ -179,3 +208,16 @@ class AsyncpgListenerHub:
             return
         for queue in list(queues.values()):
             queue.put_nowait(payload)
+
+
+def _record_listener_lifecycle(config: "AsyncpgConfig", backend_name: str, status: str) -> None:
+    config.get_observability_runtime().increment_metric(f"events.listener.{status}")
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "event.listener.connection",
+        adapter_name="asyncpg",
+        backend_name=backend_name,
+        connection_role="listener",
+        status=status,
+    )

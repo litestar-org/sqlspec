@@ -560,7 +560,10 @@ class EventsConfig(TypedDict):
     """Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours)."""
 
     poll_interval: NotRequired[float]
-    """Default poll interval in seconds for event consumers. Defaults to 1.0."""
+    """Compatibility alias for event_poll_interval. Defaults to 1.0."""
+
+    event_poll_interval: NotRequired[float]
+    """Durable event reconciliation interval in seconds. Takes precedence over poll_interval."""
 
     select_for_update: NotRequired[bool]
     """Use SELECT FOR UPDATE locking when claiming events. Defaults to False."""

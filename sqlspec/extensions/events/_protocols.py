@@ -3,6 +3,8 @@
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.extensions.events._models import EventMessage
 
 __all__ = ("AsyncEventBackendProtocol", "AsyncEventHandler", "SyncEventBackendProtocol", "SyncEventHandler")
@@ -42,6 +44,15 @@ class AsyncEventBackendProtocol(Protocol):
 
         Returns:
             The event ID.
+        """
+        ...
+
+    async def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Publish independent events as one grouped backend operation.
+
+        Implementations with native batching must preserve input order in the
+        returned event IDs. Backends without native batching are invoked through
+        the event channel's single-event fallback.
         """
         ...
 
@@ -98,6 +109,15 @@ class SyncEventBackendProtocol(Protocol):
 
         Returns:
             The event ID.
+        """
+        ...
+
+    def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Publish independent events as one grouped backend operation.
+
+        Implementations with native batching must preserve input order in the
+        returned event IDs. Backends without native batching are invoked through
+        the event channel's single-event fallback.
         """
         ...
 

@@ -27,6 +27,43 @@ adapter ``driver_features["events_backend"]`` value is used only when the
 extension setting is absent. Retired transport names fail with an explicit
 canonical replacement instead of silently changing delivery semantics.
 
+.. list-table:: Adapter support
+   :header-rows: 1
+
+   * - Adapter family
+     - Available transports
+     - Default
+   * - PostgreSQL (``asyncpg``, ``psycopg``, ``psqlpy``)
+     - ``notify``, ``notify_queue``, ``poll_queue``
+     - ``notify``
+   * - Oracle
+     - ``poll_queue``, ``aq``, ``txeventq``
+     - ``poll_queue``
+   * - Other database adapters
+     - ``poll_queue``
+     - ``poll_queue``
+
+Configure the transport and durable reconciliation cadence independently:
+
+.. code-block:: python
+
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://...", "max_size": 5},
+        extension_config={
+            "events": {
+                "backend": "notify_queue",
+                "event_poll_interval": 1.0,
+            }
+        },
+    )
+
+``event_poll_interval`` controls how often durable transports reconcile the
+queue when no native wakeup arrives. The older ``poll_interval`` setting is a
+compatibility input; ``event_poll_interval`` takes precedence when both are
+provided.
+
 ``polling`` is not a SQLSpec backend name. Litestar Queues uses it for the
 fallback worker mode where no push wakeup transport is available and the
 worker waits for its configured polling interval.
@@ -46,6 +83,13 @@ backend owns its own listener hub that:
 * Serializes subscribe / unsubscribe under a lock so concurrent callers
   cannot race on driver-level statements that share the connection.
 
+The listener lease is held for the backend lifetime. Publishers use separate,
+short-lived pooled sessions, so a shared PostgreSQL pool must configure at
+least two connections: ``max_size >= 2`` for asyncpg/psycopg and
+``max_db_pool_size >= 2`` for psqlpy. Native backend construction rejects a
+configured pool of size one instead of allowing publication to deadlock behind
+the listener.
+
 The Oracle native backends (``aq`` and
 ``txeventq``) use an analogous pattern: a per-channel
 queue-handle cache backed by a single dedicated session per backend instance.
@@ -54,6 +98,31 @@ the caller's polling cadence is respected.
 
 ``ack`` / ``nack`` semantics are unchanged. ``notify`` remains
 fire-and-forget; ``notify_queue`` acknowledges through the durable table queue.
+
+Batch publication and recovery
+==============================
+
+Both :class:`~sqlspec.extensions.events.AsyncEventChannel` and
+:class:`~sqlspec.extensions.events.SyncEventChannel` provide
+``publish_many(events)``. Each item is a
+``(channel, payload, metadata)`` tuple, and the returned event IDs preserve
+input order. Batch-capable implementations commit each grouped call atomically.
+Backends without ``publish_many``, including the current Oracle native
+transports, use an ordered single-event fallback; that fallback is not atomic
+across the batch.
+
+``poll_queue`` bulk-inserts the independent event rows with one publisher
+session and transaction. PostgreSQL ``notify`` publishes the normal per-event
+notification envelopes in one publisher transaction, so each notification
+keeps its existing payload and size limit.
+
+For PostgreSQL ``notify_queue``, SQLSpec bulk-inserts all durable rows and then
+emits one compact marker per channel in the same transaction. A marker contains
+only ``marker_id`` and ``batch_size``; it is a wakeup hint, not a batch event
+envelope or source of truth. A consumer uses that marker to drain the queued
+rows without waiting for another notification. Duplicate markers are ignored,
+and a missing marker is recovered by durable reconciliation on
+``event_poll_interval``.
 
 Oracle native event backends
 ============================
@@ -197,6 +266,8 @@ Utility Functions
 .. autofunction:: sqlspec.extensions.events.load_native_backend
 
 .. autofunction:: sqlspec.extensions.events.resolve_poll_interval
+
+.. autofunction:: sqlspec.extensions.events.resolve_event_poll_interval
 
 .. autofunction:: sqlspec.extensions.events.normalize_event_channel_name
 

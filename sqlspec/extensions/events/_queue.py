@@ -18,6 +18,7 @@ from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.config import DatabaseConfigProtocol
@@ -32,6 +33,7 @@ _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"
 _ACKED_STATUS = "acked"
 _DEFAULT_TABLE = "sqlspec_event_queue"
+_MAX_EMPTY_POLL_CHANNELS = 1_024
 
 
 class _BaseTableEventQueue:
@@ -43,6 +45,7 @@ class _BaseTableEventQueue:
         "_claim_statement",
         "_config",
         "_dialect",
+        "_empty_poll_delays",
         "_insert_statement",
         "_lease_seconds",
         "_max_claim_attempts",
@@ -70,6 +73,7 @@ class _BaseTableEventQueue:
         self._statement_config = config.statement_config
         self._runtime = config.get_observability_runtime()
         self._dialect = str(self._statement_config.dialect or "").lower() if self._statement_config else ""
+        self._empty_poll_delays: dict[str, float] = {}
         self._table_name = normalize_queue_table_name(queue_table or _DEFAULT_TABLE)
         self._lease_seconds = lease_seconds or 30
         self._retention_seconds = retention_seconds or 86_400
@@ -95,7 +99,7 @@ class _BaseTableEventQueue:
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
-        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC"
+        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC, event_id ASC"
         locking_clause = ""
         if select_for_update:
             locking_clause = " FOR UPDATE"
@@ -122,6 +126,19 @@ class _BaseTableEventQueue:
     def _uses_oracle_locking_select(self, select_for_update: bool | None = None) -> bool:
         locking_enabled = self._select_for_update if select_for_update is None else select_for_update
         return bool(locking_enabled) and "oracle" in self._dialect
+
+    def _next_empty_poll_delay(self, channel: str, poll_interval: "float | None") -> float:
+        if poll_interval is None or poll_interval <= 0:
+            return 0.0
+        if channel not in self._empty_poll_delays and len(self._empty_poll_delays) >= _MAX_EMPTY_POLL_CHANNELS:
+            self._empty_poll_delays.pop(next(iter(self._empty_poll_delays)))
+        delay = poll_interval
+        self._empty_poll_delays[channel] = delay
+        self._runtime.record_metric("events.poll.backoff", delay)
+        return delay
+
+    def _reset_empty_poll_delay(self, channel: str) -> None:
+        self._empty_poll_delays.pop(channel, None)
 
     def _claim_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
@@ -159,6 +176,29 @@ class _BaseTableEventQueue:
     @staticmethod
     def _utcnow() -> "datetime":
         return datetime.now(timezone.utc)
+
+    @classmethod
+    def _batch_insert_parameters(
+        cls, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]"
+    ) -> "tuple[list[str], list[dict[str, Any]]]":
+        now = cls._utcnow()
+        event_ids: list[str] = []
+        records: list[dict[str, Any]] = []
+        for index, (channel, payload, metadata) in enumerate(events):
+            event_id = uuid4().hex
+            event_ids.append(event_id)
+            records.append({
+                "event_id": event_id,
+                "channel": channel,
+                "payload_json": payload,
+                "metadata_json": metadata,
+                "status": _PENDING_STATUS,
+                "available_at": now,
+                "lease_expires_at": None,
+                "attempts": 0,
+                "created_at": now + timedelta(microseconds=index),
+            })
+        return event_ids, records
 
     @staticmethod
     def _claim_verified(row: "dict[str, Any] | None", leased_until: "datetime") -> bool:
@@ -243,6 +283,21 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         self._runtime.increment_metric("events.publish")
         return event_id
 
+    def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Bulk-insert independent events in one transaction."""
+        if not events:
+            return []
+        event_ids, records = self._batch_insert_parameters(events)
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
+            driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
+            driver.commit()
+        self._runtime.increment_metric("events.publisher.session")
+        self._runtime.increment_metric("events.publisher.statement")
+        self._runtime.increment_metric("events.publish", len(records))
+        return event_ids
+
     def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
         attempt = 0
         while attempt < self._max_claim_attempts:
@@ -250,14 +305,19 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             if self._select_for_update:
                 event = self._claim_locked_candidate(channel)
                 if event is not None:
+                    self._reset_empty_poll_delay(channel)
                     return event
-                if poll_interval is not None and poll_interval > 0:
-                    time.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    time.sleep(delay)
                 return None
             row = self._fetch_candidate(channel)
             if row is None:
-                if poll_interval is not None and poll_interval > 0:
-                    time.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    time.sleep(delay)
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
@@ -275,6 +335,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             if not claimed:
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
+                self._reset_empty_poll_delay(channel)
                 return self._hydrate_event(row, leased_until)
         return None
 
@@ -298,7 +359,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            return self._hydrate_event(row, leased_until)
+            event = self._hydrate_event(row, leased_until)
+            self._reset_empty_poll_delay(event.channel)
+            return event
         return None
 
     def ack(self, event_id: str) -> None:
@@ -320,6 +383,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
 
     def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
+        self._runtime.increment_metric("events.poll.query")
         with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
             return driver.select_one_or_none(
                 # SQL allocation here is intentional: DB round-trip dominates by >=100x,
@@ -450,6 +514,21 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         self._runtime.increment_metric("events.publish")
         return event_id
 
+    async def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Bulk-insert independent events in one transaction."""
+        if not events:
+            return []
+        event_ids, records = self._batch_insert_parameters(events)
+        async with cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
+            await driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
+            await driver.commit()
+        self._runtime.increment_metric("events.publisher.session")
+        self._runtime.increment_metric("events.publisher.statement")
+        self._runtime.increment_metric("events.publish", len(records))
+        return event_ids
+
     async def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
         attempt = 0
         while attempt < self._max_claim_attempts:
@@ -457,14 +536,19 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if self._select_for_update:
                 event = await self._claim_locked_candidate(channel)
                 if event is not None:
+                    self._reset_empty_poll_delay(channel)
                     return event
-                if poll_interval is not None and poll_interval > 0:
-                    await asyncio.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 return None
             row = await self._fetch_candidate(channel)
             if row is None:
-                if poll_interval is not None and poll_interval > 0:
-                    await asyncio.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
@@ -482,6 +566,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if not claimed:
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
+                self._reset_empty_poll_delay(channel)
                 return self._hydrate_event(row, leased_until)
         return None
 
@@ -505,7 +590,9 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            return self._hydrate_event(row, leased_until)
+            event = self._hydrate_event(row, leased_until)
+            self._reset_empty_poll_delay(event.channel)
+            return event
         return None
 
     async def ack(self, event_id: str) -> None:
@@ -527,6 +614,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     async def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
+        self._runtime.increment_metric("events.poll.query")
         async with cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
         ) as driver:
