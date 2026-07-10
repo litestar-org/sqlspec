@@ -8,7 +8,7 @@ module paths to filesystem paths, and ensuring optional dependencies are install
 import importlib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.exceptions import MissingDependencyError
 
@@ -147,8 +147,8 @@ def import_optional_attr(module_name: str, attr: str) -> Any:
     return getattr(module, attr, None)
 
 
-def resolve_optional_attr(module_name: str, attr: str, fallback: T) -> T:
-    """Return ``module.attr`` when available, otherwise the provided fallback.
+def resolve_optional_attr(module_name: str, attr: "str | None", fallback: T) -> T:
+    """Return an optional module or attribute, otherwise the provided fallback.
 
     Unlike :func:`import_optional_attr`, this keeps the caller-supplied shim
     object stable so module-level caches can preserve identity when the optional
@@ -156,7 +156,8 @@ def resolve_optional_attr(module_name: str, attr: str, fallback: T) -> T:
 
     Args:
         module_name: Dotted module path to import.
-        attr: Attribute name to resolve on the imported module.
+        attr: Attribute name to resolve on the imported module. Returns the
+            module itself when ``None``.
         fallback: Shim object to return when the module or attribute is missing.
 
     Returns:
@@ -166,6 +167,8 @@ def resolve_optional_attr(module_name: str, attr: str, fallback: T) -> T:
     module = import_optional(module_name)
     if module is None:
         return fallback
+    if attr is None:
+        return cast("T", module)
     resolved = getattr(module, attr, None)
     return fallback if resolved is None else resolved
 

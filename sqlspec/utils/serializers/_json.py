@@ -10,7 +10,10 @@ from collections.abc import Callable, Iterator, Mapping
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
 from pathlib import Path, PurePath
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
+
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED
 from sqlspec.utils.logging import get_logger
@@ -115,6 +118,7 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
     """Load optional type keys when the public registry is first used."""
 
     __slots__ = ("_loaded",)
+    __hash__ = None
 
     def __init__(self, encoders: "dict[type, Callable[[Any], Any]]") -> None:
         super().__init__(encoders)
@@ -137,6 +141,16 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
         self._ensure_loaded()
         return super().__contains__(key)
 
+    def __delitem__(self, key: type) -> None:
+        self._ensure_loaded()
+        super().__delitem__(key)
+
+    def __eq__(self, other: object) -> bool:
+        self._ensure_loaded()
+        if isinstance(other, _LazyTypeEncoders):
+            other._ensure_loaded()
+        return super().__eq__(other)
+
     def __getitem__(self, key: type) -> "Callable[[Any], Any]":
         self._ensure_loaded()
         return super().__getitem__(key)
@@ -149,6 +163,38 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
         self._ensure_loaded()
         return super().__len__()
 
+    def __ne__(self, other: object) -> bool:
+        return not self == other
+
+    def __or__(self, other: "dict[Any, Any]", /) -> "dict[Any, Any]":
+        self._ensure_loaded()
+        return super().__or__(other)
+
+    def __ror__(self, other: "dict[Any, Any]", /) -> "dict[Any, Any]":
+        self._ensure_loaded()
+        return super().__ror__(other)
+
+    def __repr__(self) -> str:
+        self._ensure_loaded()
+        return super().__repr__()
+
+    def __setitem__(self, key: type, value: "Callable[[Any], Any]") -> None:
+        self._ensure_loaded()
+        super().__setitem__(key, value)
+
+    def __ior__(self, other: Any) -> "Self":  # type: ignore[misc,override]
+        self._ensure_loaded()
+        super().__ior__(other)
+        return self
+
+    def clear(self) -> None:
+        self._ensure_loaded()
+        super().clear()
+
+    def copy(self) -> "dict[type, Callable[[Any], Any]]":
+        self._ensure_loaded()
+        return super().copy()
+
     def get(self, key: type, default: Any = None) -> Any:
         self._ensure_loaded()
         return super().get(key, default)
@@ -160,6 +206,22 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
     def keys(self) -> "Any":
         self._ensure_loaded()
         return super().keys()
+
+    def pop(self, key: type, *args: Any) -> Any:
+        self._ensure_loaded()
+        return super().pop(key, *args)
+
+    def popitem(self) -> "tuple[type, Callable[[Any], Any]]":
+        self._ensure_loaded()
+        return super().popitem()
+
+    def setdefault(self, key: type, default: Any = None) -> Any:
+        self._ensure_loaded()
+        return super().setdefault(key, default)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        self._ensure_loaded()
+        super().update(*args, **kwargs)
 
     def values(self) -> "Any":
         self._ensure_loaded()

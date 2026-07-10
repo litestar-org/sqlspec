@@ -706,7 +706,7 @@ _ATTRS_FIELDS_SHIM = attrs_fields_stub
 _ATTRS_HAS_SHIM = attrs_has_stub
 _CATTRS_STRUCTURE_SHIM = cattrs_structure_stub
 _CATTRS_UNSTRUCTURE_SHIM = cattrs_unstructure_stub
-_LAZY_EXPORTS: "dict[str, tuple[str, str, Any]]" = {
+_LAZY_EXPORTS: "dict[str, tuple[str, str | None, Any]]" = {
     "ArrowRecordBatch": ("pyarrow", "RecordBatch", _ARROW_RECORD_BATCH_SHIM),
     "ArrowRecordBatchReader": ("pyarrow", "RecordBatchReader", _ARROW_RECORD_BATCH_READER_SHIM),
     "ArrowSchema": ("pyarrow", "Schema", _ARROW_SCHEMA_SHIM),
@@ -733,7 +733,7 @@ _LAZY_EXPORTS: "dict[str, tuple[str, str, Any]]" = {
     "attrs_has": ("attrs", "has", _ATTRS_HAS_SHIM),
     "cattrs_structure": ("cattrs", "structure", _CATTRS_STRUCTURE_SHIM),
     "cattrs_unstructure": ("cattrs", "unstructure", _CATTRS_UNSTRUCTURE_SHIM),
-    "trace": ("opentelemetry", "trace", _TRACE_SHIM),
+    "trace": ("opentelemetry.trace", None, _TRACE_SHIM),
 }
 
 

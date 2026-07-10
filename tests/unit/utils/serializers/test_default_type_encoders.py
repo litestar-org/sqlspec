@@ -11,6 +11,8 @@ import datetime
 import enum
 import ipaddress
 import json
+import subprocess
+import sys
 import uuid
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -36,6 +38,72 @@ def test_registry_is_public_dict() -> None:
     for key, encoder in DEFAULT_TYPE_ENCODERS.items():
         assert isinstance(key, type)
         assert callable(encoder)
+
+
+@pytest.mark.skipif(not (PYDANTIC_INSTALLED and NUMPY_INSTALLED), reason="Pydantic and NumPy are required")
+@pytest.mark.parametrize("operation", ["copy", "unpack", "equality", "repr", "or", "ror"])
+def test_registry_dict_operations_load_optional_encoder_keys(operation: str) -> None:
+    """Ordinary dict operations should include lazy optional encoder keys on first use."""
+    script = f"""
+import numpy as np
+from pydantic import BaseModel
+
+from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
+
+optional_keys = (BaseModel, np.ndarray, np.generic)
+operation = {operation!r}
+if operation == "copy":
+    result = DEFAULT_TYPE_ENCODERS.copy()
+    assert all(key in result for key in optional_keys)
+elif operation == "unpack":
+    result = {{**DEFAULT_TYPE_ENCODERS}}
+    assert all(key in result for key in optional_keys)
+elif operation == "equality":
+    assert DEFAULT_TYPE_ENCODERS == DEFAULT_TYPE_ENCODERS
+    raw_registry = dict.copy(DEFAULT_TYPE_ENCODERS)
+    assert all(key in raw_registry for key in optional_keys)
+elif operation == "repr":
+    registry_repr = repr(DEFAULT_TYPE_ENCODERS)
+    assert all(key.__name__ in registry_repr for key in optional_keys)
+elif operation == "or":
+    result = DEFAULT_TYPE_ENCODERS | {{}}
+    assert all(key in result for key in optional_keys)
+else:
+    result = {{}} | DEFAULT_TYPE_ENCODERS
+    assert all(key in result for key in optional_keys)
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not (PYDANTIC_INSTALLED and NUMPY_INSTALLED), reason="Pydantic and NumPy are required")
+@pytest.mark.parametrize("mutation", ["override", "delete", "clear"])
+def test_registry_mutations_load_optional_encoder_keys_first(mutation: str) -> None:
+    """Mutations before the first read should not overwrite or resurrect user intent."""
+    script = f"""
+import numpy as np
+from pydantic import BaseModel
+
+from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
+
+mutation = {mutation!r}
+if mutation == "override":
+    override = lambda value: "override"
+    DEFAULT_TYPE_ENCODERS[BaseModel] = override
+    assert DEFAULT_TYPE_ENCODERS[BaseModel] is override
+    assert np.ndarray in dict.copy(DEFAULT_TYPE_ENCODERS)
+elif mutation == "delete":
+    del DEFAULT_TYPE_ENCODERS[BaseModel]
+    assert BaseModel not in dict.copy(DEFAULT_TYPE_ENCODERS)
+    assert BaseModel not in DEFAULT_TYPE_ENCODERS
+else:
+    DEFAULT_TYPE_ENCODERS.clear()
+    assert dict.copy(DEFAULT_TYPE_ENCODERS) == {{}}
+    assert BaseModel not in DEFAULT_TYPE_ENCODERS
+    assert np.ndarray not in DEFAULT_TYPE_ENCODERS
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_registry_covers_required_types() -> None:

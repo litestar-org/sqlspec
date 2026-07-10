@@ -1,13 +1,11 @@
 """Regression tests for import-time optional dependency leakage."""
 
-from __future__ import annotations
-
 import subprocess
 import sys
 
 import pytest
 
-FORBIDDEN = ("pandas", "polars", "pyarrow", "litestar", "pydantic", "prometheus_client")
+FORBIDDEN = ("pandas", "polars", "pyarrow", "litestar", "pydantic", "opentelemetry", "prometheus_client")
 
 
 def test_import_sqlspec_does_not_import_heavy_optional_deps() -> None:

@@ -1,5 +1,6 @@
 """Regression tests for the lazy typing hubs."""
 
+import pickle
 from typing import get_args
 
 import pytest
@@ -78,6 +79,8 @@ def test_observability_fallbacks_preserve_public_class_names(monkeypatch: pytest
     assert fallback is getattr(private_typing, export_name)
     assert fallback.__name__ == export_name
     assert fallback.__qualname__ == export_name
+    assert repr(fallback) == f"<class 'sqlspec._typing.{export_name}'>"
+    assert pickle.loads(pickle.dumps(fallback)) is fallback
 
 
 def test_get_type_adapter_resolves_lazy_pydantic_exports(monkeypatch: pytest.MonkeyPatch) -> None:
