@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import json
 import math
+import sqlite3
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -4404,6 +4405,77 @@ class AsyncLifecycleConfig(Protocol):
 SyncConfigFactory = Callable[..., SyncLifecycleConfig]
 AsyncConfigFactory = Callable[..., AsyncLifecycleConfig]
 ConnectionHook = Callable[[object], None]
+
+
+def _native_sqlite_foreign_keys_default() -> int:
+    connection = sqlite3.connect(":memory:")
+    try:
+        row = connection.execute("PRAGMA foreign_keys").fetchone()
+        assert row is not None
+        return cast("int", row[0])
+    finally:
+        connection.close()
+
+
+_SQLITE_PRAGMA_NAMES = ("foreign_keys", "busy_timeout", "cache_size", "journal_mode", "synchronous", "temp_store")
+
+
+def _normalized_sqlite_pragma_value(name: str, value: object) -> object:
+    return str(value).lower() if name == "journal_mode" else value
+
+
+def _assert_sqlite_pragma_profiles(
+    file_profile: "Mapping[str, object]", memory_profile: "Mapping[str, object]"
+) -> None:
+    native_foreign_keys = _native_sqlite_foreign_keys_default()
+    assert {name: file_profile[name] for name in ("foreign_keys", "busy_timeout", "journal_mode", "synchronous")} == {
+        "foreign_keys": native_foreign_keys,
+        "busy_timeout": 5000,
+        "journal_mode": "wal",
+        "synchronous": 1,
+    }
+    assert memory_profile == {
+        "foreign_keys": native_foreign_keys,
+        "busy_timeout": 5000,
+        "cache_size": -16000,
+        "journal_mode": "memory",
+        "synchronous": 0,
+        "temp_store": 2,
+    }
+
+
+def assert_sync_connect_time_settings_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert a fresh SQLite file and memory connection receive the converged PRAGMA profiles."""
+    assert case.id == "sqlite-sync"
+    profiles: list[dict[str, object]] = []
+    for connection_overrides in (None, {"database": ":memory:"}):
+        config = make_config(connection_overrides=connection_overrides)
+        try:
+            with config.provide_session() as driver:
+                profiles.append({
+                    name: _normalized_sqlite_pragma_value(name, driver.select_value(f"PRAGMA {name}"))
+                    for name in _SQLITE_PRAGMA_NAMES
+                })
+        finally:
+            config.close_pool()
+    _assert_sqlite_pragma_profiles(*profiles)
+
+
+async def assert_async_connect_time_settings_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Assert fresh aiosqlite file and memory connections receive the converged PRAGMA profiles."""
+    assert case.id == "aiosqlite-async"
+    profiles: list[dict[str, object]] = []
+    for connection_overrides in (None, {"database": ":memory:"}):
+        config = make_config(connection_overrides=connection_overrides)
+        try:
+            async with config.provide_session() as driver:
+                profiles.append({
+                    name: _normalized_sqlite_pragma_value(name, await driver.select_value(f"PRAGMA {name}"))
+                    for name in _SQLITE_PRAGMA_NAMES
+                })
+        finally:
+            await config.close_pool()
+    _assert_sqlite_pragma_profiles(*profiles)
 
 
 def _pool_contract_table(case: DriverCase) -> str:
