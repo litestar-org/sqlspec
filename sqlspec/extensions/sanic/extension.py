@@ -5,6 +5,7 @@ from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions._framework_common import extract_extension_settings
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -92,35 +93,7 @@ class SQLSpecPlugin:
         Returns:
             Dictionary of Sanic-specific settings.
         """
-        sanic_config = config.extension_config.get("sanic", {})
-
-        connection_key = sanic_config.get("connection_key", DEFAULT_CONNECTION_KEY)
-        pool_key = sanic_config.get("pool_key", DEFAULT_POOL_KEY)
-        session_key = sanic_config.get("session_key", DEFAULT_SESSION_KEY)
-        commit_mode = sanic_config.get("commit_mode", DEFAULT_COMMIT_MODE)
-
-        if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
-            pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
-
-        correlation_headers = sanic_config.get("correlation_headers")
-        if correlation_headers is not None:
-            correlation_headers = tuple(correlation_headers)
-
-        return {
-            "connection_key": connection_key,
-            "pool_key": pool_key,
-            "session_key": session_key,
-            "commit_mode": commit_mode,
-            "extra_commit_statuses": sanic_config.get("extra_commit_statuses"),
-            "extra_rollback_statuses": sanic_config.get("extra_rollback_statuses"),
-            "disable_di": sanic_config.get("disable_di", False),
-            "enable_correlation_middleware": sanic_config.get("enable_correlation_middleware", False),
-            "correlation_header": sanic_config.get("correlation_header", "x-request-id"),
-            "correlation_headers": correlation_headers,
-            "auto_trace_headers": sanic_config.get("auto_trace_headers", True),
-            "enable_sqlcommenter_middleware": sanic_config.get("enable_sqlcommenter_middleware", True),
-            "sqlcommenter_framework": sanic_config.get("sqlcommenter_framework", "sanic"),
-        }
+        return extract_extension_settings(config, framework_key="sanic", sqlcommenter_framework="sanic")
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SanicConfigState:
         """Create configuration state object.

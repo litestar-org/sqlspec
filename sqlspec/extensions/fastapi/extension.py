@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, overload
 from fastapi import FastAPI, Request
 
 from sqlspec.base import SQLSpec
+from sqlspec.extensions._framework_common import extract_extension_settings
 from sqlspec.extensions.fastapi.providers import DEPENDENCY_DEFAULTS
 from sqlspec.extensions.fastapi.providers import provide_filters as _provide_filters
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
@@ -53,35 +54,7 @@ class SQLSpecPlugin(_StarlettePlugin):
         Returns:
             Dictionary of FastAPI-specific settings.
         """
-        fastapi_config = config.extension_config.get("fastapi", {})
-
-        connection_key = fastapi_config.get("connection_key", "db_connection")
-        pool_key = fastapi_config.get("pool_key", "db_pool")
-        session_key = fastapi_config.get("session_key", "db_session")
-        commit_mode = fastapi_config.get("commit_mode", "manual")
-
-        if not config.supports_connection_pooling and pool_key == "db_pool":
-            pool_key = f"_db_pool_{id(config)}"
-
-        correlation_headers = fastapi_config.get("correlation_headers")
-        if correlation_headers is not None:
-            correlation_headers = tuple(correlation_headers)
-
-        return {
-            "connection_key": connection_key,
-            "pool_key": pool_key,
-            "session_key": session_key,
-            "commit_mode": commit_mode,
-            "extra_commit_statuses": fastapi_config.get("extra_commit_statuses"),
-            "extra_rollback_statuses": fastapi_config.get("extra_rollback_statuses"),
-            "disable_di": fastapi_config.get("disable_di", False),
-            "enable_correlation_middleware": fastapi_config.get("enable_correlation_middleware", False),
-            "correlation_header": fastapi_config.get("correlation_header", "x-request-id"),
-            "correlation_headers": correlation_headers,
-            "auto_trace_headers": fastapi_config.get("auto_trace_headers", True),
-            "enable_sqlcommenter_middleware": fastapi_config.get("enable_sqlcommenter_middleware", True),
-            "sqlcommenter_framework": fastapi_config.get("sqlcommenter_framework", "fastapi"),
-        }
+        return extract_extension_settings(config, framework_key="fastapi", sqlcommenter_framework="fastapi")
 
     @overload
     def provide_session(

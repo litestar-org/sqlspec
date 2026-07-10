@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions._framework_common import extract_extension_settings
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
 from sqlspec.extensions.starlette.middleware import (
@@ -77,38 +78,7 @@ class SQLSpecPlugin:
         Returns:
             Dictionary of Starlette-specific settings.
         """
-        starlette_config = config.extension_config.get("starlette", {})
-
-        connection_key = starlette_config.get("connection_key", DEFAULT_CONNECTION_KEY)
-        pool_key = starlette_config.get("pool_key", DEFAULT_POOL_KEY)
-        session_key = starlette_config.get("session_key", DEFAULT_SESSION_KEY)
-        commit_mode = starlette_config.get("commit_mode", DEFAULT_COMMIT_MODE)
-
-        if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
-            pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
-
-        enable_correlation = starlette_config.get("enable_correlation_middleware", False)
-        correlation_header = starlette_config.get("correlation_header", "x-request-id")
-        correlation_headers = starlette_config.get("correlation_headers")
-        if correlation_headers is not None:
-            correlation_headers = tuple(correlation_headers)
-        auto_trace_headers = starlette_config.get("auto_trace_headers", True)
-
-        return {
-            "connection_key": connection_key,
-            "pool_key": pool_key,
-            "session_key": session_key,
-            "commit_mode": commit_mode,
-            "extra_commit_statuses": starlette_config.get("extra_commit_statuses"),
-            "extra_rollback_statuses": starlette_config.get("extra_rollback_statuses"),
-            "disable_di": starlette_config.get("disable_di", False),
-            "enable_correlation_middleware": enable_correlation,
-            "correlation_header": correlation_header,
-            "correlation_headers": correlation_headers,
-            "auto_trace_headers": auto_trace_headers,
-            "enable_sqlcommenter_middleware": starlette_config.get("enable_sqlcommenter_middleware", True),
-            "sqlcommenter_framework": starlette_config.get("sqlcommenter_framework", "starlette"),
-        }
+        return extract_extension_settings(config, framework_key="starlette", sqlcommenter_framework="starlette")
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
         """Create configuration state object.
