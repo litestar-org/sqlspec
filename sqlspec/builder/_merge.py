@@ -182,7 +182,6 @@ class MergeIntoClauseMixin:
             table_expr = exp.to_table(table)
             if is_explicitly_quoted(table):
                 stripped = table.strip('"`')
-                table_expr.set("quoted", True)
                 table_expr.set("this", exp.to_identifier(stripped, quoted=True))
                 cast("QueryBuilder", self)._merge_target_quoted = True  # pyright: ignore[reportPrivateUsage]
             else:
