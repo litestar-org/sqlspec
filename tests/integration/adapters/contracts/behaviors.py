@@ -1158,6 +1158,32 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
     )
 
 
+def assert_sync_execute_many_empty_contract(driver: object, case: DriverCase) -> None:
+    """Assert an empty sync execute-many batch is a no-op with a zero row count."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    result = sync_driver.execute_many(table.insert_qmark_sql, [])
+
+    assert result.rows_affected == 0
+    assert sync_driver.select_value(table.select_count_sql) == 0
+
+
+async def assert_async_execute_many_empty_contract(driver: object, case: DriverCase) -> None:
+    """Assert an empty async execute-many batch is a no-op with a zero row count."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    result = await async_driver.execute_many(table.insert_qmark_sql, [])
+
+    assert result.rows_affected == 0
+    assert await async_driver.select_value(table.select_count_sql) == 0
+
+
 def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers batch insert, update, and delete with accurate row counts."""
     if not case.supports_execute_many:
@@ -1261,7 +1287,7 @@ def _postgres_execute_many_specifics(driver: object, case: DriverCase) -> None:
     insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
     try:
         empty = sync_driver.execute_many(insert, [])
-        assert empty.rows_affected in (-1, 0)
+        assert empty.rows_affected == 0
         assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
 
         sync_driver.execute_many(
@@ -1349,7 +1375,7 @@ async def _postgres_execute_many_specifics_async(driver: object, case: DriverCas
     insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
     try:
         empty = await async_driver.execute_many(insert, [])
-        assert empty.rows_affected in (-1, 0)
+        assert empty.rows_affected == 0
         assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
 
         await async_driver.execute_many(
