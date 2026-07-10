@@ -255,7 +255,7 @@ DROP TABLE users;
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL);"
         ]
 
-        result = runner.execute_upgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+        result = runner.execute_upgrade(mock_driver, migration)
 
         assert result is not None
 
@@ -303,7 +303,7 @@ DROP TABLE users;
     with patch.object(migration["loader"], "get_down_sql", new_callable=AsyncMock) as mock_get_down_sql:
         mock_get_down_sql.return_value = ["DROP TABLE users;"]
 
-        result = runner.execute_downgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+        result = runner.execute_downgrade(mock_driver, migration)
 
         assert result is not None
 
@@ -377,7 +377,7 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
 
                 with patch.object(migration["loader"], "get_up_sql", new_callable=AsyncMock) as mock_get_up_sql:
                     mock_get_up_sql.return_value = [sql_statements[i]]
-                    result = runner.execute_upgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+                    result = runner.execute_upgrade(mock_driver, migration)
                     assert result is not None
 
         executed = runner.get_executed_migrations()
@@ -424,7 +424,7 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
             "CREATE TABLE irreversible_data AS SELECT DISTINCT column1, column2 FROM legacy_table;"
         ]
 
-        result = runner.execute_upgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+        result = runner.execute_upgrade(mock_driver, migration)
         assert result is not None
 
     with (
@@ -432,7 +432,7 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
         patch("sqlspec.migrations.runner.logger"),
     ):
         mock_get_down_sql.return_value = []
-        result = runner.execute_downgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+        result = runner.execute_downgrade(mock_driver, migration)
 
         assert result is not None
 
@@ -555,7 +555,7 @@ DROP TABLE IF EXISTS nonexistent_table;
 
     with patch.object(migration["loader"], "get_up_sql", new=mock_get_up_error):
         with pytest.raises(ValueError) as exc_info:
-            runner.execute_upgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+            runner.execute_upgrade(mock_driver, migration)
 
         assert "Failed to load upgrade for migration 0001" in str(exc_info.value)
 
@@ -590,7 +590,7 @@ DROP TABLE legacy_table;
             assert migration["has_downgrade"] is True
 
     with pytest.raises(ValueError) as exc_info:
-        runner.execute_upgrade(mock_driver, cast("LoadedMigrationMetadata", migration))
+        runner.execute_upgrade(mock_driver, migration)
 
     assert "has no upgrade query" in str(exc_info.value)
 

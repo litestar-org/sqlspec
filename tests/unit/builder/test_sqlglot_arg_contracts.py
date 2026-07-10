@@ -15,6 +15,7 @@ design.
 """
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 import sqlglot.expressions as sge
@@ -77,7 +78,7 @@ KNOWN_SET_SITES: frozenset[tuple[str, str, str]] = frozenset({
 })
 
 
-def _iter_module_trees():
+def _iter_module_trees() -> "Iterator[tuple[str, ast.Module]]":
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         yield path.relative_to(PACKAGE_ROOT.parent).as_posix(), ast.parse(path.read_text(), filename=str(path))
 

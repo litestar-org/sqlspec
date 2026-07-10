@@ -22,7 +22,12 @@ from sqlspec.core import SQL
 from sqlspec.driver import ExecutionResult
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncConnection, CockroachSyncConnection
+    from sqlspec.adapters.cockroach_psycopg._typing import (
+        CockroachAsyncConnection,
+        CockroachAsyncCursor,
+        CockroachSyncConnection,
+        CockroachSyncCursor,
+    )
 
 
 def test_cockroach_psycopg_retry_config_default_values() -> None:
@@ -305,14 +310,14 @@ class _RetryingCockroachPsycopgAsyncDriver(CockroachPsycopgAsyncDriver):
 
 def test_driver_cockroach_psycopg_sync_non_retry_execute_many_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgSyncDriver()
-    result = driver.dispatch_execute_many(object(), SQL("SELECT 1"))
+    result = driver.dispatch_execute_many(cast("CockroachSyncCursor", object()), SQL("SELECT 1"))
     assert result.cursor_result == "many"
     assert driver.calls == ["many"]
 
 
 def test_driver_cockroach_psycopg_sync_non_retry_execute_script_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgSyncDriver()
-    result = driver.dispatch_execute_script(object(), SQL("SELECT 1"))
+    result = driver.dispatch_execute_script(cast("CockroachSyncCursor", object()), SQL("SELECT 1"))
     assert result.cursor_result == "script"
     assert driver.calls == ["script"]
 
@@ -320,7 +325,7 @@ def test_driver_cockroach_psycopg_sync_non_retry_execute_script_uses_impl_wrappe
 @pytest.mark.anyio
 async def test_driver_cockroach_psycopg_async_non_retry_execute_many_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgAsyncDriver()
-    result = await driver.dispatch_execute_many(object(), SQL("SELECT 1"))
+    result = await driver.dispatch_execute_many(cast("CockroachAsyncCursor", object()), SQL("SELECT 1"))
     assert result.cursor_result == "many"
     assert driver.calls == ["many"]
 
@@ -328,7 +333,7 @@ async def test_driver_cockroach_psycopg_async_non_retry_execute_many_uses_impl_w
 @pytest.mark.anyio
 async def test_driver_cockroach_psycopg_async_non_retry_execute_script_uses_impl_wrapper() -> None:
     driver = _RecordingCockroachPsycopgAsyncDriver()
-    result = await driver.dispatch_execute_script(object(), SQL("SELECT 1"))
+    result = await driver.dispatch_execute_script(cast("CockroachAsyncCursor", object()), SQL("SELECT 1"))
     assert result.cursor_result == "script"
     assert driver.calls == ["script"]
 
@@ -338,7 +343,7 @@ def test_driver_cockroach_psycopg_sync_dispatch_execute_does_not_retry_inside_st
     driver = _RetryingCockroachPsycopgSyncDriver(connection)
 
     with pytest.raises(_RetryableCockroachError):
-        driver.dispatch_execute(object(), SQL("SELECT 1"))
+        driver.dispatch_execute(cast("CockroachSyncCursor", object()), SQL("SELECT 1"))
 
     assert driver.calls == 1
     assert connection.rollbacks == 0
@@ -370,7 +375,7 @@ async def test_driver_cockroach_psycopg_async_dispatch_execute_does_not_retry_in
     driver = _RetryingCockroachPsycopgAsyncDriver(connection)
 
     with pytest.raises(_RetryableCockroachError):
-        await driver.dispatch_execute(object(), SQL("SELECT 1"))
+        await driver.dispatch_execute(cast("CockroachAsyncCursor", object()), SQL("SELECT 1"))
 
     assert driver.calls == 1
     assert connection.rollbacks == 0

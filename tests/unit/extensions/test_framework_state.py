@@ -10,12 +10,15 @@ from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 _STATE_TYPES = (FlaskConfigState, SanicConfigState, SQLSpecConfigState)
+FrameworkState = FlaskConfigState | SanicConfigState | SQLSpecConfigState
 
 
-def _state(commit_mode: str, extra_commit: "set[int] | None", extra_rollback: "set[int] | None") -> Any:
-    states = []
+def _state(
+    commit_mode: str, extra_commit: "set[int] | None", extra_rollback: "set[int] | None"
+) -> "list[FrameworkState]":
+    states: list[FrameworkState] = []
     for state_type in _STATE_TYPES:
-        state = object.__new__(state_type)
+        state = cast("FrameworkState", object.__new__(state_type))
         state.commit_mode = cast("Any", commit_mode)
         state.extra_commit_statuses = extra_commit
         state.extra_rollback_statuses = extra_rollback
