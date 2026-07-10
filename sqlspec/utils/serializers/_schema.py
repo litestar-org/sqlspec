@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, Empty, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-from sqlspec.utils.module_loader import import_optional_attr
+from sqlspec.utils.serializers._json import _dump_attrs_instance as _dump_attrs
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
     has_dict_attribute,
@@ -176,11 +176,6 @@ def _dump_dataclass(value: Any, *, dataclass_fields: "tuple[Field[Any], ...]", e
 
 def _dump_pydantic(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
     return cast("dict[str, Any]", value.model_dump(exclude_unset=exclude_unset))
-
-
-def _dump_attrs(value: Any) -> "dict[str, Any]":
-    attrs_asdict = import_optional_attr("attrs", "asdict")
-    return cast("dict[str, Any]", attrs_asdict(value, recurse=True))
 
 
 def _dump_dict_attr(value: Any) -> "dict[str, Any]":
