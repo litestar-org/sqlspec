@@ -21,6 +21,18 @@ Unreleased
   return result envelopes, object DDL lookups return ``DDLResult`` directly, and
   callers should inspect capability or DDL status instead of treating empty
   lists as unsupported metadata.
+* Standardized event transport configuration on ``notify``, ``notify_queue``,
+  ``poll_queue``, ``aq``, and ``txeventq``. Retired transport names now raise
+  an explicit configuration error with the canonical replacement.
+
+**Fixed:**
+
+* Event channels now honor adapter ``events_backend`` driver features when no
+  extension-level backend is configured.
+* Early mysql-connector row-stream cleanup now consumes unread results without
+  reconnecting underneath an active transaction.
+* Public row streams continue to clean up duck-typed sources whose ``close()``
+  method uses the original no-argument contract.
 
 **Docs:**
 

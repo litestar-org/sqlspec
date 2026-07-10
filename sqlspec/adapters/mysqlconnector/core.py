@@ -232,16 +232,15 @@ class MysqlConnectorSyncStreamSource:
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                cursor.close()
         connection = self._driver.connection
         raw_connection = getattr(connection, "_cnx", None) or connection
-        if getattr(raw_connection, "unread_result", False):
-            with contextlib.suppress(Exception):
-                raw_connection.shutdown()
-                raw_connection.unread_result = False
-                raw_connection.reconnect()
+        try:
+            if getattr(raw_connection, "unread_result", False):
+                raw_connection.consume_results()
+        finally:
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    cursor.close()
 
 
 class MysqlConnectorAsyncStreamSource:
@@ -302,16 +301,15 @@ class MysqlConnectorAsyncStreamSource:
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                await cursor.close()
         connection = self._driver.connection
         raw_connection = getattr(connection, "_cnx", None) or connection
-        if getattr(raw_connection, "unread_result", False):
-            with contextlib.suppress(Exception):
-                await raw_connection.shutdown()
-                raw_connection.unread_result = False
-                await raw_connection.reconnect()
+        try:
+            if getattr(raw_connection, "unread_result", False):
+                await raw_connection.consume_results()
+        finally:
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    await cursor.close()
 
 
 def normalize_execute_many_parameters(parameters: Any) -> Any:

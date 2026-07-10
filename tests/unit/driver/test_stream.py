@@ -176,6 +176,26 @@ def test_sync_close_does_not_retry_when_source_raises_type_error() -> None:
     assert source.close_calls == 1
 
 
+def test_sync_close_supports_legacy_no_argument_source() -> None:
+    class LegacyCloseSource:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def start(self) -> None:
+            pass
+
+        def fetch_chunk(self) -> "list[dict[str, Any]]":
+            return []
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    source = LegacyCloseSource()
+    _sync_stream(source).close()
+
+    assert source.close_calls == 1
+
+
 # --------------------------------------------------------------------------- #
 # AsyncRowStream
 # --------------------------------------------------------------------------- #
@@ -274,6 +294,26 @@ async def test_async_close_does_not_retry_when_source_raises_type_error() -> Non
             raise TypeError("close boom")
 
     source = RaisingClose([])
+    await _async_stream(source).aclose()
+
+    assert source.close_calls == 1
+
+
+async def test_async_close_supports_legacy_no_argument_source() -> None:
+    class LegacyCloseSource:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def start(self) -> None:
+            pass
+
+        async def fetch_chunk(self) -> "list[dict[str, Any]]":
+            return []
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    source = LegacyCloseSource()
     await _async_stream(source).aclose()
 
     assert source.close_calls == 1

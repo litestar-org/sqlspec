@@ -92,6 +92,12 @@ def _resolve_event_type(payload: "dict[str, Any]", metadata: "dict[str, Any] | N
 
 
 _POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
+_EVENT_BACKENDS = frozenset({"notify", "notify_queue", "poll_queue", "aq", "txeventq"})
+_RETIRED_EVENT_BACKENDS = {
+    "listen_notify": "notify",
+    "listen_notify_durable": "notify_queue",
+    "table_queue": "poll_queue",
+}
 
 
 def _get_default_backend(adapter_name: "str | None") -> str:
@@ -99,6 +105,26 @@ def _get_default_backend(adapter_name: "str | None") -> str:
     if adapter_name in _POSTGRES_ADAPTERS:
         return "notify"
     return "poll_queue"
+
+
+def _resolve_backend_name(config: Any, extension_settings: "dict[str, Any]", adapter_name: "str | None") -> str:
+    """Resolve and validate event backend configuration."""
+    backend_name = extension_settings.get("backend")
+    if backend_name is None:
+        driver_features = getattr(config, "driver_features", {})
+        if isinstance(driver_features, dict):
+            backend_name = driver_features.get("events_backend")
+    if backend_name is None:
+        return _get_default_backend(adapter_name)
+    if backend_name in _RETIRED_EVENT_BACKENDS:
+        replacement = _RETIRED_EVENT_BACKENDS[backend_name]
+        msg = f"Event backend {backend_name!r} was removed; use {replacement!r}"
+        raise ImproperConfigurationError(msg)
+    if backend_name not in _EVENT_BACKENDS:
+        valid = ", ".join(sorted(_EVENT_BACKENDS))
+        msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
+        raise ImproperConfigurationError(msg)
+    return cast("str", backend_name)
 
 
 def load_native_backend(
@@ -363,7 +389,7 @@ class SyncEventChannel:
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
-        backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
+        backend_name = _resolve_backend_name(config, extension_settings, self._adapter_name)
         native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
         if native_backend is None:
             if backend_name not in {None, "poll_queue"}:
@@ -591,7 +617,7 @@ class AsyncEventChannel:
         hints = get_runtime_hints(self._adapter_name, config)
         self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
-        backend_name = extension_settings.get("backend") or _get_default_backend(self._adapter_name)
+        backend_name = _resolve_backend_name(config, extension_settings, self._adapter_name)
         native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
         if native_backend is None:
             if backend_name not in {None, "poll_queue"}:

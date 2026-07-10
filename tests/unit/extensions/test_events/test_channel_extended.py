@@ -59,12 +59,58 @@ def test_event_channel_backend_name_poll_queue(tmp_path) -> None:
     assert channel._backend_name == "poll_queue"
 
 
-def test_event_channel_backend_fallback_warning(tmp_path) -> None:
-    """EventChannel falls back to poll_queue for unavailable backends."""
+def test_event_channel_rejects_unknown_backend(tmp_path) -> None:
+    """Unknown backend names must not silently change delivery semantics."""
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "test.db")},
         extension_config={"events": {"backend": "nonexistent_backend"}},
     )
+    with pytest.raises(ImproperConfigurationError, match="Unknown event backend"):
+        SyncEventChannel(config)
+
+
+@pytest.mark.parametrize(
+    ("retired", "replacement"),
+    (("listen_notify", "notify"), ("listen_notify_durable", "notify_queue"), ("table_queue", "poll_queue")),
+)
+def test_event_channel_rejects_retired_backend_with_migration_guidance(
+    tmp_path, retired: str, replacement: str
+) -> None:
+    """Retired backend names fail explicitly with their canonical replacement."""
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")}, extension_config={"events": {"backend": retired}}
+    )
+
+    with pytest.raises(ImproperConfigurationError, match=rf"use '{replacement}'"):
+        SyncEventChannel(config)
+
+
+def test_event_channel_honors_driver_feature_backend(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Adapter driver features select the backend when extension config does not."""
+    selected: list[str | None] = []
+
+    def capture_backend(config: Any, backend_name: str | None, settings: dict[str, Any], adapter_name: str) -> None:
+        selected.append(backend_name)
+
+    monkeypatch.setattr("sqlspec.extensions.events._channel.load_native_backend", capture_backend)
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")}, driver_features={"events_backend": "notify"}
+    )
+
+    channel = SyncEventChannel(config)
+
+    assert channel._backend_name == "poll_queue"
+    assert selected == ["notify"]
+
+
+def test_event_extension_backend_takes_precedence_over_driver_feature(tmp_path) -> None:
+    """The extension setting is the primary event transport selector."""
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")},
+        driver_features={"events_backend": "listen_notify"},
+        extension_config={"events": {"backend": "poll_queue"}},
+    )
+
     channel = SyncEventChannel(config)
 
     assert channel._backend_name == "poll_queue"

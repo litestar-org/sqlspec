@@ -289,43 +289,76 @@ async def test_async_dispatch_select_stream_uses_driver_cursor_options(monkeypat
     connection.cursor.assert_awaited_once_with(prepared=True, buffered=False)
 
 
-def test_sync_stream_close_reconnects_instead_of_draining_unread_rows() -> None:
-    """Early close discards the dirty protocol session without fetching remaining rows."""
+def test_sync_stream_close_consumes_unread_rows_without_reconnecting() -> None:
+    """Early close preserves the current session and any active transaction."""
     connection = MagicMock()
     connection.unread_result = True
     connection._cnx = None
     cursor = MagicMock()
-    cursor.close.side_effect = RuntimeError("Unread result found")
     driver = MagicMock(connection=connection, driver_features={})
     source = MysqlConnectorSyncStreamSource(driver, "SELECT 1", None, 10, set())
     source._cursor = cursor
 
     source.close()
 
-    cursor.fetchall.assert_not_called()
-    connection.shutdown.assert_called_once_with()
-    connection.reconnect.assert_called_once_with()
+    connection.consume_results.assert_called_once_with()
+    cursor.close.assert_called_once_with()
+    connection.shutdown.assert_not_called()
+    connection.reconnect.assert_not_called()
+
+
+def test_sync_stream_close_closes_cursor_when_consuming_unread_rows_fails() -> None:
+    connection = MagicMock(unread_result=True, _cnx=None)
+    connection.consume_results.side_effect = RuntimeError("consume failed")
+    cursor = MagicMock()
+    source = MysqlConnectorSyncStreamSource(MagicMock(connection=connection), "SELECT 1", None, 10, set())
+    source._cursor = cursor
+
+    with pytest.raises(RuntimeError, match="consume failed"):
+        source.close()
+
+    cursor.close.assert_called_once_with()
+    connection.reconnect.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_async_stream_close_reconnects_instead_of_draining_unread_rows() -> None:
-    """Async early close replaces the dirty protocol session without fetching remaining rows."""
+async def test_async_stream_close_consumes_unread_rows_without_reconnecting() -> None:
+    """Async early close preserves the current session and active transaction."""
     connection = MagicMock()
     connection.unread_result = True
     connection._cnx = None
+    connection.consume_results = AsyncMock()
     connection.shutdown = AsyncMock()
     connection.reconnect = AsyncMock()
     cursor = MagicMock()
-    cursor.close = AsyncMock(side_effect=RuntimeError("Unread result found"))
+    cursor.close = AsyncMock()
     driver = MagicMock(connection=connection, driver_features={})
     source = MysqlConnectorAsyncStreamSource(driver, "SELECT 1", None, 10, set())
     source._cursor = cursor
 
     await source.close()
 
-    cursor.fetchall.assert_not_called()
-    connection.shutdown.assert_awaited_once_with()
-    connection.reconnect.assert_awaited_once_with()
+    connection.consume_results.assert_awaited_once_with()
+    cursor.close.assert_awaited_once_with()
+    connection.shutdown.assert_not_awaited()
+    connection.reconnect.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_async_stream_close_closes_cursor_when_consuming_unread_rows_fails() -> None:
+    connection = MagicMock(unread_result=True, _cnx=None)
+    connection.consume_results = AsyncMock(side_effect=RuntimeError("consume failed"))
+    connection.reconnect = AsyncMock()
+    cursor = MagicMock()
+    cursor.close = AsyncMock()
+    source = MysqlConnectorAsyncStreamSource(MagicMock(connection=connection), "SELECT 1", None, 10, set())
+    source._cursor = cursor
+
+    with pytest.raises(RuntimeError, match="consume failed"):
+        await source.close()
+
+    cursor.close.assert_awaited_once_with()
+    connection.reconnect.assert_not_awaited()
 
 
 def test_sync_create_connection_forwards_local_infile_gate(monkeypatch: pytest.MonkeyPatch) -> None:

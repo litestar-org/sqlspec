@@ -22,6 +22,11 @@ The durable queue is the source of truth for ``notify_queue``; native
 notifications only prompt consumers to check it. Durable event queues are not
 browser fan-out transports.
 
+Set ``extension_config["events"]["backend"]`` to select the transport. The
+adapter ``driver_features["events_backend"]`` value is used only when the
+extension setting is absent. Retired transport names fail with an explicit
+canonical replacement instead of silently changing delivery semantics.
+
 ``polling`` is not a SQLSpec backend name. Litestar Queues uses it for the
 fallback worker mode where no push wakeup transport is available and the
 worker waits for its configured polling interval.
