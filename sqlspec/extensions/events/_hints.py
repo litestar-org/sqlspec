@@ -20,7 +20,6 @@ class EventRuntimeHints:
     retention_seconds: int = 86_400
     select_for_update: bool = False
     skip_locked: bool = False
-    json_passthrough: bool = False
 
 
 _DEFAULT_HINTS: Final[EventRuntimeHints] = EventRuntimeHints()

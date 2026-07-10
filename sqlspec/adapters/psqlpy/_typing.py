@@ -91,14 +91,6 @@ class PsqlpyCursor:
         """
         self._in_use = False
 
-    def is_in_use(self) -> bool:
-        """Check if cursor is currently in use.
-
-        Returns:
-            True if cursor is in use, False otherwise
-        """
-        return self._in_use
-
 
 class PsqlpySessionContext:
     """Async context manager for psqlpy sessions.

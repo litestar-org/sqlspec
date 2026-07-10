@@ -198,10 +198,6 @@ class SQLFileLoader:
 
         self._runtime = runtime
 
-    def _metric(self, name: str, amount: float = 1.0) -> None:
-        if self._runtime is not None:
-            self._runtime.increment_metric(name, amount)
-
     def _raise_file_not_found(self, path: str) -> None:
         """Raise SQLFileNotFoundError for nonexistent file.
 

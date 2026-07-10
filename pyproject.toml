@@ -229,7 +229,6 @@ include = [
   "sqlspec/exceptions.py",                         # Exceptions module
   "sqlspec/loader.py",                             # Loader module
   "sqlspec/observability/**/*.py",                 # Observability utilities
-  "sqlspec/observability/_formatting.py",          # OTel console formatter
   "sqlspec/driver/**/*.py",                        # Driver module
   "sqlspec/adapters/**/pool.py",                   # Adapter pool runtimes proven without driver subclasses
   "sqlspec/migrations/**/*.py",                    # Migration runtime, excluding command CLI
@@ -641,7 +640,6 @@ split-on-trailing-comma = false
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004"]
 "docs/examples/**" = ["T201"]
 "sqlspec/adapters/spanner/config.py" = ["PLC2801"]
-"sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]
 "tests/**/*.*" = [

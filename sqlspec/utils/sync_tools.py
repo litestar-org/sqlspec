@@ -106,7 +106,6 @@ class CapacityLimiter:
         self.release()
 
 
-_default_limiter = CapacityLimiter(1000)
 _default_async_executor: concurrent.futures.ThreadPoolExecutor | None = None
 _default_async_executor_pid: int | None = None
 _managed_async_executor: concurrent.futures.ThreadPoolExecutor | None = None
