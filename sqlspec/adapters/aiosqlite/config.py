@@ -122,7 +122,7 @@ class AiosqliteDriverFeatures(TypedDict):
      Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
      Requires extension_config["events"] for migration setup.
     events_backend: Event channel backend selection.
-     Only option: "poll_queue" (durable table-backed queue with retries and exactly-once delivery).
+     Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
      SQLite does not have native pub/sub, so poll_queue is the only backend.
      Defaults to "poll_queue".
     custom_functions: Register SQL functions that run on the aiosqlite worker thread.

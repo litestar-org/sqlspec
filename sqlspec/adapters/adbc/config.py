@@ -111,7 +111,7 @@ class AdbcDriverFeatures(TypedDict):
         on_connection_create: Callback executed when a connection is created.
             Receives the raw ADBC connection for low-level driver configuration.
         events_backend: Event channel backend selection.
-        Only option: "poll_queue" (durable table-backed queue with retries and exactly-once delivery).
+        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
             ADBC does not have native pub/sub, so poll_queue is the only backend.
             Defaults to "poll_queue".
     """

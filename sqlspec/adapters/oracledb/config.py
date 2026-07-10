@@ -196,7 +196,7 @@ class OracleDriverFeatures(TypedDict):
      - "aq": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
      - "txeventq": Oracle Transactional Event Queues (native messaging, requires
        DBMS_AQADM privileges; provisioned via DBMS_AQADM.CREATE_TRANSACTIONAL_EVENT_QUEUE)
-     - "poll_queue": Durable table-backed queue with retries and exactly-once delivery
+     - "poll_queue": Durable table-backed queue with lease-based retries and acknowledgements
      Defaults to "poll_queue" (works on all Oracle editions without special privileges).
     enable_direct_path_load: Route load_from_arrow through Connection.direct_path_load.
      Thin-mode only; falls back to executemany when the API is absent or the
