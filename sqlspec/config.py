@@ -662,6 +662,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "_observability_runtime",
         "_storage_capabilities",
         "bind_key",
+        "connection_config",
         "connection_instance",
         "driver_features",
         "extension_config",
@@ -691,6 +692,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     bind_key: "str | None"
     statement_config: "StatementConfig"
+    connection_config: "dict[str, Any]"
     connection_instance: "PoolT | None"
     extension_config: "ExtensionConfigs"
     driver_features: "dict[str, Any]"
@@ -751,6 +753,39 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Clear the cached capability snapshot."""
 
         self._storage_capabilities = None
+
+    def _init_config_state(
+        self,
+        *,
+        connection_config: "dict[str, Any] | None",
+        connection_instance: "Any",
+        migration_config: "dict[str, Any] | MigrationConfig | None",
+        statement_config: "StatementConfig | None",
+        driver_features: "dict[str, Any] | None",
+        bind_key: "str | None",
+        extension_config: "ExtensionConfigs | None",
+        observability_config: "ObservabilityConfig | None",
+        default_dialect: str,
+    ) -> None:
+        """Populate the configuration state shared by every base config class.
+
+        Assigns identity and connection attributes, initializes observability and
+        migration components, resolves the statement configuration against
+        ``default_dialect``, seeds runtime driver features from storage
+        capabilities, and attaches lifecycle and observability extensions.
+        """
+        self.bind_key = bind_key
+        self.connection_instance = connection_instance
+        self.connection_config = connection_config or {}
+        self.extension_config = extension_config or {}
+        self.migration_config = migration_config or {}
+        self._init_observability(observability_config)
+        self._initialize_migration_components()
+        self.statement_config = statement_config or build_default_statement_config(default_dialect)
+        self._storage_capabilities = None
+        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
+        self._attach_lifecycle_hooks()
+        self._configure_observability_extensions()
 
     def _has_initialized_attribute(self, attribute_name: str) -> bool:
         """Return whether a slot-backed attribute has been initialized."""
@@ -1319,7 +1354,7 @@ class _AsyncMigrationMixin:
 class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for sync database configurations that do not implement a pool."""
 
-    __slots__ = ("connection_config",)
+    __slots__ = ()
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -1336,20 +1371,17 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
-        self.bind_key = bind_key
-        self.connection_instance = connection_instance
-        self.connection_config = connection_config or {}
-        self.extension_config = extension_config or {}
-        self.migration_config = migration_config or {}
-        self._init_observability(observability_config)
-        self._initialize_migration_components()
-
-        self._storage_capabilities = None
-        self.statement_config = statement_config or build_default_statement_config("sqlite")
-
-        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._attach_lifecycle_hooks()
-        self._configure_observability_extensions()
+        self._init_config_state(
+            connection_config=connection_config,
+            connection_instance=connection_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features=driver_features,
+            bind_key=bind_key,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            default_dialect="sqlite",
+        )
 
     def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -1378,7 +1410,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
 class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for async database configurations that do not implement a pool."""
 
-    __slots__ = ("connection_config",)
+    __slots__ = ()
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -1395,20 +1427,17 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
     ) -> None:
-        self.bind_key = bind_key
-        self.connection_instance = connection_instance
-        self.connection_config = connection_config or {}
-        self.extension_config = extension_config or {}
-        self.migration_config = migration_config or {}
-        self._init_observability(observability_config)
-        self._initialize_migration_components()
-
-        self.statement_config = statement_config or build_default_statement_config("sqlite")
-
-        self._storage_capabilities = None
-        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._attach_lifecycle_hooks()
-        self._configure_observability_extensions()
+        self._init_config_state(
+            connection_config=connection_config,
+            connection_instance=connection_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features=driver_features,
+            bind_key=bind_key,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            default_dialect="sqlite",
+        )
 
     async def create_connection(self) -> ConnectionT:
         """Create a database connection."""
@@ -1437,7 +1466,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
 class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for sync database configurations with connection pooling."""
 
-    __slots__ = ("_pool_lock", "connection_config")
+    __slots__ = ("_pool_lock",)
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
@@ -1459,20 +1488,17 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.bind_key = bind_key
-        self.connection_instance = connection_instance
-        self.connection_config = connection_config or {}
-        self.extension_config = extension_config or {}
-        self.migration_config = migration_config or {}
-        self._init_observability(observability_config)
-        self._initialize_migration_components()
-
-        self.statement_config = statement_config or build_default_statement_config("postgres")
-
-        self._storage_capabilities = None
-        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._attach_lifecycle_hooks()
-        self._configure_observability_extensions()
+        self._init_config_state(
+            connection_config=connection_config,
+            connection_instance=connection_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features=driver_features,
+            bind_key=bind_key,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            default_dialect="postgres",
+        )
         self._pool_lock = threading.Lock()
 
     def create_pool(self) -> PoolT:
@@ -1544,7 +1570,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
 class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Base class for async database configurations with connection pooling."""
 
-    __slots__ = ("_pool_lock", "connection_config")
+    __slots__ = ("_pool_lock",)
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
@@ -1566,20 +1592,17 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.bind_key = bind_key
-        self.connection_instance = connection_instance
-        self.connection_config = connection_config or {}
-        self.extension_config = extension_config or {}
-        self.migration_config = migration_config or {}
-        self._init_observability(observability_config)
-        self._initialize_migration_components()
-
-        self.statement_config = statement_config or build_default_statement_config("postgres")
-
-        self._storage_capabilities = None
-        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._attach_lifecycle_hooks()
-        self._configure_observability_extensions()
+        self._init_config_state(
+            connection_config=connection_config,
+            connection_instance=connection_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features=driver_features,
+            bind_key=bind_key,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            default_dialect="postgres",
+        )
         self._pool_lock = asyncio.Lock()
 
     async def create_pool(self) -> PoolT:
