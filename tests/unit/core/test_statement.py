@@ -1066,6 +1066,21 @@ def test_sql_order_by_method_without_parsing() -> None:
     assert "ORDER BY" in order_stmt.raw_sql or "DESC" in order_stmt.raw_sql
 
 
+def test_sql_where_method_without_parsing() -> None:
+    """Test SQL.where() with a string condition when parsing is disabled."""
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_parsing=False)
+    stmt = SQL("SELECT * FROM users", statement_config=config)
+    where_stmt = stmt.where("id > 1")
+    assert "id > 1" in where_stmt.sql
+
+
+def test_sql_where_method_with_unparseable_condition() -> None:
+    """Test SQL.where() falls back to the raw string when the condition cannot be parsed."""
+    stmt = SQL("SELECT * FROM users")
+    where_stmt = stmt.where("id !!~ 1 ~!!")
+    assert "id !!~ 1 ~!!" in where_stmt.sql
+
+
 def test_sql_filters_property_compatibility() -> None:
     """Test SQL.filters property returns copy of filters list."""
     stmt = SQL("SELECT * FROM users")
