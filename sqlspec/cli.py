@@ -337,6 +337,59 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         async_configs = [(name, cfg) for name, cfg in configs if cfg.is_async]
         return sync_configs, async_configs
 
+    def _run_multi_config_operation(
+        configs_to_process: "list[tuple[str, Any]]",
+        *,
+        sync_apply: "Callable[[Any], None]",
+        async_apply: "Callable[[Any], Any]",
+        should_echo: "Callable[[Any], bool]",
+        progress_message: "Callable[[str], str] | None",
+        success_message: "Callable[[str], str] | None",
+        failure_message: "Callable[[str, Exception], str]",
+    ) -> None:
+        """Dispatch a migration operation across multiple configs.
+
+        Sync configs execute inline; async configs are batched into a single
+        ``run_`` call so they share one event loop.
+
+        Args:
+            configs_to_process: List of (config_name, config) tuples.
+            sync_apply: Callable executing the operation for one sync config.
+            async_apply: Coroutine function executing the operation for one async config.
+            should_echo: Per-config predicate gating console output.
+            progress_message: Builds the per-config progress line, or None to skip.
+            success_message: Builds the per-config success line, or None to skip.
+            failure_message: Builds the per-config failure line.
+        """
+        sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
+
+        for config_name, config in sync_configs:
+            if progress_message is not None and should_echo(config):
+                console.print(progress_message(config_name))
+            try:
+                sync_apply(config)
+                if success_message is not None and should_echo(config):
+                    console.print(success_message(config_name))
+            except Exception as e:
+                if should_echo(config):
+                    console.print(failure_message(config_name, e))
+
+        if async_configs:
+
+            async def _run_async_configs() -> None:
+                for config_name, config in async_configs:
+                    if progress_message is not None and should_echo(config):
+                        console.print(progress_message(config_name))
+                    try:
+                        await async_apply(config)
+                        if success_message is not None and should_echo(config):
+                            console.print(success_message(config_name))
+                    except Exception as e:
+                        if should_echo(config):
+                            console.print(failure_message(config_name, e))
+
+            run_(_run_async_configs)()
+
     def process_multiple_configs(
         ctx: "click.Context",
         bind_key: str | None,
@@ -422,35 +475,27 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             ctx, bind_key, include, exclude, dry_run=False, operation_name="show current revision"
         )
 
+        async def _async_show(config: Any) -> None:
+            migration_commands: AsyncMigrationCommands[Any] = cast(
+                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
+            )
+            await migration_commands.current(verbose=verbose)
+
         if configs_to_process is not None:
             if not configs_to_process:
                 return
 
             console.rule("[yellow]Listing current revisions for all configurations[/]", align="left")
 
-            sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
-
-            for config_name, config in sync_configs:
-                console.print(f"\n[blue]Configuration: {config_name}[/]")
-                try:
-                    _show_for_config(config)
-                except Exception as e:
-                    console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
-
-            if async_configs:
-
-                async def _run_async_configs() -> None:
-                    for config_name, config in async_configs:
-                        console.print(f"\n[blue]Configuration: {config_name}[/]")
-                        try:
-                            migration_commands: AsyncMigrationCommands[Any] = cast(
-                                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
-                            )
-                            await migration_commands.current(verbose=verbose)
-                        except Exception as e:
-                            console.print(f"[red]✗ Failed to get current revision for {config_name}: {e}[/]")
-
-                run_(_run_async_configs)()
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_show_for_config,
+                async_apply=_async_show,
+                should_echo=lambda _config: True,
+                progress_message=lambda name: f"\n[blue]Configuration: {name}[/]",
+                success_message=None,
+                failure_message=lambda name, e: f"[red]✗ Failed to get current revision for {name}: {e}[/]",
+            )
         else:
             console.rule("[yellow]Listing current revision[/]", align="left")
             sqlspec_config = get_config_by_bind_key(ctx, bind_key)
@@ -529,6 +574,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             echo=echo_enabled,
         )
 
+        async def _async_downgrade(config: Any) -> None:
+            migration_commands: AsyncMigrationCommands[Any] = cast(
+                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
+            )
+            await migration_commands.downgrade(
+                revision=revision,
+                dry_run=dry_run,
+                use_logger=use_logger,
+                echo=echo_setting,
+                summary_only=summary_setting,
+            )
+
         if configs_to_process is not None:
             if not configs_to_process:
                 return
@@ -543,43 +600,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             if echo_enabled:
                 console.rule("[yellow]Starting multi-configuration downgrade process[/]", align="left")
 
-            sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
-
-            for config_name, config in sync_configs:
-                if _should_echo(config):
-                    console.print(f"[blue]Downgrading configuration: {config_name}[/]")
-                try:
-                    _downgrade_for_config(config)
-                    if _should_echo(config):
-                        console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
-                except Exception as e:
-                    if _should_echo(config):
-                        console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
-
-            if async_configs:
-
-                async def _run_async_configs() -> None:
-                    for config_name, config in async_configs:
-                        if _should_echo(config):
-                            console.print(f"[blue]Downgrading configuration: {config_name}[/]")
-                        try:
-                            migration_commands: AsyncMigrationCommands[Any] = cast(
-                                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
-                            )
-                            await migration_commands.downgrade(
-                                revision=revision,
-                                dry_run=dry_run,
-                                use_logger=use_logger,
-                                echo=echo_setting,
-                                summary_only=summary_setting,
-                            )
-                            if _should_echo(config):
-                                console.print(f"[green]✓ Successfully downgraded: {config_name}[/]")
-                        except Exception as e:
-                            if _should_echo(config):
-                                console.print(f"[red]✗ Failed to downgrade {config_name}: {e}[/]")
-
-                run_(_run_async_configs)()
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_downgrade_for_config,
+                async_apply=_async_downgrade,
+                should_echo=_should_echo,
+                progress_message=lambda name: f"[blue]Downgrading configuration: {name}[/]",
+                success_message=lambda name: f"[green]✓ Successfully downgraded: {name}[/]",
+                failure_message=lambda name, e: f"[red]✗ Failed to downgrade {name}: {e}[/]",
+            )
         else:
             if echo_enabled:
                 console.rule("[yellow]Starting database downgrade process[/]", align="left")
@@ -670,6 +699,19 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}", echo=echo_enabled
         )
 
+        async def _async_upgrade(config: Any) -> None:
+            migration_commands: AsyncMigrationCommands[Any] = cast(
+                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
+            )
+            await migration_commands.upgrade(
+                revision=revision,
+                auto_sync=not no_auto_sync,
+                dry_run=dry_run,
+                use_logger=use_logger,
+                echo=echo_setting,
+                summary_only=summary_setting,
+            )
+
         if configs_to_process is not None:
             if not configs_to_process:
                 return
@@ -684,44 +726,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             if echo_enabled:
                 console.rule("[yellow]Starting multi-configuration upgrade process[/]", align="left")
 
-            sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
-
-            for config_name, config in sync_configs:
-                if _should_echo(config):
-                    console.print(f"[blue]Upgrading configuration: {config_name}[/]")
-                try:
-                    _upgrade_for_config(config)
-                    if _should_echo(config):
-                        console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
-                except Exception as e:
-                    if _should_echo(config):
-                        console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
-
-            if async_configs:
-
-                async def _run_async_configs() -> None:
-                    for config_name, config in async_configs:
-                        if _should_echo(config):
-                            console.print(f"[blue]Upgrading configuration: {config_name}[/]")
-                        try:
-                            migration_commands: AsyncMigrationCommands[Any] = cast(
-                                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
-                            )
-                            await migration_commands.upgrade(
-                                revision=revision,
-                                auto_sync=not no_auto_sync,
-                                dry_run=dry_run,
-                                use_logger=use_logger,
-                                echo=echo_setting,
-                                summary_only=summary_setting,
-                            )
-                            if _should_echo(config):
-                                console.print(f"[green]✓ Successfully upgraded: {config_name}[/]")
-                        except Exception as e:
-                            if _should_echo(config):
-                                console.print(f"[red]✗ Failed to upgrade {config_name}: {e}[/]")
-
-                run_(_run_async_configs)()
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_upgrade_for_config,
+                async_apply=_async_upgrade,
+                should_echo=_should_echo,
+                progress_message=lambda name: f"[blue]Upgrading configuration: {name}[/]",
+                success_message=lambda name: f"[green]✓ Successfully upgraded: {name}[/]",
+                failure_message=lambda name, e: f"[red]✗ Failed to upgrade {name}: {e}[/]",
+            )
         else:
             if echo_enabled:
                 console.rule("[yellow]Starting database upgrade process[/]", align="left")
