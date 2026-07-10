@@ -389,12 +389,12 @@ def test_cached_execution_named_style_sets_needs_rebind(sqlite_sync_driver: Any,
     sqlite_sync_driver._stmt_cache_enabled = True
     called = False
 
-    def _fake_rebind(params: tuple[Any, ...] | list[Any], cached_query: CachedQuery) -> tuple[Any, ...] | list[Any]:
+    def _fake_rebind(params: tuple[Any, ...] | list[Any], cached_query: CachedQuery) -> dict[str, Any]:
         nonlocal called
         called = True
         assert params == (1,)
         assert cached_query is cached
-        return params
+        return {"id": params[0]}
 
     monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", _fake_rebind)
 
