@@ -7,9 +7,9 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions._framework_common import should_commit
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
-from sqlspec.protocols import HasNameProtocol
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
+from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -251,7 +251,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
         """
         attrs: dict[str, str] = {"route": request.url.path, "framework": self._framework}
         endpoint = request.scope.get("endpoint")
-        if isinstance(endpoint, HasNameProtocol):
+        if has_name(endpoint):
             attrs["action"] = endpoint.__name__
 
         previous = SQLCommenterContext.get()

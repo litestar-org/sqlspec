@@ -18,10 +18,10 @@ from sqlspec.extensions.sanic._utils import (
     pop_context_value,
     set_context_value,
 )
-from sqlspec.protocols import HasNameProtocol
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
+from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from sanic import Sanic
@@ -346,12 +346,12 @@ class SQLSpecPlugin:
         endpoint = getattr(request, "endpoint", None)
         if isinstance(endpoint, str) and endpoint:
             return endpoint.rsplit(".", 1)[-1]
-        if isinstance(endpoint, HasNameProtocol):
+        if has_name(endpoint):
             return endpoint.__name__
 
         route = getattr(request, "route", None)
         handler = getattr(route, "handler", None)
-        if isinstance(handler, HasNameProtocol):
+        if has_name(handler):
             return handler.__name__
 
         name = getattr(request, "name", None)
