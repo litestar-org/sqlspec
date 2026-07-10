@@ -5,9 +5,8 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
-import oracledb as _oracledb
 from oracledb import (
     DB_TYPE_BLOB,
     DB_TYPE_CLOB,
@@ -32,8 +31,7 @@ if TYPE_CHECKING:
     from oracledb import DB_TYPE_VECTOR  # pyright: ignore[reportUnknownVariableType]
 
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, Statement, StatementConfig
+    from sqlspec.core import StatementConfig
 
     OracleSyncConnection: TypeAlias = Connection
     OracleAsyncConnection: TypeAlias = AsyncConnection
@@ -56,9 +54,6 @@ if not TYPE_CHECKING:
     OracleAsyncRawCursor = AsyncCursor
 
 __all__ = (
-    "AQMSG_INVISIBLE",
-    "AQMSG_PAYLOAD_TYPE_JSON",
-    "AQMSG_VISIBLE",
     "DB_TYPE_BLOB",
     "DB_TYPE_CLOB",
     "DB_TYPE_JSON",
@@ -66,8 +61,6 @@ __all__ = (
     "DB_TYPE_LONG_RAW",
     "DB_TYPE_RAW",
     "DB_TYPE_VECTOR",
-    "SPARSE_VECTOR_TYPE",
-    "AQDequeueOptions",
     "DatabaseError",
     "Error",
     "OracleAsyncConnection",
@@ -75,21 +68,12 @@ __all__ = (
     "OracleAsyncCursor",
     "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
-    "OraclePipelineDriver",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",
     "OracleSyncCursor",
     "OracleSyncRawCursor",
     "OracleSyncSessionContext",
-    "create_pipeline",
 )
-
-AQDequeueOptions: Any | None = getattr(_oracledb, "AQDequeueOptions", None)
-AQMSG_VISIBLE: int | None = getattr(_oracledb, "AQMSG_VISIBLE", None)
-AQMSG_INVISIBLE: int | None = getattr(_oracledb, "AQMSG_INVISIBLE", None)
-AQMSG_PAYLOAD_TYPE_JSON: Any | None = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
-SPARSE_VECTOR_TYPE: type[object] | None = getattr(_oracledb, "SparseVector", None)
-create_pipeline = _oracledb.create_pipeline
 
 
 class OracleSyncCursor:
@@ -144,24 +128,6 @@ class OracleAsyncCursor:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()
-
-
-class OraclePipelineDriver(Protocol):
-    """Protocol for Oracle pipeline driver methods used in stack execution."""
-
-    statement_config: "StatementConfig"
-    driver_features: "dict[str, Any]"
-
-    def prepare_statement(
-        self,
-        statement: "str | Statement | QueryBuilder",
-        parameters: "tuple[Any, ...] | dict[str, Any] | None",
-        *,
-        statement_config: "StatementConfig | None" = None,
-        kwargs: "dict[str, Any] | None" = None,
-    ) -> "SQL": ...
-
-    def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
 class OracleSyncSessionContext:
