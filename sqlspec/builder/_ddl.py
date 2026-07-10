@@ -1531,7 +1531,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             return exp.AlterColumn(this=exp.to_identifier(op.column_name), default=default_expr)
 
         if op_type == "ALTER COLUMN DROP DEFAULT":
-            return exp.AlterColumn(this=exp.to_identifier(op.column_name), kind="DROP DEFAULT")
+            return exp.AlterColumn(this=exp.to_identifier(op.column_name), drop=True)
 
         self._raise_builder_error(f"Unknown operation type: {op.operation_type}")
         raise AssertionError
