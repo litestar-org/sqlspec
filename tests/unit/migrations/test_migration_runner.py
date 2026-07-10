@@ -32,14 +32,6 @@ class _RunnerConfig:
         self.migration_config = migration_config
 
 
-class _SyncMigrationLoader:
-    def get_up_sql(self, _file_path: Path) -> list[str]:
-        return ["CREATE TABLE example (id INTEGER)"]
-
-    def get_down_sql(self, _file_path: Path) -> list[str]:
-        return ["DROP TABLE example"]
-
-
 class _AsyncMigrationLoader:
     async def get_up_sql(self, _file_path: Path) -> list[str]:
         return ["CREATE TABLE example (id INTEGER)"]
@@ -206,7 +198,7 @@ def test_sync_execute_upgrade_sets_migration_schema_after_begin(tmp_path: Path) 
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+    runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
 
     assert driver.mock_calls[:4] == [
         call.begin(),
@@ -223,7 +215,7 @@ def test_sync_execute_upgrade_skips_migration_schema_when_unset(tmp_path: Path) 
     runner = _sync_runner(tmp_path, {})
     driver = Mock()
 
-    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+    runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
 
     driver.set_migration_session_schema.assert_not_called()
 
@@ -235,7 +227,7 @@ def test_sync_execute_downgrade_sets_migration_schema_after_begin(tmp_path: Path
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_downgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+    runner.execute_downgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
 
     assert driver.mock_calls[:4] == [
         call.begin(),
@@ -252,7 +244,7 @@ def test_sync_execute_upgrade_sets_and_resets_non_transactional_schema(tmp_path:
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=False)
+    runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=False)
 
     assert driver.mock_calls[:3] == [
         call.set_migration_non_transactional_schema("app_schema"),
@@ -270,7 +262,7 @@ def test_sync_execute_downgrade_sets_and_resets_non_transactional_schema(tmp_pat
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_downgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=False)
+    runner.execute_downgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=False)
 
     assert driver.mock_calls[:3] == [
         call.set_migration_non_transactional_schema("app_schema"),
@@ -700,7 +692,7 @@ def test_migration_sql_upgrade_success() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])),
     }
 
     result = runner._migration_sql(migration, "up")
@@ -719,7 +711,7 @@ def test_migration_sql_downgrade_success() -> None:
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_down_sql=Mock(return_value=["DROP TABLE test;"])),
+        "loader": Mock(get_down_sql=AsyncMock(return_value=["DROP TABLE test;"])),
     }
 
     result = runner._migration_sql(migration, "down")
@@ -818,7 +810,7 @@ def test_migration_sql_empty_statements() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=[])),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=[])),
     }
 
     result = runner._migration_sql(migration, "up")
@@ -835,7 +827,7 @@ def test_migration_sql_none_statements() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=None)),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=None)),
     }
 
     result = runner._migration_sql(migration, "up")

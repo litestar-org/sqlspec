@@ -2,7 +2,6 @@
 
 import ast
 import hashlib
-import inspect
 import logging
 import re
 import time
@@ -485,6 +484,136 @@ class BaseMigrationRunner(ABC):
         migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None))
         return _resolve_default_schema(migration_config)
 
+    def _resolve_use_transaction(self, migration: "LoadedMigrationMetadata", use_transaction: "bool | None") -> bool:
+        """Resolve the effective transaction flag for a migration."""
+        if use_transaction is None:
+            config = self.context.config if self.context else None
+            use_transaction = self.should_use_transaction(migration, config) if config else False
+        return bool(use_transaction)
+
+    def _log_migration_missing(
+        self, driver: Any, migration: "LoadedMigrationMetadata", operation: str, event: str
+    ) -> None:
+        """Record metrics and a warning for a migration with no SQL to apply."""
+        self._metric(f"migrations.{operation}.skipped")
+        self._log_migration_event(
+            logging.WARNING,
+            event,
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            status="missing",
+        )
+
+    def _begin_migration_span(
+        self, driver: Any, migration: "LoadedMigrationMetadata", operation: str, event: str, use_transaction: bool
+    ) -> Any:
+        """Start the observability span for a migration and log the start event."""
+        runtime = self.runtime
+        span = None
+        if runtime is not None:
+            span = runtime.start_migration_span(operation, version=migration.get("version"))
+            runtime.increment_metric(f"migrations.{operation}.invocations")
+        self._log_migration_event(
+            logging.INFO,
+            event,
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            use_transaction=use_transaction,
+            status="start",
+        )
+        return span
+
+    def _finish_migration_span_success(
+        self,
+        span: Any,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        operation: str,
+        event: str,
+        execution_time: int,
+    ) -> None:
+        """Close the observability span and log completion for a successful migration."""
+        runtime = self.runtime
+        if runtime is not None:
+            runtime.increment_metric(f"migrations.{operation}.applied")
+            runtime.increment_metric(f"migrations.{operation}.duration_ms", float(execution_time))
+            runtime.end_migration_span(span, duration_ms=execution_time)
+        self._log_migration_event(
+            logging.INFO,
+            event,
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            duration_ms=execution_time,
+            status="complete",
+        )
+
+    def _finish_migration_span_error(
+        self,
+        span: Any,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        operation: str,
+        event: str,
+        start_time: float,
+        exc: Exception,
+    ) -> None:
+        """Close the observability span and log failure for a migration."""
+        runtime = self.runtime
+        if runtime is not None:
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            runtime.increment_metric(f"migrations.{operation}.errors")
+            runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
+        self._log_migration_event(
+            logging.ERROR,
+            event,
+            db_system=resolve_db_system(type(driver).__name__),
+            version=migration.get("version"),
+            duration_ms=int((time.perf_counter() - start_time) * 1000),
+            error_type=type(exc).__name__,
+            status="failed",
+        )
+
+    def _check_missing_direction(self, migration: "LoadedMigrationMetadata", direction: str) -> bool:
+        """Return True when a migration lacks the requested direction's query.
+
+        Called during migration loading before the ``has_*grade`` fields exist, so
+        an absent field is treated as "not yet known" and does not short-circuit.
+
+        Raises:
+            ValueError: When an upgrade query is required but absent.
+        """
+        if f"has_{direction}grade" in migration and not migration.get(f"has_{direction}grade"):
+            if direction == "down":
+                self._log_migration_event(
+                    logging.WARNING, "migration.downgrade.missing", version=migration.get("version")
+                )
+                return True
+            msg = f"Migration {migration.get('version')} has no upgrade query"
+            raise ValueError(msg)
+        return False
+
+    def _handle_migration_sql_error(
+        self, migration: "LoadedMigrationMetadata", direction: str, error: Exception
+    ) -> None:
+        """Swallow a downgrade loader failure with a warning; re-raise for upgrades.
+
+        Raises:
+            ValueError: When an upgrade query fails to load.
+        """
+        if direction == "down":
+            self._log_migration_event(
+                logging.WARNING, "migration.downgrade.load_failed", version=migration.get("version"), error=str(error)
+            )
+            return
+        msg = f"Failed to load upgrade for migration {migration.get('version')}: {error}"
+        raise ValueError(msg) from error
+
+    def _finalize_migration_sql(self, sql_statements: Any) -> "list[str] | None":
+        """Normalize loader output into a SQL statement list or None."""
+        if sql_statements:
+            return cast("list[str]", sql_statements)
+        return None
+
 
 class SyncMigrationRunner(BaseMigrationRunner):
     """Synchronous migration runner with pure sync methods."""
@@ -587,35 +716,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
         """
         upgrade_sql_list = self._migration_sql(migration, "up")
         if upgrade_sql_list is None:
-            self._metric("migrations.upgrade.skipped")
-            self._log_migration_event(
-                logging.WARNING,
-                "migration.apply",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                status="missing",
-            )
+            self._log_migration_missing(driver, migration, "upgrade", "migration.apply")
             return None, 0
 
-        if use_transaction is None:
-            config = self.context.config if self.context else None
-            use_transaction = self.should_use_transaction(migration, config) if config else False
-        use_transaction = bool(use_transaction)
-
-        runtime = self.runtime
-        span = None
-        if runtime is not None:
-            version = migration.get("version")
-            span = runtime.start_migration_span("upgrade", version=version)
-            runtime.increment_metric("migrations.upgrade.invocations")
-        self._log_migration_event(
-            logging.INFO,
-            "migration.apply",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            use_transaction=use_transaction,
-            status="start",
-        )
+        use_transaction = self._resolve_use_transaction(migration, use_transaction)
+        span = self._begin_migration_span(driver, migration, "upgrade", "migration.apply", use_transaction)
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -627,34 +732,10 @@ class SyncMigrationRunner(BaseMigrationRunner):
         except Exception as exc:
             if use_transaction:
                 driver.rollback()
-            if runtime is not None:
-                duration_ms = int((time.perf_counter() - start_time) * 1000)
-                runtime.increment_metric("migrations.upgrade.errors")
-                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
-            self._log_migration_event(
-                logging.ERROR,
-                "migration.apply",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                duration_ms=int((time.perf_counter() - start_time) * 1000),
-                error_type=type(exc).__name__,
-                status="failed",
-            )
+            self._finish_migration_span_error(span, driver, migration, "upgrade", "migration.apply", start_time, exc)
             raise
 
-        if runtime is not None:
-            runtime.increment_metric("migrations.upgrade.applied")
-            runtime.increment_metric("migrations.upgrade.duration_ms", float(execution_time))
-            runtime.end_migration_span(span, duration_ms=execution_time)
-        self._log_migration_event(
-            logging.INFO,
-            "migration.apply",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            duration_ms=execution_time,
-            status="complete",
-        )
-
+        self._finish_migration_span_success(span, driver, migration, "upgrade", "migration.apply", execution_time)
         return None, execution_time
 
     def execute_downgrade(
@@ -678,35 +759,11 @@ class SyncMigrationRunner(BaseMigrationRunner):
         """
         downgrade_sql_list = self._migration_sql(migration, "down")
         if downgrade_sql_list is None:
-            self._metric("migrations.downgrade.skipped")
-            self._log_migration_event(
-                logging.WARNING,
-                "migration.rollback",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                status="missing",
-            )
+            self._log_migration_missing(driver, migration, "downgrade", "migration.rollback")
             return None, 0
 
-        if use_transaction is None:
-            config = self.context.config if self.context else None
-            use_transaction = self.should_use_transaction(migration, config) if config else False
-        use_transaction = bool(use_transaction)
-
-        runtime = self.runtime
-        span = None
-        if runtime is not None:
-            version = migration.get("version")
-            span = runtime.start_migration_span("downgrade", version=version)
-            runtime.increment_metric("migrations.downgrade.invocations")
-        self._log_migration_event(
-            logging.INFO,
-            "migration.rollback",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            use_transaction=use_transaction,
-            status="start",
-        )
+        use_transaction = self._resolve_use_transaction(migration, use_transaction)
+        span = self._begin_migration_span(driver, migration, "downgrade", "migration.rollback", use_transaction)
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -722,34 +779,12 @@ class SyncMigrationRunner(BaseMigrationRunner):
         except Exception as exc:
             if use_transaction:
                 driver.rollback()
-            if runtime is not None:
-                duration_ms = int((time.perf_counter() - start_time) * 1000)
-                runtime.increment_metric("migrations.downgrade.errors")
-                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
-            self._log_migration_event(
-                logging.ERROR,
-                "migration.rollback",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                duration_ms=int((time.perf_counter() - start_time) * 1000),
-                error_type=type(exc).__name__,
-                status="failed",
+            self._finish_migration_span_error(
+                span, driver, migration, "downgrade", "migration.rollback", start_time, exc
             )
             raise
 
-        if runtime is not None:
-            runtime.increment_metric("migrations.downgrade.applied")
-            runtime.increment_metric("migrations.downgrade.duration_ms", float(execution_time))
-            runtime.end_migration_span(span, duration_ms=execution_time)
-        self._log_migration_event(
-            logging.INFO,
-            "migration.rollback",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            duration_ms=execution_time,
-            status="complete",
-        )
-
+        self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
     def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
@@ -762,39 +797,19 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Returns:
             SQL statements for the migration.
         """
-        # If this is being called during migration loading (no has_*grade field yet),
-        # don't raise/warn - just proceed to check if the method exists
-        if f"has_{direction}grade" in migration and not migration.get(f"has_{direction}grade"):
-            if direction == "down":
-                self._log_migration_event(
-                    logging.WARNING, "migration.downgrade.missing", version=migration.get("version")
-                )
-                return None
-            msg = f"Migration {migration.get('version')} has no upgrade query"
-            raise ValueError(msg)
+        if self._check_missing_direction(migration, direction):
+            return None
 
         file_path, loader = migration["file_path"], migration["loader"]
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = (
-                await_(method, raise_sync_error=False)(file_path)
-                if inspect.iscoroutinefunction(method)
-                else method(file_path)
-            )
-
+            sql_statements = await_(method, raise_sync_error=False)(file_path)
         except Exception as e:
-            if direction == "down":
-                self._log_migration_event(
-                    logging.WARNING, "migration.downgrade.load_failed", version=migration.get("version"), error=str(e)
-                )
-                return None
-            msg = f"Failed to load upgrade for migration {migration.get('version')}: {e}"
-            raise ValueError(msg) from e
-        else:
-            if sql_statements:
-                return cast("list[str]", sql_statements)
+            self._handle_migration_sql_error(migration, direction, e)
             return None
+        else:
+            return self._finalize_migration_sql(sql_statements)
 
     def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.
@@ -934,35 +949,11 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """
         upgrade_sql_list = await self._migration_sql(migration, "up")
         if upgrade_sql_list is None:
-            self._metric("migrations.upgrade.skipped")
-            self._log_migration_event(
-                logging.WARNING,
-                "migration.apply",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                status="missing",
-            )
+            self._log_migration_missing(driver, migration, "upgrade", "migration.apply")
             return None, 0
 
-        if use_transaction is None:
-            config = self.context.config if self.context else None
-            use_transaction = self.should_use_transaction(migration, config) if config else False
-        use_transaction = bool(use_transaction)
-
-        runtime = self.runtime
-        span = None
-        if runtime is not None:
-            version = migration.get("version")
-            span = runtime.start_migration_span("upgrade", version=version)
-            runtime.increment_metric("migrations.upgrade.invocations")
-        self._log_migration_event(
-            logging.INFO,
-            "migration.apply",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            use_transaction=use_transaction,
-            status="start",
-        )
+        use_transaction = self._resolve_use_transaction(migration, use_transaction)
+        span = self._begin_migration_span(driver, migration, "upgrade", "migration.apply", use_transaction)
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -974,34 +965,10 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         except Exception as exc:
             if use_transaction:
                 await driver.rollback()
-            if runtime is not None:
-                duration_ms = int((time.perf_counter() - start_time) * 1000)
-                runtime.increment_metric("migrations.upgrade.errors")
-                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
-            self._log_migration_event(
-                logging.ERROR,
-                "migration.apply",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                duration_ms=int((time.perf_counter() - start_time) * 1000),
-                error_type=type(exc).__name__,
-                status="failed",
-            )
+            self._finish_migration_span_error(span, driver, migration, "upgrade", "migration.apply", start_time, exc)
             raise
 
-        if runtime is not None:
-            runtime.increment_metric("migrations.upgrade.applied")
-            runtime.increment_metric("migrations.upgrade.duration_ms", float(execution_time))
-            runtime.end_migration_span(span, duration_ms=execution_time)
-        self._log_migration_event(
-            logging.INFO,
-            "migration.apply",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            duration_ms=execution_time,
-            status="complete",
-        )
-
+        self._finish_migration_span_success(span, driver, migration, "upgrade", "migration.apply", execution_time)
         return None, execution_time
 
     async def execute_downgrade(
@@ -1025,35 +992,11 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """
         downgrade_sql_list = await self._migration_sql(migration, "down")
         if downgrade_sql_list is None:
-            self._metric("migrations.downgrade.skipped")
-            self._log_migration_event(
-                logging.WARNING,
-                "migration.rollback",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                status="missing",
-            )
+            self._log_migration_missing(driver, migration, "downgrade", "migration.rollback")
             return None, 0
 
-        if use_transaction is None:
-            config = self.context.config if self.context else None
-            use_transaction = self.should_use_transaction(migration, config) if config else False
-        use_transaction = bool(use_transaction)
-
-        runtime = self.runtime
-        span = None
-        if runtime is not None:
-            version = migration.get("version")
-            span = runtime.start_migration_span("downgrade", version=version)
-            runtime.increment_metric("migrations.downgrade.invocations")
-        self._log_migration_event(
-            logging.INFO,
-            "migration.rollback",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            use_transaction=use_transaction,
-            status="start",
-        )
+        use_transaction = self._resolve_use_transaction(migration, use_transaction)
+        span = self._begin_migration_span(driver, migration, "downgrade", "migration.rollback", use_transaction)
 
         start_time = time.perf_counter()
         execution_time = 0
@@ -1069,34 +1012,12 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         except Exception as exc:
             if use_transaction:
                 await driver.rollback()
-            if runtime is not None:
-                duration_ms = int((time.perf_counter() - start_time) * 1000)
-                runtime.increment_metric("migrations.downgrade.errors")
-                runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
-            self._log_migration_event(
-                logging.ERROR,
-                "migration.rollback",
-                db_system=resolve_db_system(type(driver).__name__),
-                version=migration.get("version"),
-                duration_ms=int((time.perf_counter() - start_time) * 1000),
-                error_type=type(exc).__name__,
-                status="failed",
+            self._finish_migration_span_error(
+                span, driver, migration, "downgrade", "migration.rollback", start_time, exc
             )
             raise
 
-        if runtime is not None:
-            runtime.increment_metric("migrations.downgrade.applied")
-            runtime.increment_metric("migrations.downgrade.duration_ms", float(execution_time))
-            runtime.end_migration_span(span, duration_ms=execution_time)
-        self._log_migration_event(
-            logging.INFO,
-            "migration.rollback",
-            db_system=resolve_db_system(type(driver).__name__),
-            version=migration.get("version"),
-            duration_ms=execution_time,
-            status="complete",
-        )
-
+        self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
     async def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
@@ -1109,35 +1030,19 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             SQL statements for the migration.
         """
-        # If this is being called during migration loading (no has_*grade field yet),
-        # don't raise/warn - just proceed to check if the method exists
-        if f"has_{direction}grade" in migration and not migration.get(f"has_{direction}grade"):
-            if direction == "down":
-                self._log_migration_event(
-                    logging.WARNING, "migration.downgrade.missing", version=migration.get("version")
-                )
-                return None
-            msg = f"Migration {migration.get('version')} has no upgrade query"
-            raise ValueError(msg)
+        if self._check_missing_direction(migration, direction):
+            return None
 
         file_path, loader = migration["file_path"], migration["loader"]
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
             sql_statements = await method(file_path)
-
         except Exception as e:
-            if direction == "down":
-                self._log_migration_event(
-                    logging.WARNING, "migration.downgrade.load_failed", version=migration.get("version"), error=str(e)
-                )
-                return None
-            msg = f"Failed to load upgrade for migration {migration.get('version')}: {e}"
-            raise ValueError(msg) from e
-        else:
-            if sql_statements:
-                return cast("list[str]", sql_statements)
+            self._handle_migration_sql_error(migration, direction, e)
             return None
+        else:
+            return self._finalize_migration_sql(sql_statements)
 
     async def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.

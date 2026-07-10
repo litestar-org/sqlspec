@@ -13,7 +13,7 @@ Tests for Migration core functionality including:
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -603,7 +603,7 @@ def test_migration_sql_upgrade() -> None:
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=["CREATE TABLE test (id INTEGER);"])),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=["CREATE TABLE test (id INTEGER);"])),
     }
 
     result = runner._migration_sql(migration, "up")
@@ -621,7 +621,7 @@ def test_migration_sql_downgrade() -> None:
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_down_sql=Mock(return_value=["DROP TABLE test;"])),
+        "loader": Mock(get_down_sql=AsyncMock(return_value=["DROP TABLE test;"])),
     }
 
     result = runner._migration_sql(migration, "down")
@@ -703,7 +703,7 @@ def test_migration_sql_empty_statements() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=[])),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=[])),
     }
 
     result = runner._migration_sql(migration, "up")
