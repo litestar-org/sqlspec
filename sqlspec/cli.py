@@ -322,6 +322,50 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             return run_(async_fn)()
         return sync_fn()
 
+    def _dispatch_migration_call(config: Any, method_name: str, **kwargs: Any) -> Any:
+        """Run a migration command method with sync/async dispatch for one config.
+
+        Args:
+            config: The database configuration.
+            method_name: Name of the migration command method to invoke.
+            **kwargs: Arguments forwarded to the command method.
+
+        Returns:
+            The result of the command method.
+        """
+        from sqlspec.migrations.commands import create_migration_commands
+
+        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
+            config=config
+        )
+        method = getattr(migration_commands, method_name)
+
+        def _sync_call() -> Any:
+            return method(**kwargs)
+
+        async def _async_call() -> Any:
+            return await method(**kwargs)
+
+        return _execute_for_config(config, _sync_call, _async_call)
+
+    async def _dispatch_migration_call_async(config: Any, method_name: str, **kwargs: Any) -> Any:
+        """Await a migration command method inside an already-running event loop.
+
+        Args:
+            config: The async database configuration.
+            method_name: Name of the migration command method to invoke.
+            **kwargs: Arguments forwarded to the command method.
+
+        Returns:
+            The result of the command method.
+        """
+        from sqlspec.migrations.commands import create_migration_commands
+
+        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
+            config=config
+        )
+        return await getattr(migration_commands, method_name)(**kwargs)
+
     def _partition_configs_by_async(
         configs: "list[tuple[str, Any]]",
     ) -> "tuple[list[tuple[str, Any]], list[tuple[str, Any]]]":
@@ -453,33 +497,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Supports multi-config execution by partitioning selected configs into sync and async groups before dispatching them separately.
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         def _show_for_config(config: Any) -> None:
             """Show current revision for a single config with sync/async dispatch."""
-            migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-                config=config
-            )
-
-            def sync_show() -> None:
-                migration_commands.current(verbose=verbose)
-
-            async def async_show() -> None:
-                await cast("AsyncMigrationCommands[Any]", migration_commands).current(verbose=verbose)
-
-            _execute_for_config(config, sync_show, async_show)
+            _dispatch_migration_call(config, "current", verbose=verbose)
 
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run=False, operation_name="show current revision"
         )
 
         async def _async_show(config: Any) -> None:
-            migration_commands: AsyncMigrationCommands[Any] = cast(
-                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
-            )
-            await migration_commands.current(verbose=verbose)
+            await _dispatch_migration_call_async(config, "current", verbose=verbose)
 
         if configs_to_process is not None:
             if not configs_to_process:
@@ -524,8 +553,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     ) -> None:
         """Downgrade the database to the latest revision."""
 
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
         effective_no_echo = no_echo or summary_only
         echo_setting = False if effective_no_echo else None
@@ -540,29 +567,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         def _downgrade_for_config(config: Any) -> None:
             """Downgrade a single config with sync/async dispatch."""
-            migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-                config=config
+            _dispatch_migration_call(
+                config,
+                "downgrade",
+                revision=revision,
+                dry_run=dry_run,
+                use_logger=use_logger,
+                echo=echo_setting,
+                summary_only=summary_setting,
             )
-
-            def sync_downgrade() -> None:
-                migration_commands.downgrade(
-                    revision=revision,
-                    dry_run=dry_run,
-                    use_logger=use_logger,
-                    echo=echo_setting,
-                    summary_only=summary_setting,
-                )
-
-            async def async_downgrade() -> None:
-                await cast("AsyncMigrationCommands[Any]", migration_commands).downgrade(
-                    revision=revision,
-                    dry_run=dry_run,
-                    use_logger=use_logger,
-                    echo=echo_setting,
-                    summary_only=summary_setting,
-                )
-
-            _execute_for_config(config, sync_downgrade, async_downgrade)
 
         configs_to_process = process_multiple_configs(
             ctx,
@@ -575,10 +588,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         )
 
         async def _async_downgrade(config: Any) -> None:
-            migration_commands: AsyncMigrationCommands[Any] = cast(
-                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
-            )
-            await migration_commands.downgrade(
+            await _dispatch_migration_call_async(
+                config,
+                "downgrade",
                 revision=revision,
                 dry_run=dry_run,
                 use_logger=use_logger,
@@ -650,8 +662,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Non-automatic execution modes are surfaced in the console, and multi-config flows reuse ``process_multiple_configs`` to split sync/async executions while honoring dry-run and auto-sync flags.
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
         effective_no_echo = no_echo or summary_only
         echo_setting = False if effective_no_echo else None
@@ -669,41 +679,25 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         def _upgrade_for_config(config: Any) -> None:
             """Upgrade a single config with sync/async dispatch."""
-            migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-                config=config
+            _dispatch_migration_call(
+                config,
+                "upgrade",
+                revision=revision,
+                auto_sync=not no_auto_sync,
+                dry_run=dry_run,
+                use_logger=use_logger,
+                echo=echo_setting,
+                summary_only=summary_setting,
             )
-
-            def sync_upgrade() -> None:
-                migration_commands.upgrade(
-                    revision=revision,
-                    auto_sync=not no_auto_sync,
-                    dry_run=dry_run,
-                    use_logger=use_logger,
-                    echo=echo_setting,
-                    summary_only=summary_setting,
-                )
-
-            async def async_upgrade() -> None:
-                await cast("AsyncMigrationCommands[Any]", migration_commands).upgrade(
-                    revision=revision,
-                    auto_sync=not no_auto_sync,
-                    dry_run=dry_run,
-                    use_logger=use_logger,
-                    echo=echo_setting,
-                    summary_only=summary_setting,
-                )
-
-            _execute_for_config(config, sync_upgrade, async_upgrade)
 
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}", echo=echo_enabled
         )
 
         async def _async_upgrade(config: Any) -> None:
-            migration_commands: AsyncMigrationCommands[Any] = cast(
-                "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
-            )
-            await migration_commands.upgrade(
+            await _dispatch_migration_call_async(
+                config,
+                "upgrade",
                 revision=revision,
                 auto_sync=not no_auto_sync,
                 dry_run=dry_run,
@@ -752,20 +746,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @bind_key_option
     def stamp(bind_key: str | None, revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        migration_commands = create_migration_commands(config=sqlspec_config)
-
-        def sync_stamp() -> None:
-            migration_commands.stamp(revision=revision)
-
-        async def async_stamp() -> None:
-            await cast("AsyncMigrationCommands[Any]", migration_commands).stamp(revision=revision)
-
-        _execute_for_config(sqlspec_config, sync_stamp, async_stamp)
+        _dispatch_migration_call(sqlspec_config, "stamp", revision=revision)
 
     @database_group.command(name="init", help="Initialize migrations for the project.")
     @bind_key_option
@@ -838,8 +822,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         bind_key: str | None, message: str | None, file_format: str | None, no_prompt: bool
     ) -> None:
         """Create a new database revision."""
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Creating new migration revision[/]", align="left")
@@ -852,17 +834,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
         param_source = ctx.get_parameter_source("file_format")
         effective_format = None if param_source is ParameterSource.DEFAULT else file_format
-        migration_commands = create_migration_commands(config=sqlspec_config)
-
-        def sync_revision() -> None:
-            migration_commands.revision(message=message_text, file_type=effective_format)
-
-        async def async_revision() -> None:
-            await cast("AsyncMigrationCommands[Any]", migration_commands).revision(
-                message=message_text, file_type=effective_format
-            )
-
-        _execute_for_config(sqlspec_config, sync_revision, async_revision)
+        _dispatch_migration_call(sqlspec_config, "revision", message=message_text, file_type=effective_format)
 
     @database_group.command(name="fix", help="Convert timestamp migrations to sequential format.")
     @bind_key_option
@@ -873,23 +845,11 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         bind_key: str | None, dry_run: bool, yes: bool, no_database: bool
     ) -> None:
         """Convert timestamp migrations to sequential format."""
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Migration Fix Command[/]", align="left")
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        migration_commands = create_migration_commands(config=sqlspec_config)
-
-        def sync_fix() -> None:
-            migration_commands.fix(dry_run=dry_run, update_database=not no_database, yes=yes)
-
-        async def async_fix() -> None:
-            await cast("AsyncMigrationCommands[Any]", migration_commands).fix(
-                dry_run=dry_run, update_database=not no_database, yes=yes
-            )
-
-        _execute_for_config(sqlspec_config, sync_fix, async_fix)
+        _dispatch_migration_call(sqlspec_config, "fix", dry_run=dry_run, update_database=not no_database, yes=yes)
 
     @database_group.command(name="squash", help="Squash multiple migrations into a single file.")
     @bind_key_option
@@ -919,8 +879,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         VERSION_RANGE should be in START:END format:0004".
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         if ":" not in version_range:
@@ -933,33 +891,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         console.rule("[yellow]Migration Squash Command[/]", align="left")
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        migration_commands = create_migration_commands(config=sqlspec_config)
-
-        def sync_squash() -> None:
-            migration_commands.squash(
-                start_version=start_version,
-                end_version=end_version,
-                description=message,
-                dry_run=dry_run,
-                update_database=not no_database,
-                yes=yes,
-                allow_gaps=allow_gaps,
-                output_format=output_format,
-            )
-
-        async def async_squash() -> None:
-            await cast("AsyncMigrationCommands[Any]", migration_commands).squash(
-                start_version=start_version,
-                end_version=end_version,
-                description=message,
-                dry_run=dry_run,
-                update_database=not no_database,
-                yes=yes,
-                allow_gaps=allow_gaps,
-                output_format=output_format,
-            )
-
-        _execute_for_config(sqlspec_config, sync_squash, async_squash)
+        _dispatch_migration_call(
+            sqlspec_config,
+            "squash",
+            start_version=start_version,
+            end_version=end_version,
+            description=message,
+            dry_run=dry_run,
+            update_database=not no_database,
+            yes=yes,
+            allow_gaps=allow_gaps,
+            output_format=output_format,
+        )
 
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     @bind_key_option
