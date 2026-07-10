@@ -255,7 +255,7 @@ class UpdateTableClauseMixin:
     def table(self, table_name: str, alias: str | None = None) -> Self:
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Update):
-            self.set_expression(exp.Update(this=None, expressions=[], joins=[]))
+            self.set_expression(exp.Update(this=None, expressions=[]))
             current_expr = self.get_expression()
 
         assert current_expr is not None
@@ -377,10 +377,11 @@ class UpdateFromClauseMixin:
             msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)
 
-        from_clause = current_expr.args.get("from")
+        from_clause = current_expr.args.get("from_")
         if from_clause is None:
-            from_clause = exp.From(expressions=[])
-            current_expr.set("from", from_clause)
+            current_expr.set("from_", exp.From(this=table_expr))
+        else:
+            from_table = from_clause.this
+            from_table.append("joins", exp.Join(this=table_expr))
 
-        from_clause.append("expressions", table_expr)
         return self

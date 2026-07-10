@@ -315,11 +315,11 @@ class QueryBuilder(ABC):
         final_expression: exp.Expr = base_expression
         if has_with_method(final_expression):
             for alias, cte_node in self._with_ctes.items():
-                final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
+                final_expression = cast("Any", final_expression).with_(alias, as_=cte_node.args["this"], copy=False)
             return cast("exp.Expr", final_expression)
 
-        if isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
-            return exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
+        if "with_" in type(final_expression).arg_types:
+            final_expression.set("with_", exp.With(expressions=list(self._with_ctes.values())))
 
         return final_expression
 

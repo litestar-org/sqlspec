@@ -194,13 +194,14 @@ def test_cte_with_empty_parameters() -> None:
     cte = sql.select("id", "name").from_("users").limit(10)
 
     query = sql.select("*").with_cte("limited_users", cte).from_("orders")
+    query.enable_optimization = False
 
     stmt = query.build()
 
     # Should work without issues even with no parameters
     assert isinstance(stmt.parameters, dict)
-    assert "WITH" in stmt.sql
-    assert "limited_users" in stmt.sql
+    assert stmt.sql.startswith("WITH")
+    assert '"limited_users" AS (' in stmt.sql
 
 
 def test_multiple_cte_levels_parameter_isolation() -> None:
