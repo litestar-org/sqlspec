@@ -12,7 +12,7 @@ pytestmark = pytest.mark.xdist_group("duckdb")
 
 @pytest.fixture()
 def duckdb_stack_session() -> "Generator[DuckDBDriver, None, None]":
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
     with config.provide_session() as session:
         session.execute_script(
             "CREATE TABLE IF NOT EXISTS stack_txn_table (id INTEGER PRIMARY KEY); DELETE FROM stack_txn_table;"

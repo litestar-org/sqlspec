@@ -232,12 +232,12 @@ def pgvector_config_psycopg(pgvector_service: PostgresService) -> Generator[Psyc
     """Provide a psycopg config connected to a pgvector-enabled PostgreSQL service."""
     import psycopg
 
-    connection_config = PsycopgPoolParams(conninfo=_postgres_conninfo(pgvector_service))
+    connection_config = PsycopgPoolParams(conninfo=_postgres_conninfo(pgvector_service), min_size=1, max_size=4)
     with psycopg.connect(connection_config["conninfo"]) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.commit()
 
-    config = PsycopgSyncConfig(connection_config=connection_config, pool_config={"min_size": 1})
+    config = PsycopgSyncConfig(connection_config=connection_config)
     try:
         yield config
     finally:
@@ -273,7 +273,7 @@ def paradedb_config_psqlpy(paradedb_service: PostgresService) -> PsqlpyConfig:
 def paradedb_config_psycopg(paradedb_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
     """Provide a psycopg config connected to a ParadeDB service."""
     config = PsycopgSyncConfig(
-        connection_config=PsycopgPoolParams(conninfo=_postgres_conninfo(paradedb_service)), pool_config={"min_size": 1}
+        connection_config=PsycopgPoolParams(conninfo=_postgres_conninfo(paradedb_service), min_size=1, max_size=4)
     )
     try:
         yield config

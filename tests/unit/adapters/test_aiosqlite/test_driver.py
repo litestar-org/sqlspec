@@ -336,6 +336,7 @@ async def test_pool_acquire_acquire_multiple_concurrent_no_sleep_serialization(m
     for _ in range(pool_size):
         pool_conn = await pool._create_connection()
         pool._queue.put_nowait(pool_conn)
+
     async def _acquire_and_release() -> float:
         t0 = time.monotonic()
         connection = await pool.acquire()
