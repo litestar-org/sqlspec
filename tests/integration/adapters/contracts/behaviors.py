@@ -16,6 +16,7 @@ from sqlspec import SQL, SQLResult, StackExecutionError, StatementConfig, Statem
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.data_dictionary import VersionInfo
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
@@ -816,6 +817,7 @@ async def assert_async_complex_query_contract(driver: object, case: DriverCase) 
 
 
 STATEMENT_STACK_SCOPE = "statement_stack"
+STATEMENT_STACK_PARITY_PROOF_KEY = "statement_stack:native_fallback_parity"
 
 
 def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> None:
@@ -876,6 +878,172 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
     finally:
         await async_driver.execute(table.delete_sql)
         await async_driver.commit()
+
+
+def _statement_stack_parity_input(table: ContractTable) -> StatementStack:
+    return (
+        StatementStack()
+        .push_execute(table.insert_qmark_sql, ("parity-first", 10, None))
+        .push_execute(table.insert_qmark_sql, (None, 20, None))
+        .push_execute(table.insert_qmark_sql, ("parity-third", 30, None))
+    )
+
+
+def _sync_statement_stack_observation(
+    driver: SyncContractDriver, case: DriverCase, *, fallback: bool, continue_on_error: bool
+) -> "tuple[tuple[str, ...], type[Exception], int]":
+    table = case.table
+    driver.execute(table.delete_sql)
+    driver.commit()
+    stack_error: StackExecutionError | None = None
+    try:
+        stack = _statement_stack_parity_input(table)
+        if continue_on_error:
+            if fallback:
+                results = SyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=True)
+            else:
+                driver_any = cast("Any", driver)
+                prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                assert prepared_operations is not None
+                results = driver_any._execute_stack_pipeline(stack, prepared_operations)
+            assert len(results) == 3
+            assert results[0].error is None
+            assert results[2].error is None
+            result_error = results[1].error
+            assert isinstance(result_error, StackExecutionError)
+            stack_error = result_error
+        else:
+            try:
+                if fallback:
+                    SyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=False)
+                else:
+                    driver_any = cast("Any", driver)
+                    prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                    assert prepared_operations is not None
+                    driver_any._execute_stack_pipeline(stack, prepared_operations)
+            except StackExecutionError as exc:
+                stack_error = exc
+            else:
+                msg = "fail-fast statement stack did not raise StackExecutionError"
+                raise AssertionError(msg)
+
+        driver.rollback()
+        durable_rows = driver.execute(table.select_ordered_sql).get_data()
+        assert stack_error is not None
+        return tuple(row["name"] for row in durable_rows), type(stack_error), stack_error.operation_index
+    finally:
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute(table.delete_sql)
+        driver.commit()
+
+
+async def _async_statement_stack_observation(
+    driver: AsyncContractDriver, case: DriverCase, *, fallback: bool, continue_on_error: bool
+) -> "tuple[tuple[str, ...], type[Exception], int]":
+    table = case.table
+    await driver.execute(table.delete_sql)
+    await driver.commit()
+    stack_error: StackExecutionError | None = None
+    try:
+        stack = _statement_stack_parity_input(table)
+        if continue_on_error:
+            if fallback:
+                results = await AsyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=True)
+            elif case.adapter == "psycopg":
+                driver_any = cast("Any", driver)
+                prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                assert prepared_operations is not None
+                results = await driver_any._execute_stack_pipeline(stack, prepared_operations)
+            else:
+                results = await cast("Any", driver)._execute_stack_native(stack, continue_on_error=True)
+            assert len(results) == 3
+            assert results[0].error is None
+            assert results[2].error is None
+            result_error = results[1].error
+            assert isinstance(result_error, StackExecutionError)
+            stack_error = result_error
+        else:
+            try:
+                if fallback:
+                    await AsyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=False)
+                elif case.adapter == "psycopg":
+                    driver_any = cast("Any", driver)
+                    prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                    assert prepared_operations is not None
+                    await driver_any._execute_stack_pipeline(stack, prepared_operations)
+                else:
+                    await cast("Any", driver)._execute_stack_native(stack, continue_on_error=False)
+            except StackExecutionError as exc:
+                stack_error = exc
+            else:
+                msg = "fail-fast statement stack did not raise StackExecutionError"
+                raise AssertionError(msg)
+
+        await driver.rollback()
+        durable_rows = (await driver.execute(table.select_ordered_sql)).get_data()
+        assert stack_error is not None
+        return tuple(row["name"] for row in durable_rows), type(stack_error), stack_error.operation_index
+    finally:
+        with contextlib.suppress(Exception):
+            await driver.rollback()
+        await driver.execute(table.delete_sql)
+        await driver.commit()
+
+
+def assert_sync_statement_stack_parity_contract(driver: object, case: DriverCase) -> None:
+    """Assert psycopg native fail-fast stacks match the base fallback contract."""
+    if case.adapter != "psycopg":
+        pytest.skip(f"{case.adapter} has no active sync native stack parity case")
+    from sqlspec.adapters.psycopg.core import pipeline_supported
+
+    if not pipeline_supported():
+        pytest.skip("psycopg pipeline unavailable")
+    sync_driver = cast("SyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    if driver_any.stack_native_disabled:
+        pytest.skip("native statement stacks disabled")
+
+    fallback = _sync_statement_stack_observation(sync_driver, case, fallback=True, continue_on_error=False)
+    native = _sync_statement_stack_observation(sync_driver, case, fallback=False, continue_on_error=False)
+    assert native == fallback
+    assert native == ((), StackExecutionError, 1)
+
+
+async def assert_async_statement_stack_parity_contract(driver: object, case: DriverCase) -> None:
+    """Assert async native stacks match valid base fallback error and durability semantics."""
+    if case.adapter not in {"asyncpg", "psycopg", "oracledb"}:
+        pytest.skip(f"{case.adapter} has no active async native stack parity case")
+    if case.adapter == "psycopg":
+        from sqlspec.adapters.psycopg.core import pipeline_supported
+
+        if not pipeline_supported():
+            pytest.skip("psycopg pipeline unavailable")
+    async_driver = cast("AsyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    if driver_any.stack_native_disabled:
+        pytest.skip("native statement stacks disabled")
+    if case.adapter == "oracledb" and not await driver_any._pipeline_native_supported():
+        pytest.skip("Oracle native pipeline unavailable")
+
+    continue_on_error = case.adapter != "psycopg"
+    fallback = await _async_statement_stack_observation(
+        async_driver, case, fallback=True, continue_on_error=continue_on_error
+    )
+    native = await _async_statement_stack_observation(
+        async_driver, case, fallback=False, continue_on_error=continue_on_error
+    )
+    assert native == fallback
+    expected_durable_names = () if case.adapter == "psycopg" else ("parity-first", "parity-third")
+    assert native == (expected_durable_names, StackExecutionError, 1)
+
+
+register_sync_extra_assertion(
+    STATEMENT_STACK_PARITY_PROOF_KEY, STATEMENT_STACK_SCOPE, assert_sync_statement_stack_parity_contract
+)
+register_async_extra_assertion(
+    STATEMENT_STACK_PARITY_PROOF_KEY, STATEMENT_STACK_SCOPE, assert_async_statement_stack_parity_contract
+)
 
 
 async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> None:
