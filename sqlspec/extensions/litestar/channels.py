@@ -11,7 +11,7 @@ from litestar.channels.backends.base import ChannelsBackend
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable
+    from collections.abc import AsyncGenerator, Iterable, Sequence
 
     from sqlspec.extensions.events import AsyncEventChannel
 
@@ -64,8 +64,21 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         await self._event_channel.shutdown()
 
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
-        payload = {"data_b64": base64.b64encode(data).decode("ascii")}
-        events = [(self._db_channel_name(channel), payload, None) for channel in channels]
+        await self.publish_many((data,), channels)
+
+    async def publish_many(self, data: "Sequence[bytes]", channels: "Iterable[str]") -> None:
+        """Publish independent payloads through one event-channel batch.
+
+        Args:
+            data: Ordered payloads to publish.
+            channels: Litestar channel names that receive each payload.
+        """
+        db_channels = [self._db_channel_name(channel) for channel in channels]
+        events = [
+            (db_channel, {"data_b64": base64.b64encode(payload).decode("ascii")}, None)
+            for payload in data
+            for db_channel in db_channels
+        ]
         await self._event_channel.publish_many(events)
 
     async def subscribe(self, channels: "Iterable[str]") -> None:

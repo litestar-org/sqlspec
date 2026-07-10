@@ -25,6 +25,22 @@ Unreleased
   ``poll_queue``, ``aq``, and ``txeventq``. Retired transport names now raise
   an explicit configuration error with the canonical replacement.
 
+**Added:**
+
+* Added sync and async event-channel ``publish_many()`` APIs. Batch-capable
+  implementations preserve input order and publish a grouped call in one
+  transaction; custom backends retain an ordered single-event fallback.
+* Added ``event_poll_interval`` for durable event reconciliation, independently
+  of native listener wakeups. ``poll_interval`` remains a compatibility input.
+
+**Changed:**
+
+* PostgreSQL listeners now hold one dedicated long-lived connection while
+  publishers use short pooled sessions. Native PostgreSQL batch publication
+  reuses one publisher transaction per grouped call.
+* ``notify_queue`` batch publication now bulk-inserts durable rows and sends one
+  compact wakeup marker per channel rather than one notification per event.
+
 **Fixed:**
 
 * Event channels now honor adapter ``events_backend`` driver features when no
@@ -33,11 +49,16 @@ Unreleased
   reconnecting underneath an active transaction.
 * Public row streams continue to clean up duck-typed sources whose ``close()``
   method uses the original no-argument contract.
+* Durable notification queues now drain all rows represented by a batch marker,
+  suppress duplicate markers, and recover missed markers through periodic
+  durable reconciliation.
 
 **Docs:**
 
 * Expanded the data dictionary guide with capability vocabulary, support
   matrix, DDL/dependency guidance, and safe system-metadata opt-in behavior.
+* Documented event transport delivery semantics, adapter support, connection
+  ownership, batch behavior, and polling recovery.
 
 v0.54.0 - SQL processing correctness and cleanup
 ------------------------------------------------------------------------------

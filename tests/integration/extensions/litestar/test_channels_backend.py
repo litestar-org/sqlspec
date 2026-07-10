@@ -71,3 +71,18 @@ async def test_litestar_channels_backend_groups_multi_channel_publish() -> None:
         backend._db_channel_name("gamma"),
     ]
     assert {event[1]["data_b64"] for event in event_channel.batches[0]} == {"cGF5bG9hZA=="}
+
+
+async def test_litestar_channels_backend_groups_multiple_payloads_and_channels() -> None:
+    event_channel = _RecordingEventChannel()
+    backend = SQLSpecChannelsBackend(cast("Any", event_channel), channel_prefix="litestar")
+
+    await backend.publish_many((b"first", b"second"), (channel for channel in ("alpha", "beta")))
+
+    assert len(event_channel.batches) == 1
+    assert [(event[0], event[1]["data_b64"]) for event in event_channel.batches[0]] == [
+        (backend._db_channel_name("alpha"), "Zmlyc3Q="),
+        (backend._db_channel_name("beta"), "Zmlyc3Q="),
+        (backend._db_channel_name("alpha"), "c2Vjb25k"),
+        (backend._db_channel_name("beta"), "c2Vjb25k"),
+    ]
