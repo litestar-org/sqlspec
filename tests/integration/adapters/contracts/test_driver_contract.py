@@ -12,10 +12,12 @@ from tests.integration.adapters.contracts.behaviors import (
     assert_async_execute_many_contract,
     assert_async_for_update_contract,
     assert_async_statement_stack_contract,
+    assert_async_transaction_semantics_contract,
     assert_sync_driver_basics_contract,
     assert_sync_execute_many_contract,
     assert_sync_for_update_contract,
     assert_sync_statement_stack_contract,
+    assert_sync_transaction_semantics_contract,
 )
 
 
@@ -51,6 +53,22 @@ def test_sync_statement_stack_contract(sync_driver_case: DriverCaseContext) -> N
 async def test_async_statement_stack_contract(async_driver_case: DriverCaseContext) -> None:
     """Async drivers execute a StatementStack sequentially and return per-operation results."""
     await assert_async_statement_stack_contract(async_driver_case.driver, async_driver_case.case)
+
+
+@pytest.mark.parametrize("sync_capability_driver_case", sync_driver_params_with("supports_transactions"), indirect=True)
+def test_sync_transaction_semantics_contract(sync_capability_driver_case: DriverCaseContext) -> None:
+    """Sync drivers roll back caller work, commit durable work, and preserve outer stack ownership."""
+    assert_sync_transaction_semantics_contract(sync_capability_driver_case.driver, sync_capability_driver_case.case)
+
+
+@pytest.mark.parametrize(
+    "async_capability_driver_case", async_driver_params_with("supports_transactions"), indirect=True
+)
+async def test_async_transaction_semantics_contract(async_capability_driver_case: DriverCaseContext) -> None:
+    """Async drivers roll back caller work, commit durable work, and preserve outer stack ownership."""
+    await assert_async_transaction_semantics_contract(
+        async_capability_driver_case.driver, async_capability_driver_case.case
+    )
 
 
 @pytest.mark.parametrize("sync_capability_driver_case", sync_driver_params_with("supports_for_update"), indirect=True)

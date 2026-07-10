@@ -61,9 +61,11 @@ class FakeConnection:
 
     def __init__(self) -> None:
         self.closed = False
+        self.commit_calls = 0
         self.read_calls: list[dict[str, Any]] = []
         self.insert_calls: list[tuple[str, int, pa.Table]] = []
         self.executed: list[tuple[str, Any]] = []
+        self.rollback_calls = 0
 
     def read_arrow_batches(self, **kwargs: Any) -> FakeReader:
         self.read_calls.append(kwargs)
@@ -76,10 +78,10 @@ class FakeConnection:
         self.executed.append((query, parameters))
 
     def commit(self) -> None:
-        return None
+        self.commit_calls += 1
 
     def rollback(self) -> None:
-        return None
+        self.rollback_calls += 1
 
     def close(self) -> None:
         self.closed = True
@@ -151,6 +153,51 @@ def test_transaction_control_wraps_native_errors(method_name: str) -> None:
 
     with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
         getattr(driver, method_name)()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "statement"), [("commit", "COMMIT TRANSACTION"), ("rollback", "ROLLBACK TRANSACTION")]
+)
+def test_mssql_owned_transaction_uses_tsql_boundary(method_name: str, statement: str) -> None:
+    """Owned MSSQL transactions should bypass native controls that are no-ops under autocommit."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    driver.begin()
+    getattr(driver, method_name)()
+
+    assert connection.executed == [("BEGIN TRANSACTION", None), (statement, None)]
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(("method_name", "active_after_error"), [("commit", True), ("rollback", False)])
+def test_mssql_owned_transaction_tsql_error_preserves_state_semantics(
+    method_name: str, active_after_error: bool
+) -> None:
+    """Failed owned controls should retain commit state but always clear rollback state."""
+    connection = FakeConnection()
+    native_error = ArrowOdbcError.__new__(ArrowOdbcError)
+    native_error.args = ("native failure",)
+
+    def execute(query: str, parameters: Any = None) -> None:
+        connection.executed.append((query, parameters))
+        if query != "BEGIN TRANSACTION":
+            raise native_error
+
+    connection.execute = execute  # type: ignore[method-assign]
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+    driver.begin()
+
+    with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
+        getattr(driver, method_name)()
+
+    assert driver._connection_in_transaction() is active_after_error  # pyright: ignore[reportPrivateUsage]
 
 
 def _empty_table_reader() -> FakeReader:

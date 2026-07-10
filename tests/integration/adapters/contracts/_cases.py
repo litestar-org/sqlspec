@@ -451,6 +451,7 @@ SYNC_DRIVER_CASES = (
         supports_exception_translation=False,
         supports_connection_hook=True,
         supports_native_row_streaming=True,
+        supports_transactions=False,
         streaming_row_count=600,
         config_factory_fixture="lifecycle_config_bigquery",
         execute_rowcount_policy="unavailable",

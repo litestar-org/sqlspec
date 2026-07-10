@@ -1114,6 +1114,86 @@ async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> No
 register_async_extra_assertion("statement_stack:oracle_native", STATEMENT_STACK_SCOPE, _oracle_native_statement_stack)
 
 
+def assert_sync_transaction_semantics_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync transaction rollback, commit, and caller-owned stack boundaries."""
+    if not case.supports_transactions:
+        pytest.skip(f"{case.adapter} has no verified transaction support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    try:
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, ("transaction-rollback", 10, None))
+        sync_driver.rollback()
+        assert sync_driver.select_value(table.select_count_sql) == 0
+        sync_driver.commit()
+
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, ("transaction-commit", 20, None))
+        sync_driver.commit()
+        assert sync_driver.select_value(table.select_count_sql) == 1
+        sync_driver.commit()
+
+        sync_driver.execute(table.delete_sql)
+        sync_driver.commit()
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, ("transaction-outer-direct", 30, None))
+        stack = StatementStack().push_execute(table.insert_qmark_sql, ("transaction-outer-stack", 40, None))
+        stack_results = sync_driver.execute_stack(stack)
+        assert len(stack_results) == 1
+        assert stack_results[0].error is None
+        sync_driver.rollback()
+        assert sync_driver.select_value(table.select_count_sql) == 0
+        sync_driver.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        sync_driver.execute(table.delete_sql)
+        sync_driver.commit()
+
+
+async def assert_async_transaction_semantics_contract(driver: object, case: DriverCase) -> None:
+    """Assert async transaction rollback, commit, and caller-owned stack boundaries."""
+    if not case.supports_transactions:
+        pytest.skip(f"{case.adapter} has no verified transaction support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    try:
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, ("transaction-rollback", 10, None))
+        await async_driver.rollback()
+        assert await async_driver.select_value(table.select_count_sql) == 0
+        await async_driver.commit()
+
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, ("transaction-commit", 20, None))
+        await async_driver.commit()
+        assert await async_driver.select_value(table.select_count_sql) == 1
+        await async_driver.commit()
+
+        await async_driver.execute(table.delete_sql)
+        await async_driver.commit()
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, ("transaction-outer-direct", 30, None))
+        stack = StatementStack().push_execute(table.insert_qmark_sql, ("transaction-outer-stack", 40, None))
+        stack_results = await async_driver.execute_stack(stack)
+        assert len(stack_results) == 1
+        assert stack_results[0].error is None
+        await async_driver.rollback()
+        assert await async_driver.select_value(table.select_count_sql) == 0
+        await async_driver.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        await async_driver.execute(table.delete_sql)
+        await async_driver.commit()
+
+
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert sync execute-many behavior for a driver case."""
     if not case.supports_execute_many:
