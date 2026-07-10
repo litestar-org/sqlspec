@@ -556,3 +556,37 @@ def test_or_where_ilike_case_insensitive() -> None:
     assert "%PYTHON%" in param_values
     assert "%exactly%" in param_values
     assert True in param_values
+
+
+def test_where_in_and_or_where_in_build_identical_subquery_conditions() -> None:
+    """where_in and or_where_in accept builder subqueries and produce the same IN condition."""
+
+    def make_subquery() -> "object":
+        return sql.select("id").from_("banned").where_eq("status", "active")
+
+    where_stmt = sql.select("*").from_("users").where_in("user_id", make_subquery()).build()
+    or_stmt = sql.select("*").from_("users").where_eq("flag", 1).or_where_in("user_id", make_subquery()).build()
+
+    normalized_where = " ".join(where_stmt.sql.split())
+    normalized_or = " ".join(or_stmt.sql.split())
+    in_fragment = normalized_where.split("WHERE ", 1)[1]
+
+    assert '"users"."user_id" IN' in in_fragment
+    assert in_fragment in normalized_or
+    assert "active" in where_stmt.parameters.values()
+    assert "active" in or_stmt.parameters.values()
+
+
+def test_where_between_and_or_where_between_use_identical_parameter_names() -> None:
+    """where_between and or_where_between bind low/high bounds with the same parameter naming."""
+    where_stmt = sql.select("*").from_("t").where_between("age", 18, 65).build()
+    or_stmt = sql.select("*").from_("t").where_eq("flag", 1).or_where_between("age", 18, 65).build()
+
+    assert where_stmt.parameters == {"age_low": 18, "age_high": 65}
+    assert or_stmt.parameters == {"flag": 1, "age_low": 18, "age_high": 65}
+
+    normalized_where = " ".join(where_stmt.sql.split())
+    normalized_or = " ".join(or_stmt.sql.split())
+    between_fragment = normalized_where.split("WHERE ", 1)[1]
+
+    assert between_fragment in normalized_or
