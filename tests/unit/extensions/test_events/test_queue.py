@@ -103,13 +103,15 @@ def test_table_queue_empty_poll_backoff_state_is_bounded(tmp_path: Any) -> None:
 
 
 def test_table_queue_batch_records_have_deterministic_created_order() -> None:
-    _, records = SyncTableEventQueue._batch_insert_parameters([
-        ("events", {"index": index}, None) for index in range(3)
-    ])
+    payloads = [{"index": index} for index in range(3)]
+    metadata = {"source": "test"}
+    _, records = SyncTableEventQueue._batch_insert_parameters([("events", payload, metadata) for payload in payloads])
 
     created_at = [record["created_at"] for record in records]
     assert created_at == sorted(created_at)
     assert len(set(created_at)) == 3
+    assert [record["payload_json"] for record in records] == payloads
+    assert all(record["metadata_json"] is metadata for record in records)
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:

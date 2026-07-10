@@ -14,7 +14,7 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
 from sqlspec.extensions.events._payload import parse_event_timestamp
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -190,8 +190,8 @@ class _BaseTableEventQueue:
             records.append({
                 "event_id": event_id,
                 "channel": channel,
-                "payload_json": to_json(payload),
-                "metadata_json": to_json(metadata) if metadata is not None else None,
+                "payload_json": payload,
+                "metadata_json": metadata,
                 "status": _PENDING_STATUS,
                 "available_at": now,
                 "lease_expires_at": None,

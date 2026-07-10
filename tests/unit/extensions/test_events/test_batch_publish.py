@@ -573,8 +573,9 @@ async def test_async_postgres_hybrid_single_and_batch_preserve_empty_metadata(
     batch_backend = backend_factory(batch_config)
     await batch_backend.publish_many([("events", {"value": 1}, {})])
 
-    assert single_config.driver.execute_calls[0].parameters["metadata_json"] == to_json({})
-    assert batch_config.driver.execute_many_calls[0][1][0]["metadata_json"] == to_json({})
+    expected_single_metadata = {} if config_type is _PsqlpyConfig else to_json({})
+    assert single_config.driver.execute_calls[0].parameters["metadata_json"] == expected_single_metadata
+    assert batch_config.driver.execute_many_calls[0][1][0]["metadata_json"] == {}
 
 
 def test_psycopg_sync_hybrid_publish_many_bulk_inserts_and_marks_each_channel_once() -> None:
@@ -630,7 +631,7 @@ def test_psycopg_sync_hybrid_single_and_batch_preserve_empty_metadata() -> None:
     batch_backend.publish_many([("events", {"value": 1}, {})])
 
     assert single_config.driver.execute_calls[0].parameters["metadata_json"] == to_json({})
-    assert batch_config.driver.execute_many_calls[0][1][0]["metadata_json"] == to_json({})
+    assert batch_config.driver.execute_many_calls[0][1][0]["metadata_json"] == {}
 
 
 def _notify_event_ids(parameters: "list[Any]") -> list[str]:

@@ -311,8 +311,8 @@ class PsqlpyHybridEventsBackend:
                     {
                         "event_id": event_id,
                         "channel": channel,
-                        "payload_json": to_json(payload),
-                        "metadata_json": to_json(metadata) if metadata is not None else None,
+                        "payload_json": payload,
+                        "metadata_json": metadata,
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
