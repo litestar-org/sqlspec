@@ -1,18 +1,20 @@
-"""Shared helpers for the FastAPI, Starlette, and Sanic extensions.
+"""Shared helpers for the FastAPI, Starlette, Sanic, and Flask extensions.
 
-Interpreted module (not mypyc-compiled) — safe to hold plain Python helpers
-that FastAPI/Starlette/Sanic (and, where field shapes align, Flask) extension
-modules delegate to instead of duplicating logic per framework.
+This module is interpreted (not mypyc-compiled). It holds framework-agnostic
+logic that the per-framework extension modules delegate to.
 """
 
 from typing import Any
 
-__all__ = ("extract_extension_settings",)
+__all__ = ("extract_extension_settings", "should_commit", "should_rollback")
 
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
 DEFAULT_COMMIT_MODE = "manual"
+HTTP_200_OK = 200
+HTTP_300_MULTIPLE_CHOICES = 300
+HTTP_400_BAD_REQUEST = 400
 
 
 def extract_extension_settings(config: Any, *, framework_key: str, sqlcommenter_framework: str) -> "dict[str, Any]":
@@ -57,3 +59,61 @@ def extract_extension_settings(config: Any, *, framework_key: str, sqlcommenter_
         "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
         "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", sqlcommenter_framework),
     }
+
+
+def should_commit(
+    status_code: int,
+    commit_mode: str,
+    extra_commit_statuses: "set[int] | None",
+    extra_rollback_statuses: "set[int] | None",
+) -> bool:
+    """Determine whether a response status should trigger a commit.
+
+    Extra commit/rollback status overrides take precedence over the commit
+    mode's default status ranges. Manual mode never commits.
+
+    Args:
+        status_code: HTTP response status code.
+        commit_mode: Commit mode for the configuration.
+        extra_commit_statuses: Status codes that always commit.
+        extra_rollback_statuses: Status codes that always roll back.
+
+    Returns:
+        ``True`` when the transaction should commit.
+    """
+    if extra_commit_statuses and status_code in extra_commit_statuses:
+        return True
+    if extra_rollback_statuses and status_code in extra_rollback_statuses:
+        return False
+    if commit_mode == "manual":
+        return False
+    if commit_mode == "autocommit":
+        return HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES
+    if commit_mode == "autocommit_include_redirect":
+        return HTTP_200_OK <= status_code < HTTP_400_BAD_REQUEST
+    return False
+
+
+def should_rollback(
+    status_code: int,
+    commit_mode: str,
+    extra_commit_statuses: "set[int] | None",
+    extra_rollback_statuses: "set[int] | None",
+) -> bool:
+    """Determine whether a response status should trigger a rollback.
+
+    In autocommit modes, any status that does not commit rolls back.
+    Manual mode never rolls back.
+
+    Args:
+        status_code: HTTP response status code.
+        commit_mode: Commit mode for the configuration.
+        extra_commit_statuses: Status codes that always commit.
+        extra_rollback_statuses: Status codes that always roll back.
+
+    Returns:
+        ``True`` when the transaction should roll back.
+    """
+    if commit_mode == "manual":
+        return False
+    return not should_commit(status_code, commit_mode, extra_commit_statuses, extra_rollback_statuses)

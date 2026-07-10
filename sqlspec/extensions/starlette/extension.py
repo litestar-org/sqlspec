@@ -170,10 +170,8 @@ class SQLSpecPlugin:
         """
         if config_state.commit_mode == "manual":
             app.add_middleware(SQLSpecManualMiddleware, config_state=config_state)
-        elif config_state.commit_mode == "autocommit":
-            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state, include_redirect=False)
-        elif config_state.commit_mode == "autocommit_include_redirect":
-            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state, include_redirect=True)
+        elif config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}:
+            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state)
 
     def _add_correlation_middleware(self, app: "Starlette") -> None:
         """Add correlation middleware if any config enables it.

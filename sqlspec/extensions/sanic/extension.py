@@ -5,7 +5,7 @@ from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._framework_common import extract_extension_settings
+from sqlspec.extensions._framework_common import extract_extension_settings, should_commit
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -30,9 +30,6 @@ DEFAULT_COMMIT_MODE = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
-HTTP_200_OK = 200
-HTTP_300_MULTIPLE_CHOICES = 300
-HTTP_400_BAD_REQUEST = 400
 
 
 class SQLSpecPlugin:
@@ -431,19 +428,11 @@ class SQLSpecPlugin:
         Returns:
             ``True`` when the transaction should commit.
         """
-        extra_commit = config_state.extra_commit_statuses or set()
-        extra_rollback = config_state.extra_rollback_statuses or set()
-
-        if status_code in extra_commit:
-            return True
-        if status_code in extra_rollback:
-            return False
-
-        if HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES:
-            return True
-        return bool(
-            config_state.commit_mode == "autocommit_include_redirect"
-            and HTTP_300_MULTIPLE_CHOICES <= status_code < HTTP_400_BAD_REQUEST
+        return should_commit(
+            status_code,
+            config_state.commit_mode,
+            config_state.extra_commit_statuses,
+            config_state.extra_rollback_statuses,
         )
 
     def _response_status_code(self, response: Any) -> int:

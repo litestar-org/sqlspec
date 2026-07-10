@@ -20,6 +20,7 @@ from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware,
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.extensions.starlette._state import CommitMode
 
 pytest.importorskip("starlette")
 
@@ -129,13 +130,13 @@ class _Config:
         return self.manager
 
 
-def _make_state(config: _Config) -> SQLSpecConfigState:
+def _make_state(config: _Config, commit_mode: "CommitMode" = "manual") -> SQLSpecConfigState:
     return SQLSpecConfigState(
         config=cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         connection_key="db_connection",
         pool_key="db_pool",
         session_key="db_session",
-        commit_mode="manual",
+        commit_mode=commit_mode,
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         disable_di=False,
@@ -189,7 +190,7 @@ async def test_middleware_manual_middleware_connection_cm_pool_uses_pool_context
 async def test_middleware_autocommit_middleware_connection_cm_no_pool_commits_and_closes() -> None:
     connection = _Connection()
     config = _Config(pooled=False, connection=connection)
-    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config))
+    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config, "autocommit"))
     request = _make_request()
 
     async def call_next(request_: Any) -> Response:
@@ -208,7 +209,7 @@ async def test_middleware_autocommit_middleware_connection_cm_pool_rolls_back_on
     connection = _Connection()
     manager = _ConnectionManager(connection)
     config = _Config(pooled=True, connection=connection, manager=manager)
-    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config))
+    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config, "autocommit"))
     request = _make_request(object())
 
     async def call_next(_request: Any) -> Response:
