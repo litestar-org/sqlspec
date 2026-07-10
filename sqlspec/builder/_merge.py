@@ -29,7 +29,46 @@ from sqlspec.utils.type_guards import has_expression_and_sql
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.protocols import SQLBuilderProtocol
+
 __all__ = ("Merge",)
+
+
+def _ensure_merge_expression(builder: "SQLBuilderProtocol") -> exp.Merge:
+    """Return the builder's MERGE expression, initializing it when absent.
+
+    Raises:
+        SQLBuilderError: If the builder state cannot provide a MERGE expression.
+    """
+    expression = builder.get_expression()
+    if expression is None or not isinstance(expression, exp.Merge):
+        builder.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
+        expression = builder.get_expression()
+    if not isinstance(expression, exp.Merge):
+        msg = "Merge builder is in an invalid state: expected a MERGE expression."
+        raise SQLBuilderError(msg)
+    return expression
+
+
+def _parse_merge_condition(
+    builder: "SQLBuilderProtocol", condition: "str | exp.Expr", condition_label: str, clause_label: str
+) -> exp.Expr:
+    """Parse a MERGE condition into a SQLGlot expression.
+
+    Raises:
+        SQLBuilderError: If a condition string cannot be parsed or the condition type is unsupported.
+    """
+    if isinstance(condition, str):
+        parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
+        if parsed_condition is None:
+            msg = f"Could not parse {condition_label}: {condition}"
+            raise SQLBuilderError(msg)
+        return parsed_condition
+    if isinstance(condition, exp.Expr):
+        return condition
+    msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
+    raise SQLBuilderError(msg)
+
 
 MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
 _POSTGRES_TYPE_DISPATCHER = TypeDispatcher[str]()
@@ -136,12 +175,7 @@ class MergeIntoClauseMixin:
     def set_expression(self, expression: exp.Expr) -> None: ...
 
     def into(self, table: str | exp.Expr, alias: str | None = None) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
 
         table_expr: exp.Expr
         if isinstance(table, str):
@@ -375,12 +409,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         return exp.paren(select_expr)
 
     def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         source_expr: exp.Expr
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
@@ -436,24 +465,8 @@ class MergeOnClauseMixin:
     def set_expression(self, expression: exp.Expr) -> None: ...
 
     def on(self, condition: str | exp.Expr) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
-        if isinstance(condition, str):
-            builder = cast("QueryBuilder", self)
-            parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
-            if parsed_condition is None:
-                msg = f"Could not parse ON condition: {condition}"
-                raise SQLBuilderError(msg)
-            condition_expr = parsed_condition
-        elif isinstance(condition, exp.Expr):
-            condition_expr = condition
-        else:
-            msg = f"Unsupported condition type for ON clause: {type(condition)}"
-            raise SQLBuilderError(msg)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
+        condition_expr = _parse_merge_condition(cast("SQLBuilderProtocol", self), condition, "ON condition", "ON")
 
         current_expr.set("on", exp.paren(condition_expr))
         return self
@@ -471,12 +484,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
     def when_matched_then_update(
         self, set_values: dict[str, Any] | None = None, condition: str | exp.Expr | None = None, **assignments: Any
     ) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         combined_assignments: dict[str, Any] = {}
         if set_values:
             combined_assignments.update(set_values)
@@ -492,45 +500,20 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
 
         when_kwargs: dict[str, Any] = {"matched": True, "then": update_expression}
         if condition is not None:
-            if isinstance(condition, str):
-                builder = cast("QueryBuilder", self)
-                parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
-                if parsed_condition is None:
-                    msg = f"Could not parse WHEN clause condition: {condition}"
-                    raise SQLBuilderError(msg)
-                condition_expr = parsed_condition
-            elif isinstance(condition, exp.Expr):
-                condition_expr = condition
-            else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
-                raise SQLBuilderError(msg)
-
-            when_kwargs["condition"] = condition_expr
+            when_kwargs["condition"] = _parse_merge_condition(
+                cast("SQLBuilderProtocol", self), condition, "WHEN clause condition", "WHEN"
+            )
 
         self._append_when(current_expr, exp.When(**when_kwargs))
         return self
 
     def when_matched_then_delete(self, condition: str | exp.Expr | None = None) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         when_kwargs: dict[str, Any] = {"matched": True, "then": exp.Var(this="DELETE")}
         if condition is not None:
-            if isinstance(condition, str):
-                builder = cast("QueryBuilder", self)
-                parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
-                if parsed_condition is None:
-                    msg = f"Could not parse WHEN clause condition: {condition}"
-                    raise SQLBuilderError(msg)
-                when_kwargs["condition"] = parsed_condition
-            elif isinstance(condition, exp.Expr):
-                when_kwargs["condition"] = condition
-            else:
-                msg = f"Unsupported condition type for WHEN clause: {type(condition)}"
-                raise SQLBuilderError(msg)
+            when_kwargs["condition"] = _parse_merge_condition(
+                cast("SQLBuilderProtocol", self), condition, "WHEN clause condition", "WHEN"
+            )
 
         self._append_when(current_expr, exp.When(**when_kwargs))
         return self
@@ -551,12 +534,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
         values: Sequence[Any] | None = None,
         **value_kwargs: Any,
     ) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         insert_expr = exp.Insert()
         column_names: list[str]
         column_values: list[Any]
@@ -633,12 +611,7 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
     def when_not_matched_by_source_then_update(
         self, set_values: dict[str, Any] | None = None, **assignments: Any
     ) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         combined_assignments: dict[str, Any] = {}
         if set_values:
             combined_assignments.update(set_values)
@@ -655,12 +628,7 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
         return self
 
     def when_not_matched_by_source_then_delete(self) -> Self:
-        current_expr = self.get_expression()
-        if current_expr is None or not isinstance(current_expr, exp.Merge):
-            self.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-            current_expr = self.get_expression()
-
-        assert isinstance(current_expr, exp.Merge)
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         self._append_when(current_expr, exp.When(matched=False, source=True, then=exp.Delete()))
         return self
 

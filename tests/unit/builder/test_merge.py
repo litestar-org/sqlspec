@@ -1,6 +1,7 @@
 """Unit tests for MERGE builder functionality."""
 
 import pytest
+from sqlglot import exp
 
 import sqlspec.builder._merge as merge_module
 from sqlspec import sql
@@ -881,3 +882,17 @@ def test_merge_factory_rejects_non_merge_sql() -> None:
 
     with pytest.raises(SQLBuilderError):
         sql.merge(bad_sql)
+
+
+def test_merge_corrupted_expression_state_raises_builder_error() -> None:
+    """A merge builder whose expression state cannot be initialized raises SQLBuilderError."""
+
+    class _BrokenMerge(Merge):
+        def get_expression(self) -> "exp.Expr | None":
+            return None
+
+    with pytest.raises(SQLBuilderError, match="MERGE"):
+        _BrokenMerge().into("target")
+
+    with pytest.raises(SQLBuilderError, match="MERGE"):
+        _BrokenMerge().when_matched_then_delete()
