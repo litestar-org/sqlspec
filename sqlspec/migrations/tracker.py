@@ -7,7 +7,7 @@ import logging
 import os
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from rich.console import Console
 
@@ -19,6 +19,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
@@ -160,7 +161,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         )
         return current
 
-    def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[dict[str, Any]]":
+    def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[AppliedMigrationRecord]":
         """Get all applied migrations in order.
 
         Args:
@@ -170,7 +171,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             List of migration records.
         """
         result = driver.execute(self._applied_migrations_query())
-        applied = result.get_data()
+        applied = cast("list[AppliedMigrationRecord]", result.get_data())
         log_with_context(
             logger,
             logging.DEBUG,
@@ -548,7 +549,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         )
         return current
 
-    async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase") -> "list[dict[str, Any]]":
+    async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase") -> "list[AppliedMigrationRecord]":
         """Get all applied migrations in order.
 
         Args:
@@ -558,7 +559,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             List of migration records.
         """
         result = await driver.execute(self._applied_migrations_query())
-        applied = result.get_data()
+        applied = cast("list[AppliedMigrationRecord]", result.get_data())
         log_with_context(
             logger,
             logging.DEBUG,

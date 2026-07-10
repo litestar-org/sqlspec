@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.config import AsyncConfigT, SyncConfigT
+    from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
 
 __all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_commands")
 
@@ -328,7 +329,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             console.print(f"[green]Current version:[/] {current}")
 
-            applied: list[dict[str, Any]] = []
+            applied: list[AppliedMigrationRecord] = []
             if verbose:
                 applied = self.tracker.get_applied_migrations(driver)
 
@@ -436,7 +437,13 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             )
 
     def _apply_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Apply a single migration and record it.
 
@@ -453,7 +460,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         try:
 
-            def record_version(exec_time: int, migration: "dict[str, Any]" = migration) -> None:
+            def record_version(exec_time: int, migration: "LoadedMigrationMetadata" = migration) -> None:
                 self.tracker.record_migration(
                     driver, migration["version"], migration["description"], exec_time, migration["checksum"]
                 )
@@ -486,7 +493,13 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             return execution_time
 
     def _revert_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Revert a single migration.
 
@@ -556,7 +569,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         all_migrations = self.runner.get_migration_files()
 
         try:
-            applied_migrations = self.tracker.get_applied_migrations(driver)
+            applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
         except Exception as exc:
             log_with_context(
                 logger,
@@ -682,7 +695,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
 
-                applied_migrations = self.tracker.get_applied_migrations(driver)
+                applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                 applied_versions = [m["version_num"] for m in applied_migrations]
                 applied_set = set(applied_versions)
 
@@ -815,7 +828,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 db_system = resolve_db_system(type(driver).__name__)
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
-                applied = self.tracker.get_applied_migrations(driver)
+                applied: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
                 if not applied:
@@ -1115,7 +1128,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if update_database:
                 with self.config.provide_session() as driver:
                     self.tracker.ensure_tracking_table(driver)
-                    applied_migrations = self.tracker.get_applied_migrations(driver)
+                    applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
 
                     updated_count = 0
@@ -1213,7 +1226,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return None
 
             console.print(f"[green]Current version:[/] {current}")
-            applied: list[dict[str, Any]] = []
+            applied: list[AppliedMigrationRecord] = []
             if verbose:
                 applied = await self.tracker.get_applied_migrations(driver)
                 table = Table(title="Applied Migrations")
@@ -1320,7 +1333,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             )
 
     async def _apply_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Apply a single migration and record it.
 
@@ -1337,7 +1356,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         try:
 
-            async def record_version(exec_time: int, migration: "dict[str, Any]" = migration) -> None:
+            async def record_version(exec_time: int, migration: "LoadedMigrationMetadata" = migration) -> None:
                 await self.tracker.record_migration(
                     driver, migration["version"], migration["description"], exec_time, migration["checksum"]
                 )
@@ -1370,7 +1389,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return execution_time
 
     async def _revert_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Revert a single migration.
 
@@ -1440,7 +1465,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         all_migrations = await self.runner.get_migration_files()
 
         try:
-            applied_migrations = await self.tracker.get_applied_migrations(driver)
+            applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
         except Exception as exc:
             log_with_context(
                 logger,
@@ -1566,7 +1591,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
 
-                applied_migrations = await self.tracker.get_applied_migrations(driver)
+                applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                 applied_versions = [m["version_num"] for m in applied_migrations]
                 applied_set = set(applied_versions)
 
@@ -1702,7 +1727,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
-                applied = await self.tracker.get_applied_migrations(driver)
+                applied: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
                 if not applied:
@@ -2029,7 +2054,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             if update_database:
                 async with self.config.provide_session() as driver:
                     await self.tracker.ensure_tracking_table(driver)
-                    applied_migrations = await self.tracker.get_applied_migrations(driver)
+                    applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
 
                     updated_count = 0

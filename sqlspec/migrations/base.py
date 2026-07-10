@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from rich.console import Console
+from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
@@ -22,12 +23,49 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("BaseMigrationCommands", "BaseMigrationTracker")
+__all__ = ("AppliedMigrationRecord", "BaseMigrationCommands", "BaseMigrationTracker", "LoadedMigrationMetadata")
 
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.migrations.base")
+
+
+class LoadedMigrationMetadata(TypedDict):
+    """Metadata for a migration loaded from a file.
+
+    Keyed on ``version`` (file-derived). The ``has_upgrade``, ``has_downgrade``,
+    and ``loader`` keys are added by ``load_migration`` after the base metadata
+    is built by ``_load_metadata``.
+    """
+
+    version: "str | None"
+    description: str
+    file_path: "Path"
+    checksum: str
+    content: str
+    transactional: "bool | None"
+    has_upgrade: NotRequired[bool]
+    has_downgrade: NotRequired[bool]
+    loader: NotRequired[Any]
+
+
+class AppliedMigrationRecord(TypedDict):
+    """Row from the migration tracking table.
+
+    Keyed on ``version_num`` (database column), unlike file-loaded metadata
+    which keys on ``version``.
+    """
+
+    version_num: str
+    version_type: str
+    execution_sequence: int
+    description: str
+    applied_at: Any
+    execution_time_ms: int
+    checksum: str
+    applied_by: "str | None"
+    replaces: "str | None"
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -337,7 +375,9 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         ...
 
     @abstractmethod
-    def get_applied_migrations(self, driver: DriverT) -> "list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]":
+    def get_applied_migrations(
+        self, driver: DriverT
+    ) -> "list[AppliedMigrationRecord] | list[dict[str, Any]] | Awaitable[list[AppliedMigrationRecord]] | Awaitable[list[dict[str, Any]]]":
         """Get all applied migrations in order."""
         ...
 
@@ -586,7 +626,9 @@ out-of-order migrations gracefully.
                         pending.append((version, file_path))
         return pending
 
-    def _collect_revert_migrations(self, applied: "list[dict[str, Any]]", revision: str) -> "list[dict[str, Any]]":
+    def _collect_revert_migrations(
+        self, applied: "list[AppliedMigrationRecord]", revision: str
+    ) -> "list[AppliedMigrationRecord]":
         """Collect migrations to revert based on target revision."""
         if revision == "-1":
             return [applied[-1]]

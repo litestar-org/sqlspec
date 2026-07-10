@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.migrations.base import LoadedMigrationMetadata
     from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner")
@@ -268,7 +269,7 @@ class BaseMigrationRunner(ABC):
         return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
 
     @abstractmethod
-    def load_migration(self, file_path: Path) -> "dict[str, Any] | Awaitable[dict[str, Any]]":
+    def load_migration(self, file_path: Path) -> "LoadedMigrationMetadata | Awaitable[LoadedMigrationMetadata]":
         """Load a migration file and extract its components.
 
         Args:
@@ -312,7 +313,7 @@ class BaseMigrationRunner(ABC):
     def get_migration_files(self) -> "list[tuple[str, Path]] | Awaitable[list[tuple[str, Path]]]":
         """Get all migration files sorted by version."""
 
-    def _load_metadata(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
+    def _load_metadata(self, file_path: Path, version: "str | None" = None) -> "LoadedMigrationMetadata":
         """Load common migration metadata that doesn't require async operations.
 
         Args:
@@ -332,7 +333,7 @@ class BaseMigrationRunner(ABC):
         ):
             self._metric("migrations.metadata.cache_hit")
             self._log_migration_event(logging.DEBUG, "migration.metadata.cache_hit", file_path=cache_key)
-            metadata = cached_metadata.clone()
+            metadata = cast("LoadedMigrationMetadata", cached_metadata.clone())
             metadata["file_path"] = file_path
             return metadata
 
@@ -354,14 +355,17 @@ class BaseMigrationRunner(ABC):
         if transactional_match:
             transactional = transactional_match.group(1).lower() == "true"
 
-        metadata = {
-            "version": version,
-            "description": description,
-            "file_path": file_path,
-            "checksum": checksum,
-            "content": content,
-            "transactional": transactional,
-        }
+        metadata = cast(
+            "LoadedMigrationMetadata",
+            {
+                "version": version,
+                "description": description,
+                "file_path": file_path,
+                "checksum": checksum,
+                "content": content,
+                "transactional": transactional,
+            },
+        )
         self._metadata_cache[cache_key] = _CachedMigrationMetadata(
             metadata=dict(metadata), mtime_ns=stat_result.st_mtime_ns, size=stat_result.st_size
         )
@@ -455,7 +459,7 @@ class BaseMigrationRunner(ABC):
         return context_to_use
 
     def should_use_transaction(
-        self, migration: "dict[str, Any]", config: "DatabaseConfigProtocol[Any, Any, Any]"
+        self, migration: "LoadedMigrationMetadata", config: "DatabaseConfigProtocol[Any, Any, Any]"
     ) -> bool:
         """Determine if migration should run in a transaction.
 
@@ -493,7 +497,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         """
         return self._load_migration_listing()
 
-    def load_migration(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
+    def load_migration(self, file_path: Path, version: "str | None" = None) -> "LoadedMigrationMetadata":
         """Load a migration file and extract its components.
 
         Args:
@@ -517,7 +521,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
-                has_downgrade = bool(self._migration_sql({"loader": loader, "file_path": file_path}, "down"))
+                partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
+                has_downgrade = bool(self._migration_sql(partial, "down"))
             except Exception:
                 has_downgrade = False
 
@@ -564,7 +569,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
     def execute_upgrade(
         self,
         driver: "SyncDriverAdapterBase",
-        migration: "dict[str, Any]",
+        migration: "LoadedMigrationMetadata",
         *,
         use_transaction: "bool | None" = None,
         on_success: "Callable[[int], None] | None" = None,
@@ -600,7 +605,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         runtime = self.runtime
         span = None
         if runtime is not None:
-            version = cast("str | None", migration.get("version"))
+            version = migration.get("version")
             span = runtime.start_migration_span("upgrade", version=version)
             runtime.increment_metric("migrations.upgrade.invocations")
         self._log_migration_event(
@@ -655,7 +660,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
     def execute_downgrade(
         self,
         driver: "SyncDriverAdapterBase",
-        migration: "dict[str, Any]",
+        migration: "LoadedMigrationMetadata",
         *,
         use_transaction: "bool | None" = None,
         on_success: "Callable[[int], None] | None" = None,
@@ -691,7 +696,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         runtime = self.runtime
         span = None
         if runtime is not None:
-            version = cast("str | None", migration.get("version"))
+            version = migration.get("version")
             span = runtime.start_migration_span("downgrade", version=version)
             runtime.increment_metric("migrations.downgrade.invocations")
         self._log_migration_event(
@@ -747,7 +752,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         return None, execution_time
 
-    def _migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
+    def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (sync version).
 
         Args:
@@ -839,7 +844,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """
         return await async_(self._load_migration_listing)()
 
-    async def load_migration(self, file_path: Path, version: "str | None" = None) -> "dict[str, Any]":
+    async def load_migration(self, file_path: Path, version: "str | None" = None) -> "LoadedMigrationMetadata":
         """Load a migration file and extract its components.
 
         Args:
@@ -863,7 +868,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
-                has_downgrade = bool(await self._migration_sql({"loader": loader, "file_path": file_path}, "down"))
+                partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
+                has_downgrade = bool(await self._migration_sql(partial, "down"))
             except Exception:
                 has_downgrade = False
 
@@ -910,7 +916,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
     async def execute_upgrade(
         self,
         driver: "AsyncDriverAdapterBase",
-        migration: "dict[str, Any]",
+        migration: "LoadedMigrationMetadata",
         *,
         use_transaction: "bool | None" = None,
         on_success: "Callable[[int], Awaitable[None]] | None" = None,
@@ -946,7 +952,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         runtime = self.runtime
         span = None
         if runtime is not None:
-            version = cast("str | None", migration.get("version"))
+            version = migration.get("version")
             span = runtime.start_migration_span("upgrade", version=version)
             runtime.increment_metric("migrations.upgrade.invocations")
         self._log_migration_event(
@@ -1001,7 +1007,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
     async def execute_downgrade(
         self,
         driver: "AsyncDriverAdapterBase",
-        migration: "dict[str, Any]",
+        migration: "LoadedMigrationMetadata",
         *,
         use_transaction: "bool | None" = None,
         on_success: "Callable[[int], Awaitable[None]] | None" = None,
@@ -1037,7 +1043,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         runtime = self.runtime
         span = None
         if runtime is not None:
-            version = cast("str | None", migration.get("version"))
+            version = migration.get("version")
             span = runtime.start_migration_span("downgrade", version=version)
             runtime.increment_metric("migrations.downgrade.invocations")
         self._log_migration_event(
@@ -1093,7 +1099,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         return None, execution_time
 
-    async def _migration_sql(self, migration: "dict[str, Any]", direction: str) -> "list[str] | None":
+    async def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (async version).
 
         Args:
