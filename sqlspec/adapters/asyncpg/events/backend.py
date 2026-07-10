@@ -28,12 +28,48 @@ __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_b
 
 logger = get_logger("sqlspec.events.postgres")
 _MIN_LISTENER_POOL_SIZE = 2
+_MAX_SEEN_MARKERS = 1_024
+
+
+class _MarkerDrainState:
+    __slots__ = ("_pending", "_seen")
+
+    def __init__(self) -> None:
+        self._pending: dict[str, int] = {}
+        self._seen: dict[tuple[str, str], None] = {}
+
+    def take(self, channel: str) -> bool:
+        pending = self._pending.get(channel, 0)
+        if pending <= 0:
+            return False
+        if pending == 1:
+            self._pending.pop(channel, None)
+        else:
+            self._pending[channel] = pending - 1
+        return True
+
+    def register(self, channel: str, marker_id: "str | None", batch_size: int) -> "tuple[bool, bool]":
+        is_new = marker_id is None or (channel, marker_id) not in self._seen
+        if is_new:
+            if marker_id is not None:
+                if len(self._seen) >= _MAX_SEEN_MARKERS:
+                    self._seen.pop(next(iter(self._seen)))
+                self._seen[(channel, marker_id)] = None
+            self._pending[channel] = self._pending.get(channel, 0) + max(batch_size, 1)
+        return is_new, self.take(channel)
+
+    def clear(self, channel: str) -> None:
+        self._pending.pop(channel, None)
+
+    def reset(self) -> None:
+        self._pending.clear()
+        self._seen.clear()
 
 
 class AsyncpgHybridEventsBackend:
     """Hybrid backend combining durable queue with LISTEN/NOTIFY wakeups."""
 
-    __slots__ = ("_config", "_hub", "_queue", "_runtime")
+    __slots__ = ("_config", "_hub", "_marker_state", "_queue", "_runtime")
 
     supports_sync = False
     supports_async = True
@@ -46,6 +82,7 @@ class AsyncpgHybridEventsBackend:
         self._config = config
         self._runtime = config.get_observability_runtime()
         self._queue = queue
+        self._marker_state = _MarkerDrainState()
         self._hub: AsyncpgListenerHub | None = None
         log_with_context(
             logger,
@@ -87,7 +124,11 @@ class AsyncpgHybridEventsBackend:
                 "created_at": now,
             })
             marker_counts[channel] = marker_counts.get(channel, 0) + 1
-        markers = [(channel, to_json({"batch_size": count})) for channel, count in marker_counts.items()]
+        marker_id = uuid4().hex
+        markers = [
+            (channel, to_json({"batch_size": count, "marker_id": marker_id}))
+            for channel, count in marker_counts.items()
+        ]
         self._runtime.increment_metric("events.publisher.session")
         async with self._config.provide_session() as driver:
             await driver.execute_many(
@@ -100,16 +141,30 @@ class AsyncpgHybridEventsBackend:
         return event_ids
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
+        if self._marker_state.take(channel):
+            return await self._dequeue_hinted(channel)
         hub = self._ensure_hub()
-        payload = await hub.dequeue(channel, poll_interval)
-        if payload is None:
-            return await self._queue.dequeue(channel)
-        event_id = _extract_event_id(payload)
-        if event_id is not None:
-            event = await self._queue.dequeue_by_event_id(event_id)
-            if event is not None:
-                return event
-        return await self._queue.dequeue(channel)
+        while True:
+            payload = await hub.dequeue(channel, poll_interval)
+            if payload is None:
+                return await self._dequeue_reconciled(channel)
+            self._queue._reset_empty_poll_delay(channel)
+            self._runtime.increment_metric("events.listener.wakeup")
+            batch_size = _extract_batch_size(payload)
+            is_new, should_drain = self._marker_state.register(channel, _extract_marker_id(payload), batch_size)
+            if is_new and batch_size > 1:
+                self._runtime.increment_metric("events.marker.coalesced", batch_size - 1)
+            if not should_drain:
+                self._runtime.increment_metric("events.marker.duplicate")
+                continue
+            event_id = _extract_event_id(payload)
+            if event_id is not None:
+                event = await self._queue.dequeue_by_event_id(event_id)
+                if event is not None:
+                    self._runtime.increment_metric("events.marker.drain")
+                    _record_dequeue_result(self._runtime, event)
+                    return event
+            return await self._dequeue_hinted(channel)
 
     async def ack(self, event_id: str) -> None:
         await self._queue.ack(event_id)
@@ -121,14 +176,37 @@ class AsyncpgHybridEventsBackend:
 
     async def shutdown(self) -> None:
         hub = self._hub
-        if hub is not None:
-            self._hub = None
-            await hub.shutdown()
+        try:
+            if hub is not None:
+                self._hub = None
+                await hub.shutdown()
+        finally:
+            self._marker_state.reset()
 
     def _ensure_hub(self) -> AsyncpgListenerHub:
         if self._hub is None:
             self._hub = AsyncpgListenerHub(self._config, self.backend_name)
         return self._hub
+
+    async def _dequeue_hinted(self, channel: str) -> EventMessage | None:
+        event = await self._queue.dequeue(channel)
+        if event is None:
+            self._marker_state.clear(channel)
+            self._runtime.increment_metric("events.marker.shortfall")
+            return None
+        self._runtime.increment_metric("events.marker.drain")
+        _record_dequeue_result(self._runtime, event)
+        return event
+
+    async def _dequeue_reconciled(self, channel: str) -> EventMessage | None:
+        self._runtime.increment_metric("events.poll.fallback")
+        event = await self._queue.dequeue(channel)
+        if event is None:
+            self._runtime.increment_metric("events.listener.timeout")
+            return None
+        self._runtime.increment_metric("events.marker.miss")
+        _record_dequeue_result(self._runtime, event)
+        return event
 
     async def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
@@ -142,7 +220,7 @@ class AsyncpgHybridEventsBackend:
                         "event_id": event_id,
                         "channel": channel,
                         "payload_json": to_json(payload),
-                        "metadata_json": to_json(metadata) if metadata else None,
+                        "metadata_json": to_json(metadata) if metadata is not None else None,
                         "status": "pending",
                         "available_at": now,
                         "lease_expires_at": None,
@@ -215,8 +293,12 @@ class AsyncpgEventsBackend:
         hub = self._ensure_hub()
         payload = await hub.dequeue(channel, poll_interval)
         if payload is None:
+            self._runtime.increment_metric("events.listener.timeout")
             return None
-        return decode_notify_payload(channel, payload)
+        self._runtime.increment_metric("events.listener.wakeup")
+        event = decode_notify_payload(channel, payload)
+        _record_dequeue_result(self._runtime, event)
+        return event
 
     async def ack(self, _event_id: str) -> None:
         self._runtime.increment_metric("events.ack")
@@ -275,3 +357,30 @@ def _extract_event_id(payload: "str | None") -> "str | None":
         event_id = raw.get("event_id")
         return event_id if isinstance(event_id, str) else None
     return None
+
+
+def _extract_batch_size(payload: "str | None") -> int:
+    if not payload:
+        return 0
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        batch_size = raw.get("batch_size")
+        return batch_size if isinstance(batch_size, int) else 0
+    return 0
+
+
+def _extract_marker_id(payload: "str | None") -> "str | None":
+    if not payload:
+        return None
+    raw = from_json(payload)
+    if isinstance(raw, dict):
+        marker_id = raw.get("marker_id", raw.get("event_id"))
+        return marker_id if isinstance(marker_id, str) else None
+    return None
+
+
+def _record_dequeue_result(runtime: Any, event: "EventMessage | None") -> None:
+    if event is None:
+        return
+    latency_ms = max(0.0, (datetime.now(timezone.utc) - event.created_at).total_seconds() * 1000)
+    runtime.record_metric("events.dequeue.latency_ms", latency_ms)

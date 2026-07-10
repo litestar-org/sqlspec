@@ -2,6 +2,7 @@
 """Unit tests for SyncTableEventQueue and AsyncTableEventQueue."""
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -10,6 +11,20 @@ from sqlspec.core import StatementConfig
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import AsyncTableEventQueue, EventMessage, SyncTableEventQueue, parse_event_timestamp
+
+
+def _event_row(event_id: str = "event-1") -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    return {
+        "event_id": event_id,
+        "channel": "alerts",
+        "payload_json": {"ok": True},
+        "metadata_json": None,
+        "attempts": 0,
+        "available_at": now,
+        "lease_expires_at": None,
+        "created_at": now,
+    }
 
 
 def test_table_event_queue_classes_are_final_with_classvar_flags() -> None:
@@ -21,6 +36,70 @@ def test_table_event_queue_classes_are_final_with_classvar_flags() -> None:
     assert AsyncTableEventQueue.supports_async is True
     assert SyncTableEventQueue.backend_name == "poll_queue"
     assert AsyncTableEventQueue.backend_name == "poll_queue"
+
+
+def test_sync_table_queue_empty_poll_backoff_is_bounded_and_resets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "sync-backoff.db")})
+    queue = SyncTableEventQueue(config)
+    rows = iter([None, None, None, _event_row(), None])
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(SyncTableEventQueue, "_fetch_candidate", lambda *_args: next(rows))
+    monkeypatch.setattr(SyncTableEventQueue, "_execute", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr("sqlspec.extensions.events._queue.time.sleep", sleeps.append)
+
+    assert queue.dequeue("alerts", 0.08) is None
+    assert queue.dequeue("alerts", 0.08) is None
+    assert queue.dequeue("alerts", 0.01) is None
+    assert queue.dequeue("alerts", 0.08) is not None
+    assert queue.dequeue("alerts", 0.08) is None
+
+    assert sleeps == [0.05, 0.08, 0.01, 0.05]
+
+
+async def test_async_table_queue_empty_poll_backoff_is_bounded_and_resets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "async-backoff.db")})
+    queue = AsyncTableEventQueue(config)
+    rows = iter([None, None, None, _event_row(), None])
+    sleeps: list[float] = []
+
+    async def _fetch_candidate(*_args: Any) -> dict[str, Any] | None:
+        return next(rows)
+
+    async def _execute(*_args: Any, **_kwargs: Any) -> int:
+        return 1
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(AsyncTableEventQueue, "_fetch_candidate", _fetch_candidate)
+    monkeypatch.setattr(AsyncTableEventQueue, "_execute", _execute)
+    monkeypatch.setattr("sqlspec.extensions.events._queue.asyncio.sleep", _sleep)
+
+    assert await queue.dequeue("alerts", 0.08) is None
+    assert await queue.dequeue("alerts", 0.08) is None
+    assert await queue.dequeue("alerts", 0.01) is None
+    assert await queue.dequeue("alerts", 0.08) is not None
+    assert await queue.dequeue("alerts", 0.08) is None
+
+    assert sleeps == [0.05, 0.08, 0.01, 0.05]
+
+
+def test_table_queue_empty_poll_backoff_state_is_bounded(tmp_path: Any) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "bounded-backoff.db")})
+    queue = SyncTableEventQueue(config)
+
+    for index in range(1_025):
+        queue._next_empty_poll_delay(f"channel-{index}", 0.1)
+
+    assert len(queue._empty_poll_delays) == 1_024
+    assert "channel-0" not in queue._empty_poll_delays
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:

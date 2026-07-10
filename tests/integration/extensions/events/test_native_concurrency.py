@@ -22,11 +22,12 @@ import asyncio
 import contextlib
 import importlib
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from sqlspec import SQLSpec
+from sqlspec.extensions.events import AsyncEventChannel
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -229,7 +230,8 @@ async def test_native_publish_many_preserves_individual_envelopes(postgres_servi
         await asyncio.sleep(_SUBSCRIBE_WAIT)
         events = [(channel_name, {"index": index}, {"source": "batch"}) for index in range(_EXPECTED_DELIVERIES)]
 
-        event_ids = await channel.publish_many(events)
+        async_channel = cast("AsyncEventChannel", channel)
+        event_ids = await async_channel.publish_many(events)
         await _drain(received, _EXPECTED_DELIVERIES, watch_tasks=(listener.task,))
 
         assert len(received) == _EXPECTED_DELIVERIES

@@ -6,6 +6,7 @@ from sqlspec.extensions.events._channel import (
     SyncEventChannel,
     SyncEventListener,
     load_native_backend,
+    resolve_event_poll_interval,
     resolve_poll_interval,
 )
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
@@ -47,5 +48,6 @@ __all__ = (
     "normalize_queue_table_name",
     "parse_event_timestamp",
     "resolve_adapter_name",
+    "resolve_event_poll_interval",
     "resolve_poll_interval",
 )

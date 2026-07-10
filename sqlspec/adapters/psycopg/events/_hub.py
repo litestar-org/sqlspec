@@ -17,6 +17,7 @@ import threading
 from typing import TYPE_CHECKING, Any
 from weakref import WeakKeyDictionary
 
+from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -69,12 +70,11 @@ class PsycopgAsyncListenerHub:
             if channel in self._queues:
                 return
             await self._ensure_connection_locked()
-            validated = normalize_event_channel_name(channel)
             connection = self._connection
             assert connection is not None
             self._queues[channel] = WeakKeyDictionary()
             try:
-                await connection.execute(f"LISTEN {validated}")
+                await connection.execute(_listen_statement(channel))
             except Exception:
                 self._queues.pop(channel, None)
                 raise
@@ -87,9 +87,8 @@ class PsycopgAsyncListenerHub:
             connection = self._connection
             if connection is None:
                 return
-            validated = normalize_event_channel_name(channel)
             with contextlib.suppress(Exception):
-                await connection.execute(f"UNLISTEN {validated}")
+                await connection.execute(_unlisten_statement(channel))
 
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
@@ -124,9 +123,8 @@ class PsycopgAsyncListenerHub:
                 await pump_task
         if connection is not None:
             for channel in channels:
-                validated = normalize_event_channel_name(channel)
                 with contextlib.suppress(Exception):
-                    await connection.execute(f"UNLISTEN {validated}")
+                    await connection.execute(_unlisten_statement(channel))
         if connection_cm is not None:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
@@ -186,8 +184,7 @@ class PsycopgAsyncListenerHub:
         self._connection = connection
         try:
             for channel in self._queues:
-                validated = normalize_event_channel_name(channel)
-                await connection.execute(f"LISTEN {validated}")
+                await connection.execute(_listen_statement(channel))
         except Exception:
             self._connection = None
             self._connection_cm = None
@@ -453,12 +450,10 @@ class PsycopgSyncListenerHub:
                 return
             try:
                 if op == "listen":
-                    validated = normalize_event_channel_name(channel)
-                    connection.execute(f"LISTEN {validated}")
+                    connection.execute(_listen_statement(channel))
                 elif op == "unlisten":
-                    validated = normalize_event_channel_name(channel)
                     with contextlib.suppress(Exception):
-                        connection.execute(f"UNLISTEN {validated}")
+                        connection.execute(_unlisten_statement(channel))
                 elif op == "stop":
                     stopping.set()
             finally:
@@ -488,3 +483,13 @@ def _record_listener_lifecycle(
         mode="async" if is_async else "sync",
         status=status,
     )
+
+
+def _listen_statement(channel: str) -> PsycopgComposed:
+    validated = normalize_event_channel_name(channel)
+    return PsycopgSQL("LISTEN {}").format(PsycopgIdentifier(validated))
+
+
+def _unlisten_statement(channel: str) -> PsycopgComposed:
+    validated = normalize_event_channel_name(channel)
+    return PsycopgSQL("UNLISTEN {}").format(PsycopgIdentifier(validated))

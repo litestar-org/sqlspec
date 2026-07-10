@@ -12,7 +12,7 @@ from sqlspec.core import StatementConfig
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import AsyncEventChannel, AsyncTableEventQueue, SyncEventChannel, SyncTableEventQueue
 from sqlspec.observability import ObservabilityRuntime
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -182,7 +182,11 @@ async def test_async_event_channel_publish_many_finishes_error_span(tmp_path: An
 class _SyncDriver:
     def __init__(self) -> None:
         self.commits = 0
+        self.execute_calls: list[Any] = []
         self.execute_many_calls: list[tuple[Any, list[dict[str, Any]], Any]] = []
+
+    def execute(self, statement: Any) -> None:
+        self.execute_calls.append(statement)
 
     def execute_many(self, statement: Any, parameters: Any, *, statement_config: Any = None) -> None:
         self.execute_many_calls.append((statement, list(parameters), statement_config))
@@ -194,7 +198,14 @@ class _SyncDriver:
 class _AsyncDriver:
     def __init__(self) -> None:
         self.commits = 0
+        self.execute_calls: list[Any] = []
         self.execute_many_calls: list[tuple[Any, list[dict[str, Any]], Any]] = []
+
+    async def execute(self, statement: Any) -> None:
+        self.execute_calls.append(statement)
+
+    async def execute_script(self, statement: Any) -> None:
+        self.execute_calls.append(statement)
 
     async def execute_many(self, statement: Any, parameters: Any, *, statement_config: Any = None) -> None:
         self.execute_many_calls.append((statement, list(parameters), statement_config))
@@ -438,8 +449,33 @@ async def test_async_postgres_hybrid_publish_many_bulk_inserts_and_marks_each_ch
     assert len(config.driver.execute_many_calls) == 2
     assert [len(call[1]) for call in config.driver.execute_many_calls] == [1_000, 2]
     assert [record["event_id"] for record in config.driver.execute_many_calls[0][1]] == ids
-    assert _notify_channels(config.driver.execute_many_calls[1][1]) == ["channel_0", "channel_1"]
+    marker_parameters = config.driver.execute_many_calls[1][1]
+    assert _notify_channels(marker_parameters) == ["channel_0", "channel_1"]
+    assert _notify_batch_markers(marker_parameters) == [500, 500]
     assert config.driver.commits == 1
+
+
+@pytest.mark.parametrize(
+    "config_type,backend_factory",
+    [
+        (_AsyncpgConfig, _asyncpg_hybrid_backend),
+        (_PsycopgAsyncConfig, _psycopg_async_hybrid_backend),
+        (_PsqlpyConfig, _psqlpy_hybrid_backend),
+    ],
+)
+async def test_async_postgres_hybrid_single_and_batch_preserve_empty_metadata(
+    config_type: Any, backend_factory: Any
+) -> None:
+    single_config = config_type()
+    single_backend = backend_factory(single_config)
+    await single_backend.publish("events", {"value": 1}, {})
+
+    batch_config = config_type()
+    batch_backend = backend_factory(batch_config)
+    await batch_backend.publish_many([("events", {"value": 1}, {})])
+
+    assert single_config.driver.execute_calls[0].parameters["metadata_json"] == to_json({})
+    assert batch_config.driver.execute_many_calls[0][1][0]["metadata_json"] == to_json({})
 
 
 def test_psycopg_sync_hybrid_publish_many_bulk_inserts_and_marks_each_channel_once() -> None:
@@ -456,8 +492,26 @@ def test_psycopg_sync_hybrid_publish_many_bulk_inserts_and_marks_each_channel_on
     assert len(config.driver.execute_many_calls) == 2
     assert [len(call[1]) for call in config.driver.execute_many_calls] == [1_000, 2]
     assert [record["event_id"] for record in config.driver.execute_many_calls[0][1]] == ids
-    assert _notify_channels(config.driver.execute_many_calls[1][1]) == ["channel_0", "channel_1"]
+    marker_parameters = config.driver.execute_many_calls[1][1]
+    assert _notify_channels(marker_parameters) == ["channel_0", "channel_1"]
+    assert _notify_batch_markers(marker_parameters) == [500, 500]
     assert config.driver.commits == 1
+
+
+def test_psycopg_sync_hybrid_single_and_batch_preserve_empty_metadata() -> None:
+    pytest.importorskip("psycopg")
+    from sqlspec.adapters.psycopg.events.backend import PsycopgSyncHybridEventsBackend
+
+    single_config = _PsycopgSyncConfig()
+    single_backend = PsycopgSyncHybridEventsBackend(single_config, _HybridQueue())  # type: ignore[arg-type]
+    single_backend.publish("events", {"value": 1}, {})
+
+    batch_config = _PsycopgSyncConfig()
+    batch_backend = PsycopgSyncHybridEventsBackend(batch_config, _HybridQueue())  # type: ignore[arg-type]
+    batch_backend.publish_many([("events", {"value": 1}, {})])
+
+    assert single_config.driver.execute_calls[0].parameters["metadata_json"] == to_json({})
+    assert batch_config.driver.execute_many_calls[0][1][0]["metadata_json"] == to_json({})
 
 
 def _notify_event_ids(parameters: "list[Any]") -> list[str]:
@@ -477,3 +531,20 @@ def _notify_channels(parameters: "list[Any]") -> list[str]:
         parameters_row["channel"] if isinstance(parameters_row, dict) else parameters_row[0]
         for parameters_row in parameters
     ]
+
+
+def _notify_batch_markers(parameters: "list[Any]") -> list[int]:
+    batch_sizes: list[int] = []
+    marker_ids: set[str] = set()
+    for parameters_row in parameters:
+        payload = parameters_row["payload"] if isinstance(parameters_row, dict) else parameters_row[1]
+        decoded = from_json(payload)
+        assert isinstance(decoded, dict)
+        batch_size = decoded.get("batch_size")
+        marker_id = decoded.get("marker_id")
+        assert isinstance(batch_size, int)
+        assert isinstance(marker_id, str)
+        batch_sizes.append(batch_size)
+        marker_ids.add(marker_id)
+    assert len(marker_ids) == 1
+    return batch_sizes

@@ -33,6 +33,8 @@ _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"
 _ACKED_STATUS = "acked"
 _DEFAULT_TABLE = "sqlspec_event_queue"
+_INITIAL_EMPTY_POLL_BACKOFF = 0.05
+_MAX_EMPTY_POLL_CHANNELS = 1_024
 
 
 class _BaseTableEventQueue:
@@ -44,6 +46,7 @@ class _BaseTableEventQueue:
         "_claim_statement",
         "_config",
         "_dialect",
+        "_empty_poll_delays",
         "_insert_statement",
         "_lease_seconds",
         "_max_claim_attempts",
@@ -71,6 +74,7 @@ class _BaseTableEventQueue:
         self._statement_config = config.statement_config
         self._runtime = config.get_observability_runtime()
         self._dialect = str(self._statement_config.dialect or "").lower() if self._statement_config else ""
+        self._empty_poll_delays: dict[str, float] = {}
         self._table_name = normalize_queue_table_name(queue_table or _DEFAULT_TABLE)
         self._lease_seconds = lease_seconds or 30
         self._retention_seconds = retention_seconds or 86_400
@@ -123,6 +127,19 @@ class _BaseTableEventQueue:
     def _uses_oracle_locking_select(self, select_for_update: bool | None = None) -> bool:
         locking_enabled = self._select_for_update if select_for_update is None else select_for_update
         return bool(locking_enabled) and "oracle" in self._dialect
+
+    def _next_empty_poll_delay(self, channel: str, poll_interval: "float | None") -> float:
+        if poll_interval is None or poll_interval <= 0:
+            return 0.0
+        if channel not in self._empty_poll_delays and len(self._empty_poll_delays) >= _MAX_EMPTY_POLL_CHANNELS:
+            self._empty_poll_delays.pop(next(iter(self._empty_poll_delays)))
+        delay = min(self._empty_poll_delays.get(channel, _INITIAL_EMPTY_POLL_BACKOFF), poll_interval)
+        self._empty_poll_delays[channel] = min(delay * 2, poll_interval)
+        self._runtime.record_metric("events.poll.backoff", delay)
+        return delay
+
+    def _reset_empty_poll_delay(self, channel: str) -> None:
+        self._empty_poll_delays.pop(channel, None)
 
     def _claim_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
@@ -289,14 +306,19 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             if self._select_for_update:
                 event = self._claim_locked_candidate(channel)
                 if event is not None:
+                    self._reset_empty_poll_delay(channel)
                     return event
-                if poll_interval is not None and poll_interval > 0:
-                    time.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    time.sleep(delay)
                 return None
             row = self._fetch_candidate(channel)
             if row is None:
-                if poll_interval is not None and poll_interval > 0:
-                    time.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    time.sleep(delay)
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
@@ -314,6 +336,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             if not claimed:
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
+                self._reset_empty_poll_delay(channel)
                 return self._hydrate_event(row, leased_until)
         return None
 
@@ -337,7 +360,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            return self._hydrate_event(row, leased_until)
+            event = self._hydrate_event(row, leased_until)
+            self._reset_empty_poll_delay(event.channel)
+            return event
         return None
 
     def ack(self, event_id: str) -> None:
@@ -359,6 +384,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
 
     def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
+        self._runtime.increment_metric("events.poll.query")
         with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
             return driver.select_one_or_none(
                 # SQL allocation here is intentional: DB round-trip dominates by >=100x,
@@ -511,14 +537,19 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if self._select_for_update:
                 event = await self._claim_locked_candidate(channel)
                 if event is not None:
+                    self._reset_empty_poll_delay(channel)
                     return event
-                if poll_interval is not None and poll_interval > 0:
-                    await asyncio.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 return None
             row = await self._fetch_candidate(channel)
             if row is None:
-                if poll_interval is not None and poll_interval > 0:
-                    await asyncio.sleep(poll_interval)
+                self._runtime.increment_metric("events.poll.empty")
+                delay = self._next_empty_poll_delay(channel, poll_interval)
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
@@ -536,6 +567,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if not claimed:
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
+                self._reset_empty_poll_delay(channel)
                 return self._hydrate_event(row, leased_until)
         return None
 
@@ -559,7 +591,9 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            return self._hydrate_event(row, leased_until)
+            event = self._hydrate_event(row, leased_until)
+            self._reset_empty_poll_delay(event.channel)
+            return event
         return None
 
     async def ack(self, event_id: str) -> None:
@@ -581,6 +615,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     async def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
         current_time = self._utcnow()
+        self._runtime.increment_metric("events.poll.query")
         async with cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
         ) as driver:

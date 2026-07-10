@@ -32,6 +32,7 @@ __all__ = (
     "SyncEventChannel",
     "SyncEventListener",
     "load_native_backend",
+    "resolve_event_poll_interval",
     "resolve_poll_interval",
 )
 
@@ -79,6 +80,19 @@ def resolve_poll_interval(poll_interval: "float | None", default: float) -> floa
         msg = "poll_interval must be greater than zero"
         raise ImproperConfigurationError(msg)
     return poll_interval
+
+
+def resolve_event_poll_interval(
+    event_poll_interval: "float | None", poll_interval: "float | None", default: float
+) -> float:
+    """Resolve the event reconciliation interval with compatibility precedence."""
+    resolved = event_poll_interval if event_poll_interval is not None else poll_interval
+    if resolved is None:
+        resolved = default
+    if resolved <= 0:
+        msg = "event_poll_interval must be greater than zero"
+        raise ImproperConfigurationError(msg)
+    return resolved
 
 
 def _resolve_event_type(payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> "str | None":
@@ -374,6 +388,7 @@ class SyncEventChannel:
         "_backend",
         "_backend_name",
         "_config",
+        "_event_poll_interval",
         "_listeners",
         "_poll_interval_default",
         "_runtime",
@@ -388,7 +403,10 @@ class SyncEventChannel:
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
         self._adapter_name = resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
-        self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
+        self._event_poll_interval = resolve_event_poll_interval(
+            extension_settings.get("event_poll_interval"), extension_settings.get("poll_interval"), hints.poll_interval
+        )
+        self._poll_interval_default = self._event_poll_interval
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = _resolve_backend_name(config, extension_settings, self._adapter_name)
         native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
@@ -414,6 +432,16 @@ class SyncEventChannel:
         self._config = config
         self._backend_name = backend_label
         self._runtime = config.get_observability_runtime()
+        self._runtime.record_metric("events.poll.interval", self._event_poll_interval)
+        self._runtime.increment_metric(f"events.backend.{self._backend_name}.resolved")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.configure",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            event_poll_interval=self._event_poll_interval,
+        )
         self._listeners: dict[str, SyncEventListener] = {}
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
@@ -486,13 +514,15 @@ class SyncEventChannel:
         )
         return event_ids
 
-    def iter_events(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
+    def iter_events(
+        self, channel: str, *, event_poll_interval: float | None = None, poll_interval: float | None = None
+    ) -> Iterator[EventMessage]:
         """Yield events as they become available."""
         channel = normalize_event_channel_name(channel)
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync consumption"
             raise ImproperConfigurationError(msg)
-        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_event_poll_interval(event_poll_interval, poll_interval, self._event_poll_interval)
         return _SyncEventIterator(
             backend=self._backend,
             runtime=self._runtime,
@@ -503,14 +533,20 @@ class SyncEventChannel:
         )
 
     def listen(
-        self, channel: str, handler: "SyncEventHandler", *, poll_interval: float | None = None, auto_ack: bool = True
+        self,
+        channel: str,
+        handler: "SyncEventHandler",
+        *,
+        event_poll_interval: float | None = None,
+        poll_interval: float | None = None,
+        auto_ack: bool = True,
     ) -> SyncEventListener:
         """Start a background thread that invokes handler for each event."""
         channel = normalize_event_channel_name(channel)
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync listeners"
             raise ImproperConfigurationError(msg)
-        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_event_poll_interval(event_poll_interval, poll_interval, self._event_poll_interval)
         listener_id = uuid4().hex
         stop_event = threading.Event()
         thread = threading.Thread(
@@ -580,6 +616,7 @@ class SyncEventChannel:
 
     def shutdown(self) -> None:
         """Shutdown the event channel and release backend resources."""
+        started_at = perf_counter()
         span = _start_event_span(self._runtime, "shutdown", self._backend_name, self._adapter_name, mode="sync")
         try:
             for listener_id in list(self._listeners):
@@ -588,6 +625,8 @@ class SyncEventChannel:
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
+        finally:
+            self._runtime.record_metric("events.shutdown.duration_ms", (perf_counter() - started_at) * 1000)
         _end_event_span(self._runtime, span, result="shutdown")
         self._runtime.increment_metric("events.shutdown")
 
@@ -646,6 +685,7 @@ class AsyncEventChannel:
         "_backend",
         "_backend_name",
         "_config",
+        "_event_poll_interval",
         "_listeners",
         "_poll_interval_default",
         "_runtime",
@@ -660,7 +700,10 @@ class AsyncEventChannel:
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
         self._adapter_name = resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
-        self._poll_interval_default = float(extension_settings.get("poll_interval") or hints.poll_interval)
+        self._event_poll_interval = resolve_event_poll_interval(
+            extension_settings.get("event_poll_interval"), extension_settings.get("poll_interval"), hints.poll_interval
+        )
+        self._poll_interval_default = self._event_poll_interval
         queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
         backend_name = _resolve_backend_name(config, extension_settings, self._adapter_name)
         native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
@@ -686,6 +729,16 @@ class AsyncEventChannel:
         self._config = config
         self._backend_name = backend_label
         self._runtime = config.get_observability_runtime()
+        self._runtime.record_metric("events.poll.interval", self._event_poll_interval)
+        self._runtime.increment_metric(f"events.backend.{self._backend_name}.resolved")
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.configure",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            event_poll_interval=self._event_poll_interval,
+        )
         self._listeners: dict[str, AsyncEventListener] = {}
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
@@ -760,13 +813,15 @@ class AsyncEventChannel:
         )
         return event_ids
 
-    def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
+    def iter_events(
+        self, channel: str, *, event_poll_interval: float | None = None, poll_interval: float | None = None
+    ) -> AsyncIterator[EventMessage]:
         """Yield events as they become available."""
         channel = normalize_event_channel_name(channel)
         if not self._backend.supports_async:
             msg = "Current events backend does not support async consumption"
             raise ImproperConfigurationError(msg)
-        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_event_poll_interval(event_poll_interval, poll_interval, self._event_poll_interval)
         return _AsyncEventIterator(
             backend=self._backend,
             runtime=self._runtime,
@@ -781,6 +836,7 @@ class AsyncEventChannel:
         channel: str,
         handler: "AsyncEventHandler | SyncEventHandler",
         *,
+        event_poll_interval: float | None = None,
         poll_interval: float | None = None,
         auto_ack: bool = True,
     ) -> AsyncEventListener:
@@ -791,7 +847,7 @@ class AsyncEventChannel:
             raise ImproperConfigurationError(msg)
         loop = asyncio.get_running_loop()
         stop_event = asyncio.Event()
-        interval = resolve_poll_interval(poll_interval, self._poll_interval_default)
+        interval = resolve_event_poll_interval(event_poll_interval, poll_interval, self._event_poll_interval)
         listener_id = uuid4().hex
         task = loop.create_task(self._run_listener(listener_id, channel, handler, stop_event, interval, auto_ack))
         listener = AsyncEventListener(listener_id, channel, task, stop_event, interval)
@@ -857,6 +913,7 @@ class AsyncEventChannel:
 
     async def shutdown(self) -> None:
         """Shutdown the event channel and release backend resources."""
+        started_at = perf_counter()
         span = _start_event_span(self._runtime, "shutdown", self._backend_name, self._adapter_name, mode="async")
         try:
             for listener_id in list(self._listeners):
@@ -865,6 +922,8 @@ class AsyncEventChannel:
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
+        finally:
+            self._runtime.record_metric("events.shutdown.duration_ms", (perf_counter() - started_at) * 1000)
         _end_event_span(self._runtime, span, result="shutdown")
         self._runtime.increment_metric("events.shutdown")
 
