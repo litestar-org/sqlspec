@@ -1,6 +1,58 @@
 """Configuration-related tests for extension auto-migration inclusion."""
 
+import importlib
+from pathlib import Path
+from typing import get_args, get_type_hints
+
+import pytest
+
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.config import EventsConfig
+
+
+def test_events_backend_literal_uses_canonical_transport_names() -> None:
+    """The SQLSpec selector excludes the Litestar Queues-only polling mode."""
+
+    backend_hint = get_type_hints(EventsConfig)["backend"]
+    backend_args = get_args(backend_hint)
+    backend_values = get_args(backend_args[0]) if len(backend_args) == 1 and get_args(backend_args[0]) else backend_args
+
+    assert set(backend_values) == {"notify", "notify_queue", "poll_queue", "aq", "txeventq"}
+
+
+_POSTGRES_DRIVER_FEATURES = (
+    ("sqlspec.adapters.asyncpg.config", "AsyncpgDriverFeatures"),
+    ("sqlspec.adapters.psycopg.config", "PsycopgDriverFeatures"),
+    ("sqlspec.adapters.psqlpy.config", "PsqlpyDriverFeatures"),
+)
+_POSTGRES_EVENT_BACKENDS = {"notify", "notify_queue", "poll_queue"}
+_RETIRED_EVENT_BACKENDS = ("listen_notify", "listen_notify_durable", "table_queue")
+
+
+@pytest.mark.parametrize(("module_name", "features_name"), _POSTGRES_DRIVER_FEATURES)
+def test_postgres_driver_feature_event_backends_are_canonical_literals(module_name: str, features_name: str) -> None:
+    """PostgreSQL adapter feature typing exposes only canonical event transports."""
+    module = importlib.import_module(module_name)
+    features = getattr(module, features_name)
+    annotation = features.__annotations__["events_backend"]
+    literal = get_args(annotation)[0]
+
+    assert set(get_args(literal)) == _POSTGRES_EVENT_BACKENDS
+
+
+def test_active_event_config_prose_uses_canonical_transport_names() -> None:
+    """Active adapter config and event reference docs do not advertise retired names."""
+    project_root = Path(__file__).parents[4]
+    paths = [*project_root.glob("sqlspec/adapters/*/config.py"), project_root / "docs/reference/extensions/events.rst"]
+
+    violations = {
+        str(path.relative_to(project_root)): retired
+        for path in paths
+        for retired in _RETIRED_EVENT_BACKENDS
+        if retired in path.read_text(encoding="utf-8")
+    }
+
+    assert violations == {}
 
 
 def test_events_extension_auto_includes_migrations(tmp_path) -> None:
@@ -36,7 +88,7 @@ def test_exclude_extensions_prevents_auto_inclusion(tmp_path) -> None:
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "events_skip.db")},
         migration_config={"script_location": "migrations", "exclude_extensions": ["events"]},
-        extension_config={"events": {"backend": "listen_notify"}},
+        extension_config={"events": {"backend": "notify"}},
     )
 
     include_extensions = config.migration_config.get("include_extensions")
@@ -107,7 +159,7 @@ def test_multiple_extensions_auto_include_migrations(tmp_path) -> None:
         extension_config={
             "litestar": {"session_table": True},  # Needs session_table for migrations
             "adk": {},
-            "events": {"backend": "table_queue"},
+            "events": {"backend": "poll_queue"},
         },
     )
 
@@ -124,7 +176,7 @@ def test_exclude_extensions_partial(tmp_path) -> None:
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "partial.db")},
         migration_config={"script_location": "migrations", "exclude_extensions": ["events"]},
-        extension_config={"litestar": {"session_table": True}, "events": {"backend": "listen_notify"}},
+        extension_config={"litestar": {"session_table": True}, "events": {"backend": "notify"}},
     )
 
     include_extensions = config.migration_config.get("include_extensions")

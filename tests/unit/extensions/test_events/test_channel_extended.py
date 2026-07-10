@@ -51,23 +51,69 @@ def test_event_channel_custom_poll_interval(tmp_path) -> None:
     assert channel._poll_interval_default == 0.5
 
 
-def test_event_channel_backend_name_table_queue(tmp_path) -> None:
-    """EventChannel defaults to table_queue backend."""
+def test_event_channel_backend_name_poll_queue(tmp_path) -> None:
+    """EventChannel defaults to the durable polling queue backend."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     channel = SyncEventChannel(config)
 
-    assert channel._backend_name == "table_queue"
+    assert channel._backend_name == "poll_queue"
 
 
-def test_event_channel_backend_fallback_warning(tmp_path) -> None:
-    """EventChannel falls back to table_queue for unavailable backends."""
+def test_event_channel_rejects_unknown_backend(tmp_path) -> None:
+    """Unknown backend names must not silently change delivery semantics."""
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "test.db")},
         extension_config={"events": {"backend": "nonexistent_backend"}},
     )
+    with pytest.raises(ImproperConfigurationError, match="Unknown event backend"):
+        SyncEventChannel(config)
+
+
+@pytest.mark.parametrize(
+    ("retired", "replacement"),
+    (("listen_notify", "notify"), ("listen_notify_durable", "notify_queue"), ("table_queue", "poll_queue")),
+)
+def test_event_channel_rejects_retired_backend_with_migration_guidance(
+    tmp_path, retired: str, replacement: str
+) -> None:
+    """Retired backend names fail explicitly with their canonical replacement."""
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")}, extension_config={"events": {"backend": retired}}
+    )
+
+    with pytest.raises(ImproperConfigurationError, match=rf"use '{replacement}'"):
+        SyncEventChannel(config)
+
+
+def test_event_channel_honors_driver_feature_backend(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Adapter driver features select the backend when extension config does not."""
+    selected: list[str | None] = []
+
+    def capture_backend(config: Any, backend_name: str | None, settings: dict[str, Any], adapter_name: str) -> None:
+        selected.append(backend_name)
+
+    monkeypatch.setattr("sqlspec.extensions.events._channel.load_native_backend", capture_backend)
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")}, driver_features={"events_backend": "notify"}
+    )
+
     channel = SyncEventChannel(config)
 
-    assert channel._backend_name == "table_queue"
+    assert channel._backend_name == "poll_queue"
+    assert selected == ["notify"]
+
+
+def test_event_extension_backend_takes_precedence_over_driver_feature(tmp_path) -> None:
+    """The extension setting is the primary event transport selector."""
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")},
+        driver_features={"events_backend": "listen_notify"},
+        extension_config={"events": {"backend": "poll_queue"}},
+    )
+
+    channel = SyncEventChannel(config)
+
+    assert channel._backend_name == "poll_queue"
 
 
 def test_sync_event_channel_is_sync_class(tmp_path) -> None:
@@ -198,12 +244,12 @@ def test_event_channel_resolve_adapter_name_non_sqlspec_module(tmp_path) -> None
     assert result is None
 
 
-def test_event_channel_load_native_backend_table_queue_returns_none(tmp_path) -> None:
-    """load_native_backend returns None for table_queue backend name."""
+def test_event_channel_load_native_backend_poll_queue_returns_none(tmp_path) -> None:
+    """load_native_backend returns None for poll_queue backend name."""
     from sqlspec.extensions.events import load_native_backend
 
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
-    result = load_native_backend(config, "table_queue", {})
+    result = load_native_backend(config, "poll_queue", {})
 
     assert result is None
 
@@ -234,7 +280,7 @@ def test_load_native_backend_uses_pre_resolved_adapter_name(monkeypatch: pytest.
     CustomConfig.__module__ = "myapp.database.config"
     monkeypatch.setattr("sqlspec.extensions.events._channel.importlib.import_module", fake_import_module)
 
-    result = load_native_backend(CustomConfig(), "listen_notify", {}, adapter_name="sqlite")
+    result = load_native_backend(CustomConfig(), "notify", {}, adapter_name="sqlite")
 
     assert result is None
     assert imported_modules == ["sqlspec.adapters.sqlite.events.backend"]

@@ -89,7 +89,7 @@ class ArrowOdbcStreamSource:
             if rows:
                 return rows
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         reader = self._reader
         self._reader = None
         close = getattr(reader, "close", None)

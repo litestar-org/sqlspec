@@ -1,7 +1,7 @@
 """DuckDB database configuration with connection pooling."""
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -163,9 +163,9 @@ class DuckDBDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (DuckDB has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
-            DuckDB does not have native pub/sub, so table_queue is the only backend.
-            Defaults to "table_queue".
+        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
+            DuckDB does not have native pub/sub, so poll_queue is the only backend.
+            Defaults to "poll_queue".
     """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
@@ -175,7 +175,7 @@ class DuckDBDriverFeatures(TypedDict):
     enable_uuid_conversion: NotRequired[bool]
     extension_flags: NotRequired["dict[str, Any]"]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class DuckDBConnectionContext(SyncPoolConnectionContext):

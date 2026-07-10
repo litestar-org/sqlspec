@@ -27,7 +27,7 @@ def test_psycopg_sync_hybrid_listen_notify_durable(postgres_service: "Any", tmp_
     config = PsycopgSyncConfig(
         connection_config={"conninfo": _conninfo(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {"backend": "listen_notify_durable"}},
+        extension_config={"events": {"backend": "notify_queue"}},
     )
 
     SyncMigrationCommands(config).upgrade()
@@ -62,8 +62,7 @@ async def test_psycopg_async_multi_channel_listen_delivery(postgres_service: "An
     """
 
     config = PsycopgAsyncConfig(
-        connection_config={"conninfo": _conninfo(postgres_service)},
-        extension_config={"events": {"backend": "listen_notify"}},
+        connection_config={"conninfo": _conninfo(postgres_service)}, extension_config={"events": {"backend": "notify"}}
     )
 
     spec = SQLSpec()
@@ -105,8 +104,7 @@ def test_psycopg_sync_multi_channel_listen_delivery(postgres_service: "Any") -> 
     """Sync psycopg: same multi-channel LISTEN drop bug as the async variant."""
 
     config = PsycopgSyncConfig(
-        connection_config={"conninfo": _conninfo(postgres_service)},
-        extension_config={"events": {"backend": "listen_notify"}},
+        connection_config={"conninfo": _conninfo(postgres_service)}, extension_config={"events": {"backend": "notify"}}
     )
 
     spec = SQLSpec()
@@ -153,7 +151,7 @@ async def test_psycopg_async_hybrid_listen_notify_durable(postgres_service: "Any
     config = PsycopgAsyncConfig(
         connection_config={"conninfo": _conninfo(postgres_service)},
         migration_config={"script_location": str(migrations), "include_extensions": ["events"]},
-        extension_config={"events": {"backend": "listen_notify_durable"}},
+        extension_config={"events": {"backend": "notify_queue"}},
     )
 
     await AsyncMigrationCommands(config).upgrade()

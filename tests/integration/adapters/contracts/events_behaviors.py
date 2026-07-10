@@ -41,8 +41,8 @@ def _events_extension_config(case: EventsCase, behavior: str) -> "tuple[str, dic
     token = f"{case.id}_{behavior}".replace("-", "_")
     queue_table = f"evq_{token}"
     events_config: dict[str, Any] = {"queue_table": queue_table}
-    if case.force_table_queue:
-        events_config["backend"] = "table_queue"
+    if case.force_poll_queue:
+        events_config["backend"] = "poll_queue"
     return queue_table, {"events": events_config}, token
 
 
@@ -103,7 +103,7 @@ def assert_sync_listen_notify_delivery_contract(make_config: Any, case: ListenNo
     channel = spec.event_channel(config)
     listener: Any | None = None
     try:
-        assert channel._backend_name == "listen_notify"  # pyright: ignore[reportPrivateUsage]
+        assert channel._backend_name == "notify"  # pyright: ignore[reportPrivateUsage]
         received: list[Any] = []
         listener = channel.listen(channel_name, received.append, poll_interval=_LISTEN_NOTIFY_POLL_INTERVAL)
         time.sleep(_LISTEN_NOTIFY_SUBSCRIBE_WAIT)
@@ -144,7 +144,7 @@ async def assert_async_listen_notify_delivery_contract(make_config: Any, case: L
     channel = spec.event_channel(config)
     listener: Any | None = None
     try:
-        assert channel._backend_name == "listen_notify"  # pyright: ignore[reportPrivateUsage]
+        assert channel._backend_name == "notify"  # pyright: ignore[reportPrivateUsage]
         received: list[Any] = []
 
         async def _handler(message: Any) -> None:
@@ -186,7 +186,7 @@ def assert_sync_events_queue_lifecycle_contract(make_config: Any, case: EventsCa
     config = make_config(extension_config=extension_config, suffix=suffix)
     try:
         _spec, channel = setup_sync_event_channel(config)
-        assert channel._backend_name == "table_queue"  # pyright: ignore[reportPrivateUsage]
+        assert channel._backend_name == "poll_queue"  # pyright: ignore[reportPrivateUsage]
         event_id = channel.publish("notifications", {"action": "queue"})
         message = _consume_sync(channel, "notifications")
         assert message.event_id == event_id
@@ -204,7 +204,7 @@ async def assert_async_events_queue_lifecycle_contract(make_config: Any, case: E
     config = make_config(extension_config=extension_config, suffix=suffix)
     try:
         _spec, channel = await setup_async_event_channel(config)
-        assert channel._backend_name == "table_queue"  # pyright: ignore[reportPrivateUsage]
+        assert channel._backend_name == "poll_queue"  # pyright: ignore[reportPrivateUsage]
         event_id = await channel.publish("notifications", {"action": "queue"})
         message = await _consume_async(channel, "notifications")
         assert message.event_id == event_id

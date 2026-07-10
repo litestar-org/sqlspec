@@ -196,8 +196,8 @@ class AiomysqlStreamSource:
         handler = self._driver.handle_database_exceptions()
         async with handler:
             cursor = await self._driver.connection.cursor(SSCursor)
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
         self._driver._check_pending_exception(handler)
 
@@ -214,7 +214,7 @@ class AiomysqlStreamSource:
         deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
         return collect_stream_rows(rows, self._row_plan, deserializer)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:

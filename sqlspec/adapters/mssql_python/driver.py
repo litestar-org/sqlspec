@@ -122,7 +122,7 @@ class MssqlPythonStreamSource:
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         cursor_manager = self._cursor_manager
         self._cursor_manager = None
         if cursor_manager is not None:

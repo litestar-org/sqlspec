@@ -11,6 +11,7 @@ interpreted adapter sources can feed compiled stream classes):
 
 import builtins
 import contextlib
+import inspect
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast, overload
 
 from typing_extensions import Self
@@ -56,6 +57,28 @@ class AsyncRowSource(Protocol):
     async def close(self) -> None: ...
 
 
+def _close_sync_source(source: SyncRowSource, error: bool) -> None:
+    """Close a source while preserving the original no-argument contract."""
+    close = source.close
+    try:
+        inspect.signature(close).bind(error=error)
+    except (TypeError, ValueError):
+        close()
+        return
+    cast("Any", close)(error=error)
+
+
+async def _close_async_source(source: AsyncRowSource, error: bool) -> None:
+    """Close an async source while preserving the original no-argument contract."""
+    close = source.close
+    try:
+        inspect.signature(close).bind(error=error)
+    except (TypeError, ValueError):
+        await close()
+        return
+    await cast("Any", close)(error=error)
+
+
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
     """Zip positional rows with column names into dict rows."""
     if not column_names:
@@ -96,7 +119,7 @@ class SyncRowStream(Generic[RowT]):
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
-        self.close()
+        self._close(error=exc_type is not None)
 
     def __iter__(self) -> "SyncRowStream[RowT]":
         return self
@@ -109,13 +132,13 @@ class SyncRowStream(Generic[RowT]):
             try:
                 self._source.start()
             except BaseException:
-                self.close()
+                self._close(error=True)
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
                 chunk = self._source.fetch_chunk()
             except BaseException:
-                self.close()
+                self._close(error=True)
                 raise
             if not chunk:
                 self.close()
@@ -133,13 +156,16 @@ class SyncRowStream(Generic[RowT]):
         return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
 
     def close(self) -> None:
+        self._close(error=False)
+
+    def _close(self, error: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
         with contextlib.suppress(Exception):
-            self._source.close()
+            _close_sync_source(self._source, error)
 
 
 class AsyncRowStream(Generic[RowT]):
@@ -178,7 +204,7 @@ class AsyncRowStream(Generic[RowT]):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> None:
-        await self.aclose()
+        await self._aclose(error=exc_type is not None)
 
     async def __anext__(self) -> RowT:
         if self._closed:
@@ -188,13 +214,13 @@ class AsyncRowStream(Generic[RowT]):
             try:
                 await self._source.start()
             except BaseException:
-                await self.aclose()
+                await self._aclose(error=True)
                 raise
         if self._buffer_index >= len(self._buffer):
             try:
                 chunk = await self._source.fetch_chunk()
             except BaseException:
-                await self.aclose()
+                await self._aclose(error=True)
                 raise
             if not chunk:
                 await self.aclose()
@@ -212,13 +238,16 @@ class AsyncRowStream(Generic[RowT]):
         return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
 
     async def aclose(self) -> None:
+        await self._aclose(error=False)
+
+    async def _aclose(self, error: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
         with contextlib.suppress(Exception):
-            await self._source.close()
+            await _close_async_source(self._source, error)
 
 
 class EagerSyncRowSource:
@@ -239,7 +268,7 @@ class EagerSyncRowSource:
         self._position += len(chunk)
         return chunk
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         self._rows = []
 
 
@@ -261,7 +290,7 @@ class EagerAsyncRowSource:
         self._position += len(chunk)
         return chunk
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         self._rows = []
 
 
@@ -286,5 +315,5 @@ class _LazyEagerAsyncRowSource:
         self._position += len(chunk)
         return chunk
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         self._rows = []

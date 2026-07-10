@@ -1039,7 +1039,7 @@ def listen_notify_config_asyncpg(postgres_service: PostgresService) -> Callable[
     def make(*, suffix: str) -> AsyncpgConfig:
         return AsyncpgConfig(
             connection_config={"dsn": _postgres_conninfo(postgres_service)},
-            extension_config={"events": {"backend": "listen_notify"}},
+            extension_config={"events": {"backend": "notify"}},
         )
 
     return make
@@ -1052,7 +1052,7 @@ def listen_notify_config_psqlpy(postgres_service: PostgresService) -> Callable[.
     def make(*, suffix: str) -> PsqlpyConfig:
         return PsqlpyConfig(
             connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(postgres_service)),
-            extension_config={"events": {"backend": "listen_notify"}},
+            extension_config={"events": {"backend": "notify"}},
         )
 
     return make
@@ -1065,7 +1065,7 @@ def listen_notify_config_psycopg_sync(postgres_service: PostgresService) -> Call
     def make(*, suffix: str) -> PsycopgSyncConfig:
         return PsycopgSyncConfig(
             connection_config={"conninfo": _postgres_conninfo(postgres_service)},
-            extension_config={"events": {"backend": "listen_notify"}},
+            extension_config={"events": {"backend": "notify"}},
         )
 
     return make
@@ -1078,7 +1078,7 @@ def listen_notify_config_psycopg_async(postgres_service: PostgresService) -> Cal
     def make(*, suffix: str) -> PsycopgAsyncConfig:
         return PsycopgAsyncConfig(
             connection_config={"conninfo": _postgres_conninfo(postgres_service)},
-            extension_config={"events": {"backend": "listen_notify"}},
+            extension_config={"events": {"backend": "notify"}},
         )
 
     return make

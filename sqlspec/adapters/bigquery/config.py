@@ -1,6 +1,6 @@
 """BigQuery database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
@@ -84,9 +84,9 @@ class BigQueryDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
-            BigQuery does not have native pub/sub, so table_queue is the only backend.
-            Defaults to "table_queue".
+        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
+            BigQuery does not have native pub/sub, so poll_queue is the only backend.
+            Defaults to "poll_queue".
         job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
             Values <= 0 disable retries entirely: API requests are not retried and ``job_retry`` is
             withheld from ``client.query()``, which also bypasses the client's built-in
@@ -114,7 +114,7 @@ class BigQueryDriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     enable_uuid_conversion: NotRequired[bool]
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     job_retry_deadline: NotRequired[float]
     job_result_timeout: NotRequired[float]
     use_query_and_wait: NotRequired[bool]

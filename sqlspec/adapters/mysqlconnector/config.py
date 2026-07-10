@@ -180,7 +180,7 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
     events_backend: Event channel backend selection.
-     Only option: "table_queue".
+     Only option: "poll_queue".
     cursor_options: Cursor keyword arguments SQLSpec forwards to
      ``connection.cursor()`` for statement execution.
     """
@@ -189,7 +189,7 @@ class MysqlConnectorDriverFeatures(TypedDict):
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
     cursor_options: NotRequired[MysqlConnectorCursorParams]
     enable_local_infile_bulk_load: NotRequired[bool]
 

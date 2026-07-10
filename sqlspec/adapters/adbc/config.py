@@ -1,6 +1,6 @@
 """ADBC database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -111,9 +111,9 @@ class AdbcDriverFeatures(TypedDict):
         on_connection_create: Callback executed when a connection is created.
             Receives the raw ADBC connection for low-level driver configuration.
         events_backend: Event channel backend selection.
-        Only option: "table_queue" (durable table-backed queue with retries and exactly-once delivery).
-            ADBC does not have native pub/sub, so table_queue is the only backend.
-            Defaults to "table_queue".
+        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
+            ADBC does not have native pub/sub, so poll_queue is the only backend.
+            Defaults to "poll_queue".
     """
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
@@ -126,7 +126,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_paradedb: NotRequired[bool]
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
-    events_backend: NotRequired[str]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class AdbcConnectionContext(SyncPoolConnectionContext):

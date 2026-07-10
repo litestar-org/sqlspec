@@ -521,13 +521,16 @@ class AsyncpgStreamSource:
         self._driver._check_pending_exception(handler)
         return [dict(record) for record in records]
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         self._cursor = None
         transaction = self._transaction
         self._transaction = None
         if transaction is not None:
             try:
-                await transaction.commit()
+                if error:
+                    await transaction.rollback()
+                else:
+                    await transaction.commit()
             except Exception:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()

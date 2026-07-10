@@ -540,13 +540,14 @@ class EventsConfig(TypedDict):
     Use in ``extension_config["events"]``.
     """
 
-    backend: NotRequired[Literal["listen_notify", "table_queue", "listen_notify_durable", "aq"]]
-    """Backend implementation. PostgreSQL adapters default to 'listen_notify', others to 'table_queue'.
+    backend: NotRequired[Literal["notify", "notify_queue", "poll_queue", "aq", "txeventq"]]
+    """Backend implementation. PostgreSQL adapters default to 'notify', others to 'poll_queue'.
 
-    - listen_notify: Real-time PostgreSQL LISTEN/NOTIFY (ephemeral)
-    - table_queue: Durable table-backed queue with retries (all adapters)
-    - listen_notify_durable: Hybrid combining both (PostgreSQL only)
-    - aq: Oracle Advanced Queueing
+    - notify: Transient PostgreSQL LISTEN/NOTIFY wakeup; not a durable event ledger
+    - notify_queue: Durable table queue with PostgreSQL LISTEN/NOTIFY wakeups
+    - poll_queue: Durable table queue discovered by polling
+    - aq: Oracle Advanced Queuing
+    - txeventq: Oracle Transactional Event Queues
     """
 
     queue_table: NotRequired[str]

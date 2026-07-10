@@ -204,8 +204,8 @@ class AiosqliteStreamSource:
         async with handler:
             cursor = await self._driver.connection.cursor()
             cursor.arraysize = self._chunk_size
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -220,7 +220,7 @@ class AiosqliteStreamSource:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:

@@ -27,7 +27,7 @@ class EventsCase:
     adapter: str
     mode: Literal["sync", "async"]
     marks: tuple[Mark | MarkDecorator, ...] = ()
-    force_table_queue: bool = False
+    force_poll_queue: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,7 +74,7 @@ SYNC_EVENTS_CASES = (
         "psycopg",
         "sync",
         marks=(POSTGRES_XDIST_MARK,),
-        force_table_queue=True,
+        force_poll_queue=True,
     ),
     EventsCase(
         "oracledb-sync",
@@ -82,7 +82,7 @@ SYNC_EVENTS_CASES = (
         "oracledb",
         "sync",
         marks=(ORACLE_XDIST_MARK,),
-        force_table_queue=True,
+        force_poll_queue=True,
     ),
 )
 
@@ -109,7 +109,7 @@ ASYNC_EVENTS_CASES = (
         "psqlpy",
         "async",
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
-        force_table_queue=True,
+        force_poll_queue=True,
     ),
     EventsCase(
         "psycopg-async",
@@ -117,7 +117,7 @@ ASYNC_EVENTS_CASES = (
         "psycopg",
         "async",
         marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio),
-        force_table_queue=True,
+        force_poll_queue=True,
     ),
     EventsCase(
         "oracledb-async",
@@ -125,7 +125,7 @@ ASYNC_EVENTS_CASES = (
         "oracledb",
         "async",
         marks=(ORACLE_XDIST_MARK, pytest.mark.anyio),
-        force_table_queue=True,
+        force_poll_queue=True,
     ),
 )
 

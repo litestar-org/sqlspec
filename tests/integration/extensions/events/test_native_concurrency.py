@@ -58,16 +58,14 @@ def _asyncpg_factory(service: Any) -> Any:
     config_module = importlib.import_module("sqlspec.adapters.asyncpg")
     config_cls = config_module.AsyncpgConfig
     dsn = f"postgresql://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
-    return config_cls(connection_config={"dsn": dsn}, extension_config={"events": {"backend": "listen_notify"}})
+    return config_cls(connection_config={"dsn": dsn}, extension_config={"events": {"backend": "notify"}})
 
 
 def _psycopg_async_factory(service: Any) -> Any:
     config_module = importlib.import_module("sqlspec.adapters.psycopg")
     config_cls = config_module.PsycopgAsyncConfig
     conninfo = f"postgresql://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
-    return config_cls(
-        connection_config={"conninfo": conninfo}, extension_config={"events": {"backend": "listen_notify"}}
-    )
+    return config_cls(connection_config={"conninfo": conninfo}, extension_config={"events": {"backend": "notify"}})
 
 
 def _psqlpy_factory(service: Any) -> Any:
@@ -75,7 +73,7 @@ def _psqlpy_factory(service: Any) -> Any:
     config_cls = config_module.PsqlpyConfig
     params_cls = config_module.PsqlpyPoolParams
     dsn = f"postgres://{service.user}:{service.password}@{service.host}:{service.port}/{service.database}"
-    return config_cls(connection_config=params_cls(dsn=dsn), extension_config={"events": {"backend": "listen_notify"}})
+    return config_cls(connection_config=params_cls(dsn=dsn), extension_config={"events": {"backend": "notify"}})
 
 
 _FACTORIES: "dict[str, ConfigFactory]" = {

@@ -165,8 +165,8 @@ class SqliteStreamSource:
         with handler:
             cursor = self._driver.connection.cursor()
             cursor.arraysize = self._chunk_size
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -181,7 +181,7 @@ class SqliteStreamSource:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:

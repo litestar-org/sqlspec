@@ -211,8 +211,8 @@ class MysqlConnectorSyncStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             cursor = self._driver.connection.cursor(**self._cursor_options)
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
         self._driver._check_pending_exception(handler)
 
@@ -229,14 +229,18 @@ class MysqlConnectorSyncStreamSource:
         deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
         return collect_stream_rows(rows, self._row_plan, deserializer)
 
-    def close(self) -> None:
+    def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                cursor.fetchall()
-            with contextlib.suppress(Exception):
-                cursor.close()
+        connection = self._driver.connection
+        raw_connection = getattr(connection, "_cnx", None) or connection
+        try:
+            if getattr(raw_connection, "unread_result", False):
+                raw_connection.consume_results()
+        finally:
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    cursor.close()
 
 
 class MysqlConnectorAsyncStreamSource:
@@ -276,8 +280,8 @@ class MysqlConnectorAsyncStreamSource:
         handler = self._driver.handle_database_exceptions()
         async with handler:
             cursor = await self._driver.connection.cursor(**self._cursor_options)
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
         self._driver._check_pending_exception(handler)
 
@@ -294,14 +298,18 @@ class MysqlConnectorAsyncStreamSource:
         deserializer = cast("Callable[[Any], Any]", self._driver.driver_features.get("json_deserializer", from_json))
         return collect_stream_rows(rows, self._row_plan, deserializer)
 
-    async def close(self) -> None:
+    async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                await cursor.fetchall()
-            with contextlib.suppress(Exception):
-                await cursor.close()
+        connection = self._driver.connection
+        raw_connection = getattr(connection, "_cnx", None) or connection
+        try:
+            if getattr(raw_connection, "unread_result", False):
+                await raw_connection.consume_results()
+        finally:
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    await cursor.close()
 
 
 def normalize_execute_many_parameters(parameters: Any) -> Any:

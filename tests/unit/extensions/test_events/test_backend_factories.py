@@ -4,32 +4,32 @@
 import pytest
 
 
-def test_asyncpg_factory_listen_notify_backend() -> None:
-    """Asyncpg factory creates listen_notify backend."""
+def test_asyncpg_factory_notify_backend() -> None:
+    """Asyncpg factory creates the transient notification backend."""
     pytest.importorskip("asyncpg")
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
     from sqlspec.adapters.asyncpg.events.backend import AsyncpgEventsBackend, create_event_backend
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify", {})
+    backend = create_event_backend(config, "notify", {})
 
     assert isinstance(backend, AsyncpgEventsBackend)
-    assert backend.backend_name == "listen_notify"
+    assert backend.backend_name == "notify"
     assert backend.supports_sync is False
     assert backend.supports_async is True
 
 
-def test_asyncpg_factory_listen_notify_durable_backend() -> None:
+def test_asyncpg_factory_notify_queue_backend() -> None:
     """Asyncpg factory creates hybrid durable backend."""
     pytest.importorskip("asyncpg")
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
     from sqlspec.adapters.asyncpg.events.backend import AsyncpgHybridEventsBackend, create_event_backend
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
 
     assert isinstance(backend, AsyncpgHybridEventsBackend)
-    assert backend.backend_name == "listen_notify_durable"
+    assert backend.backend_name == "notify_queue"
 
 
 def test_asyncpg_factory_unknown_backend_returns_none() -> None:
@@ -51,36 +51,34 @@ def test_asyncpg_factory_passes_extension_settings() -> None:
     from sqlspec.adapters.asyncpg.events.backend import AsyncpgHybridEventsBackend, create_event_backend
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(
-        config, "listen_notify_durable", {"queue_table": "custom_queue", "lease_seconds": 60}
-    )
+    backend = create_event_backend(config, "notify_queue", {"queue_table": "custom_queue", "lease_seconds": 60})
     assert isinstance(backend, AsyncpgHybridEventsBackend)
     assert backend._queue._table_name == "custom_queue"
     assert backend._queue._lease_seconds == 60
 
 
-def test_psycopg_factory_listen_notify_async() -> None:
-    """Psycopg factory creates listen_notify backend for async config."""
+def test_psycopg_factory_notify_async() -> None:
+    """Psycopg factory creates the notification backend for async config."""
     pytest.importorskip("psycopg")
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
     from sqlspec.adapters.psycopg.events.backend import PsycopgAsyncEventsBackend, create_event_backend
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
-    backend = create_event_backend(config, "listen_notify", {})
+    backend = create_event_backend(config, "notify", {})
 
     assert isinstance(backend, PsycopgAsyncEventsBackend)
     assert backend.supports_sync is False
     assert backend.supports_async is True
 
 
-def test_psycopg_factory_listen_notify_sync() -> None:
-    """Psycopg factory creates listen_notify backend for sync config."""
+def test_psycopg_factory_notify_sync() -> None:
+    """Psycopg factory creates the notification backend for sync config."""
     pytest.importorskip("psycopg")
     from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
     from sqlspec.adapters.psycopg.events.backend import PsycopgSyncEventsBackend, create_event_backend
 
     config = PsycopgSyncConfig(connection_config={"dbname": "test"})
-    backend = create_event_backend(config, "listen_notify", {})
+    backend = create_event_backend(config, "notify", {})
 
     assert isinstance(backend, PsycopgSyncEventsBackend)
 
@@ -92,10 +90,10 @@ def test_psycopg_factory_hybrid_backend() -> None:
     from sqlspec.adapters.psycopg.events.backend import PsycopgAsyncHybridEventsBackend, create_event_backend
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
 
     assert isinstance(backend, PsycopgAsyncHybridEventsBackend)
-    assert backend.backend_name == "listen_notify_durable"
+    assert backend.backend_name == "notify_queue"
 
 
 def test_psycopg_factory_unknown_returns_none() -> None:
@@ -110,17 +108,17 @@ def test_psycopg_factory_unknown_returns_none() -> None:
     assert backend is None
 
 
-def test_psqlpy_factory_listen_notify_backend() -> None:
-    """Psqlpy factory creates listen_notify backend."""
+def test_psqlpy_factory_notify_backend() -> None:
+    """Psqlpy factory creates the transient notification backend."""
     pytest.importorskip("psqlpy")
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
     from sqlspec.adapters.psqlpy.events.backend import PsqlpyEventsBackend, create_event_backend
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify", {})
+    backend = create_event_backend(config, "notify", {})
 
     assert isinstance(backend, PsqlpyEventsBackend)
-    assert backend.backend_name == "listen_notify"
+    assert backend.backend_name == "notify"
     assert backend.supports_sync is False
     assert backend.supports_async is True
 
@@ -132,10 +130,10 @@ def test_psqlpy_factory_hybrid_backend() -> None:
     from sqlspec.adapters.psqlpy.events.backend import PsqlpyHybridEventsBackend, create_event_backend
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
 
     assert isinstance(backend, PsqlpyHybridEventsBackend)
-    assert backend.backend_name == "listen_notify_durable"
+    assert backend.backend_name == "notify_queue"
 
 
 def test_psqlpy_factory_hybrid_passes_settings() -> None:
@@ -145,9 +143,7 @@ def test_psqlpy_factory_hybrid_passes_settings() -> None:
     from sqlspec.adapters.psqlpy.events.backend import PsqlpyHybridEventsBackend, create_event_backend
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(
-        config, "listen_notify_durable", {"queue_table": "custom_events", "lease_seconds": 45}
-    )
+    backend = create_event_backend(config, "notify_queue", {"queue_table": "custom_events", "lease_seconds": 45})
     assert isinstance(backend, PsqlpyHybridEventsBackend)
     assert backend._queue._table_name == "custom_events"
     assert backend._queue._lease_seconds == 45
@@ -214,7 +210,7 @@ def test_oracle_factory_unknown_returns_none() -> None:
     from sqlspec.adapters.oracledb.events.backend import create_event_backend
 
     config = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
-    backend = create_event_backend(config, "listen_notify", {})
+    backend = create_event_backend(config, "notify", {})
 
     assert backend is None
 
@@ -469,7 +465,7 @@ def test_asyncpg_hybrid_backend_has_shutdown() -> None:
     from sqlspec.adapters.asyncpg.events.backend import create_event_backend
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
     assert backend is not None
     assert hasattr(backend, "shutdown")
     assert callable(backend.shutdown)
@@ -497,7 +493,7 @@ async def test_asyncpg_hybrid_backend_shutdown_idempotent() -> None:
     from sqlspec.adapters.asyncpg.events.backend import create_event_backend
 
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
     assert backend is not None
     await backend.shutdown()
     await backend.shutdown()
@@ -523,7 +519,7 @@ def test_psycopg_hybrid_backend_has_shutdown() -> None:
     from sqlspec.adapters.psycopg.events.backend import create_event_backend
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
     assert backend is not None
     assert hasattr(backend, "shutdown")
     assert callable(backend.shutdown)
@@ -551,7 +547,7 @@ async def test_psycopg_hybrid_backend_shutdown_idempotent() -> None:
     from sqlspec.adapters.psycopg.events.backend import PsycopgAsyncHybridEventsBackend, create_event_backend
 
     config = PsycopgAsyncConfig(connection_config={"dbname": "test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
     assert isinstance(backend, PsycopgAsyncHybridEventsBackend)
     await backend.shutdown()
     await backend.shutdown()
@@ -577,7 +573,7 @@ def test_psqlpy_hybrid_backend_has_shutdown() -> None:
     from sqlspec.adapters.psqlpy.events.backend import create_event_backend
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
     assert backend is not None
     assert hasattr(backend, "shutdown")
     assert callable(backend.shutdown)
@@ -605,7 +601,7 @@ async def test_psqlpy_hybrid_backend_shutdown_idempotent() -> None:
     from sqlspec.adapters.psqlpy.events.backend import create_event_backend
 
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    backend = create_event_backend(config, "listen_notify_durable", {})
+    backend = create_event_backend(config, "notify_queue", {})
     assert backend is not None
     await backend.shutdown()
     await backend.shutdown()

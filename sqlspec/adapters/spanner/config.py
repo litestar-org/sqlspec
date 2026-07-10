@@ -1,6 +1,6 @@
 """Spanner configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -145,7 +145,7 @@ class SpannerDriverFeatures(TypedDict):
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
         events_backend: Backend type for event handling.
-            Spanner only supports "table_queue" (no native pub/sub).
+            Spanner only supports "poll_queue" (no native pub/sub).
         enable_batch_write_api: Route load_from_arrow through the Spanner Batch Write API
             (Database.mutation_groups().batch_write()) for high-throughput, independently
             committed mutation groups instead of a single in-transaction insert_or_update.
@@ -161,7 +161,7 @@ class SpannerDriverFeatures(TypedDict):
     directed_read_options: "NotRequired[DirectedReadOptions | None]"
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
-    events_backend: "NotRequired[str]"
+    events_backend: "NotRequired[Literal['poll_queue']]"
     enable_batch_write_api: "NotRequired[bool]"
 
 
