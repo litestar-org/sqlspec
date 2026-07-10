@@ -16,14 +16,7 @@ if TYPE_CHECKING:
 
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-__all__ = (
-    "AsyncArrowBatchIterator",
-    "AsyncBytesIterator",
-    "AsyncChunkedBytesIterator",
-    "AsyncObStoreStreamIterator",
-    "AsyncThreadedBytesIterator",
-    "ObjectStoreBase",
-)
+__all__ = ("AsyncArrowBatchIterator", "AsyncObStoreStreamIterator", "AsyncThreadedBytesIterator", "ObjectStoreBase")
 
 
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
@@ -82,52 +75,6 @@ class AsyncArrowBatchIterator:
     def __anext__(self) -> Any:
         # Returning a Future avoids mypyc coroutine state machine bugs entirely.
         return asyncio.get_running_loop().run_in_executor(None, self._sync_next)
-
-
-class AsyncBytesIterator:
-    """Async iterator wrapper for sync bytes iterators."""
-
-    __slots__ = ("_sync_iter",)
-
-    def __init__(self, sync_iterator: "Iterator[bytes]") -> None:
-        self._sync_iter = sync_iterator
-
-    def __aiter__(self) -> "AsyncBytesIterator":
-        return self
-
-    def _sync_next(self) -> bytes:
-        try:
-            return next(self._sync_iter)
-        except StopIteration:
-            raise _StopAsync() from None
-
-    def __anext__(self) -> Any:
-        return asyncio.get_running_loop().run_in_executor(None, self._sync_next)
-
-
-class AsyncChunkedBytesIterator:
-    """Async iterator that yields pre-loaded bytes data in chunks."""
-
-    __slots__ = ("_chunk_size", "_data", "_offset")
-
-    def __init__(self, data: bytes, chunk_size: int = 65536) -> None:
-        self._data = data
-        self._chunk_size = chunk_size
-        self._offset = 0
-
-    def __aiter__(self) -> "AsyncChunkedBytesIterator":
-        return self
-
-    def _get_next_chunk(self) -> bytes:
-        if self._offset >= len(self._data):
-            raise _StopAsync()
-        chunk = self._data[self._offset : self._offset + self._chunk_size]
-        self._offset += self._chunk_size
-        return chunk
-
-    def __anext__(self) -> Any:
-        # We use a Future even for memory-only data to satisfy the protocol safely.
-        return asyncio.get_running_loop().run_in_executor(None, self._get_next_chunk)
 
 
 class AsyncObStoreStreamIterator:
