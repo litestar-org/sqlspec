@@ -5300,6 +5300,31 @@ def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
             sync_driver.execute("SELECT * FROM missing_contract_table")
 
 
+def assert_sync_script_parameter_embedding_contract(driver: object, case: DriverCase) -> None:
+    """Assert a flat script payload embeds distinct values across statements."""
+    if not case.supports_execute_script:
+        pytest.skip(f"{case.adapter} has no verified execute_script support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+
+    result = sync_driver.execute_script(
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"UPDATE {table.name} SET value = ? WHERE name = ?",
+        ("embed-one", 10, "embed-two", 20, 99, "embed-two"),
+    )
+    sync_driver.commit()
+
+    assert_sql_result(result)
+    assert result.operation_type == "SCRIPT"
+    assert_result_data(
+        sync_driver.execute(f"SELECT name, value FROM {table.name} ORDER BY value"),
+        ({"name": "embed-one", "value": 10}, {"name": "embed-two", "value": 99}),
+    )
+
+
 async def assert_async_script_error_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers execute scripts and normalize generic SQL errors."""
     async_driver = cast("AsyncContractDriver", driver)
@@ -5322,6 +5347,31 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
             await async_driver.execute(f"SELCT * FROM {table}")
         with pytest.raises(SQLSpecError):
             await async_driver.execute("SELECT * FROM missing_contract_table")
+
+
+async def assert_async_script_parameter_embedding_contract(driver: object, case: DriverCase) -> None:
+    """Assert async script execution embeds a flat payload with distinct values."""
+    if not case.supports_execute_script:
+        pytest.skip(f"{case.adapter} has no verified execute_script support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+
+    result = await async_driver.execute_script(
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"UPDATE {table.name} SET value = ? WHERE name = ?",
+        ("embed-one", 10, "embed-two", 20, 99, "embed-two"),
+    )
+    await async_driver.commit()
+
+    assert_sql_result(result)
+    assert result.operation_type == "SCRIPT"
+    assert_result_data(
+        await async_driver.execute(f"SELECT name, value FROM {table.name} ORDER BY value"),
+        ({"name": "embed-one", "value": 10}, {"name": "embed-two", "value": 99}),
+    )
 
 
 def _explain_skip_reason(case: DriverCase) -> str:

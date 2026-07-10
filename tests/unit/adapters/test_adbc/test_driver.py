@@ -1,7 +1,7 @@
 """Unit tests for ADBC driver execute path optimizations."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pyarrow as pa
 import pytest
@@ -9,6 +9,7 @@ from adbc_driver_manager import AdbcStatusCode
 
 from sqlspec.adapters.adbc._typing import AdbcNativeError
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError
 
 
@@ -46,6 +47,39 @@ def test_handle_exception_propagates_non_native_error() -> None:
         with handler:
             raise KeyError("internal bug")
     assert handler.pending_exception is None
+
+
+def test_dispatch_execute_script_compiles_parameters_before_splitting() -> None:
+    connection = MagicMock()
+    connection.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    driver = AdbcDriver(connection)
+    statement = SQL(
+        "INSERT INTO events (name) VALUES (?); UPDATE events SET value = ?",
+        ("first;segment", 99),
+        statement_config=driver.statement_config,
+    ).as_script()
+    cursor = MagicMock()
+    cursor.rowcount = 0
+
+    driver.dispatch_execute_script(cursor, statement)
+
+    assert cursor.execute.call_args_list == [
+        call("INSERT INTO events (name) VALUES ('first;segment')"),
+        call("UPDATE events SET value = 99"),
+    ]
+
+
+def test_dispatch_execute_script_preserves_unparameterized_script_splitting() -> None:
+    connection = MagicMock()
+    connection.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    driver = AdbcDriver(connection)
+    statement = SQL("SELECT ';' AS marker; SELECT 2", statement_config=driver.statement_config).as_script()
+    cursor = MagicMock()
+    cursor.rowcount = 0
+
+    driver.dispatch_execute_script(cursor, statement)
+
+    assert cursor.execute.call_args_list == [call("SELECT ';' AS marker"), call("SELECT 2")]
 
 
 def test_dispatch_execute_many_non_postgres_uses_compiled_parameter_sets(monkeypatch: pytest.MonkeyPatch) -> None:

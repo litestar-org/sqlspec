@@ -21,6 +21,25 @@ def test_as_script_embeds_parameters_statically() -> None:
     assert "5" in compiled_sql
 
 
+def test_as_script_embeds_distinct_qmark_values_across_statements() -> None:
+    """A flat script-wide payload embeds each qmark occurrence and leaves no driver parameters."""
+    statement = SQL(
+        "INSERT INTO t (name, value) VALUES (?, ?); "
+        "INSERT INTO t (name, value) VALUES (?, ?); "
+        "UPDATE t SET value = ? WHERE name = ?",
+        ("embed-one", 10, "embed-two", 20, 99, "embed-two"),
+        statement_config=default_statement_config,
+    ).as_script()
+
+    compiled_sql, parameters = statement.compile()
+
+    assert parameters is None
+    assert "?" not in compiled_sql
+    assert "VALUES ('embed-one', 10)" in compiled_sql
+    assert "VALUES ('embed-two', 20)" in compiled_sql
+    assert "SET value = 99 WHERE name = 'embed-two'" in compiled_sql
+
+
 @requires_interpreted
 def test_sync_execute_script_tracks_all_successful_statements(sqlite_sync_driver) -> None:
     """Sync execute_script should report all statements as successful."""

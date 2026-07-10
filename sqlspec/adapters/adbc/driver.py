@@ -296,11 +296,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Execution result with statement counts
         """
-        prepared_parameters: Any | None = None
-        if statement.is_script:
-            sql = statement.raw_sql
-        else:
-            sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
