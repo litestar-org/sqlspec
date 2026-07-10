@@ -21,6 +21,7 @@ from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier,
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.type_guards import has_notifies
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -212,7 +213,7 @@ class PsycopgAsyncListenerHub:
         try:
             while not self._stopping:
                 connection = self._connection
-                if connection is None:
+                if connection is None or not has_notifies(connection):
                     return
                 try:
                     async for notify in connection.notifies(timeout=_PUMP_TIMEOUT, stop_after=_PUMP_BATCH):
@@ -420,7 +421,7 @@ class PsycopgSyncListenerHub:
         self, stopping: threading.Event, command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event]]"
     ) -> None:
         connection = self._connection
-        if connection is None:
+        if connection is None or not has_notifies(connection):
             return
         while not stopping.is_set():
             self._drain_commands(connection, command_queue, stopping)
