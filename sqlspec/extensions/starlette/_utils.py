@@ -1,7 +1,5 @@
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.extensions._framework_common import get_or_create_session as _shared_get_or_create_session
-
 if TYPE_CHECKING:
     from starlette.requests import Request
 
@@ -74,14 +72,16 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     """
     session_instance_key = f"{config_state.session_key}_instance"
 
-    return _shared_get_or_create_session(
-        request.state,
-        session_instance_key,
-        config_state,
-        get_value=get_state_value,
-        set_value=set_state_value,
-        connection_getter=lambda: get_connection_from_request(request, config_state),
+    existing_session = get_state_value(request.state, session_instance_key, None)
+    if existing_session is not None:
+        return existing_session
+    session = config_state.config.driver_type(
+        connection=get_connection_from_request(request, config_state),
+        statement_config=config_state.config.statement_config,
+        driver_features=config_state.config.driver_features,
     )
+    set_state_value(request.state, session_instance_key, session)
+    return session
 
 
 def _state_dict(state: Any) -> dict[str, Any]:

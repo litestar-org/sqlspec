@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._framework_common import get_or_create_session as _shared_get_or_create_session
 
 if TYPE_CHECKING:
     from sqlspec.extensions.sanic._state import SanicConfigState
@@ -113,11 +112,13 @@ def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any
     """
     session_instance_key = f"{config_state.session_key}_instance"
 
-    return _shared_get_or_create_session(
-        request.ctx,
-        session_instance_key,
-        config_state,
-        get_value=get_context_value,
-        set_value=set_context_value,
-        connection_getter=lambda: get_connection_from_request(request, config_state),
+    existing_session = get_context_value(request.ctx, session_instance_key, None)
+    if existing_session is not None:
+        return existing_session
+    session = config_state.config.driver_type(
+        connection=get_connection_from_request(request, config_state),
+        statement_config=config_state.config.statement_config,
+        driver_features=config_state.config.driver_features,
     )
+    set_context_value(request.ctx, session_instance_key, session)
+    return session

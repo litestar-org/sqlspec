@@ -10,7 +10,6 @@ analytics stream into BigQuery.
 """
 
 import math
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -21,6 +20,7 @@ from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -603,7 +603,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     @staticmethod
     def _new_id() -> str:
-        return str(uuid.uuid4())
+        return str(uuid4())
 
 
 def _session_record_from_row(row: "dict[str, Any]") -> SessionRecord:

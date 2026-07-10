@@ -5,7 +5,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.extensions._framework_common import should_commit
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
@@ -148,12 +147,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         Returns:
             True if should commit, False if should rollback.
         """
-        return should_commit(
-            status_code,
-            self.config_state.commit_mode,
-            self.config_state.extra_commit_statuses,
-            self.config_state.extra_rollback_statuses,
-        )
+        return self.config_state.should_commit(status_code)
 
 
 class CorrelationMiddleware(BaseHTTPMiddleware):

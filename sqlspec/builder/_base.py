@@ -5,7 +5,6 @@ Provides abstract base classes and core functionality for SQL query builders.
 
 import hashlib
 import re
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NoReturn, cast
@@ -37,6 +36,7 @@ from sqlspec.core.filters import StatementFilter
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
+from sqlspec.utils.uuids import uuid4
 
 __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
@@ -499,7 +499,7 @@ class QueryBuilder(ABC):
         while candidate in self._parameters:
             next_index += 1
             if next_index > MAX_PARAMETER_COLLISION_ATTEMPTS:
-                return f"{base_name}_{uuid.uuid4().hex[:8]}"
+                return f"{base_name}_{uuid4().hex[:8]}"
             candidate = f"{base_name}_{next_index}"
 
         self._parameter_name_counters[base_name] = next_index

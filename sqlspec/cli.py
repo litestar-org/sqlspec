@@ -173,12 +173,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         default=False,
         help="Emit a single summary log entry when logger output is enabled",
     )
-    execution_mode_option = click.option(
-        "--execution-mode",
-        type=click.Choice(["auto", "sync", "async"]),
-        default="auto",
-        help="Force execution mode (auto-detects by default)",
-    )
     no_auto_sync_option = click.option(
         "--no-auto-sync",
         is_flag=True,
@@ -634,7 +628,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @use_logger_option
     @no_echo_option
     @summary_only_option
-    @execution_mode_option
     @no_auto_sync_option
     @click.argument("revision", type=str, default="head")
     def upgrade_database(  # pyright: ignore[reportUnusedFunction]
@@ -647,13 +640,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         use_logger: bool,
         no_echo: bool,
         summary_only: bool,
-        execution_mode: str,
         no_auto_sync: bool,
     ) -> None:
-        """Upgrade the database to the latest revision.
-
-        Non-automatic execution modes are surfaced in the console, and multi-config flows reuse ``process_multiple_configs`` to split sync/async executions while honoring dry-run and auto-sync flags.
-        """
+        """Upgrade the database to the latest revision."""
         ctx = _ensure_click_context()
         effective_no_echo = no_echo or summary_only
         echo_setting = False if effective_no_echo else None
@@ -665,9 +654,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 return False
             migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
             return not bool(migration_config.get("use_logger", False))
-
-        if execution_mode != "auto" and echo_enabled:
-            console.print(f"[dim]Execution mode: {execution_mode}[/]")
 
         def _upgrade_for_config(config: Any) -> None:
             """Upgrade a single config with sync/async dispatch."""

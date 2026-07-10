@@ -45,11 +45,9 @@ __all__ = (
     "HasAsDictProtocol",
     "HasConfigProtocol",
     "HasConnectionConfigProtocol",
-    "HasDataProtocol",
     "HasDatabaseUrlAndBindKeyProtocol",
     "HasErrnoProtocol",
     "HasErrorsProtocol",
-    "HasExecuteProtocol",
     "HasExpressionAndParametersProtocol",
     "HasExpressionAndSQLProtocol",
     "HasExpressionProtocol",
@@ -75,7 +73,6 @@ __all__ = (
     "HasTypecodeSizedProtocol",
     "HasValueProtocol",
     "HasWhereProtocol",
-    "LitestarRouteHandlerProtocol",
     "MappingLikeProtocol",
     "NotificationProtocol",
     "ObjectStoreProtocol",
@@ -248,32 +245,10 @@ class HasErrnoProtocol(Protocol):
 
 
 @runtime_checkable
-class HasDataProtocol(Protocol):
-    """Protocol for results exposing a data attribute."""
-
-    data: "Sequence[object] | None"
-
-
-@runtime_checkable
-class HasExecuteProtocol(Protocol):
-    """Protocol for drivers exposing execute method returning data results."""
-
-    def execute(self, sql: str, *parameters: object, **kwargs: object) -> "HasDataProtocol": ...
-
-
-@runtime_checkable
 class HasNameProtocol(Protocol):
     """Protocol for objects exposing a __name__ attribute."""
 
     __name__: str
-
-
-@runtime_checkable
-class LitestarRouteHandlerProtocol(Protocol):
-    """Protocol for Litestar route handlers."""
-
-    fn: object
-    owner: object
 
 
 @runtime_checkable

@@ -2,7 +2,6 @@
 
 import inspect
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
@@ -18,6 +17,7 @@ from sqlspec.extensions.adk.converters import (
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -72,7 +72,7 @@ class SQLSpecSessionService(BaseSessionService):
             The newly created session.
         """
         if session_id is None:
-            session_id = str(uuid.uuid4())
+            session_id = str(uuid4())
 
         if state is None:
             state = {}

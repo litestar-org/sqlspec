@@ -1,7 +1,8 @@
 """Reusable converter builders for parameter configuration."""
 
 import decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
+from uuid import UUID
 
 from typing_extensions import final
 
@@ -12,8 +13,14 @@ if TYPE_CHECKING:
     import datetime
     from collections.abc import Callable, Sequence
 
+
+class _UUIDLike(Protocol):
+    """Structural UUID shape shared by stdlib and uuid-utils."""
+
+    int: int
+
+
 __all__ = (
-    "DEFAULT_DECIMAL_MODE",
     "build_decimal_converter",
     "build_json_list_converter",
     "build_json_tuple_converter",
@@ -177,14 +184,12 @@ def build_nested_decimal_normalizer(*, mode: str = DEFAULT_DECIMAL_MODE) -> "Cal
     return _DecimalNormalizer(decimal_converter)
 
 
-def _uuid_to_string(value: Any) -> str:
+def _uuid_to_string(value: object) -> str:
     return str(value)
 
 
-def _uuid_utils_to_stdlib(value: Any) -> Any:
-    import uuid as _uuid_mod
-
-    return _uuid_mod.UUID(bytes=value.bytes)
+def _uuid_utils_to_stdlib(value: _UUIDLike) -> UUID:
+    return UUID(int=value.int)
 
 
 def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[Any], Any]]":

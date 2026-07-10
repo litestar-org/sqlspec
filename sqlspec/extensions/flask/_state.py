@@ -1,14 +1,16 @@
 """Flask configuration state management."""
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-from sqlspec.extensions._framework_common import should_commit, should_rollback, validate_extra_statuses
-
-if TYPE_CHECKING:
-    from sqlspec.config import DatabaseConfigProtocol
+from sqlspec.config import DatabaseConfigProtocol
+from sqlspec.exceptions import ImproperConfigurationError
 
 __all__ = ("FlaskConfigState",)
+
+HTTP_200_OK = 200
+HTTP_300_MULTIPLE_CHOICES = 300
+HTTP_400_BAD_REQUEST = 400
 
 
 @dataclass
@@ -18,7 +20,7 @@ class FlaskConfigState:
     Holds configuration, state keys, commit settings, and transaction logic.
     """
 
-    config: "DatabaseConfigProtocol[Any, Any, Any]"
+    config: DatabaseConfigProtocol[Any, Any, Any]
     connection_key: str
     session_key: str
     commit_mode: Literal["manual", "autocommit", "autocommit_include_redirect"]
@@ -34,7 +36,9 @@ class FlaskConfigState:
 
     def __post_init__(self) -> None:
         """Validate status configuration."""
-        validate_extra_statuses(self.extra_commit_statuses, self.extra_rollback_statuses)
+        if (self.extra_commit_statuses or set()) & (self.extra_rollback_statuses or set()):
+            msg = "Extra rollback statuses and commit statuses must not share any status codes"
+            raise ImproperConfigurationError(msg)
 
     def should_commit(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger commit.
@@ -45,7 +49,15 @@ class FlaskConfigState:
         Returns:
             True if status should trigger commit, False otherwise.
         """
-        return should_commit(status_code, self.commit_mode, self.extra_commit_statuses, self.extra_rollback_statuses)
+        if self.extra_commit_statuses and status_code in self.extra_commit_statuses:
+            return True
+        if self.extra_rollback_statuses and status_code in self.extra_rollback_statuses:
+            return False
+        if self.commit_mode == "autocommit":
+            return HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES
+        if self.commit_mode == "autocommit_include_redirect":
+            return HTTP_200_OK <= status_code < HTTP_400_BAD_REQUEST
+        return False
 
     def should_rollback(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger rollback.
@@ -58,4 +70,4 @@ class FlaskConfigState:
         Returns:
             True if status should trigger rollback, False otherwise.
         """
-        return should_rollback(status_code, self.commit_mode, self.extra_commit_statuses, self.extra_rollback_statuses)
+        return self.commit_mode != "manual" and not self.should_commit(status_code)

@@ -18,10 +18,10 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.typing import SupportedSchemaModel
 
-__all__ = ("open_fixture", "open_fixture_async", "write_fixture", "write_fixture_async")
+__all__ = ("open_fixture_async", "open_fixture_sync", "write_fixture_async", "write_fixture_sync")
 
 
-def open_fixture(fixtures_path: Any, fixture_name: str) -> Any:
+def open_fixture_sync(fixtures_path: Any, fixture_name: str) -> Any:
     """Load and parse a JSON fixture file with compression support.
 
     Supports reading from:
@@ -75,7 +75,7 @@ async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
     return decode_json(f_data)
 
 
-def write_fixture(
+def write_fixture_sync(
     fixtures_path: str,
     table_name: str,
     data: "list[SupportedSchemaModel] | list[dict[str, Any]] | SupportedSchemaModel",

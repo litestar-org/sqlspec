@@ -68,6 +68,12 @@ def test_uuid4_returns_valid_uuid() -> None:
     assert _is_uuid_like(result)
 
 
+def test_accelerated_uuid_helpers_return_stdlib_uuid_instances() -> None:
+    """The public return annotation is truthful when uuid-utils accelerates generation."""
+    results = (uuid3("test-name"), uuid4(), uuid5("test-name"), uuid6(), uuid7())
+    assert all(type(result) is UUID for result in results)
+
+
 def test_uuid5_returns_valid_uuid() -> None:
     """Test uuid5 returns a valid UUID-like object."""
     result = uuid5("test-name")

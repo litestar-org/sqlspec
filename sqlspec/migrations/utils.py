@@ -16,9 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.driver import AsyncDriverAdapterBase
-
-__all__ = ("create_migration_file", "drop_all", "get_author", "resolve_default_schema", "resolve_tracker_schema")
+__all__ = ("create_migration_file", "get_author", "resolve_default_schema", "resolve_tracker_schema")
 
 logger = get_logger(__name__)
 
@@ -275,18 +273,3 @@ def _resolve_adapter_name(config: "DatabaseConfigProtocol[Any, Any, Any] | None"
 def _slugify_message(message: str) -> str:
     slug = slugify(message or "", separator="_")
     return slug[:50]
-
-
-async def drop_all(engine: "AsyncDriverAdapterBase", version_table_name: str, metadata: Any | None = None) -> None:
-    """Drop all tables from the database.
-
-    Args:
-        engine: The database engine/driver.
-        version_table_name: Name of the version tracking table.
-        metadata: Optional metadata object.
-
-    Raises:
-        NotImplementedError: Always raised.
-    """
-    msg = "drop_all functionality requires database-specific implementation"
-    raise NotImplementedError(msg)

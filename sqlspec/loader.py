@@ -256,7 +256,7 @@ class SQLFileLoader:
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
-    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFileCacheEntry) -> bool:
+    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFile) -> bool:
         """Check if file has changed since caching.
 
         Args:
@@ -271,7 +271,38 @@ class SQLFileLoader:
         except Exception:
             return False
         else:
-            return current_checksum == cached_file.sql_file.checksum
+            return current_checksum == cached_file.checksum
+
+    def _reload_changed_files(self) -> "list[str]":
+        """Reload tracked SQL files whose content checksum changed.
+
+        Returns:
+            Paths of files that were reloaded.
+        """
+        changed_paths: list[str] = []
+        for path, sql_file in list(self._files.items()):
+            if self._is_file_unchanged(path, sql_file):
+                if self._runtime is not None:
+                    self._runtime.increment_metric("loader.reload.skipped")
+                continue
+
+            query_names = [name for name, source in self._query_to_file.items() if source == path]
+            namespaces = {
+                name[: -(len(statement.name) + 1)]
+                for name in query_names
+                if (statement := self._queries.get(name)) is not None and name.endswith(f".{statement.name}")
+            }
+            namespace = next(iter(namespaces)) if len(namespaces) == 1 else None
+            for name in query_names:
+                self._queries.pop(name, None)
+                self._query_to_file.pop(name, None)
+                self._compiled_statements.pop(name, None)
+            self._files.pop(path, None)
+            self._load_single_file(path, namespace)
+            changed_paths.append(path)
+            if self._runtime is not None:
+                self._runtime.increment_metric("loader.reload.changed")
+        return changed_paths
 
     def _content_matches_cache(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
         """Check if already-read file content matches cached checksum."""

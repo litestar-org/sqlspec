@@ -4,12 +4,7 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.extensions._framework_common import (
-    config_state_by_key,
-    ensure_unique_keys,
-    extract_extension_settings,
-    should_commit,
-)
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -94,7 +89,26 @@ class SQLSpecPlugin:
         Returns:
             Dictionary of Sanic-specific settings.
         """
-        return extract_extension_settings(config, framework_key="sanic", sqlcommenter_framework="sanic")
+        framework_config = config.extension_config.get("sanic", {})
+        pool_key = framework_config.get("pool_key", DEFAULT_POOL_KEY)
+        if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
+            pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
+        correlation_headers = framework_config.get("correlation_headers")
+        return {
+            "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
+            "pool_key": pool_key,
+            "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
+            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
+            "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
+            "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
+            "disable_di": framework_config.get("disable_di", False),
+            "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", False),
+            "correlation_header": framework_config.get("correlation_header", "x-request-id"),
+            "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
+            "auto_trace_headers": framework_config.get("auto_trace_headers", True),
+            "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "sanic"),
+        }
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SanicConfigState:
         """Create configuration state object.
@@ -432,12 +446,7 @@ class SQLSpecPlugin:
         Returns:
             ``True`` when the transaction should commit.
         """
-        return should_commit(
-            status_code,
-            config_state.commit_mode,
-            config_state.extra_commit_statuses,
-            config_state.extra_rollback_statuses,
-        )
+        return config_state.should_commit(status_code)
 
     def _response_status_code(self, response: Any) -> int:
         """Return a Sanic response status code.
@@ -537,11 +546,14 @@ class SQLSpecPlugin:
         Raises:
             ImproperConfigurationError: If duplicate keys are found.
         """
-        ensure_unique_keys(
-            self._config_states,
-            key_getter=lambda state: {state.connection_key, state.pool_key, state.session_key},
-            message="Duplicate context keys found: {duplicates}",
-        )
+        all_keys: set[str] = set()
+        for state in self._config_states:
+            keys = {state.connection_key, state.pool_key, state.session_key}
+            duplicates = all_keys & keys
+            if duplicates:
+                msg = f"Duplicate context keys found: {duplicates}"
+                raise ImproperConfigurationError(msg)
+            all_keys.update(keys)
 
     def get_session(self, request: Any, key: "str | None" = None) -> Any:
         """Get or create database session for request.
@@ -581,7 +593,8 @@ class SQLSpecPlugin:
         Raises:
             ValueError: If no configuration is found with the specified key.
         """
-        state: SanicConfigState = config_state_by_key(
-            self._config_states, key, not_found_exc=ValueError, message="No configuration found with session_key: {key}"
-        )
-        return state
+        for state in self._config_states:
+            if state.session_key == key:
+                return state
+        msg = f"No configuration found with session_key: {key}"
+        raise ValueError(msg)

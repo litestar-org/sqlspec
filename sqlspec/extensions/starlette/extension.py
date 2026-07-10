@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.base import SQLSpec
-from sqlspec.extensions._framework_common import config_state_by_key, ensure_unique_keys, extract_extension_settings
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
 from sqlspec.extensions.starlette.middleware import (
@@ -77,7 +77,26 @@ class SQLSpecPlugin:
         Returns:
             Dictionary of Starlette-specific settings.
         """
-        return extract_extension_settings(config, framework_key="starlette", sqlcommenter_framework="starlette")
+        framework_config = config.extension_config.get("starlette", {})
+        pool_key = framework_config.get("pool_key", DEFAULT_POOL_KEY)
+        if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
+            pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
+        correlation_headers = framework_config.get("correlation_headers")
+        return {
+            "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
+            "pool_key": pool_key,
+            "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
+            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
+            "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
+            "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
+            "disable_di": framework_config.get("disable_di", False),
+            "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", False),
+            "correlation_header": framework_config.get("correlation_header", "x-request-id"),
+            "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
+            "auto_trace_headers": framework_config.get("auto_trace_headers", True),
+            "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "starlette"),
+        }
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
         """Create configuration state object.
@@ -148,11 +167,14 @@ class SQLSpecPlugin:
         Raises:
             ImproperConfigurationError: If duplicate keys found.
         """
-        ensure_unique_keys(
-            self._config_states,
-            key_getter=lambda state: {state.connection_key, state.pool_key, state.session_key},
-            message="Duplicate state keys found: {duplicates}",
-        )
+        all_keys: set[str] = set()
+        for state in self._config_states:
+            keys = {state.connection_key, state.pool_key, state.session_key}
+            duplicates = all_keys & keys
+            if duplicates:
+                msg = f"Duplicate state keys found: {duplicates}"
+                raise ImproperConfigurationError(msg)
+            all_keys.update(keys)
 
     def _add_middleware(self, app: "Starlette", config_state: SQLSpecConfigState) -> None:
         """Add transaction middleware for configuration.
@@ -299,7 +321,8 @@ class SQLSpecPlugin:
         Raises:
             ValueError: If no configuration found with the specified key.
         """
-        state: SQLSpecConfigState = config_state_by_key(
-            self._config_states, key, not_found_exc=ValueError, message="No configuration found with session_key: {key}"
-        )
-        return state
+        for state in self._config_states:
+            if state.session_key == key:
+                return state
+        msg = f"No configuration found with session_key: {key}"
+        raise ValueError(msg)

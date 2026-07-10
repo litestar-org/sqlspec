@@ -1,4 +1,3 @@
-# ruff: noqa: F401
 """BigQuery driver implementation.
 
 Provides Google Cloud BigQuery connectivity with parameter style conversion,
@@ -52,7 +51,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError, StorageOperationFailedError
+from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -68,13 +67,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.core import BigQueryLoadFormat
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, Statement, StatementFilter
-    from sqlspec.storage import (
-        StorageBridgeJob,
-        StorageDestination,
-        StorageFormat,
-        StorageTelemetry,
-        SyncStoragePipeline,
-    )
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")

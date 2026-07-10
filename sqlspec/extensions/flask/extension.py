@@ -9,7 +9,6 @@ from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._framework_common import config_state_by_key, ensure_unique_keys
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
     get_context_value,
@@ -185,11 +184,14 @@ class SQLSpecPlugin:
         Raises:
             ImproperConfigurationError: If duplicate keys found.
         """
-        ensure_unique_keys(
-            self._config_states,
-            key_getter=lambda state: {state.connection_key, state.session_key},
-            message="Duplicate state keys found: {duplicates}. Use unique session_key values.",
-        )
+        all_keys: set[str] = set()
+        for state in self._config_states:
+            keys = {state.connection_key, state.session_key}
+            duplicates = all_keys & keys
+            if duplicates:
+                msg = f"Duplicate state keys found: {duplicates}. Use unique session_key values."
+                raise ImproperConfigurationError(msg)
+            all_keys.update(keys)
 
     def _register_shutdown_hook(self) -> None:
         """Register shutdown hook for pool and portal cleanup."""
@@ -390,13 +392,11 @@ class SQLSpecPlugin:
         Raises:
             ImproperConfigurationError: If key not found.
         """
-        state: FlaskConfigState = config_state_by_key(
-            self._config_states,
-            key,
-            not_found_exc=ImproperConfigurationError,
-            message="No configuration found for key: {key}",
-        )
-        return state
+        for state in self._config_states:
+            if state.session_key == key:
+                return state
+        msg = f"No configuration found for key: {key}"
+        raise ImproperConfigurationError(msg)
 
     def shutdown(self) -> None:
         """Dispose connection pools and stop async portal."""

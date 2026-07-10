@@ -524,13 +524,11 @@ def test_is_file_unchanged(tmp_path: Path) -> None:
     loader = SQLFileLoader()
 
     sql_file_obj = SQLFile(original_content, str(sql_file))
-    cached_file = SQLFileCacheEntry(sql_file_obj, {})
-
-    assert loader._is_file_unchanged(str(sql_file), cached_file)
+    assert loader._is_file_unchanged(str(sql_file), sql_file_obj)
 
     sql_file.write_text("SELECT * FROM products;")
 
-    assert not loader._is_file_unchanged(str(sql_file), cached_file)
+    assert not loader._is_file_unchanged(str(sql_file), sql_file_obj)
 
 
 def test_add_named_sql() -> None:

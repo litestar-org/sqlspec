@@ -18,7 +18,6 @@ Features:
     - Cacheable filter configurations
 """
 
-import uuid
 from abc import ABC, abstractmethod
 from collections import abc
 from datetime import datetime
@@ -31,6 +30,7 @@ from typing_extensions import TypeVar
 from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.query_modifiers import parse_column_for_condition
 from sqlspec.utils.type_guards import has_field_name
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlglot.expressions import Condition
@@ -115,7 +115,7 @@ class StatementFilter(ABC):
         resolved_names = []
         for name in proposed_names:
             if name in existing_params:
-                unique_suffix = str(uuid.uuid4()).replace("-", "")[:8]
+                unique_suffix = str(uuid4()).replace("-", "")[:8]
                 resolved_name = f"{name}_{unique_suffix}"
             else:
                 resolved_name = name

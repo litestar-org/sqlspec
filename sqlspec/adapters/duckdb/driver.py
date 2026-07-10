@@ -2,7 +2,6 @@
 
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
 
 import duckdb
 from sqlglot import exp
@@ -33,6 +32,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

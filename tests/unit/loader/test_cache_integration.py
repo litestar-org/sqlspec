@@ -184,10 +184,9 @@ def test_file_content_change_detection() -> None:
         tf.write(original_content)
         tf.flush()
         sql_file = SQLFile(original_content, tf.name)
-        cached_file = SQLFileCacheEntry(sql_file, {})
-        assert loader._is_file_unchanged(tf.name, cached_file)
+        assert loader._is_file_unchanged(tf.name, sql_file)
         Path(tf.name).write_text("SELECT 'modified' as content;")
-        assert not loader._is_file_unchanged(tf.name, cached_file)
+        assert not loader._is_file_unchanged(tf.name, sql_file)
         Path(tf.name).unlink()
 
 
@@ -199,9 +198,8 @@ def test_file_deletion_handling() -> None:
         tf.write(content)
         tf.flush()
         sql_file = SQLFile(content, tf.name)
-        cached_file = SQLFileCacheEntry(sql_file, {})
         Path(tf.name).unlink()
-        assert not loader._is_file_unchanged(tf.name, cached_file)
+        assert not loader._is_file_unchanged(tf.name, sql_file)
 
 
 def test_checksum_calculation_error_handling() -> None:
@@ -209,8 +207,7 @@ def test_checksum_calculation_error_handling() -> None:
     loader = SQLFileLoader()
     with patch("sqlspec.loader.SQLFileLoader._read_file_content", side_effect=Exception("Read error")):
         sql_file = SQLFile("SELECT 1", "/nonexistent/file.sql")
-        cached_file = SQLFileCacheEntry(sql_file, {})
-        result = loader._is_file_unchanged("/nonexistent/file.sql", cached_file)
+        result = loader._is_file_unchanged("/nonexistent/file.sql", sql_file)
         assert not result
 
 

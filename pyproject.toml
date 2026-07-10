@@ -73,7 +73,7 @@ pymysql = ["pymysql"]
 sanic = ["sanic"]
 spanner = ["google-cloud-spanner"]
 starlette = ["starlette"]
-uuid = ["uuid-utils"]
+uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]

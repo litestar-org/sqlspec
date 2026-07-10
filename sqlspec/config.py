@@ -571,9 +571,6 @@ class EventsConfig(TypedDict):
     skip_locked: NotRequired[bool]
     """Use SKIP LOCKED for non-blocking event claims. Defaults to False."""
 
-    json_passthrough: NotRequired[bool]
-    """Skip JSON encoding/decoding for payloads. Defaults to False."""
-
     in_memory: NotRequired[bool]
     """
     Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False.

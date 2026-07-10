@@ -4,12 +4,12 @@ import contextlib
 import logging
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -58,7 +58,7 @@ class PyMysqlConnectionPool:
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
-        self._pool_id = str(uuid.uuid4())[:8]
+        self._pool_id = str(uuid4())[:8]
 
     @property
     def _database_name(self) -> str:

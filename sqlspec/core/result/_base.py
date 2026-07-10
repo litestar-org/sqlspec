@@ -17,6 +17,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.statement import SQL
+from sqlspec.exceptions import MultipleResultsFoundError
 from sqlspec.storage import (
     AsyncStoragePipeline,
     StorageDestination,
@@ -641,7 +642,7 @@ class SQLResult(StatementResult):
             The single row (optionally transformed to schema_type) or None if no results
 
         Raises:
-            ValueError: If more than one result
+            MultipleResultsFoundError: If more than one result.
         """
         rows = self._get_rows()
         if not rows:
@@ -650,7 +651,7 @@ class SQLResult(StatementResult):
         data_len = len(rows)
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), at most one row expected"
-            raise ValueError(msg)
+            raise MultipleResultsFoundError(msg)
 
         row = rows[0]
         if schema_type:

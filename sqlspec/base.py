@@ -588,13 +588,12 @@ class SQLSpec:
         """
         if self._loader is None:
             return
-        files = self._loader.list_files() if reload else []
+        if reload:
+            changed_files = self._loader._reload_changed_files()
+            logger.debug("Reloaded %d changed SQL files", len(changed_files))
+            return
         self._loader.clear_cache()
-        if reload and files:
-            self._loader.load_sql(*files)
-            logger.debug("Reloaded SQL files")
-        else:
-            logger.debug("Cleared SQL cache for reload")
+        logger.debug("Cleared SQL cache for reload")
 
     def get_sql_files(self) -> "list[str]":
         """Get list of loaded SQL files.

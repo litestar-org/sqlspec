@@ -16,7 +16,6 @@ __all__ = (
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
     "IntegrityError",
-    "InvalidVersionFormatError",
     "MigrationError",
     "MissingDependencyError",
     "MultipleResultsFoundError",
@@ -35,7 +34,6 @@ __all__ = (
     "SQLSpecError",
     "SQLStatementNotFoundError",
     "SerializationConflictError",
-    "SerializationError",
     "SquashValidationError",
     "StackExecutionError",
     "StorageCapabilityError",
@@ -133,10 +131,6 @@ class ImproperConfigurationError(SQLSpecError):
 
 class DialectNotSupportedError(SQLBuilderError):
     """Raised when a SQL dialect does not support a specific feature."""
-
-
-class SerializationError(SQLSpecError):
-    """Encoding or decoding of an object failed."""
 
 
 class RepositoryError(SQLSpecError):
@@ -366,14 +360,6 @@ class SQLFileParseError(SQLSpecError):
 
 class MigrationError(SQLSpecError):
     """Base exception for migration-related errors."""
-
-
-class InvalidVersionFormatError(MigrationError):
-    """Raised when a migration version format is invalid.
-
-    Invalid formats include versions that don't match sequential (0001)
-    or timestamp (YYYYMMDDHHmmss) patterns, or timestamps with invalid dates.
-    """
 
 
 class OutOfOrderMigrationError(MigrationError):

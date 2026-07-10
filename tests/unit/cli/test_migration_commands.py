@@ -600,34 +600,25 @@ def get_configs():
     mock_commands.upgrade.assert_not_called()
 
 
-def test_execution_mode_reporting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_test_modules: None) -> None:
-    """Test that execution mode is reported when specified."""
+def test_upgrade_help_does_not_advertise_unused_execution_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_test_modules: None
+) -> None:
+    """The upgrade command does not expose an option that cannot affect dispatch."""
     runner = CliRunner()
     monkeypatch.chdir(tmp_path)
-
-    config_module = """
+    module_name = _create_module(
+        """
 from sqlspec.adapters.sqlite.config import SqliteConfig
 
 def get_config():
-    config = SqliteConfig(connection_config={"database": ":memory:"})
-    config.bind_key = "execution_mode_test"
-    config.migration_config = {"enabled": True}
-    return config
-"""
-    module_name = _create_module(config_module, tmp_path)
-
-    with patch("sqlspec.migrations.commands.create_migration_commands") as mock_create:
-        mock_commands = Mock()
-        mock_commands.upgrade = Mock(return_value=None)
-        mock_create.return_value = mock_commands
-
-        result = runner.invoke(
-            add_migration_commands(),
-            ["--config", f"{module_name}.get_config", "upgrade", "--execution-mode", "sync", "--no-prompt"],
-        )
+    return SqliteConfig(connection_config={"database": ":memory:"}, migration_config={"enabled": True})
+""",
+        tmp_path,
+    )
+    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_config", "upgrade", "--help"])
 
     assert result.exit_code == 0
-    assert "Execution mode: sync" in result.output
+    assert "--execution-mode" not in result.output
 
 
 def test_bind_key_filtering_single_config(
