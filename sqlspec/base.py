@@ -102,6 +102,14 @@ class SQLSpec:
         """
         return self._configs
 
+    def _ensure_registered(
+        self,
+        config: "NoPoolSyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any]",
+    ) -> None:
+        """Register the configuration when it is not already tracked."""
+        if id(config) not in self._configs:
+            self.add_config(config)
+
     @overload
     def get_connection(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
@@ -124,8 +132,7 @@ class SQLSpec:
         Returns:
             A database connection or an awaitable yielding a connection.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         return config.create_connection()
 
@@ -151,8 +158,7 @@ class SQLSpec:
         Returns:
             A driver adapter instance or an awaitable yielding one.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         connection_obj = self.get_connection(config)
 
@@ -199,8 +205,7 @@ class SQLSpec:
         Returns:
             A sync or async context manager yielding a connection.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         connection_context = config.provide_connection(*args, **kwargs)
         runtime = config.get_observability_runtime()
@@ -244,8 +249,7 @@ class SQLSpec:
         Returns:
             A sync or async context manager yielding a driver adapter instance.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         session_context = config.provide_session(*args, **kwargs)
         runtime = config.get_observability_runtime()
@@ -278,8 +282,7 @@ class SQLSpec:
         Returns:
             The connection pool, an awaitable yielding the pool, or None if not supported.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         if config.supports_connection_pooling:
             return cast("type[PoolT] | Awaitable[type[PoolT]]", config.create_pool())
@@ -307,8 +310,7 @@ class SQLSpec:
         Returns:
             None, or an awaitable if closing an async pool.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         if config.supports_connection_pooling:
             return config.close_pool()
