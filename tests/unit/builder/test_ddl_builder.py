@@ -3,6 +3,7 @@
 import inspect
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder._ddl import (
@@ -107,3 +108,38 @@ def test_ddl_check_constraint_build_constraint_expression_uses_condition_expr_wi
     expr = build_constraint_expression(constraint)
     assert expr is not None
     assert "CK_AGE" in expr.sql().upper()
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite", "mysql", "oracle", "tsql"])
+def test_create_index_where_renders_predicate_per_dialect(dialect: str) -> None:
+    result = CreateIndex("ix_t_k").unique().on_table("t").columns("k").where("k IS NOT NULL").build(dialect=dialect)
+    assert "WHERE" in result.sql.upper()
+    assert "NULL" in result.sql.upper()
+
+
+def test_create_index_where_with_tsql_if_not_exists_guard() -> None:
+    result = (
+        CreateIndex("ix_queue_tasks_task_key")
+        .if_not_exists()
+        .unique()
+        .on_table("queue_tasks")
+        .columns("task_key")
+        .where("task_key IS NOT NULL")
+        .build(dialect="tsql")
+    )
+    exec_payload = result.sql.split("EXEC")[-1]
+    assert "WHERE" in exec_payload.upper()
+    assert "NULL" in exec_payload.upper()
+
+
+def test_create_index_where_accepts_expression() -> None:
+    result = (
+        CreateIndex("ix_t_k")
+        .unique()
+        .on_table("t")
+        .columns("k")
+        .where(exp.condition("k IS NOT NULL"))
+        .build(dialect="postgres")
+    )
+    assert "WHERE" in result.sql.upper()
+    assert "NULL" in result.sql.upper()
