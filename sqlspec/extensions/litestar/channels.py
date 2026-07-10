@@ -65,9 +65,8 @@ class SQLSpecChannelsBackend(ChannelsBackend):
 
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
         payload = {"data_b64": base64.b64encode(data).decode("ascii")}
-        for channel in channels:
-            db_channel = self._db_channel_name(channel)
-            await self._event_channel.publish(db_channel, payload)
+        events = [(self._db_channel_name(channel), payload, None) for channel in channels]
+        await self._event_channel.publish_many(events)
 
     async def subscribe(self, channels: "Iterable[str]") -> None:
         for channel in channels:

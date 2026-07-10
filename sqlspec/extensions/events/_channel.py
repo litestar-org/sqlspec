@@ -5,8 +5,9 @@ import importlib
 import inspect
 import logging
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
@@ -441,6 +442,50 @@ class SyncEventChannel:
         )
         return event_id
 
+    def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Publish independent events in one grouped operation when supported.
+
+        Backend-native implementations are atomic per grouped call. A backend
+        without ``publish_many`` uses an ordered single-event fallback, which is
+        not atomic across the full batch.
+        """
+        normalized = [
+            (normalize_event_channel_name(channel), payload, metadata) for channel, payload, metadata in events
+        ]
+        if not normalized:
+            return []
+        if not self._backend.supports_sync:
+            msg = "Current events backend does not support sync publishing"
+            raise ImproperConfigurationError(msg)
+        started_at = perf_counter()
+        span = _start_event_span(self._runtime, "publish_many", self._backend_name, self._adapter_name, mode="sync")
+        publish_many = getattr(cast("Any", self._backend), "publish_many", None)
+        try:
+            if publish_many is None:
+                self._runtime.increment_metric("events.publish.batch_fallback")
+                event_ids = [
+                    self._backend.publish(channel, payload, metadata) for channel, payload, metadata in normalized
+                ]
+            else:
+                event_ids = cast("list[str]", publish_many(normalized))
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="published")
+        self._runtime.increment_metric("events.publish.batch")
+        self._runtime.increment_metric("events.publish.batch_size", len(normalized))
+        self._runtime.record_metric("events.publish.batch_latency_ms", (perf_counter() - started_at) * 1000)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.publish_batch",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            batch_size=len(normalized),
+            mode="sync",
+        )
+        return event_ids
+
     def iter_events(self, channel: str, *, poll_interval: float | None = None) -> Iterator[EventMessage]:
         """Yield events as they become available."""
         channel = normalize_event_channel_name(channel)
@@ -670,6 +715,50 @@ class AsyncEventChannel:
             mode="async",
         )
         return event_id
+
+    async def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Publish independent events in one grouped operation when supported.
+
+        Backend-native implementations are atomic per grouped call. A backend
+        without ``publish_many`` uses an ordered single-event fallback, which is
+        not atomic across the full batch.
+        """
+        normalized = [
+            (normalize_event_channel_name(channel), payload, metadata) for channel, payload, metadata in events
+        ]
+        if not normalized:
+            return []
+        if not self._backend.supports_async:
+            msg = "Current events backend does not support async publishing"
+            raise ImproperConfigurationError(msg)
+        started_at = perf_counter()
+        span = _start_event_span(self._runtime, "publish_many", self._backend_name, self._adapter_name, mode="async")
+        publish_many = getattr(cast("Any", self._backend), "publish_many", None)
+        try:
+            if publish_many is None:
+                self._runtime.increment_metric("events.publish.batch_fallback")
+                event_ids = [
+                    await self._backend.publish(channel, payload, metadata) for channel, payload, metadata in normalized
+                ]
+            else:
+                event_ids = cast("list[str]", await publish_many(normalized))
+        except Exception as error:
+            _end_event_span(self._runtime, span, error=error)
+            raise
+        _end_event_span(self._runtime, span, result="published")
+        self._runtime.increment_metric("events.publish.batch")
+        self._runtime.increment_metric("events.publish.batch_size", len(normalized))
+        self._runtime.record_metric("events.publish.batch_latency_ms", (perf_counter() - started_at) * 1000)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "event.publish_batch",
+            adapter_name=self._adapter_name,
+            backend_name=self._backend_name,
+            batch_size=len(normalized),
+            mode="async",
+        )
+        return event_ids
 
     def iter_events(self, channel: str, *, poll_interval: float | None = None) -> AsyncIterator[EventMessage]:
         """Yield events as they become available."""

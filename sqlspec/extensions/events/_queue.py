@@ -14,10 +14,11 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
 from sqlspec.extensions.events._payload import parse_event_timestamp
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.config import DatabaseConfigProtocol
@@ -160,6 +161,29 @@ class _BaseTableEventQueue:
     def _utcnow() -> "datetime":
         return datetime.now(timezone.utc)
 
+    @classmethod
+    def _batch_insert_parameters(
+        cls, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]"
+    ) -> "tuple[list[str], list[dict[str, Any]]]":
+        now = cls._utcnow()
+        event_ids: list[str] = []
+        records: list[dict[str, Any]] = []
+        for channel, payload, metadata in events:
+            event_id = uuid4().hex
+            event_ids.append(event_id)
+            records.append({
+                "event_id": event_id,
+                "channel": channel,
+                "payload_json": to_json(payload),
+                "metadata_json": to_json(metadata) if metadata is not None else None,
+                "status": _PENDING_STATUS,
+                "available_at": now,
+                "lease_expires_at": None,
+                "attempts": 0,
+                "created_at": now,
+            })
+        return event_ids, records
+
     @staticmethod
     def _claim_verified(row: "dict[str, Any] | None", leased_until: "datetime") -> bool:
         """Confirm claim ownership by matching the stored lease against the claimer's token.
@@ -242,6 +266,21 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         )
         self._runtime.increment_metric("events.publish")
         return event_id
+
+    def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Bulk-insert independent events in one transaction."""
+        if not events:
+            return []
+        event_ids, records = self._batch_insert_parameters(events)
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
+            driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
+            driver.commit()
+        self._runtime.increment_metric("events.publisher.session")
+        self._runtime.increment_metric("events.publisher.statement")
+        self._runtime.increment_metric("events.publish", len(records))
+        return event_ids
 
     def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
         attempt = 0
@@ -449,6 +488,21 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         )
         self._runtime.increment_metric("events.publish")
         return event_id
+
+    async def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Bulk-insert independent events in one transaction."""
+        if not events:
+            return []
+        event_ids, records = self._batch_insert_parameters(events)
+        async with cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
+        ) as driver:
+            await driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
+            await driver.commit()
+        self._runtime.increment_metric("events.publisher.session")
+        self._runtime.increment_metric("events.publisher.statement")
+        self._runtime.increment_metric("events.publish", len(records))
+        return event_ids
 
     async def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
         attempt = 0

@@ -204,6 +204,43 @@ async def test_native_concurrent_same_channel_peers(postgres_service: Any, backe
         await _cleanup(channel, config)
 
 
+@pytest.mark.postgres
+@pytest.mark.parametrize("backend_key", sorted(_FACTORIES))
+async def test_native_publish_many_preserves_individual_envelopes(postgres_service: Any, backend_key: str) -> None:
+    """A native batch uses one producer flush without changing subscriber envelopes."""
+    factory = _import_or_skip(backend_key)
+    try:
+        config = factory(postgres_service)
+    except ImportError:  # pragma: no cover - driver absent
+        pytest.skip(f"driver for {backend_key} not installed")
+
+    spec = SQLSpec()
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+    received: list[Any] = []
+
+    async def _handler(message: Any) -> None:
+        received.append(message)
+
+    channel_name = f"batch_{backend_key}"
+    listener = None
+    try:
+        listener = channel.listen(channel_name, _handler, poll_interval=_POLL_INTERVAL)
+        await asyncio.sleep(_SUBSCRIBE_WAIT)
+        events = [(channel_name, {"index": index}, {"source": "batch"}) for index in range(_EXPECTED_DELIVERIES)]
+
+        event_ids = await channel.publish_many(events)
+        await _drain(received, _EXPECTED_DELIVERIES, watch_tasks=(listener.task,))
+
+        assert len(received) == _EXPECTED_DELIVERIES
+        assert [message.event_id for message in received] == event_ids
+        assert [message.payload["index"] for message in received] == list(range(_EXPECTED_DELIVERIES))
+        assert all(message.metadata == {"source": "batch"} for message in received)
+    finally:
+        await _safe_stop(channel, listener)
+        await _cleanup(channel, config)
+
+
 async def _safe_stop(channel: Any, *listeners: Any) -> None:
     for listener in listeners:
         if listener is None:

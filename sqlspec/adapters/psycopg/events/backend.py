@@ -21,6 +21,8 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
 __all__ = (
@@ -77,6 +79,24 @@ class PsycopgSyncEventsBackend:
             driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
+
+    def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Publish unchanged per-event envelopes through one producer session."""
+        if not events:
+            return []
+        event_ids: list[str] = []
+        parameters: list[dict[str, str]] = []
+        for channel, payload, metadata in events:
+            event_id = uuid4().hex
+            event_ids.append(event_id)
+            parameters.append({"channel": channel, "payload": encode_notify_payload(event_id, payload, metadata)})
+        self._runtime.increment_metric("events.publisher.session")
+        with self._config.provide_session() as driver:
+            driver.execute_many("SELECT pg_notify(:channel, :payload)", parameters)
+            driver.commit()
+        self._runtime.increment_metric("events.publisher.statement")
+        self._runtime.increment_metric("events.publish.native", len(parameters))
+        return event_ids
 
     def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         hub = self._ensure_hub()
@@ -136,6 +156,24 @@ class PsycopgAsyncEventsBackend:
             await driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
+
+    async def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Publish unchanged per-event envelopes through one producer session."""
+        if not events:
+            return []
+        event_ids: list[str] = []
+        parameters: list[dict[str, str]] = []
+        for channel, payload, metadata in events:
+            event_id = uuid4().hex
+            event_ids.append(event_id)
+            parameters.append({"channel": channel, "payload": encode_notify_payload(event_id, payload, metadata)})
+        self._runtime.increment_metric("events.publisher.session")
+        async with self._config.provide_session() as driver:
+            await driver.execute_many("SELECT pg_notify(:channel, :payload)", parameters)
+            await driver.commit()
+        self._runtime.increment_metric("events.publisher.statement")
+        self._runtime.increment_metric("events.publish.native", len(parameters))
+        return event_ids
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         hub = self._ensure_hub()
@@ -198,6 +236,41 @@ class PsycopgSyncHybridEventsBackend:
         self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id
+
+    def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Persist a batch and publish one compact wakeup marker per channel."""
+        if not events:
+            return []
+        now = datetime.now(timezone.utc)
+        event_ids: list[str] = []
+        records: list[dict[str, Any]] = []
+        marker_counts: dict[str, int] = {}
+        for channel, payload, metadata in events:
+            event_id = uuid4().hex
+            event_ids.append(event_id)
+            records.append({
+                "event_id": event_id,
+                "channel": channel,
+                "payload_json": to_json(payload),
+                "metadata_json": to_json(metadata) if metadata is not None else None,
+                "status": "pending",
+                "available_at": now,
+                "lease_expires_at": None,
+                "attempts": 0,
+                "created_at": now,
+            })
+            marker_counts[channel] = marker_counts.get(channel, 0) + 1
+        markers = [
+            {"channel": channel, "payload": to_json({"batch_size": count})} for channel, count in marker_counts.items()
+        ]
+        self._runtime.increment_metric("events.publisher.session")
+        with self._config.provide_session() as driver:
+            driver.execute_many(self._queue._insert_statement, records, statement_config=self._queue._statement_config)
+            driver.execute_many("SELECT pg_notify(:channel, :payload)", markers)
+            driver.commit()
+        self._runtime.increment_metric("events.publisher.statement", 2)
+        self._runtime.increment_metric("events.publish.native", len(records))
+        return event_ids
 
     def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         hub = self._ensure_hub()
@@ -288,6 +361,43 @@ class PsycopgAsyncHybridEventsBackend:
         await self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
         return event_id
+
+    async def publish_many(self, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
+        """Persist a batch and publish one compact wakeup marker per channel."""
+        if not events:
+            return []
+        now = datetime.now(timezone.utc)
+        event_ids: list[str] = []
+        records: list[dict[str, Any]] = []
+        marker_counts: dict[str, int] = {}
+        for channel, payload, metadata in events:
+            event_id = uuid4().hex
+            event_ids.append(event_id)
+            records.append({
+                "event_id": event_id,
+                "channel": channel,
+                "payload_json": to_json(payload),
+                "metadata_json": to_json(metadata) if metadata is not None else None,
+                "status": "pending",
+                "available_at": now,
+                "lease_expires_at": None,
+                "attempts": 0,
+                "created_at": now,
+            })
+            marker_counts[channel] = marker_counts.get(channel, 0) + 1
+        markers = [
+            {"channel": channel, "payload": to_json({"batch_size": count})} for channel, count in marker_counts.items()
+        ]
+        self._runtime.increment_metric("events.publisher.session")
+        async with self._config.provide_session() as driver:
+            await driver.execute_many(
+                self._queue._insert_statement, records, statement_config=self._queue._statement_config
+            )
+            await driver.execute_many("SELECT pg_notify(:channel, :payload)", markers)
+            await driver.commit()
+        self._runtime.increment_metric("events.publisher.statement", 2)
+        self._runtime.increment_metric("events.publish.native", len(records))
+        return event_ids
 
     async def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
         hub = self._ensure_hub()
@@ -398,10 +508,7 @@ def create_event_backend(
 def _validate_listener_pool_capacity(config: "PsycopgAsyncConfig | PsycopgSyncConfig") -> None:
     max_size = config.connection_config.get("max_size")
     if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
-        msg = (
-            f"{type(config).__name__} native event listeners require "
-            f"pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
-        )
+        msg = f"{type(config).__name__} native event listeners require pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
         raise ImproperConfigurationError(msg)
 
 
