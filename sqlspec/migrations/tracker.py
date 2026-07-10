@@ -524,7 +524,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: The database driver to use.
         """
         await driver.execute(self._tracking_table_ddl())
-        await self._safe_commit_async(driver)
+        await self._safe_commit(driver)
 
         await self._migrate_schema_if_needed(driver)
 
@@ -602,7 +602,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 os.environ.get("USER", "unknown"),
             )
         )
-        await self._safe_commit_async(driver)
+        await self._safe_commit(driver)
         log_with_context(
             logger,
             logging.DEBUG,
@@ -621,7 +621,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             version: Version number to remove.
         """
         await driver.execute(self._remove_migration_statement(version))
-        await self._safe_commit_async(driver)
+        await self._safe_commit(driver)
         log_with_context(
             logger,
             logging.DEBUG,
@@ -674,7 +674,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             msg = f"Migration version {old_version} not found in database"
             raise ValueError(msg)
 
-        await self._safe_commit_async(driver)
+        await self._safe_commit(driver)
         log_with_context(
             logger,
             logging.INFO,
@@ -728,7 +728,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             )
         )
 
-        await self._safe_commit_async(driver)
+        await self._safe_commit(driver)
         log_with_context(
             logger,
             logging.INFO,
@@ -759,7 +759,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         result = await driver.execute(self._check_versions_query(replaced_versions))
         return bool(result.data)
 
-    async def _safe_commit_async(self, driver: "AsyncDriverAdapterBase") -> None:
+    async def _safe_commit(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
         Args:
