@@ -20,6 +20,7 @@ __all__ = (
     "config_state_by_key",
     "ensure_unique_keys",
     "extract_extension_settings",
+    "get_or_create_session",
     "should_commit",
     "should_rollback",
     "validate_extra_statuses",
@@ -167,6 +168,47 @@ def extract_extension_settings(config: Any, *, framework_key: str, sqlcommenter_
         "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
         "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", sqlcommenter_framework),
     }
+
+
+def get_or_create_session(
+    target: Any,
+    cache_key: str,
+    config_state: Any,
+    *,
+    get_value: "Callable[[Any, str, Any], Any]",
+    set_value: "Callable[[Any, str, Any], None]",
+    connection_getter: "Callable[[], Any]",
+) -> Any:
+    """Get or create a request-scoped database session.
+
+    Sessions are cached on the request-scoped storage target so the same
+    session instance is returned for multiple calls within one request. The
+    connection is only fetched when no cached session exists.
+
+    Args:
+        target: Request-scoped storage object holding cached sessions.
+        cache_key: Storage key for the cached session.
+        config_state: Configuration state for the database.
+        get_value: Callable reading ``(target, key, default)`` from storage.
+        set_value: Callable writing ``(target, key, value)`` to storage.
+        connection_getter: Callable returning the request's connection.
+
+    Returns:
+        Database session (driver instance).
+    """
+    existing_session = get_value(target, cache_key, None)
+    if existing_session is not None:
+        return existing_session
+
+    connection = connection_getter()
+    session = config_state.config.driver_type(
+        connection=connection,
+        statement_config=config_state.config.statement_config,
+        driver_features=config_state.config.driver_features,
+    )
+
+    set_value(target, cache_key, session)
+    return session
 
 
 def should_commit(

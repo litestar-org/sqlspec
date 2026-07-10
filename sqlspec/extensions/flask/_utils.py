@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.extensions._framework_common import get_or_create_session as _shared_get_or_create_session
+
 if TYPE_CHECKING:
     from sqlspec.extensions.flask._state import FlaskConfigState
     from sqlspec.protocols import DictProtocol
@@ -52,20 +54,14 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
 
     cache_key = f"sqlspec_session_cache_{config_state.session_key}"
 
-    cached_session = get_context_value(g, cache_key, None)
-    if cached_session is not None:
-        return cached_session
-
-    connection = get_context_value(g, config_state.connection_key)
-
-    session = config_state.config.driver_type(
-        connection=connection,
-        statement_config=config_state.config.statement_config,
-        driver_features=config_state.config.driver_features,
+    return _shared_get_or_create_session(
+        g,
+        cache_key,
+        config_state,
+        get_value=get_context_value,
+        set_value=set_context_value,
+        connection_getter=lambda: get_context_value(g, config_state.connection_key),
     )
-
-    set_context_value(g, cache_key, session)
-    return session
 
 
 def _context_dict(target: Any) -> dict[str, Any]:
