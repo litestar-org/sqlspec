@@ -12,7 +12,7 @@ from sqlspec.core import SQL, StatementConfig
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
-from sqlspec.extensions.events._payload import parse_event_timestamp
+from sqlspec.extensions.events._payload import coerce_dict, coerce_optional_dict, parse_event_timestamp
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
@@ -233,10 +233,8 @@ class _BaseTableEventQueue:
             metadata_obj = from_json(metadata_raw)
         else:
             metadata_obj = None
-        payload_value = payload_obj if isinstance(payload_obj, dict) else {"value": payload_obj}
-        metadata_value = (
-            metadata_obj if isinstance(metadata_obj, dict) or metadata_obj is None else {"value": metadata_obj}
-        )
+        payload_value = coerce_dict(payload_obj)
+        metadata_value = coerce_optional_dict(metadata_obj)
         available_at = parse_event_timestamp(row.get("available_at"))
         created_at = parse_event_timestamp(row.get("created_at"))
         lease_value = lease_expires_at or row.get("lease_expires_at")
