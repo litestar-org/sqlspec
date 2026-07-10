@@ -8,7 +8,10 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, final
+from typing import TYPE_CHECKING, final
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from sqlspec.utils.logging import get_logger
 
@@ -323,7 +326,7 @@ def convert_to_sequential_version(timestamp_version: MigrationVersion, sequence_
     return seq_str
 
 
-def generate_conversion_map(migrations: "list[tuple[str, Any]]") -> "dict[str, str]":
+def generate_conversion_map(migrations: "list[tuple[str, Path]]") -> "dict[str, str]":
     """Generate mapping from timestamp versions to sequential versions.
 
     Separates timestamp migrations from sequential, sorts timestamps chronologically,

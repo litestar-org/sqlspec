@@ -84,6 +84,16 @@ _DATASET_TABLE_PARTS = 2
 _PROJECT_DATASET_TABLE_PARTS = 3
 
 
+def _close_bigquery_cursor(cursor: BigQueryCursor) -> None:
+    try:
+        if cursor.job is not None:
+            if cursor.job.state in {"PENDING", "RUNNING"}:
+                cursor.job.cancel()
+            cursor.job = None
+    except Exception:
+        logger.exception("Failed to cancel BigQuery job during cursor cleanup")
+
+
 def _resolve_storage_write_table_path(table: str, default_project: str) -> tuple[str, str, str]:
     parts = split_qualified_identifier(table, quote_chars="`", allow_bracket_quotes=False)
     if len(parts) == 1 and "." in parts[0]:

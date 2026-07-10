@@ -2,7 +2,7 @@
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import rich_click as click
 from click.core import ParameterSource
@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
 __all__ = ("add_migration_commands", "get_sqlspec_group")
+
+AnyDatabaseConfig: TypeAlias = AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]
 
 
 def get_sqlspec_group() -> "Group":
@@ -76,7 +78,7 @@ def get_sqlspec_group() -> "Group":
             cwd_added = True
 
         try:
-            all_configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = []
+            all_configs: list[AnyDatabaseConfig] = []
             for config_path in config.split(","):
                 config_path = config_path.strip()
                 if not config_path:
@@ -87,9 +89,7 @@ def get_sqlspec_group() -> "Group":
                 else:
                     all_configs.append(config_result)  # pyright: ignore
 
-            configs_by_key: dict[
-                str | None, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]
-            ] = {}
+            configs_by_key: dict[str | None, AnyDatabaseConfig] = {}
             for cfg in all_configs:
                 configs_by_key[cfg.bind_key] = cfg
 
@@ -186,9 +186,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         help="Disable automatic version reconciliation when migrations have been renamed",
     )
 
-    def get_config_by_bind_key(
-        ctx: "click.Context", bind_key: str | None
-    ) -> "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
+    def get_config_by_bind_key(ctx: "click.Context", bind_key: str | None) -> "AnyDatabaseConfig":
         """Get the SQLSpec config for the specified bind key.
 
         Args:
@@ -213,11 +211,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[red]No config found for bind key: {bind_key}[/]")
                 sys.exit(1)
 
-        return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config)
+        return cast("AnyDatabaseConfig", config)
 
-    def _adk_configs(
-        ctx: "click.Context", bind_key: str | None
-    ) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]":
+    def _adk_configs(ctx: "click.Context", bind_key: str | None) -> "list[AnyDatabaseConfig]":
         if bind_key is not None:
             return [get_config_by_bind_key(ctx, bind_key)]
 
@@ -225,7 +221,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         return [cfg for cfg in configs if "adk" in cfg.extension_config]
 
     def _get_memory_store_class(
-        config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
+        config: "AnyDatabaseConfig",
     ) -> "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None":
         config_module = type(config).__module__
         config_name = type(config).__name__
@@ -242,9 +238,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         except ImportError:
             return None
 
-    def _is_adk_memory_enabled(
-        config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
-    ) -> bool:
+    def _is_adk_memory_enabled(config: "AnyDatabaseConfig") -> bool:
         adk_config = cast("dict[str, Any]", config.extension_config.get("adk", {}))
         return bool(adk_config.get("enable_memory", True))
 
@@ -257,7 +251,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
     def get_configs_with_migrations(
         ctx: "click.Context", enabled_only: bool = False
-    ) -> "list[tuple[str, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]]":
+    ) -> "list[tuple[str, AnyDatabaseConfig]]":
         """Get all configurations that have migrations enabled.
 
         Args:
@@ -267,8 +261,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         Returns:
             List of tuples (config_name, config) for configs with migrations enabled.
         """
-        configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = ctx.obj["configs"]
-        migration_configs: list[tuple[str, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]] = []
+        configs: list[AnyDatabaseConfig] = ctx.obj["configs"]
+        migration_configs: list[tuple[str, AnyDatabaseConfig]] = []
 
         for config in configs:
             migration_config = config.migration_config
@@ -301,9 +295,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         return filtered
 
     def _execute_for_config(
-        config: "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]",
-        sync_fn: "Callable[[], Any]",
-        async_fn: "Callable[[], Any]",
+        config: "AnyDatabaseConfig", sync_fn: "Callable[[], Any]", async_fn: "Callable[[], Any]"
     ) -> Any:
         """Execute a migration command with appropriate sync/async handling.
 
@@ -915,12 +907,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         if bind_key is not None:
             get_config_by_bind_key(ctx, bind_key)
-            all_configs: list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] = ctx.obj[
-                "configs"
-            ]
-            migration_configs: list[
-                tuple[str, AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]
-            ] = []
+            all_configs: list[AnyDatabaseConfig] = ctx.obj["configs"]
+            migration_configs: list[tuple[str, AnyDatabaseConfig]] = []
             for cfg in all_configs:
                 config_name = cfg.bind_key
                 if config_name == bind_key and cfg.migration_config:

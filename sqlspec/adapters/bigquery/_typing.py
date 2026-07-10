@@ -4,7 +4,6 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
@@ -56,15 +55,9 @@ class BigQueryCursor:
 
     def __exit__(self, *_: Any) -> None:
         """Clean up cursor resources including active QueryJobs."""
-        if self.job is not None:
-            try:
-                # Cancel the job if it's still running to free up resources
-                if self.job.state in {"PENDING", "RUNNING"}:
-                    self.job.cancel()
-                # Clear the job reference
-                self.job = None
-            except Exception:
-                logging.getLogger(__name__).exception("Failed to cancel BigQuery job during cursor cleanup")
+        from sqlspec.adapters.bigquery.driver import _close_bigquery_cursor
+
+        _close_bigquery_cursor(self)
 
 
 class BigQuerySessionContext:

@@ -56,8 +56,9 @@ def slugify(value: str, allow_unicode: bool = False, separator: str | None = Non
     if sep == "-":
         value = value.strip("-")
         return _SLUGIFY_HYPHEN_COLLAPSE.sub("-", value)
-    value = re.sub(rf"^{re.escape(sep)}+|{re.escape(sep)}+$", "", value)
-    return re.sub(rf"{re.escape(sep)}+", sep, value)
+    escaped_separator = re.escape(sep)
+    value = re.sub(rf"^{escaped_separator}+|{escaped_separator}+$", "", value)
+    return re.sub(rf"{escaped_separator}+", sep, value)
 
 
 @lru_cache(maxsize=100)
@@ -150,9 +151,10 @@ def normalize_identifier(identifier: str, dialect: str) -> str:
         Identifier in the form expected by the dialect's metadata tables.
     """
     value = identifier.strip()
-    if len(value) >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == '"':
+    value_length = len(value)
+    if value_length >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == '"':
         return value[1:-1].replace('""', '"')
-    if len(value) >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == "`":
+    if value_length >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == "`":
         return value[1:-1].replace("``", "`")
 
     normalized_dialect = dialect.lower().replace("-", "_")

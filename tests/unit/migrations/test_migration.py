@@ -12,11 +12,12 @@ Tests for Migration core functionality including:
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from sqlspec.migrations.base import LoadedMigrationMetadata
 from sqlspec.migrations.runner import SyncMigrationRunner
 
 
@@ -39,7 +40,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     def execute_upgrade(
         self,
         driver: Any,
-        migration: dict[str, Any],
+        migration: LoadedMigrationMetadata,
         *,
         use_transaction: bool | None = None,
         on_success: Callable[[int], None] | None = None,
@@ -50,7 +51,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     def execute_downgrade(
         self,
         driver: Any,
-        migration: dict[str, Any],
+        migration: LoadedMigrationMetadata,
         *,
         use_transaction: bool | None = None,
         on_success: Callable[[int], None] | None = None,
@@ -606,7 +607,7 @@ def test_migration_sql_upgrade() -> None:
         "loader": Mock(get_up_sql=AsyncMock(return_value=["CREATE TABLE test (id INTEGER);"])),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert isinstance(result, list)
     assert result == ["CREATE TABLE test (id INTEGER);"]
@@ -624,7 +625,7 @@ def test_migration_sql_downgrade() -> None:
         "loader": Mock(get_down_sql=AsyncMock(return_value=["DROP TABLE test;"])),
     }
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "down")
 
     assert isinstance(result, list)
     assert result == ["DROP TABLE test;"]
@@ -644,7 +645,7 @@ def test_migration_sql_no_downgrade() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
@@ -663,7 +664,7 @@ def test_migration_sql_no_upgrade_error() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._migration_sql(migration, "up")
+        runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert "has no upgrade query" in str(exc_info.value)
 
@@ -684,12 +685,12 @@ def test_migration_sql_loader_error() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._migration_sql(migration, "up")
+        runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
     assert "Failed to load upgrade" in str(exc_info.value)
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "down")
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
 
@@ -706,5 +707,5 @@ def test_migration_sql_empty_statements() -> None:
         "loader": Mock(get_up_sql=AsyncMock(return_value=[])),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
     assert result is None

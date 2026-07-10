@@ -11,7 +11,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import Field
 from dataclasses import fields as dataclasses_fields
 from dataclasses import is_dataclass as dataclasses_is_dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlglot import exp
 from typing_extensions import is_typeddict
@@ -465,7 +465,9 @@ def is_mapping_like(obj: Any) -> "TypeGuard[MappingLikeProtocol]":
         return False
 
 
-def resolve_row_format(rows: "Sequence[Any] | None", *, default: str = "tuple") -> str:
+def resolve_row_format(
+    rows: "Sequence[Any] | None", *, default: "Literal['dict', 'tuple', 'record']" = "tuple"
+) -> "Literal['dict', 'tuple', 'record']":
     """Resolve the raw row format from the first row in a result set."""
     if not rows:
         return default

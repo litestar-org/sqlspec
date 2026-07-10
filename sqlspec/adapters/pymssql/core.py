@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Callable, Sized
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -209,7 +209,7 @@ def collect_rows(
     fetched_data: "Sequence[Any] | None",
     description: "Sequence[Any] | None",
     column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None,
-) -> "tuple[list[Any], list[str], str]":
+) -> "tuple[list[Any], list[str], Literal['dict', 'tuple', 'record']]":
     """Collect pymssql rows, preserving tuple row shape."""
     column_names = resolve_column_names(description, column_name_cache)
     if not fetched_data:

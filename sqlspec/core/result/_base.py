@@ -11,7 +11,7 @@ Classes:
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
+RowFormat = Literal["dict", "tuple", "record"]
 _EMPTY_RESULT_STATEMENT: Final = SQL("-- empty stack result --")
 _EMPTY_RESULT_DATA: Final[tuple[Any, ...]] = ()
 _DEFAULT_DML_METADATA: Final[dict[str, Any]] = {}
@@ -190,6 +191,8 @@ class SQLResult(StatementResult):
         "total_statements",
     )
 
+    _row_format: RowFormat
+
     def __init__(
         self,
         statement: "SQL",
@@ -210,7 +213,7 @@ class SQLResult(StatementResult):
         errors: "list[str] | None" = None,
         total_statements: int = 0,
         successful_statements: int = 0,
-        row_format: str = "dict",
+        row_format: RowFormat = "dict",
     ) -> None:
         """Initialize SQL result.
 
@@ -1122,7 +1125,7 @@ def create_sql_result(
     errors: "list[str] | None" = None,
     total_statements: int = 0,
     successful_statements: int = 0,
-    row_format: str = "dict",
+    row_format: RowFormat = "dict",
 ) -> SQLResult:
     """Create SQLResult instance.
 

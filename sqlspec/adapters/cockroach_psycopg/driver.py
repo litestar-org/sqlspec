@@ -35,6 +35,7 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncCursor, CockroachSyncCursor
     from sqlspec.driver import ExecutionResult
 
 __all__ = (
@@ -137,31 +138,31 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         msg = "CockroachDB transaction retry limit exceeded"
         raise TransactionRetryError(msg) from last_error
 
-    def _apply_follower_reads(self, cursor: Any) -> None:
+    def _apply_follower_reads(self, cursor: "CockroachSyncCursor") -> None:
         if not self.driver_features.get("enable_follower_reads", False):
             return
         if not self._follower_staleness:
             return
-        cursor.execute(f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
+        cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
 
-    def _dispatch_execute_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def _dispatch_execute_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         if statement.returns_rows():
             self._apply_follower_reads(cursor)
         return super().dispatch_execute(cursor, statement)
 
-    def _dispatch_execute_many_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def _dispatch_execute_many_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return PsycopgSyncDriver.dispatch_execute_many(self, cursor, statement)
 
-    def _dispatch_execute_script_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def _dispatch_execute_script_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return PsycopgSyncDriver.dispatch_execute_script(self, cursor, statement)
 
-    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return self._dispatch_execute_impl(cursor, statement)
 
-    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_many(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return self._dispatch_execute_many_impl(cursor, statement)
 
-    def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    def dispatch_execute_script(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return self._dispatch_execute_script_impl(cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachPsycopgSyncExceptionHandler":  # type: ignore[override]
@@ -228,31 +229,31 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         msg = "CockroachDB transaction retry limit exceeded"
         raise TransactionRetryError(msg) from last_error
 
-    async def _apply_follower_reads(self, cursor: Any) -> None:
+    async def _apply_follower_reads(self, cursor: "CockroachAsyncCursor") -> None:
         if not self.driver_features.get("enable_follower_reads", False):
             return
         if not self._follower_staleness:
             return
-        await cursor.execute(f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
+        await cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
 
-    async def _dispatch_execute_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    async def _dispatch_execute_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         if statement.returns_rows():
             await self._apply_follower_reads(cursor)
         return await super().dispatch_execute(cursor, statement)
 
-    async def _dispatch_execute_many_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    async def _dispatch_execute_many_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await PsycopgAsyncDriver.dispatch_execute_many(self, cursor, statement)
 
-    async def _dispatch_execute_script_impl(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    async def _dispatch_execute_script_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await PsycopgAsyncDriver.dispatch_execute_script(self, cursor, statement)
 
-    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await self._dispatch_execute_impl(cursor, statement)
 
-    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_many(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await self._dispatch_execute_many_impl(cursor, statement)
 
-    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+    async def dispatch_execute_script(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await self._dispatch_execute_script_impl(cursor, statement)
 
     def handle_database_exceptions(self) -> "CockroachPsycopgAsyncExceptionHandler":  # type: ignore[override]

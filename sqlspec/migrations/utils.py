@@ -92,7 +92,9 @@ def create_migration_file(
 
 
 def get_author(
-    author_config: Any | None = None, *, config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None
+    author_config: "str | dict[str, Any] | None" = None,
+    *,
+    config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
 ) -> str:
     """Resolve author metadata for migration templates."""
 

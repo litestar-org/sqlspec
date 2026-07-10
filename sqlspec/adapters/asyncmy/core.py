@@ -2,7 +2,7 @@
 
 import contextlib
 from collections.abc import Callable, Sized
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -526,7 +526,7 @@ def collect_rows(
     deserializer: "Callable[[Any], Any]",
     *,
     logger: Any | None = None,
-) -> "tuple[list[Any], list[str], str]":
+) -> "tuple[list[Any], list[str], Literal['dict', 'tuple', 'record']]":
     """Collect AsyncMy rows with JSON decoding, preserving raw format."""
     column_names, json_indexes = row_plan
     if not column_names:

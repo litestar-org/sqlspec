@@ -83,6 +83,7 @@ if TYPE_CHECKING:
 
     from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
+    from sqlspec.core.result._base import RowFormat
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.storage import (
@@ -185,7 +186,7 @@ class ExecutionResult(NamedTuple):
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
-    row_format: str = "dict"
+    row_format: "RowFormat" = "dict"
     last_inserted_id: int | str | None = None
 
 
@@ -770,7 +771,7 @@ class CommonDriverAttributesMixin:
         is_script_result: bool = False,
         is_select_result: bool = False,
         is_many_result: bool = False,
-        row_format: str = "dict",
+        row_format: "RowFormat" = "dict",
         last_inserted_id: int | str | None = None,
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.

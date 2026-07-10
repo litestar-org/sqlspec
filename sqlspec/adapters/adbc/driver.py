@@ -186,7 +186,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
-        self._dialect_name = resolve_dialect_name(self.dialect)
+        self._dialect_name = dialect or resolve_dialect_name(self.dialect)
         self._is_postgres = is_postgres_dialect(self._dialect_name)
         self._json_serializer = cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json))
         self._data_dictionary: AdbcDataDictionary | None = None
