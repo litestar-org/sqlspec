@@ -11,9 +11,14 @@ import datetime
 import enum
 import ipaddress
 import json
+import subprocess
+import sys
+import threading
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 
@@ -36,6 +41,156 @@ def test_registry_is_public_dict() -> None:
     for key, encoder in DEFAULT_TYPE_ENCODERS.items():
         assert isinstance(key, type)
         assert callable(encoder)
+
+
+@pytest.mark.skipif(not (PYDANTIC_INSTALLED and NUMPY_INSTALLED), reason="Pydantic and NumPy are required")
+@pytest.mark.parametrize("operation", ["copy", "unpack", "equality", "repr", "or", "ror"])
+def test_registry_dict_operations_load_optional_encoder_keys(operation: str) -> None:
+    """Ordinary dict operations should include lazy optional encoder keys on first use."""
+    script = f"""
+import numpy as np
+from pydantic import BaseModel
+
+from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
+
+optional_keys = (BaseModel, np.ndarray, np.generic)
+operation = {operation!r}
+if operation == "copy":
+    result = DEFAULT_TYPE_ENCODERS.copy()
+    assert all(key in result for key in optional_keys)
+elif operation == "unpack":
+    result = {{**DEFAULT_TYPE_ENCODERS}}
+    assert all(key in result for key in optional_keys)
+elif operation == "equality":
+    assert DEFAULT_TYPE_ENCODERS == DEFAULT_TYPE_ENCODERS
+    raw_registry = dict.copy(DEFAULT_TYPE_ENCODERS)
+    assert all(key in raw_registry for key in optional_keys)
+elif operation == "repr":
+    registry_repr = repr(DEFAULT_TYPE_ENCODERS)
+    assert all(key.__name__ in registry_repr for key in optional_keys)
+elif operation == "or":
+    result = DEFAULT_TYPE_ENCODERS | {{}}
+    assert all(key in result for key in optional_keys)
+else:
+    result = {{}} | DEFAULT_TYPE_ENCODERS
+    assert all(key in result for key in optional_keys)
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not (PYDANTIC_INSTALLED and NUMPY_INSTALLED), reason="Pydantic and NumPy are required")
+@pytest.mark.parametrize("mutation", ["override", "delete", "clear"])
+def test_registry_mutations_load_optional_encoder_keys_first(mutation: str) -> None:
+    """Mutations before the first read should not overwrite or resurrect user intent."""
+    script = f"""
+import numpy as np
+from pydantic import BaseModel
+
+from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS
+
+mutation = {mutation!r}
+if mutation == "override":
+    override = lambda value: "override"
+    DEFAULT_TYPE_ENCODERS[BaseModel] = override
+    assert DEFAULT_TYPE_ENCODERS[BaseModel] is override
+    assert np.ndarray in dict.copy(DEFAULT_TYPE_ENCODERS)
+elif mutation == "delete":
+    del DEFAULT_TYPE_ENCODERS[BaseModel]
+    assert BaseModel not in dict.copy(DEFAULT_TYPE_ENCODERS)
+    assert BaseModel not in DEFAULT_TYPE_ENCODERS
+else:
+    DEFAULT_TYPE_ENCODERS.clear()
+    assert dict.copy(DEFAULT_TYPE_ENCODERS) == {{}}
+    assert BaseModel not in DEFAULT_TYPE_ENCODERS
+    assert np.ndarray not in DEFAULT_TYPE_ENCODERS
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_registry_first_load_is_thread_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent first readers should wait for the complete optional registry."""
+
+    class NumpyArray:
+        pass
+
+    class NumpyGeneric:
+        pass
+
+    first_import_started = threading.Event()
+    release_first_import = threading.Event()
+    start_readers = threading.Barrier(3)
+    registry = serializer_json._LazyTypeEncoders({})
+
+    def import_optional_type(_module_name: str, attr_name: str) -> type:
+        if attr_name == "ndarray":
+            first_import_started.set()
+            if not release_first_import.wait(timeout=5):
+                pytest.fail("timed out waiting to release the first optional import")
+            return NumpyArray
+        return NumpyGeneric
+
+    def copy_registry() -> dict[type, Any]:
+        start_readers.wait(timeout=5)
+        return registry.copy()
+
+    monkeypatch.setattr(serializer_json, "NUMPY_INSTALLED", True)
+    monkeypatch.setattr(serializer_json, "PYDANTIC_INSTALLED", False)
+    monkeypatch.setattr(serializer_json, "import_optional_attr", import_optional_type)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(copy_registry) for _ in range(2)]
+        start_readers.wait(timeout=5)
+        assert first_import_started.wait(timeout=5)
+        completed_before_release, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
+        release_first_import.set()
+        results = [future.result(timeout=5) for future in futures]
+
+    assert not completed_before_release
+    assert all(NumpyArray in result and NumpyGeneric in result for result in results)
+
+
+def test_registry_retries_after_optional_registration_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed optional registration should publish nothing and remain retryable."""
+
+    class NumpyArray:
+        pass
+
+    class NumpyGeneric:
+        pass
+
+    attempts: list[str] = []
+    fail_generic = True
+    registry = serializer_json._LazyTypeEncoders({})
+
+    def import_optional_type(_module_name: str, attr_name: str) -> type:
+        nonlocal fail_generic
+        attempts.append(attr_name)
+        if attr_name == "ndarray":
+            return NumpyArray
+        if fail_generic:
+            fail_generic = False
+            msg = "generic import failed"
+            raise ImportError(msg)
+        return NumpyGeneric
+
+    monkeypatch.setattr(serializer_json, "NUMPY_INSTALLED", True)
+    monkeypatch.setattr(serializer_json, "PYDANTIC_INSTALLED", False)
+    monkeypatch.setattr(serializer_json, "import_optional_attr", import_optional_type)
+
+    with pytest.raises(ImportError, match="generic import failed"):
+        registry.copy()
+
+    assert registry._loaded is False
+    assert dict.copy(registry) == {}
+
+    loaded = registry.copy()
+
+    assert registry._loaded is True
+    assert NumpyArray in loaded
+    assert NumpyGeneric in loaded
+    assert attempts == ["ndarray", "generic", "ndarray", "generic"]
 
 
 def test_registry_covers_required_types() -> None:

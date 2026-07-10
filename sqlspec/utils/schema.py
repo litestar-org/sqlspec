@@ -13,19 +13,10 @@ from typing_extensions import TypeVar
 
 from sqlspec.data_dictionary import ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.typing import (
-    CATTRS_INSTALLED,
-    NUMPY_INSTALLED,
-    MsgspecValidationError,
-    SchemaT,
-    attrs_asdict,
-    cattrs_structure,
-    cattrs_unstructure,
-    convert,
-    get_type_adapter,
-)
+from sqlspec.typing import CATTRS_INSTALLED, NUMPY_INSTALLED, MsgspecValidationError, SchemaT, convert, get_type_adapter
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
@@ -405,12 +396,15 @@ def _convert_pydantic(data: Any, schema_type: Any) -> Any:
 def _convert_attrs(data: Any, schema_type: Any) -> Any:
     """Convert data to attrs class."""
     if CATTRS_INSTALLED:
+        cattrs_structure = import_optional_attr("cattrs", "structure")
+        cattrs_unstructure = import_optional_attr("cattrs", "unstructure")
         if isinstance(data, Sequence):
             return cattrs_structure(data, list[schema_type])
         structured = cattrs_unstructure(data) if is_attrs_instance(data) else data
         return cattrs_structure(structured, schema_type)
 
     if isinstance(data, list):
+        attrs_asdict = import_optional_attr("attrs", "asdict")
         return [schema_type(**item) if is_dict(item) else schema_type(**attrs_asdict(item)) for item in data]
     return schema_type(**data) if is_dict(data) else data
 

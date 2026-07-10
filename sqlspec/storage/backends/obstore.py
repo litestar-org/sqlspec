@@ -23,8 +23,10 @@ from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreS
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
+
 from sqlspec.storage.errors import execute_sync_storage_operation
-from sqlspec.typing import ArrowRecordBatch, ArrowTable
 from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
 
@@ -404,7 +406,7 @@ class ObStoreBackend:
         except Exception:
             return False
 
-    def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
+    def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table using obstore synchronously."""
         pq = import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
@@ -428,7 +430,7 @@ class ObStoreBackend:
         )
         return result
 
-    def write_arrow_sync(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
+    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table using obstore synchronously."""
         pa = import_pyarrow()
         pq = import_pyarrow_parquet()
@@ -489,7 +491,7 @@ class ObStoreBackend:
         for chunk in result.stream(min_chunk_size=chunk_size):
             yield bytes(chunk)
 
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches using obstore's native streaming synchronously.
 
         For each matching file, streams data through a buffered wrapper
@@ -792,7 +794,7 @@ class ObStoreBackend:
         else:
             return result
 
-    async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> ArrowTable:
+    async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously.
 
         Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
@@ -813,7 +815,7 @@ class ObStoreBackend:
         )
         return cast("ArrowTable", result)
 
-    async def write_arrow_async(self, path: "str | Path", table: ArrowTable, **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously.
 
         Uses async_() with storage limiter to offload blocking PyArrow serialization

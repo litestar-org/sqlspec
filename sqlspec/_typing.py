@@ -10,11 +10,39 @@ import enum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 from typing_extensions import Self, TypeVar, dataclass_transform
 
-from sqlspec.utils.module_loader import dependency_flag, import_optional, import_optional_attr, module_available
+from sqlspec.utils.module_loader import (
+    dependency_flag,
+    import_optional,
+    import_optional_attr,
+    module_available,
+    resolve_optional_attr,
+)
+
+if TYPE_CHECKING:
+    from attrs import AttrsInstance
+    from attrs import asdict as attrs_asdict
+    from attrs import define as attrs_define
+    from attrs import field as attrs_field
+    from attrs import fields as attrs_fields
+    from attrs import has as attrs_has
+    from cattrs import structure as cattrs_structure
+    from cattrs import unstructure as cattrs_unstructure
+    from litestar.dto.data_structures import DTOData
+    from numpy import ndarray as NumpyArray  # noqa: N812
+    from opentelemetry import trace
+    from opentelemetry.trace import Span, Status, StatusCode, Tracer
+    from pandas import DataFrame as PandasDataFrame
+    from polars import DataFrame as PolarsDataFrame
+    from prometheus_client import Counter, Gauge, Histogram
+    from pyarrow import RecordBatch as ArrowRecordBatch
+    from pyarrow import RecordBatchReader as ArrowRecordBatchReader
+    from pyarrow import Schema as ArrowSchema
+    from pyarrow import Table as ArrowTable
+    from pydantic import BaseModel, FailFast, TypeAdapter
 
 __all__ = (
     "ALLOYDB_CONNECTOR_INSTALLED",
@@ -198,20 +226,6 @@ class FailFastStub:
     fail_fast: bool = True
 
 
-# Try to import real implementations at runtime
-try:
-    from pydantic import BaseModel as _RealBaseModel
-    from pydantic import FailFast as _RealFailFast
-    from pydantic import TypeAdapter as _RealTypeAdapter
-
-    BaseModel = _RealBaseModel
-    TypeAdapter = _RealTypeAdapter
-    FailFast = _RealFailFast
-except ImportError:
-    BaseModel = BaseModelStub  # type: ignore[assignment,misc]
-    TypeAdapter = TypeAdapterStub  # type: ignore[assignment,misc]
-    FailFast = FailFastStub  # type: ignore[assignment,misc]
-
 # Always define stub types for msgspec
 
 
@@ -304,15 +318,6 @@ class DTODataStub(Protocol[T]):
         return {}
 
 
-# Try to import real implementation at runtime
-try:
-    from litestar.dto.data_structures import DTOData as _RealDTOData  # pyright: ignore[reportUnknownVariableType]
-
-    DTOData = _RealDTOData
-except ImportError:
-    DTOData = DTODataStub  # type: ignore[assignment,misc]
-
-
 # Always define stub types for attrs
 @dataclass_transform()
 class AttrsInstanceStub:
@@ -358,41 +363,14 @@ def attrs_has_stub(*args: Any, **kwargs: Any) -> bool:  # noqa: ARG001
     return False
 
 
-# Try to import real implementations at runtime
-try:
-    from attrs import AttrsInstance as _RealAttrsInstance  # pyright: ignore
-    from attrs import asdict as _real_attrs_asdict
-    from attrs import define as _real_attrs_define
-    from attrs import field as _real_attrs_field
-    from attrs import fields as _real_attrs_fields
-    from attrs import has as _real_attrs_has
+def cattrs_unstructure_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+    """Placeholder implementation"""
+    return {}
 
-    AttrsInstance = _RealAttrsInstance
-    attrs_asdict = _real_attrs_asdict
-    attrs_define = _real_attrs_define
-    attrs_field = _real_attrs_field
-    attrs_fields = _real_attrs_fields
-    attrs_has = _real_attrs_has
-except ImportError:
-    AttrsInstance = AttrsInstanceStub  # type: ignore[misc]
-    attrs_asdict = attrs_asdict_stub
-    attrs_define = attrs_define_stub
-    attrs_field = attrs_field_stub
-    attrs_fields = attrs_fields_stub
-    attrs_has = attrs_has_stub  # type: ignore[assignment]
 
-try:
-    from cattrs import structure as cattrs_structure
-    from cattrs import unstructure as cattrs_unstructure
-except ImportError:
-
-    def cattrs_unstructure(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
-        """Placeholder implementation"""
-        return {}
-
-    def cattrs_structure(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
-        """Placeholder implementation"""
-        return {}
+def cattrs_structure_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+    """Placeholder implementation"""
+    return {}
 
 
 class EmptyEnum(Enum):
@@ -505,16 +483,10 @@ class ArrowRecordBatchReaderProtocol(Protocol):
         ...
 
 
-try:
-    from pyarrow import RecordBatch as ArrowRecordBatch
-    from pyarrow import RecordBatchReader as ArrowRecordBatchReader
-    from pyarrow import Schema as ArrowSchema
-    from pyarrow import Table as ArrowTable
-except ImportError:
-    ArrowTable = ArrowTableResult  # type: ignore[assignment,misc]
-    ArrowRecordBatch = ArrowRecordBatchResult  # type: ignore[assignment,misc]
-    ArrowSchema = ArrowSchemaProtocol  # type: ignore[assignment,misc]
-    ArrowRecordBatchReader = ArrowRecordBatchReaderProtocol  # type: ignore[assignment,misc]
+_ARROW_TABLE_SHIM = ArrowTableResult
+_ARROW_RECORD_BATCH_SHIM = ArrowRecordBatchResult
+_ARROW_SCHEMA_SHIM = ArrowSchemaProtocol
+_ARROW_RECORD_BATCH_READER_SHIM = ArrowRecordBatchReaderProtocol
 
 
 @runtime_checkable
@@ -543,17 +515,10 @@ class PolarsDataFrameProtocol(Protocol):
         ...
 
 
-try:
-    from pandas import DataFrame as PandasDataFrame
-except ImportError:
-    PandasDataFrame = PandasDataFrameProtocol  # type: ignore[assignment,misc]
+_PANDAS_DATAFRAME_SHIM = PandasDataFrameProtocol
 
 
-try:
-    from polars import DataFrame as PolarsDataFrame
-
-except ImportError:
-    PolarsDataFrame = PolarsDataFrameProtocol  # type: ignore[assignment,misc]
+_POLARS_DATAFRAME_SHIM = PolarsDataFrameProtocol
 
 
 @runtime_checkable
@@ -568,136 +533,145 @@ class NumpyArrayStub(Protocol):
         ...
 
 
-try:
-    from numpy import ndarray as NumpyArray  # noqa: N812
-except ImportError:
-    NumpyArray = NumpyArrayStub  # type: ignore[assignment,misc]
+_NUMPY_ARRAY_SHIM = NumpyArrayStub
 
 
-try:
-    from opentelemetry import trace  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    from opentelemetry.trace import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        Span,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        Status,
-        StatusCode,
-        Tracer,  # pyright: ignore[reportMissingImports, reportAssignmentType]
-    )
-except ImportError:
-    # Define shims for when opentelemetry is not installed
+class _SpanShim:
+    def set_attribute(self, key: str, value: Any) -> None:
+        return None
 
-    class Span:  # type: ignore[no-redef]
-        def set_attribute(self, key: str, value: Any) -> None:
-            return None
+    def record_exception(
+        self,
+        exception: "Exception",
+        attributes: "Mapping[str, Any] | None" = None,
+        timestamp: "int | None" = None,
+        escaped: bool = False,
+    ) -> None:
+        return None
 
-        def record_exception(
-            self,
-            exception: "Exception",
-            attributes: "Mapping[str, Any] | None" = None,
-            timestamp: "int | None" = None,
-            escaped: bool = False,
-        ) -> None:
-            return None
+    def set_status(self, status: Any, description: "str | None" = None) -> None:
+        return None
 
-        def set_status(self, status: Any, description: "str | None" = None) -> None:
-            return None
+    def end(self, end_time: "int | None" = None) -> None:
+        return None
 
-        def end(self, end_time: "int | None" = None) -> None:
-            return None
+    def __enter__(self) -> Self:
+        return self
 
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
-            return None
-
-    class Tracer:  # type: ignore[no-redef]
-        def start_span(
-            self,
-            name: str,
-            context: Any = None,
-            kind: Any = None,
-            attributes: Any = None,
-            links: Any = None,
-            start_time: Any = None,
-            record_exception: bool = True,
-            set_status_on_exception: bool = True,
-        ) -> Span:
-            return Span()  # type: ignore[abstract]
-
-    class _TraceModule:
-        def get_tracer(
-            self,
-            instrumenting_module_name: str,
-            instrumenting_library_version: "str | None" = None,
-            schema_url: "str | None" = None,
-            tracer_provider: Any = None,
-        ) -> Tracer:
-            return Tracer()  # type: ignore[abstract] # pragma: no cover
-
-        def get_tracer_provider(self) -> Any:  # pragma: no cover
-            return None
-
-        TracerProvider = type(None)  # Shim for TracerProvider if needed elsewhere
-        StatusCode = type(None)  # Shim for StatusCode
-        Status = type(None)  # Shim for Status
-
-    trace = _TraceModule()  # type: ignore[assignment]
-    StatusCode = trace.StatusCode  # type: ignore[misc]
-    Status = trace.Status  # type: ignore[misc]
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        return None
 
 
-try:
-    from prometheus_client import (  # pyright: ignore[reportMissingImports, reportAssignmentType]
-        Counter,  # pyright: ignore[reportAssignmentType]
-        Gauge,  # pyright: ignore[reportAssignmentType]
-        Histogram,  # pyright: ignore[reportAssignmentType]
-    )
-except ImportError:
-    # Define shims for when prometheus_client is not installed
+_SPAN_SHIM = _SpanShim
+_SPAN_SHIM.__name__ = "Span"
+_SPAN_SHIM.__qualname__ = "Span"
 
-    class _Metric:  # Base shim for metrics
-        def __init__(
-            self,
-            name: str,
-            documentation: str,
-            labelnames: tuple[str, ...] = (),
-            namespace: str = "",
-            subsystem: str = "",
-            unit: str = "",
-            registry: Any = None,
-            ejemplar_fn: Any = None,
-            buckets: Any = None,
-            **_: Any,
-        ) -> None:
-            return None
 
-        def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
-            return _MetricInstance()
+class _TracerShim:
+    def start_span(
+        self,
+        name: str,
+        context: Any = None,
+        kind: Any = None,
+        attributes: Any = None,
+        links: Any = None,
+        start_time: Any = None,
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+    ) -> "_SpanShim":
+        return _SPAN_SHIM()
 
-    class _MetricInstance:
-        def inc(self, amount: float = 1) -> None:
-            return None
 
-        def dec(self, amount: float = 1) -> None:
-            return None
+_TRACER_SHIM = _TracerShim
+_TRACER_SHIM.__name__ = "Tracer"
+_TRACER_SHIM.__qualname__ = "Tracer"
 
-        def set(self, value: float) -> None:
-            return None
 
-        def observe(self, amount: float) -> None:
-            return None
+class _TraceModule:
+    def get_tracer(
+        self,
+        instrumenting_module_name: str,
+        instrumenting_library_version: "str | None" = None,
+        schema_url: "str | None" = None,
+        tracer_provider: Any = None,
+    ) -> "_TracerShim":
+        return _TRACER_SHIM()  # pragma: no cover
 
-    class Counter(_Metric):  # type: ignore[no-redef]
-        def labels(self, *labelvalues: str, **labelkwargs: str) -> _MetricInstance:
-            return _MetricInstance()  # pragma: no cover
+    def get_tracer_provider(self) -> Any:  # pragma: no cover
+        return None
 
-    class Gauge(_Metric):  # type: ignore[no-redef]
-        def labels(self, *labelvalues: str, **labelkwargs: str) -> _MetricInstance:
-            return _MetricInstance()  # pragma: no cover
+    TracerProvider = type(None)  # Shim for TracerProvider if needed elsewhere
+    StatusCode = type(None)  # Shim for StatusCode
+    Status = type(None)  # Shim for Status
 
-    class Histogram(_Metric):  # type: ignore[no-redef]
-        def labels(self, *labelvalues: str, **labelkwargs: str) -> _MetricInstance:
-            return _MetricInstance()  # pragma: no cover
+
+_TRACE_SHIM = _TraceModule()
+_STATUS_CODE_SHIM = type(None)
+_STATUS_SHIM = type(None)
+
+
+class _Metric:  # Base shim for metrics
+    def __init__(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: tuple[str, ...] = (),
+        namespace: str = "",
+        subsystem: str = "",
+        unit: str = "",
+        registry: Any = None,
+        ejemplar_fn: Any = None,
+        buckets: Any = None,
+        **_: Any,
+    ) -> None:
+        return None
+
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
+        return _MetricInstance()
+
+
+class _MetricInstance:
+    def inc(self, amount: float = 1) -> None:
+        return None
+
+    def dec(self, amount: float = 1) -> None:
+        return None
+
+    def set(self, value: float) -> None:
+        return None
+
+    def observe(self, amount: float) -> None:
+        return None
+
+
+class _CounterShim(_Metric):
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
+        return _MetricInstance()  # pragma: no cover
+
+
+_COUNTER_SHIM = _CounterShim
+_COUNTER_SHIM.__name__ = "Counter"
+_COUNTER_SHIM.__qualname__ = "Counter"
+
+
+class _GaugeShim(_Metric):
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
+        return _MetricInstance()  # pragma: no cover
+
+
+_GAUGE_SHIM = _GaugeShim
+_GAUGE_SHIM.__name__ = "Gauge"
+_GAUGE_SHIM.__qualname__ = "Gauge"
+
+
+class _HistogramShim(_Metric):
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
+        return _MetricInstance()  # pragma: no cover
+
+
+_HISTOGRAM_SHIM = _HistogramShim
+_HISTOGRAM_SHIM.__name__ = "Histogram"
+_HISTOGRAM_SHIM.__qualname__ = "Histogram"
 
 
 ATTRS_INSTALLED = dependency_flag("attrs")
@@ -719,3 +693,69 @@ PYDANTIC_INSTALLED = dependency_flag("pydantic")
 ALLOYDB_CONNECTOR_INSTALLED = dependency_flag("google.cloud.alloydb.connector")
 NANOID_INSTALLED = dependency_flag("fastnanoid")
 UUID_UTILS_INSTALLED = dependency_flag("uuid_utils")
+
+_BASE_MODEL_SHIM = BaseModelStub
+_TYPE_ADAPTER_SHIM = TypeAdapterStub
+_FAIL_FAST_SHIM = FailFastStub
+_DTO_DATA_SHIM = DTODataStub
+_ATTRS_INSTANCE_SHIM = AttrsInstanceStub
+_ATTRS_ASDICT_SHIM = attrs_asdict_stub
+_ATTRS_DEFINE_SHIM = attrs_define_stub
+_ATTRS_FIELD_SHIM = attrs_field_stub
+_ATTRS_FIELDS_SHIM = attrs_fields_stub
+_ATTRS_HAS_SHIM = attrs_has_stub
+_CATTRS_STRUCTURE_SHIM = cattrs_structure_stub
+_CATTRS_STRUCTURE_SHIM.__name__ = "cattrs_structure"
+_CATTRS_STRUCTURE_SHIM.__qualname__ = "cattrs_structure"
+_CATTRS_UNSTRUCTURE_SHIM = cattrs_unstructure_stub
+_CATTRS_UNSTRUCTURE_SHIM.__name__ = "cattrs_unstructure"
+_CATTRS_UNSTRUCTURE_SHIM.__qualname__ = "cattrs_unstructure"
+_LAZY_EXPORTS: "dict[str, tuple[str, str | None, Any]]" = {
+    "ArrowRecordBatch": ("pyarrow", "RecordBatch", _ARROW_RECORD_BATCH_SHIM),
+    "ArrowRecordBatchReader": ("pyarrow", "RecordBatchReader", _ARROW_RECORD_BATCH_READER_SHIM),
+    "ArrowSchema": ("pyarrow", "Schema", _ARROW_SCHEMA_SHIM),
+    "ArrowTable": ("pyarrow", "Table", _ARROW_TABLE_SHIM),
+    "AttrsInstance": ("attrs", "AttrsInstance", _ATTRS_INSTANCE_SHIM),
+    "BaseModel": ("pydantic", "BaseModel", _BASE_MODEL_SHIM),
+    "Counter": ("prometheus_client", "Counter", _COUNTER_SHIM),
+    "DTOData": ("litestar.dto.data_structures", "DTOData", _DTO_DATA_SHIM),
+    "FailFast": ("pydantic", "FailFast", _FAIL_FAST_SHIM),
+    "Gauge": ("prometheus_client", "Gauge", _GAUGE_SHIM),
+    "Histogram": ("prometheus_client", "Histogram", _HISTOGRAM_SHIM),
+    "NumpyArray": ("numpy", "ndarray", _NUMPY_ARRAY_SHIM),
+    "PandasDataFrame": ("pandas", "DataFrame", _PANDAS_DATAFRAME_SHIM),
+    "PolarsDataFrame": ("polars", "DataFrame", _POLARS_DATAFRAME_SHIM),
+    "Span": ("opentelemetry.trace", "Span", _SPAN_SHIM),
+    "Status": ("opentelemetry.trace", "Status", _STATUS_SHIM),
+    "StatusCode": ("opentelemetry.trace", "StatusCode", _STATUS_CODE_SHIM),
+    "Tracer": ("opentelemetry.trace", "Tracer", _TRACER_SHIM),
+    "TypeAdapter": ("pydantic", "TypeAdapter", _TYPE_ADAPTER_SHIM),
+    "attrs_asdict": ("attrs", "asdict", _ATTRS_ASDICT_SHIM),
+    "attrs_define": ("attrs", "define", _ATTRS_DEFINE_SHIM),
+    "attrs_field": ("attrs", "field", _ATTRS_FIELD_SHIM),
+    "attrs_fields": ("attrs", "fields", _ATTRS_FIELDS_SHIM),
+    "attrs_has": ("attrs", "has", _ATTRS_HAS_SHIM),
+    "cattrs_structure": ("cattrs", "structure", _CATTRS_STRUCTURE_SHIM),
+    "cattrs_unstructure": ("cattrs", "unstructure", _CATTRS_UNSTRUCTURE_SHIM),
+    "trace": ("opentelemetry.trace", None, _TRACE_SHIM),
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve optional dependency symbols lazily on first access."""
+
+    try:
+        module_name, attr_name, fallback = _LAZY_EXPORTS[name]
+    except KeyError:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg) from None
+
+    resolved = resolve_optional_attr(module_name, attr_name, fallback)
+    globals()[name] = resolved
+    return resolved
+
+
+def __dir__() -> "list[str]":
+    """Expose the public surface for autocomplete and ``dir()``."""
+
+    return sorted(set(globals()) | set(__all__))

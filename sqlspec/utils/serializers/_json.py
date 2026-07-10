@@ -4,22 +4,19 @@ import contextlib
 import datetime
 import enum
 import json
+import threading
 import uuid as uuid_mod
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
 from pathlib import Path, PurePath
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
-from sqlspec.typing import (
-    MSGSPEC_INSTALLED,
-    NUMPY_INSTALLED,
-    ORJSON_INSTALLED,
-    PYDANTIC_INSTALLED,
-    BaseModel,
-    attrs_asdict,
-)
+if TYPE_CHECKING:
+    from typing_extensions import Self
+
+from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
@@ -115,23 +112,135 @@ def _default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
 
         encoders[pgproto.UUID] = str
 
-    if NUMPY_INSTALLED:
-        import numpy as np
-
-        encoders[np.ndarray] = lambda v: v.tolist()
-        encoders[np.generic] = lambda v: v.item()
-
-    if PYDANTIC_INSTALLED:
-        encoders[BaseModel] = _dump_pydantic_model
-
     return encoders
 
 
-DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _default_type_encoders()
+class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
+    """Load optional type keys when the public registry is first used."""
+
+    __slots__ = ("_load_lock", "_loaded")
+    __hash__ = None
+
+    def __init__(self, encoders: "dict[type, Callable[[Any], Any]]") -> None:
+        super().__init__(encoders)
+        self._load_lock = threading.Lock()
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        with self._load_lock:
+            if self._loaded:
+                return
+            optional_encoders: dict[type, Callable[[Any], Any]] = {}
+            if NUMPY_INSTALLED:
+                ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
+                generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
+                optional_encoders[ndarray] = lambda value: value.tolist()
+                optional_encoders[generic] = lambda value: value.item()
+            if PYDANTIC_INSTALLED:
+                base_model = cast("type[Any]", import_optional_attr("pydantic", "BaseModel"))
+                optional_encoders[base_model] = _dump_pydantic_model
+            dict.update(self, optional_encoders)
+            self._loaded = True
+
+    def __contains__(self, key: object) -> bool:
+        self._ensure_loaded()
+        return super().__contains__(key)
+
+    def __delitem__(self, key: type) -> None:
+        self._ensure_loaded()
+        super().__delitem__(key)
+
+    def __eq__(self, other: object) -> bool:
+        self._ensure_loaded()
+        if isinstance(other, _LazyTypeEncoders):
+            other._ensure_loaded()
+        return super().__eq__(other)
+
+    def __getitem__(self, key: type) -> "Callable[[Any], Any]":
+        self._ensure_loaded()
+        return super().__getitem__(key)
+
+    def __iter__(self) -> "Iterator[type]":
+        self._ensure_loaded()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._ensure_loaded()
+        return super().__len__()
+
+    def __ne__(self, other: object) -> bool:
+        return not self == other
+
+    def __or__(self, other: "dict[Any, Any]", /) -> "dict[Any, Any]":
+        self._ensure_loaded()
+        return super().__or__(other)
+
+    def __ror__(self, other: "dict[Any, Any]", /) -> "dict[Any, Any]":
+        self._ensure_loaded()
+        return super().__ror__(other)
+
+    def __repr__(self) -> str:
+        self._ensure_loaded()
+        return super().__repr__()
+
+    def __setitem__(self, key: type, value: "Callable[[Any], Any]") -> None:
+        self._ensure_loaded()
+        super().__setitem__(key, value)
+
+    def __ior__(self, other: Any) -> "Self":  # type: ignore[misc,override]
+        self._ensure_loaded()
+        super().__ior__(other)
+        return self
+
+    def clear(self) -> None:
+        self._ensure_loaded()
+        super().clear()
+
+    def copy(self) -> "dict[type, Callable[[Any], Any]]":
+        self._ensure_loaded()
+        return super().copy()
+
+    def get(self, key: type, default: Any = None) -> Any:
+        self._ensure_loaded()
+        return super().get(key, default)
+
+    def items(self) -> "Any":
+        self._ensure_loaded()
+        return super().items()
+
+    def keys(self) -> "Any":
+        self._ensure_loaded()
+        return super().keys()
+
+    def pop(self, key: type, *args: Any) -> Any:
+        self._ensure_loaded()
+        return super().pop(key, *args)
+
+    def popitem(self) -> "tuple[type, Callable[[Any], Any]]":
+        self._ensure_loaded()
+        return super().popitem()
+
+    def setdefault(self, key: type, default: Any = None) -> Any:
+        self._ensure_loaded()
+        return super().setdefault(key, default)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        self._ensure_loaded()
+        super().update(*args, **kwargs)
+
+    def values(self) -> "Any":
+        self._ensure_loaded()
+        return super().values()
+
+
+DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _LazyTypeEncoders(_default_type_encoders())
 _STRUCTURAL_ENCODER_CACHE: Final["dict[type[Any], StructuralEncoder | None]"] = {}
 
 
 def _dump_attrs_instance(value: Any) -> Any:
+    attrs_asdict = import_optional_attr("attrs", "asdict")
     return attrs_asdict(value, recurse=True)
 
 

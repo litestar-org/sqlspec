@@ -8,7 +8,7 @@ module paths to filesystem paths, and ensuring optional dependencies are install
 import importlib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.exceptions import MissingDependencyError
 
@@ -40,6 +40,7 @@ __all__ = (
     "module_available",
     "module_to_os_path",
     "reset_dependency_cache",
+    "resolve_optional_attr",
 )
 
 
@@ -49,6 +50,7 @@ __all__ = (
 
 _dependency_cache: "dict[str, bool]" = {}
 _optional_module_cache: "dict[str, ModuleType | None]" = {}
+T = TypeVar("T")
 
 
 def module_available(module_name: str) -> bool:
@@ -143,6 +145,32 @@ def import_optional_attr(module_name: str, attr: str) -> Any:
     if module is None:
         return None
     return getattr(module, attr, None)
+
+
+def resolve_optional_attr(module_name: str, attr: "str | None", fallback: T) -> T:
+    """Return an optional module or attribute, otherwise the provided fallback.
+
+    Unlike :func:`import_optional_attr`, this keeps the caller-supplied shim
+    object stable so module-level caches can preserve identity when the optional
+    dependency is missing.
+
+    Args:
+        module_name: Dotted module path to import.
+        attr: Attribute name to resolve on the imported module. Returns the
+            module itself when ``None``.
+        fallback: Shim object to return when the module or attribute is missing.
+
+    Returns:
+        The resolved attribute or the fallback shim.
+    """
+
+    module = import_optional(module_name)
+    if module is None:
+        return fallback
+    if attr is None:
+        return cast("T", module)
+    resolved = getattr(module, attr, None)
+    return fallback if resolved is None else resolved
 
 
 class OptionalDependencyFlag:

@@ -8,8 +8,9 @@ from functools import partial
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, Empty, attrs_asdict, msgspec_fields
+from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, Empty, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
     has_dict_attribute,
@@ -178,7 +179,8 @@ def _dump_pydantic(value: Any, *, exclude_unset: bool) -> "dict[str, Any]":
 
 
 def _dump_attrs(value: Any) -> "dict[str, Any]":
-    return attrs_asdict(value, recurse=True)
+    attrs_asdict = import_optional_attr("attrs", "asdict")
+    return cast("dict[str, Any]", attrs_asdict(value, recurse=True))
 
 
 def _dump_dict_attr(value: Any) -> "dict[str, Any]":

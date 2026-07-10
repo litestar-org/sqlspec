@@ -198,6 +198,14 @@ def test_import_optional_attr_returns_none_when_attr_missing() -> None:
     assert dependencies.import_optional_attr("json", "definitely_not_an_attr") is None
 
 
+def test_resolve_optional_attr_returns_module_when_attr_is_none() -> None:
+    """resolve_optional_attr can return an optional module directly."""
+    import json
+
+    fallback = object()
+    assert dependencies.resolve_optional_attr("json", None, fallback) is json
+
+
 def test_import_string_basic_module() -> None:
     """Test import_string with basic module import."""
     sys_module = import_string("sys")

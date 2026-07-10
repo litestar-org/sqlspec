@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING, Any, cast
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
 
-from sqlspec.typing import ArrowRecordBatch, ArrowTable
-
 if TYPE_CHECKING:
     from types import TracebackType
+
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
     "AsyncArrowBatchIterator",
@@ -270,17 +270,17 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read_arrow_sync(self, path: str, **kwargs: Any) -> ArrowTable:
+    def read_arrow_sync(self, path: str, **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_arrow_sync(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+    def write_arrow_sync(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator[ArrowRecordBatch]:
+    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches from storage synchronously."""
         raise NotImplementedError
 
@@ -342,17 +342,17 @@ class ObjectStoreBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
+    async def read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
         raise NotImplementedError
 
     # NOTE: Returns AsyncIterator directly; keep in sync with ObjectStoreProtocol.
     @abstractmethod
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
         """Stream Arrow record batches from storage asynchronously."""
         raise NotImplementedError
