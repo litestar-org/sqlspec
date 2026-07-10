@@ -355,7 +355,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Commit database transaction."""
         try:
             self.connection.commit()
-        except Exception as e:
+        except AdbcNativeError as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
         self._transaction_active = False
@@ -364,7 +364,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Rollback database transaction."""
         try:
             self.connection.rollback()
-        except Exception as e:
+        except AdbcNativeError as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
         finally:

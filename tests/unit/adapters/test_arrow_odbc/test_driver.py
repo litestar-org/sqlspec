@@ -18,6 +18,7 @@ from sqlspec.adapters.arrow_odbc import (
     odbc_type_to_arrow,
     resolve_dialect_from_dbms_name,
 )
+from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.core import LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
@@ -120,6 +121,36 @@ class ErrorConnection(FakeConnection):
 
     def from_table_to_db(self, source: pa.Table, target: str, chunk_size: int = 1000) -> None:
         raise FakeOdbcError("insert failed")
+
+
+@pytest.mark.parametrize("method_name", ["commit", "rollback"])
+def test_transaction_control_propagates_non_native_errors(method_name: str) -> None:
+    connection = FakeConnection()
+
+    def raise_runtime_error() -> None:
+        raise RuntimeError("internal bug")
+
+    setattr(connection, method_name, raise_runtime_error)
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(RuntimeError, match="internal bug"):
+        getattr(driver, method_name)()
+
+
+@pytest.mark.parametrize("method_name", ["commit", "rollback"])
+def test_transaction_control_wraps_native_errors(method_name: str) -> None:
+    connection = FakeConnection()
+    native_error = ArrowOdbcError.__new__(ArrowOdbcError)
+    native_error.args = ("native failure",)
+
+    def raise_native_error() -> None:
+        raise native_error
+
+    setattr(connection, method_name, raise_native_error)
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
+        getattr(driver, method_name)()
 
 
 def _empty_table_reader() -> FakeReader:

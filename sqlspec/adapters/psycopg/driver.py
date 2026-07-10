@@ -378,7 +378,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         try:
             if self.connection.autocommit:
                 self.connection.autocommit = False
-        except Exception as e:
+        except psycopg.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -386,7 +386,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Commit the current transaction on the current connection."""
         try:
             self.connection.commit()
-        except Exception as e:
+        except psycopg.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -394,7 +394,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Rollback the current transaction on the current connection."""
         try:
             self.connection.rollback()
-        except Exception as e:
+        except psycopg.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -874,14 +874,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         try:
-            try:
-                autocommit_flag = self.connection.autocommit
-            except AttributeError:
-                autocommit_flag = None
-            if isinstance(autocommit_flag, bool) and not autocommit_flag:
-                return
-            await self.connection.set_autocommit(False)
-        except Exception as e:
+            if self.connection.autocommit:
+                await self.connection.set_autocommit(False)
+        except psycopg.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -889,7 +884,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Commit the current transaction on the current connection."""
         try:
             await self.connection.commit()
-        except Exception as e:
+        except psycopg.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -897,7 +892,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Rollback the current transaction on the current connection."""
         try:
             await self.connection.rollback()
-        except Exception as e:
+        except psycopg.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
 

@@ -5,13 +5,38 @@ from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
+from adbc_driver_manager import AdbcStatusCode
 
+from sqlspec.adapters.adbc._typing import AdbcNativeError
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
+from sqlspec.exceptions import SQLSpecError
 
 
 def test_adbc_driver_classes_are_final() -> None:
     assert getattr(AdbcExceptionHandler, "__final__", False) is True
     assert getattr(AdbcDriver, "__final__", False) is True
+
+
+@pytest.mark.parametrize("method_name", ["commit", "rollback"])
+def test_transaction_control_propagates_non_native_errors(method_name: str) -> None:
+    connection = MagicMock()
+    connection.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    getattr(connection, method_name).side_effect = RuntimeError("internal bug")
+    driver = AdbcDriver(connection)
+
+    with pytest.raises(RuntimeError, match="internal bug"):
+        getattr(driver, method_name)()
+
+
+@pytest.mark.parametrize("method_name", ["commit", "rollback"])
+def test_transaction_control_wraps_native_errors(method_name: str) -> None:
+    connection = MagicMock()
+    connection.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    getattr(connection, method_name).side_effect = AdbcNativeError("native failure", status_code=AdbcStatusCode.UNKNOWN)
+    driver = AdbcDriver(connection)
+
+    with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
+        getattr(driver, method_name)()
 
 
 def test_handle_exception_propagates_non_native_error() -> None:
