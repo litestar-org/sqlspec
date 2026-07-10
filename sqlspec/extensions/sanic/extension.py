@@ -4,8 +4,12 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._framework_common import extract_extension_settings, should_commit
+from sqlspec.extensions._framework_common import (
+    config_state_by_key,
+    ensure_unique_keys,
+    extract_extension_settings,
+    should_commit,
+)
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -533,17 +537,11 @@ class SQLSpecPlugin:
         Raises:
             ImproperConfigurationError: If duplicate keys are found.
         """
-        all_keys: set[str] = set()
-
-        for state in self._config_states:
-            keys = {state.connection_key, state.pool_key, state.session_key}
-            duplicates = all_keys & keys
-
-            if duplicates:
-                msg = f"Duplicate context keys found: {duplicates}"
-                raise ImproperConfigurationError(msg)
-
-            all_keys.update(keys)
+        ensure_unique_keys(
+            self._config_states,
+            key_getter=lambda state: {state.connection_key, state.pool_key, state.session_key},
+            message="Duplicate context keys found: {duplicates}",
+        )
 
     def get_session(self, request: Any, key: "str | None" = None) -> Any:
         """Get or create database session for request.
@@ -583,9 +581,7 @@ class SQLSpecPlugin:
         Raises:
             ValueError: If no configuration is found with the specified key.
         """
-        for state in self._config_states:
-            if state.session_key == key:
-                return state
-
-        msg = f"No configuration found with session_key: {key}"
-        raise ValueError(msg)
+        state: SanicConfigState = config_state_by_key(
+            self._config_states, key, not_found_exc=ValueError, message="No configuration found with session_key: {key}"
+        )
+        return state

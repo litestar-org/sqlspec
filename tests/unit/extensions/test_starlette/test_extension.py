@@ -13,6 +13,7 @@ from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette import SQLSpecPlugin
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
@@ -222,3 +223,19 @@ async def test_middleware_autocommit_middleware_connection_cm_pool_rolls_back_on
     assert connection.closed is False
     assert manager.exited is True
     assert not hasattr(request.state, "db_connection")
+
+
+def test_duplicate_state_keys_raise_improper_configuration_error() -> None:
+    """Duplicate state keys should raise ImproperConfigurationError with the Starlette message."""
+    plugin = SQLSpecPlugin(SQLSpec())
+    config = _Config(pooled=False, connection=_Connection())
+    plugin._config_states = [_make_state(config), _make_state(config)]
+    with pytest.raises(ImproperConfigurationError, match="Duplicate state keys found"):
+        plugin._ensure_unique_keys()
+
+
+def test_config_state_by_key_unknown_key_raises_value_error() -> None:
+    """Unknown session keys should raise ValueError with the Starlette message."""
+    plugin = SQLSpecPlugin(SQLSpec())
+    with pytest.raises(ValueError, match="No configuration found with session_key: missing"):
+        plugin._config_state_by_key("missing")

@@ -143,3 +143,10 @@ async def test_extractor_init_sanic_plugin_reuses_same_extractor_across_requests
             plugin._restore_correlation_context(request, SimpleNamespace(headers={}))
     finally:
         CorrelationContext.clear()
+
+
+def test_config_state_by_key_unknown_key_raises_value_error() -> None:
+    """Unknown session keys should raise ValueError with the Sanic message."""
+    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    with pytest.raises(ValueError, match="No configuration found with session_key: missing"):
+        plugin._config_state_by_key("missing")

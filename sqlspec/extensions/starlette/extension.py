@@ -3,8 +3,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.base import SQLSpec
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._framework_common import extract_extension_settings
+from sqlspec.extensions._framework_common import config_state_by_key, ensure_unique_keys, extract_extension_settings
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
 from sqlspec.extensions.starlette.middleware import (
@@ -149,17 +148,11 @@ class SQLSpecPlugin:
         Raises:
             ImproperConfigurationError: If duplicate keys found.
         """
-        all_keys: set[str] = set()
-
-        for state in self._config_states:
-            keys = {state.connection_key, state.pool_key, state.session_key}
-            duplicates = all_keys & keys
-
-            if duplicates:
-                msg = f"Duplicate state keys found: {duplicates}"
-                raise ImproperConfigurationError(msg)
-
-            all_keys.update(keys)
+        ensure_unique_keys(
+            self._config_states,
+            key_getter=lambda state: {state.connection_key, state.pool_key, state.session_key},
+            message="Duplicate state keys found: {duplicates}",
+        )
 
     def _add_middleware(self, app: "Starlette", config_state: SQLSpecConfigState) -> None:
         """Add transaction middleware for configuration.
@@ -306,9 +299,7 @@ class SQLSpecPlugin:
         Raises:
             ValueError: If no configuration found with the specified key.
         """
-        for state in self._config_states:
-            if state.session_key == key:
-                return state
-
-        msg = f"No configuration found with session_key: {key}"
-        raise ValueError(msg)
+        state: SQLSpecConfigState = config_state_by_key(
+            self._config_states, key, not_found_exc=ValueError, message="No configuration found with session_key: {key}"
+        )
+        return state

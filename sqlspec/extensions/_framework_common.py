@@ -10,11 +10,15 @@ from typing import TYPE_CHECKING, Any, Literal
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from sqlspec.config import DatabaseConfigProtocol
 
 __all__ = (
     "BaseConfigState",
     "CommitMode",
+    "config_state_by_key",
+    "ensure_unique_keys",
     "extract_extension_settings",
     "should_commit",
     "should_rollback",
@@ -30,6 +34,51 @@ DEFAULT_COMMIT_MODE = "manual"
 HTTP_200_OK = 200
 HTTP_300_MULTIPLE_CHOICES = 300
 HTTP_400_BAD_REQUEST = 400
+
+
+def ensure_unique_keys(states: "Sequence[Any]", *, key_getter: "Callable[[Any], set[str]]", message: str) -> None:
+    """Validate that configuration state keys are unique across configs.
+
+    Args:
+        states: Configuration state instances.
+        key_getter: Callable returning the set of keys for one state.
+        message: Error message template with a ``{duplicates}`` placeholder.
+
+    Raises:
+        ImproperConfigurationError: If duplicate keys are found.
+    """
+    all_keys: set[str] = set()
+
+    for state in states:
+        keys = key_getter(state)
+        duplicates = all_keys & keys
+
+        if duplicates:
+            raise ImproperConfigurationError(message.format(duplicates=duplicates))
+
+        all_keys.update(keys)
+
+
+def config_state_by_key(states: "Sequence[Any]", key: str, *, not_found_exc: "type[Exception]", message: str) -> Any:
+    """Get configuration state by session key.
+
+    Args:
+        states: Configuration state instances.
+        key: Session key to search for.
+        not_found_exc: Exception type raised when no state matches.
+        message: Error message template with a ``{key}`` placeholder.
+
+    Returns:
+        Configuration state matching the key.
+
+    Raises:
+        Exception: The ``not_found_exc`` type when no state matches the key.
+    """
+    for state in states:
+        if state.session_key == key:
+            return state
+
+    raise not_found_exc(message.format(key=key))
 
 
 def validate_extra_statuses(

@@ -10,6 +10,7 @@ from flask import Flask, g
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
@@ -140,3 +141,18 @@ def test_utils_get_or_create_session_returns_cached_session() -> None:
         first = get_or_create_session(state, portal=None)
         second = get_or_create_session(state, portal=None)
     assert second is first
+
+
+def test_duplicate_state_keys_raise_improper_configuration_error() -> None:
+    """Duplicate state keys should raise ImproperConfigurationError with the Flask message."""
+    plugin = SQLSpecPlugin(SQLSpec())
+    plugin._config_states = [_make_state(), _make_state()]
+    with pytest.raises(ImproperConfigurationError, match="Use unique session_key values"):
+        plugin._ensure_unique_keys()
+
+
+def test_config_state_by_key_unknown_key_raises_improper_configuration_error() -> None:
+    """Unknown session keys should raise ImproperConfigurationError with the Flask message."""
+    plugin = SQLSpecPlugin(SQLSpec())
+    with pytest.raises(ImproperConfigurationError, match="No configuration found for key: missing"):
+        plugin._config_state_by_key("missing")
