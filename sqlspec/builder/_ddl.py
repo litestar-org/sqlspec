@@ -4,7 +4,7 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -660,10 +660,51 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         return any(c.name == col_name and c.primary_key for c in self._columns)
 
 
-class DropTable(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+class _SingleObjectDropBuilder(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+    """Template base for DROP builders targeting a single named object.
+
+    Subclasses set ``_drop_kind`` (the SQL object kind) and ``_object_label``
+    (the human-readable noun used in error messages), and may override
+    ``_build_drop_this`` or ``_drop_expression_args`` to customize the
+    generated ``exp.Drop`` expression.
+    """
+
+    __slots__ = ("_cascade", "_if_exists", "_name")
+
+    _drop_kind: "ClassVar[str]" = ""
+    _object_label: "ClassVar[str]" = ""
+
+    def __init__(self, name: str, dialect: "DialectType" = None) -> None:
+        super().__init__(dialect=dialect)
+        self._name = name
+        self._if_exists = False
+        self._cascade: bool | None = None
+
+    def _build_drop_this(self) -> exp.Expr:
+        return exp.to_identifier(self._name)
+
+    def _drop_expression_args(self) -> "dict[str, Any]":
+        return {}
+
+    def _create_base_expression(self) -> exp.Expr:
+        if not self._name:
+            self._raise_builder_error(f"{self._object_label} name must be set for DROP {self._drop_kind}.")
+        return exp.Drop(
+            kind=self._drop_kind,
+            this=self._build_drop_this(),
+            exists=self._if_exists,
+            cascade=self._cascade,
+            **self._drop_expression_args(),
+        )
+
+
+class DropTable(_SingleObjectDropBuilder):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_table_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "TABLE"
+    _object_label: "ClassVar[str]" = "Table"
 
     def __init__(self, table_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP TABLE with table name.
@@ -672,27 +713,23 @@ class DropTable(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
             table_name: Name of the table to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._table_name = table_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(table_name, dialect=dialect)
 
     def table(self, name: str) -> Self:
-        self._table_name = name
+        self._name = name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._table_name:
-            self._raise_builder_error("Table name must be set for DROP TABLE.")
-        return exp.Drop(
-            kind="TABLE", this=exp.to_table(self._table_name), exists=self._if_exists, cascade=self._cascade
-        )
+    def _build_drop_this(self) -> exp.Expr:
+        return exp.to_table(self._name)
 
 
-class DropIndex(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+class DropIndex(_SingleObjectDropBuilder):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_index_name", "_table_name")
+    __slots__ = ("_table_name",)
+
+    _drop_kind: "ClassVar[str]" = "INDEX"
+    _object_label: "ClassVar[str]" = "Index"
 
     def __init__(self, index_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP INDEX with index name.
@@ -701,36 +738,28 @@ class DropIndex(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
             index_name: Name of the index to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._index_name = index_name
+        super().__init__(index_name, dialect=dialect)
         self._table_name: str | None = None
-        self._if_exists = False
-        self._cascade: bool | None = None
 
     def name(self, index_name: str) -> Self:
-        self._index_name = index_name
+        self._name = index_name
         return self
 
     def on_table(self, table_name: str) -> Self:
         self._table_name = table_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._index_name:
-            self._raise_builder_error("Index name must be set for DROP INDEX.")
-        return exp.Drop(
-            kind="INDEX",
-            this=exp.to_identifier(self._index_name),
-            table=exp.to_table(self._table_name) if self._table_name else None,
-            exists=self._if_exists,
-            cascade=self._cascade,
-        )
+    def _drop_expression_args(self) -> "dict[str, Any]":
+        return {"table": exp.to_table(self._table_name) if self._table_name else None}
 
 
-class DropView(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+class DropView(_SingleObjectDropBuilder):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_view_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "VIEW"
+    _object_label: "ClassVar[str]" = "View"
 
     def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP VIEW with view name.
@@ -739,27 +768,20 @@ class DropView(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
             view_name: Name of the view to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._view_name = view_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(view_name, dialect=dialect)
 
     def name(self, view_name: str) -> Self:
-        self._view_name = view_name
+        self._name = view_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._view_name:
-            self._raise_builder_error("View name must be set for DROP VIEW.")
-        return exp.Drop(
-            kind="VIEW", this=exp.to_identifier(self._view_name), exists=self._if_exists, cascade=self._cascade
-        )
 
-
-class DropSchema(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+class DropSchema(_SingleObjectDropBuilder):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_schema_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "SCHEMA"
+    _object_label: "ClassVar[str]" = "Schema"
 
     def __init__(self, schema_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP SCHEMA with schema name.
@@ -768,27 +790,20 @@ class DropSchema(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
             schema_name: Name of the schema to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._schema_name = schema_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(schema_name, dialect=dialect)
 
     def name(self, schema_name: str) -> Self:
-        self._schema_name = schema_name
+        self._name = schema_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._schema_name:
-            self._raise_builder_error("Schema name must be set for DROP SCHEMA.")
-        return exp.Drop(
-            kind="SCHEMA", this=exp.to_identifier(self._schema_name), exists=self._if_exists, cascade=self._cascade
-        )
 
-
-class DropMaterializedView(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+class DropMaterializedView(_SingleObjectDropBuilder):
     """Builder for DROP MATERIALIZED VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_view_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "MATERIALIZED VIEW"
+    _object_label: "ClassVar[str]" = "View"
 
     def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP MATERIALIZED VIEW with view name.
@@ -797,25 +812,12 @@ class DropMaterializedView(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMix
             view_name: Name of the materialized view to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._view_name = view_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(view_name, dialect=dialect)
 
     def name(self, view_name: str) -> Self:
         """Set the materialized view name."""
-        self._view_name = view_name
+        self._name = view_name
         return self
-
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._view_name:
-            self._raise_builder_error("View name must be set for DROP MATERIALIZED VIEW.")
-        return exp.Drop(
-            kind="MATERIALIZED VIEW",
-            this=exp.to_identifier(self._view_name),
-            exists=self._if_exists,
-            cascade=self._cascade,
-        )
 
 
 class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
