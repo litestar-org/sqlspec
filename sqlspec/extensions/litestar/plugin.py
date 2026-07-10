@@ -290,7 +290,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         pool_key = state.pool_key
         commit_mode = state.commit_mode
         config = state.config
-        is_async = config.is_async
 
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
@@ -298,11 +297,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state.lifespan_handler = lifespan_handler_maker(config, pool_key)
 
         if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key, is_async)
+            state.before_send_handler = manual_handler_maker(connection_key)
         else:
             commit_on_redirect = commit_mode == "autocommit_include_redirect"
             state.before_send_handler = autocommit_handler_maker(
-                connection_key, is_async, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
+                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
             )
 
     @property
