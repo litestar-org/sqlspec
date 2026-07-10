@@ -5,6 +5,7 @@ understand type narrowing, replacing defensive hasattr() and duck typing pattern
 """
 
 import inspect
+import sys
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import Field
@@ -34,12 +35,8 @@ from sqlspec.typing import (
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
     PYDANTIC_INSTALLED,
-    BaseModel,
     DataclassProtocol,
-    DTOData,
     Struct,
-    attrs_fields,
-    attrs_has,
 )
 from sqlspec.utils.text import camelize, kebabize, pascalize
 
@@ -589,12 +586,16 @@ def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModelStub]":
     """
     if not PYDANTIC_INSTALLED:
         return False
+    pydantic = sys.modules.get("pydantic")
+    if pydantic is None:
+        return False
+    base_model = pydantic.BaseModel
     if isinstance(obj, type):
         try:
-            return issubclass(obj, BaseModel)
+            return issubclass(obj, base_model)
         except TypeError:
             return False
-    return isinstance(obj, BaseModel)
+    return isinstance(obj, base_model)
 
 
 def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseModelStub]":
@@ -777,7 +778,12 @@ def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstanceStub]":
     Returns:
         bool
     """
-    return bool(ATTRS_INSTALLED) and attrs_has(obj.__class__)
+    if not ATTRS_INSTALLED:
+        return False
+    from sqlspec.utils.module_loader import import_optional_attr
+
+    attrs_has = import_optional_attr("attrs", "has")
+    return bool(attrs_has(obj.__class__))
 
 
 def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstanceStub]]":
@@ -789,7 +795,12 @@ def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstanceStub]]":
     Returns:
         bool
     """
-    return bool(ATTRS_INSTALLED) and attrs_has(cls)
+    if not ATTRS_INSTALLED:
+        return False
+    from sqlspec.utils.module_loader import import_optional_attr
+
+    attrs_has = import_optional_attr("attrs", "has")
+    return bool(attrs_has(cls))
 
 
 def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstanceStub]":
@@ -804,6 +815,9 @@ def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsI
     """
     if not is_attrs_instance(obj):
         return False
+    from sqlspec.utils.module_loader import import_optional_attr
+
+    attrs_fields = import_optional_attr("attrs", "fields")
     return any(field.name == field_name for field in attrs_fields(obj.__class__))
 
 
@@ -819,6 +833,9 @@ def is_attrs_instance_without_field(obj: Any, field_name: str) -> "TypeGuard[Att
     """
     if not is_attrs_instance(obj):
         return False
+    from sqlspec.utils.module_loader import import_optional_attr
+
+    attrs_fields = import_optional_attr("attrs", "fields")
     return all(field.name != field_name for field in attrs_fields(obj.__class__))
 
 
@@ -951,7 +968,10 @@ def is_dto_data(v: Any) -> "TypeGuard[DTODataStub[Any]]":
     Returns:
         bool
     """
-    return bool(LITESTAR_INSTALLED) and isinstance(v, DTOData)
+    if not LITESTAR_INSTALLED:
+        return False
+    data_structures = sys.modules.get("litestar.dto.data_structures")
+    return data_structures is not None and isinstance(v, data_structures.DTOData)
 
 
 def is_expression(obj: Any) -> "TypeGuard[exp.Expr]":
