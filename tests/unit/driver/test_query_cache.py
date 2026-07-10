@@ -375,7 +375,7 @@ def test_sync_execute_cache_hit_re_raises_mapped_exception(sqlite_sync_driver: A
         sqlite_sync_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
-def test_prepare_cached_statement_named_style_sets_needs_rebind(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+def test_cached_execution_named_style_sets_needs_rebind(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     profile = ParameterProfile([ParameterInfo("id", ParameterStyle.NAMED_COLON, 0, 0, ":id")])
     cached = _make_cached(
         compiled_sql="SELECT :id",
@@ -398,9 +398,9 @@ def test_prepare_cached_statement_named_style_sets_needs_rebind(sqlite_sync_driv
 
     monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", _fake_rebind)
 
-    prepared = sqlite_sync_driver._prepare_cached_statement("SELECT :id", (1,))
+    result = sqlite_sync_driver._cached_execution("SELECT :id", (1,))
 
-    assert prepared is not None
+    assert result is not None
     assert called is True
 
 

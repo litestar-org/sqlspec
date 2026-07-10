@@ -497,7 +497,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path.
 
-        The statement is already compiled by _prepare_cached_statement, so dispatch_execute
+        The statement is already compiled by _cached_execution, so dispatch_execute
         will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()

@@ -68,13 +68,9 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import (
-    has_array_interface,
     has_asdict_method,
     has_cursor_metadata,
-    has_dtype_str,
     has_statement_type,
-    has_typecode,
-    has_typecode_and_len,
     is_dict_row,
     is_mapping_like,
     is_statement_filter,
@@ -100,7 +96,6 @@ if TYPE_CHECKING:
 
 
 __all__ = (
-    "DEFAULT_EXECUTION_RESULT",
     "VERSION_GROUPS_MIN_FOR_MINOR",
     "VERSION_GROUPS_MIN_FOR_PATCH",
     "AsyncExceptionHandler",
@@ -114,10 +109,8 @@ __all__ = (
     "describe_stack_statement",
     "handle_single_row_error",
     "hash_stack_operations",
-    "make_cache_key_hashable",
     "parameter_value_needs_processing",
     "parameter_values_need_processing",
-    "resolve_db_system",
     "type_coercion_fallbacks",
     "validate_savepoint_name",
 )
@@ -130,12 +123,8 @@ _SAVEPOINT_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
 
-DEFAULT_EXECUTION_RESULT: Final["tuple[object | None, int | None, object | None]"] = (None, None, None)
-
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
-_CONVERT_TO_TUPLE = object()
-_CONVERT_TO_FROZENSET = object()
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Any], ...], TypeDispatcher[Any]]" = {}
 
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
@@ -198,110 +187,6 @@ class ExecutionResult(NamedTuple):
     is_many_result: bool
     row_format: str = "dict"
     last_inserted_id: int | str | None = None
-
-
-def make_cache_key_hashable(obj: Any) -> Any:
-    """Recursively convert unhashable types to hashable ones for cache keys.
-
-    Uses an iterative stack-based approach to avoid C-stack recursion limits
-    in mypyc-compiled code.
-
-    For array-like objects (NumPy arrays, Python arrays, etc.), we use structural
-    info (dtype + shape or typecode + length) rather than content for cache keys.
-
-    Collections are processed with stack entries that track (object, parent_list, index)
-    so we can convert substructures in-place and then replace placeholders with tuples or frozensets
-    only after their children are evaluated. Dictionaries are iterated in sorted order for determinism
-    while sets fall back to a best-effort ordering if necessary.
-
-    Args:
-        obj: Object to make hashable.
-
-    Returns:
-        A hashable representation of the object. Collections become tuples,
-        arrays become structural tuples like ("ndarray", dtype, shape).
-    """
-    if isinstance(obj, (int, str, bytes, bool, float, type(None))):
-        return obj
-
-    root: list[Any] = [obj]
-    stack = [(obj, root, 0)]
-
-    while stack:
-        current_obj, parent, idx = stack.pop()
-
-        if current_obj is _CONVERT_TO_TUPLE:
-            parent[idx] = tuple(parent[idx])
-            continue
-
-        if current_obj is _CONVERT_TO_FROZENSET:
-            parent[idx] = frozenset(parent[idx])
-            continue
-
-        if has_typecode_and_len(current_obj):
-            parent[idx] = ("array", current_obj.typecode, len(current_obj))
-            continue
-        if has_typecode(current_obj):
-            parent[idx] = ("array", current_obj.typecode)
-            continue
-        if has_array_interface(current_obj):
-            try:
-                dtype_str = current_obj.dtype.str if has_dtype_str(current_obj.dtype) else str(type(current_obj))
-                shape = tuple(int(s) for s in current_obj.shape)
-                parent[idx] = ("ndarray", dtype_str, shape)
-            except (AttributeError, TypeError):
-                try:
-                    length = len(current_obj)
-                    parent[idx] = ("array_like", type(current_obj).__name__, length)
-                except (AttributeError, TypeError):
-                    parent[idx] = ("array_like", type(current_obj).__name__)
-            continue
-
-        if isinstance(current_obj, (list, tuple)):
-            new_list = [None] * len(current_obj)
-            parent[idx] = new_list
-
-            stack.append((_CONVERT_TO_TUPLE, parent, idx))
-
-            stack.extend((current_obj[i], new_list, i) for i in range(len(current_obj) - 1, -1, -1))
-            continue
-
-        if isinstance(current_obj, dict):
-            try:
-                sorted_items = sorted(current_obj.items())
-            except TypeError:
-                sorted_items = list(current_obj.items())
-
-            items_list = []
-            for k, v in sorted_items:
-                items_list.append([k, v])
-
-            parent[idx] = items_list
-
-            stack.append((_CONVERT_TO_TUPLE, parent, idx))
-
-            for i in range(len(items_list) - 1, -1, -1):
-                stack.extend(((_CONVERT_TO_TUPLE, items_list, i), (items_list[i][1], items_list[i], 1)))
-
-            continue
-
-        if isinstance(current_obj, set):
-            try:
-                sorted_list = sorted(current_obj)
-            except TypeError:
-                sorted_list = list(current_obj)
-
-            new_list = [None] * len(sorted_list)
-            parent[idx] = new_list
-
-            stack.append((_CONVERT_TO_FROZENSET, parent, idx))
-
-            stack.extend((sorted_list[i], new_list, i) for i in range(len(sorted_list) - 1, -1, -1))
-            continue
-
-        parent[idx] = current_obj
-
-    return root[0]
 
 
 def describe_stack_statement(statement: "StatementProtocol | str") -> str:
@@ -1212,56 +1097,6 @@ class CommonDriverAttributesMixin:
         ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
         return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
-    def _prepare_cached_statement(
-        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQL | None":
-        """Prepare direct execution if cache hit.
-
-        Only essential checks in the hot lookup path. All detailed eligibility
-        validation happens at store time in _cache_statement().
-
-        Args:
-            statement: Raw SQL string.
-            params: Query parameters.
-
-        Returns:
-            Prepared SQL object with processed state if cache hit, None otherwise.
-        """
-        if not self._stmt_cache_enabled:
-            return None
-        cached = self._stmt_cache.get(statement)
-        if cached is None or cached.param_count != len(params):
-            return None
-        param_values = _cache_param_values(params)
-
-        # AST transformer fallback
-        if self.statement_config.parameter_config.ast_transformer is not None and any(p is None for p in param_values):
-            return None
-
-        # Fast-path: skip stmt_cache_rebind entirely when no transformations are needed.
-        config = self.statement_config.parameter_config
-        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
-        if not needs_rebind:
-            needs_rebind = parameter_values_need_processing(param_values, config.type_coercion_map)
-        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
-            needs_rebind = True
-        if needs_rebind:
-            rebound_params = self.stmt_cache_rebind(params, cached)
-            params_are_simple = False
-        else:
-            rebound_params = params
-            params_are_simple = True
-        compiled_sql = cached.compiled_sql
-
-        output_transformer = self.statement_config.output_transformer
-        if output_transformer:
-            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
-            params_are_simple = False
-
-        return self._cached_statement(
-            statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
-        )
-
     def _cached_execution(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
     ) -> "SQLResult | None | Awaitable[SQLResult | None]":
@@ -1529,24 +1364,6 @@ class CommonDriverAttributesMixin:
         for filter_obj in filters:
             sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
-
-    def _apply_coercion(self, value: object, type_coercion_map: "dict[type, Callable[[Any], Any]] | None") -> object:
-        """Apply type coercion to a single value.
-
-        Args:
-            value: Value to coerce (may be TypedParameter or raw value)
-            type_coercion_map: Optional type coercion map
-
-        Returns:
-            Coerced value with TypedParameter unwrapped
-        """
-        unwrapped_value = value.value if isinstance(value, TypedParameter) else value
-        if not type_coercion_map:
-            return unwrapped_value
-
-        return self._apply_coercion_with_fallback(
-            unwrapped_value, type_coercion_map, type_coercion_fallbacks(type_coercion_map)
-        )
 
     def _apply_coercion_with_fallback(
         self,
