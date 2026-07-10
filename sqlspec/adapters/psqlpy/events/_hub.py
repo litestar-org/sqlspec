@@ -12,13 +12,14 @@ other's callbacks mid-iteration.
 
 import asyncio
 import contextlib
+import logging
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from sqlspec.core import SQL
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.protocols import NotificationProtocol
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -74,6 +75,7 @@ class PsqlpyListenerHub:
     """Per-channel persistent listener for psqlpy event backends."""
 
     __slots__ = (
+        "_backend_name",
         "_callbacks",
         "_config",
         "_listener",
@@ -85,7 +87,8 @@ class PsqlpyListenerHub:
         "_shutting_down",
     )
 
-    def __init__(self, config: "PsqlpyConfig") -> None:
+    def __init__(self, config: "PsqlpyConfig", backend_name: str = "notify") -> None:
+        self._backend_name = backend_name
         self._config = config
         self._lock = asyncio.Lock()
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
@@ -123,6 +126,7 @@ class PsqlpyListenerHub:
             msg = "PsqlpyListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
         async with self._lock:
+            await self._ensure_listener_locked()
             if channel not in self._queues:
                 queue = await self._subscribe_locked(channel, consumer_task=task, ready_timeout=poll_interval)
             else:
@@ -156,6 +160,7 @@ class PsqlpyListenerHub:
                     listener.abort_listen()
             with contextlib.suppress(Exception):
                 await listener.shutdown()
+            _record_listener_lifecycle(self._config, self._backend_name, "release")
         self._shutting_down = False
 
     def is_subscribed(self, channel: str) -> bool:
@@ -207,12 +212,38 @@ class PsqlpyListenerHub:
         return consumer_queue
 
     async def _ensure_listener_locked(self) -> "PsqlpyListener":
-        if self._listener is not None:
+        if self._listener is not None and self._listener.is_started:
             return cast("PsqlpyListener", self._listener)
+        previous_listener = self._listener
+        reconnecting = previous_listener is not None
+        if previous_listener is not None:
+            if self._listener_started:
+                with contextlib.suppress(Exception):
+                    previous_listener.abort_listen()
+            with contextlib.suppress(Exception):
+                await previous_listener.shutdown()
+            _record_listener_lifecycle(self._config, self._backend_name, "release")
+            self._listener = None
+            self._listener_started = False
         pool = await self._config.provide_pool()
         listener = pool.listener()
         await listener.startup()
         self._listener = listener
+        try:
+            for channel, callback in self._callbacks.items():
+                await listener.add_callback(channel=channel, callback=callback.__call__)
+        except Exception:
+            self._listener = None
+            with contextlib.suppress(Exception):
+                await listener.shutdown()
+            raise
+        if self._callbacks:
+            listener.listen()
+            self._listener_started = True
+        _record_listener_lifecycle(self._config, self._backend_name, "acquire")
+        if reconnecting:
+            _record_listener_lifecycle(self._config, self._backend_name, "reconnect")
+        _record_listener_lifecycle(self._config, self._backend_name, "ready")
         self._register_pool_destroying()
         return listener
 
@@ -254,3 +285,16 @@ class PsqlpyListenerHub:
             return
         for queue in list(queues.values()):
             queue.put_nowait(payload)
+
+
+def _record_listener_lifecycle(config: "PsqlpyConfig", backend_name: str, status: str) -> None:
+    config.get_observability_runtime().increment_metric(f"events.listener.{status}")
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "event.listener.connection",
+        adapter_name="psqlpy",
+        backend_name=backend_name,
+        connection_role="listener",
+        status=status,
+    )

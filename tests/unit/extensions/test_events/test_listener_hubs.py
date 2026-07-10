@@ -20,20 +20,41 @@ from sqlspec.extensions.events import EventMessage
 
 
 class _AsyncConnectionContext:
-    def __init__(self, connection: Any) -> None:
+    def __init__(self, connection: Any, tracker: Any | None = None) -> None:
         self.connection = connection
+        self.tracker = tracker
 
     async def __aenter__(self) -> Any:
+        if self.tracker is not None:
+            self.tracker.connection_enters += 1
         return self.connection
 
     async def __aexit__(self, *_exc_info: object) -> None:
-        return None
+        if self.tracker is not None:
+            self.tracker.connection_exits += 1
+
+
+class _SyncConnectionContext:
+    def __init__(self, connection: Any, tracker: Any) -> None:
+        self.connection = connection
+        self.tracker = tracker
+
+    def __enter__(self) -> Any:
+        self.tracker.connection_enters += 1
+        return self.connection
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.tracker.connection_exits += 1
 
 
 class _AsyncpgConnection:
     def __init__(self) -> None:
         self.callbacks: dict[str, Any] = {}
         self.executed: list[str] = []
+        self.closed = False
+
+    def is_closed(self) -> bool:
+        return self.closed
 
     async def execute(self, statement: str) -> None:
         self.executed.append(statement)
@@ -47,22 +68,26 @@ class _AsyncpgConnection:
 
 class _StubRuntime:
     def __init__(self) -> None:
+        self.metrics: list[str] = []
         self.registered: list[tuple[str, Any]] = []
 
-    def increment_metric(self, _metric: str) -> None:
-        return None
+    def increment_metric(self, metric: str) -> None:
+        self.metrics.append(metric)
 
     def register_lifecycle_hook(self, event: str, callback: Any) -> None:
         self.registered.append((event, callback))
 
 
 class _AsyncpgConfig:
-    def __init__(self, connection: _AsyncpgConnection) -> None:
-        self.connection = connection
+    def __init__(self, connection: _AsyncpgConnection, *replacement_connections: _AsyncpgConnection) -> None:
+        self.connections = [connection, *replacement_connections]
+        self.connection_enters = 0
+        self.connection_exits = 0
         self._runtime = _StubRuntime()
 
     def provide_connection(self) -> _AsyncConnectionContext:
-        return _AsyncConnectionContext(self.connection)
+        connection = self.connections[min(self.connection_enters, len(self.connections) - 1)]
+        return _AsyncConnectionContext(connection, self)
 
     def get_observability_runtime(self) -> _StubRuntime:
         return self._runtime
@@ -77,9 +102,15 @@ class _PsqlpyListener:
         self.listen_count = 0
         self.abort_count = 0
         self.emitted: list[tuple[str, str]] = []
+        self.shutdown_count = 0
+        self.started = False
+
+    @property
+    def is_started(self) -> bool:
+        return self.started
 
     async def startup(self) -> None:
-        pass
+        self.started = True
 
     async def add_callback(self, *, channel: str, callback: Any) -> None:
         self.callbacks[channel] = callback
@@ -104,21 +135,25 @@ class _PsqlpyListener:
         self.abort_count += 1
 
     async def shutdown(self) -> None:
-        pass
+        self.shutdown_count += 1
+        self.started = False
 
 
 class _PsqlpyPool:
-    def __init__(self, listener_handle: _PsqlpyListener | None = None) -> None:
-        self.listener_handle = listener_handle or _PsqlpyListener()
+    def __init__(self, listener_handle: _PsqlpyListener, *replacement_listeners: _PsqlpyListener) -> None:
+        self.listener_handles = [listener_handle, *replacement_listeners]
+        self.listener_calls = 0
 
     def listener(self) -> _PsqlpyListener:
-        return self.listener_handle
+        listener = self.listener_handles[min(self.listener_calls, len(self.listener_handles) - 1)]
+        self.listener_calls += 1
+        return listener
 
 
 class _PsqlpyConfig:
-    def __init__(self, listener_handle: _PsqlpyListener | None = None) -> None:
+    def __init__(self, listener_handle: _PsqlpyListener | None = None, *replacement_listeners: _PsqlpyListener) -> None:
         self.listener_handle = listener_handle or _PsqlpyListener()
-        self.pool = _PsqlpyPool(self.listener_handle)
+        self.pool = _PsqlpyPool(self.listener_handle, *replacement_listeners)
         self._runtime = _StubRuntime()
 
     async def provide_pool(self) -> _PsqlpyPool:
@@ -158,6 +193,7 @@ class _PsqlpySession:
 class _PsycopgAsyncConnection:
     def __init__(self) -> None:
         self.executed: list[str] = []
+        self.closed = False
 
     async def execute(self, statement: str) -> None:
         self.executed.append(statement)
@@ -177,12 +213,45 @@ class _PsycopgAsyncConnection:
 
 
 class _PsycopgAsyncConfig:
-    def __init__(self, connection: _PsycopgAsyncConnection) -> None:
-        self.connection = connection
+    def __init__(self, connection: _PsycopgAsyncConnection, *replacement_connections: _PsycopgAsyncConnection) -> None:
+        self.connections = [connection, *replacement_connections]
+        self.connection_enters = 0
+        self.connection_exits = 0
         self._runtime = _StubRuntime()
 
     def provide_connection(self) -> _AsyncConnectionContext:
-        return _AsyncConnectionContext(self.connection)
+        connection = self.connections[min(self.connection_enters, len(self.connections) - 1)]
+        return _AsyncConnectionContext(connection, self)
+
+    def get_observability_runtime(self) -> _StubRuntime:
+        return self._runtime
+
+
+class _PsycopgSyncConnection:
+    def __init__(self) -> None:
+        self.autocommit = False
+        self.closed = False
+        self.executed: list[str] = []
+
+    def execute(self, statement: str) -> None:
+        self.executed.append(statement)
+
+    def notifies(self, *, timeout: float, stop_after: int) -> list[Any]:
+        _ = stop_after
+        threading.Event().wait(timeout)
+        return []
+
+
+class _PsycopgSyncConfig:
+    def __init__(self, connection: _PsycopgSyncConnection, *replacement_connections: _PsycopgSyncConnection) -> None:
+        self.connections = [connection, *replacement_connections]
+        self.connection_enters = 0
+        self.connection_exits = 0
+        self._runtime = _StubRuntime()
+
+    def provide_connection(self) -> _SyncConnectionContext:
+        connection = self.connections[min(self.connection_enters, len(self.connections) - 1)]
+        return _SyncConnectionContext(connection, self)
 
     def get_observability_runtime(self) -> _StubRuntime:
         return self._runtime
@@ -283,6 +352,43 @@ async def test_asyncpg_listener_hub_broadcasts_to_same_channel_consumers() -> No
     await hub.shutdown()
 
 
+async def test_async_listener_hubs_acquire_one_listener_resource_for_many_channels() -> None:
+    asyncpg_config = _AsyncpgConfig(_AsyncpgConnection())
+    asyncpg_hub = AsyncpgListenerHub(asyncpg_config)  # type: ignore[arg-type]
+    psycopg_config = _PsycopgAsyncConfig(_PsycopgAsyncConnection())
+    psycopg_hub = PsycopgAsyncListenerHub(psycopg_config)  # type: ignore[arg-type]
+    psqlpy_config = _PsqlpyConfig()
+    psqlpy_hub = PsqlpyListenerHub(psqlpy_config)  # type: ignore[arg-type]
+
+    await asyncpg_hub.subscribe("alerts")
+    await asyncpg_hub.subscribe("metrics")
+    await psycopg_hub.subscribe("alerts")
+    await psycopg_hub.subscribe("metrics")
+    await psqlpy_hub.subscribe("alerts")
+    await psqlpy_hub.subscribe("metrics")
+
+    assert asyncpg_config.connection_enters == 1
+    assert psycopg_config.connection_enters == 1
+    assert psqlpy_config.pool.listener_calls == 1
+
+    await asyncpg_hub.shutdown()
+    await psycopg_hub.shutdown()
+    await psqlpy_hub.shutdown()
+
+
+def test_psycopg_sync_listener_hub_acquires_one_listener_resource_for_many_channels() -> None:
+    config = _PsycopgSyncConfig(_PsycopgSyncConnection())
+    hub = PsycopgSyncListenerHub(config)  # type: ignore[arg-type]
+
+    hub.subscribe("alerts")
+    hub.subscribe("metrics")
+
+    assert config.connection_enters == 1
+
+    hub.shutdown()
+    assert config.connection_exits == 1
+
+
 async def test_psqlpy_listener_hub_broadcasts_to_same_channel_consumers() -> None:
     payload = "payload-1"
     hub = PsqlpyListenerHub(_PsqlpyConfig())  # type: ignore[arg-type]
@@ -351,6 +457,26 @@ async def test_psqlpy_listener_hub_rearms_for_new_channels() -> None:
     await hub.shutdown()
 
 
+async def test_psqlpy_listener_hub_reconnects_and_releases_listener_handles() -> None:
+    first = _PsqlpyListener()
+    replacement = _PsqlpyListener()
+    config = _PsqlpyConfig(first, replacement)
+    hub = PsqlpyListenerHub(config)  # type: ignore[arg-type]
+
+    await hub.subscribe("alerts")
+    first.started = False
+
+    assert await hub.dequeue("alerts", 0.01) is None
+    assert config.pool.listener_calls == 2
+    assert first.shutdown_count == 1
+    assert "alerts" in replacement.callbacks
+    assert "events.listener.reconnect" in config.get_observability_runtime().metrics
+
+    await hub.shutdown()
+    assert replacement.shutdown_count == 1
+    assert config.get_observability_runtime().metrics.count("events.listener.release") == 2
+
+
 async def test_psycopg_async_listener_hub_broadcasts_to_same_channel_consumers() -> None:
     payload = "payload-1"
     connection = _PsycopgAsyncConnection()
@@ -371,10 +497,50 @@ async def test_psycopg_async_listener_hub_broadcasts_to_same_channel_consumers()
     await hub.shutdown()
 
 
+async def test_asyncpg_listener_hub_reconnects_and_releases_listener_contexts() -> None:
+    first = _AsyncpgConnection()
+    replacement = _AsyncpgConnection()
+    config = _AsyncpgConfig(first, replacement)
+    hub = AsyncpgListenerHub(config)  # type: ignore[arg-type]
+
+    await hub.subscribe("alerts")
+    first.closed = True
+
+    assert await hub.dequeue("alerts", 0.01) is None
+    assert config.connection_enters == 2
+    assert config.connection_exits == 1
+    assert "alerts" in replacement.callbacks
+    assert "events.listener.reconnect" in config.get_observability_runtime().metrics
+
+    await hub.shutdown()
+    assert config.connection_exits == 2
+    assert config.get_observability_runtime().metrics.count("events.listener.release") == 2
+
+
+async def test_psycopg_async_listener_hub_reconnects_and_releases_listener_contexts() -> None:
+    first = _PsycopgAsyncConnection()
+    replacement = _PsycopgAsyncConnection()
+    config = _PsycopgAsyncConfig(first, replacement)
+    hub = PsycopgAsyncListenerHub(config)  # type: ignore[arg-type]
+
+    await hub.subscribe("alerts")
+    first.closed = True
+
+    assert await hub.dequeue("alerts", 0.01) is None
+    assert config.connection_enters == 2
+    assert config.connection_exits == 1
+    assert "LISTEN alerts" in replacement.executed
+    assert "events.listener.reconnect" in config.get_observability_runtime().metrics
+
+    await hub.shutdown()
+    assert config.connection_exits == 2
+    assert config.get_observability_runtime().metrics.count("events.listener.release") == 2
+
+
 def test_psycopg_sync_listener_hub_broadcasts_to_same_channel_consumers() -> None:
     payload = "payload-1"
-    hub = PsycopgSyncListenerHub(object())  # type: ignore[arg-type]
-    hub._queues["alerts"] = WeakKeyDictionary()
+    hub = PsycopgSyncListenerHub(_PsycopgSyncConfig(_PsycopgSyncConnection()))  # type: ignore[arg-type]
+    hub.subscribe("alerts")
     results: list[str | None] = []
 
     def receive_once() -> None:
@@ -391,6 +557,27 @@ def test_psycopg_sync_listener_hub_broadcasts_to_same_channel_consumers() -> Non
     thread_b.join(timeout=1.0)
 
     assert results == [payload, payload]
+    hub.shutdown()
+
+
+def test_psycopg_sync_listener_hub_reconnects_and_releases_listener_contexts() -> None:
+    first = _PsycopgSyncConnection()
+    replacement = _PsycopgSyncConnection()
+    config = _PsycopgSyncConfig(first, replacement)
+    hub = PsycopgSyncListenerHub(config)  # type: ignore[arg-type]
+
+    hub.subscribe("alerts")
+    first.closed = True
+
+    assert hub.dequeue("alerts", 0.01) is None
+    assert config.connection_enters == 2
+    assert config.connection_exits == 1
+    assert "LISTEN alerts" in replacement.executed
+    assert "events.listener.reconnect" in config.get_observability_runtime().metrics
+
+    hub.shutdown()
+    assert config.connection_exits == 2
+    assert config.get_observability_runtime().metrics.count("events.listener.release") == 2
 
 
 async def test_asyncpg_hybrid_dequeue_polls_durable_queue_after_notify_timeout() -> None:

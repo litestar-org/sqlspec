@@ -27,6 +27,7 @@ __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_bac
 
 
 logger = get_logger("sqlspec.events.psqlpy")
+_MIN_LISTENER_POOL_SIZE = 2
 
 
 class PsqlpyEventsBackend:
@@ -56,6 +57,7 @@ class PsqlpyEventsBackend:
         )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         async with self._config.provide_session() as driver:
             await driver.execute_script(
@@ -86,7 +88,7 @@ class PsqlpyEventsBackend:
 
     def _ensure_hub(self) -> PsqlpyListenerHub:
         if self._hub is None:
-            self._hub = PsqlpyListenerHub(self._config)
+            self._hub = PsqlpyListenerHub(self._config, self.backend_name)
         return self._hub
 
 
@@ -118,6 +120,7 @@ class PsqlpyHybridEventsBackend:
         )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         await self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
@@ -151,7 +154,7 @@ class PsqlpyHybridEventsBackend:
 
     def _ensure_hub(self) -> PsqlpyListenerHub:
         if self._hub is None:
-            self._hub = PsqlpyListenerHub(self._config)
+            self._hub = PsqlpyListenerHub(self._config, self.backend_name)
         return self._hub
 
     async def _publish_durable(
@@ -184,6 +187,8 @@ def create_event_backend(
     config: "PsqlpyConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> PsqlpyEventsBackend | PsqlpyHybridEventsBackend | None:
     """EventChannel factory for the native psqlpy backend."""
+    if backend_name in {"notify", "notify_queue"}:
+        _validate_listener_pool_capacity(config)
     match backend_name:
         case "notify":
             try:
@@ -198,6 +203,16 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _validate_listener_pool_capacity(config: "PsqlpyConfig") -> None:
+    max_size = config.connection_config.get("max_size")
+    if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
+        msg = (
+            f"{type(config).__name__} native event listeners require "
+            f"pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
+        )
+        raise ImproperConfigurationError(msg)
 
 
 def _extract_event_id(payload: "str | None") -> "str | None":

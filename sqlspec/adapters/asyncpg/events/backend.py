@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncpgEventsBackend", "AsyncpgHybridEventsBackend", "create_event_backend")
 
 logger = get_logger("sqlspec.events.postgres")
+_MIN_LISTENER_POOL_SIZE = 2
 
 
 class AsyncpgHybridEventsBackend:
@@ -55,6 +56,7 @@ class AsyncpgHybridEventsBackend:
         )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         await self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
@@ -88,7 +90,7 @@ class AsyncpgHybridEventsBackend:
 
     def _ensure_hub(self) -> AsyncpgListenerHub:
         if self._hub is None:
-            self._hub = AsyncpgListenerHub(self._config)
+            self._hub = AsyncpgListenerHub(self._config, self.backend_name)
         return self._hub
 
     async def _publish_durable(
@@ -144,6 +146,7 @@ class AsyncpgEventsBackend:
         )
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         async with self._config.provide_session() as driver:
             await driver.execute(
@@ -174,7 +177,7 @@ class AsyncpgEventsBackend:
 
     def _ensure_hub(self) -> AsyncpgListenerHub:
         if self._hub is None:
-            self._hub = AsyncpgListenerHub(self._config)
+            self._hub = AsyncpgListenerHub(self._config, self.backend_name)
         return self._hub
 
 
@@ -182,6 +185,8 @@ def create_event_backend(
     config: "AsyncpgConfig", backend_name: str, extension_settings: "dict[str, Any]"
 ) -> AsyncpgEventsBackend | AsyncpgHybridEventsBackend | None:
     """EventChannel factory for the native backend."""
+    if backend_name in {"notify", "notify_queue"}:
+        _validate_listener_pool_capacity(config)
     match backend_name:
         case "notify":
             try:
@@ -198,6 +203,16 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _validate_listener_pool_capacity(config: "AsyncpgConfig") -> None:
+    max_size = config.connection_config.get("max_size")
+    if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
+        msg = (
+            f"{type(config).__name__} native event listeners require "
+            f"pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
+        )
+        raise ImproperConfigurationError(msg)
 
 
 def _extract_event_id(payload: "str | None") -> "str | None":

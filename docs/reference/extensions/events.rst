@@ -46,6 +46,12 @@ backend owns its own listener hub that:
 * Serializes subscribe / unsubscribe under a lock so concurrent callers
   cannot race on driver-level statements that share the connection.
 
+The listener lease is held for the backend lifetime. Publishers use separate,
+short-lived pooled sessions, so a shared PostgreSQL pool must configure
+``max_size >= 2``: one connection for the listener and at least one for
+publication. Native backend construction rejects a configured pool of size one
+instead of allowing publication to deadlock behind the listener.
+
 The Oracle native backends (``aq`` and
 ``txeventq``) use an analogous pattern: a per-channel
 queue-handle cache backed by a single dedicated session per backend instance.

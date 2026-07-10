@@ -32,6 +32,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.events.psycopg")
+_MIN_LISTENER_POOL_SIZE = 2
 
 
 class PsycopgSyncEventsBackend:
@@ -64,6 +65,7 @@ class PsycopgSyncEventsBackend:
         )
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         with self._config.provide_session() as driver:
             driver.execute(
@@ -97,7 +99,7 @@ class PsycopgSyncEventsBackend:
 
     def _ensure_hub(self) -> PsycopgSyncListenerHub:
         if self._hub is None:
-            self._hub = PsycopgSyncListenerHub(self._config)
+            self._hub = PsycopgSyncListenerHub(self._config, self.backend_name)
         return self._hub
 
 
@@ -122,6 +124,7 @@ class PsycopgAsyncEventsBackend:
         self._hub: PsycopgAsyncListenerHub | None = None
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         async with self._config.provide_session() as driver:
             await driver.execute(
@@ -155,7 +158,7 @@ class PsycopgAsyncEventsBackend:
 
     def _ensure_hub(self) -> PsycopgAsyncListenerHub:
         if self._hub is None:
-            self._hub = PsycopgAsyncListenerHub(self._config)
+            self._hub = PsycopgAsyncListenerHub(self._config, self.backend_name)
         return self._hub
 
 
@@ -190,6 +193,7 @@ class PsycopgSyncHybridEventsBackend:
         )
 
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
@@ -223,7 +227,7 @@ class PsycopgSyncHybridEventsBackend:
 
     def _ensure_hub(self) -> PsycopgSyncListenerHub:
         if self._hub is None:
-            self._hub = PsycopgSyncListenerHub(self._config)
+            self._hub = PsycopgSyncListenerHub(self._config, self.backend_name)
         return self._hub
 
     def _publish_durable(
@@ -279,6 +283,7 @@ class PsycopgAsyncHybridEventsBackend:
         self._hub: PsycopgAsyncListenerHub | None = None
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
+        self._runtime.increment_metric("events.publisher.session")
         event_id = uuid4().hex
         await self._publish_durable(channel, event_id, payload, metadata)
         self._runtime.increment_metric("events.publish.native")
@@ -312,7 +317,7 @@ class PsycopgAsyncHybridEventsBackend:
 
     def _ensure_hub(self) -> PsycopgAsyncListenerHub:
         if self._hub is None:
-            self._hub = PsycopgAsyncListenerHub(self._config)
+            self._hub = PsycopgAsyncListenerHub(self._config, self.backend_name)
         return self._hub
 
     async def _publish_durable(
@@ -356,6 +361,8 @@ def create_event_backend(
     | None
 ):
     """EventChannel factory for the native psycopg backend."""
+    if backend_name in {"notify", "notify_queue"}:
+        _validate_listener_pool_capacity(config)
     is_async = config.is_async
     match (backend_name, is_async):
         case ("notify", False):
@@ -386,6 +393,16 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+def _validate_listener_pool_capacity(config: "PsycopgAsyncConfig | PsycopgSyncConfig") -> None:
+    max_size = config.connection_config.get("max_size")
+    if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
+        msg = (
+            f"{type(config).__name__} native event listeners require "
+            f"pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
+        )
+        raise ImproperConfigurationError(msg)
 
 
 def _extract_event_id(payload: "str | None") -> "str | None":
