@@ -389,7 +389,8 @@ class _AsyncWrapper(Generic[ParamSpecT, ReturnT]):
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
         call = functools.partial(ctx.run, self._function, *args, **kwargs)
-        return await loop.run_in_executor(executor, call)
+        # Equivalent to run_in_executor(), without Python 3.14's deprecated debug-loop coroutine probe.
+        return await asyncio.wrap_future(executor.submit(call), loop=loop)
 
 
 class _EnsureAsyncWrapper(Generic[ParamSpecT, ReturnT]):

@@ -86,7 +86,7 @@ def test_litestar_in_fields_filter_dependency() -> None:
         filter_deps = create_filter_dependencies({"in_fields": {FieldNameType(name="status", type_hint=str)}})
 
         @get("/users", dependencies=filter_deps)
-        async def list_users(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+        async def list_users(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
             in_filters = [f for f in filters if isinstance(f, InCollectionFilter)]
             if in_filters:
                 return {
@@ -123,7 +123,7 @@ def test_litestar_not_in_fields_filter_dependency() -> None:
         filter_deps = create_filter_dependencies({"not_in_fields": {FieldNameType(name="status", type_hint=str)}})
 
         @get("/users", dependencies=filter_deps)
-        async def list_users(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+        async def list_users(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
             not_in_filters = [f for f in filters if isinstance(f, NotInCollectionFilter)]
             if not_in_filters:
                 return {
@@ -162,7 +162,7 @@ def test_litestar_multiple_in_fields() -> None:
         })
 
         @get("/users", dependencies=filter_deps)
-        async def list_users(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+        async def list_users(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
             return {"filter_count": len(filters), "filter_types": sorted(type(f).__name__ for f in filters)}
 
         app = Litestar(route_handlers=[list_users], plugins=[SQLSpecPlugin(sqlspec=sql)])
@@ -186,7 +186,7 @@ def test_litestar_in_fields_single_value() -> None:
         filter_deps = create_filter_dependencies({"in_fields": {FieldNameType(name="status", type_hint=str)}})
 
         @get("/users", dependencies=filter_deps)
-        async def list_users(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+        async def list_users(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
             in_filters = [f for f in filters if isinstance(f, InCollectionFilter)]
             if in_filters:
                 return {
@@ -229,7 +229,7 @@ async def test_litestar_qualified_column_search_filter() -> None:
         filter_deps = create_filter_dependencies({"search": "p.name"})
 
         @get("/joined", dependencies=filter_deps)
-        async def joined_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+        async def joined_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
             async with sql.provide_session(config) as session:
                 query = (
                     sql_builder
@@ -272,7 +272,7 @@ async def test_litestar_qualified_column_order_by_filter() -> None:
         filter_deps = create_filter_dependencies({"sort_field": "p.name"})
 
         @get("/ordered", dependencies=filter_deps)
-        async def ordered_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+        async def ordered_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
             async with sql.provide_session(config) as session:
                 query = sql_builder.select("p.name").from_("parent p")
                 results = await session.select(query, *filters)
@@ -316,7 +316,7 @@ async def test_litestar_order_by_accepts_camelized_sort_field_alias() -> None:
         filter_deps = create_filter_dependencies({"sort_field": ["created_at", "uploaded_collections"]})
 
         @get("/ordered", dependencies=filter_deps)
-        async def ordered_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+        async def ordered_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
             async with sql.provide_session(config) as session:
                 query = sql_builder.select("id", "uploaded_collections").from_("upload_stats")
                 results = await session.select(query, *filters)
@@ -351,7 +351,7 @@ async def test_litestar_order_by_accepts_dotted_camelized_sort_field_alias() -> 
         filter_deps = create_filter_dependencies({"sort_field": ["p.created_at", "p.name"]})
 
         @get("/ordered", dependencies=filter_deps)
-        async def ordered_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+        async def ordered_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
             async with sql.provide_session(config) as session:
                 query = sql_builder.select("p.id", "p.name", "p.created_at").from_("parent p")
                 results = await session.select(query, *filters)
@@ -379,7 +379,7 @@ async def test_litestar_order_by_invalid_alias_error_uses_display_aliases() -> N
     filter_deps = create_filter_dependencies({"sort_field": ["created_at", "uploaded_collections"]})
 
     @get("/ordered", dependencies=filter_deps)
-    async def ordered_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+    async def ordered_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
         return {"items": []}
 
     app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
@@ -404,7 +404,7 @@ def test_litestar_order_by_openapi_schema() -> None:
     filter_deps = create_filter_dependencies({"sort_field": "p.name"})
 
     @get("/ordered", dependencies=filter_deps)
-    async def ordered_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+    async def ordered_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
         return {"items": []}
 
     app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
@@ -455,7 +455,7 @@ def test_litestar_order_by_openapi_schema_uses_alias_default() -> None:
     filter_deps = create_filter_dependencies({"sort_field": ["created_at", "uploaded_collections"]})
 
     @get("/ordered", dependencies=filter_deps)
-    async def ordered_route(filters: "SkipValidation[NamedDependency[list[Any]]]") -> dict[str, Any]:
+    async def ordered_route(filters: "NamedDependency[SkipValidation[list[Any]]]") -> dict[str, Any]:
         return {"items": []}
 
     app = Litestar(route_handlers=[ordered_route], plugins=[SQLSpecPlugin(sqlspec=sql)])
@@ -502,7 +502,7 @@ def test_litestar_collection_filter_openapi_schema_preserves_configured_value_ty
     })
 
     @get("/users", dependencies=filter_deps)
-    async def list_users(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def list_users(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {"filters": len(filters)}
 
     app = Litestar(route_handlers=[list_users], plugins=[SQLSpecPlugin(sqlspec=sql)])
@@ -528,7 +528,7 @@ def test_litestar_in_fields_two_str_fields_do_not_cross_bind() -> None:
     filter_deps = create_filter_dependencies({"in_fields": [FieldNameType("a", str), FieldNameType("b", str)]})
 
     @get("/x", dependencies=filter_deps)
-    async def handler(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def handler(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {"got": [(f.field_name, sorted(f.values or ())) for f in filters if isinstance(f, InCollectionFilter)]}
 
     app = Litestar(route_handlers=[handler])
@@ -546,7 +546,7 @@ def test_litestar_in_fields_mixed_types_do_not_400() -> None:
     })
 
     @get("/x", dependencies=filter_deps)
-    async def handler(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def handler(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {
             "got": [
                 (f.field_name, [str(v) for v in (f.values or ())]) for f in filters if isinstance(f, InCollectionFilter)
@@ -573,7 +573,7 @@ def test_litestar_not_in_fields_two_fields_do_not_cross_bind() -> None:
     filter_deps = create_filter_dependencies({"not_in_fields": [FieldNameType("a", str), FieldNameType("b", str)]})
 
     @get("/x", dependencies=filter_deps)
-    async def handler(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def handler(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {
             "got": [(f.field_name, sorted(f.values or ())) for f in filters if isinstance(f, NotInCollectionFilter)]
         }
@@ -591,7 +591,7 @@ def test_litestar_null_fields_two_fields_do_not_cross_bind() -> None:
     filter_deps = create_filter_dependencies({"null_fields": ["a", "b"]})
 
     @get("/x", dependencies=filter_deps)
-    async def handler(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def handler(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {"fields": sorted(str(f.field_name) for f in filters if isinstance(f, NullFilter))}
 
     app = Litestar(route_handlers=[handler])
@@ -614,7 +614,7 @@ def test_litestar_not_null_fields_two_fields_do_not_cross_bind() -> None:
     filter_deps = create_filter_dependencies({"not_null_fields": ["a", "b"]})
 
     @get("/x", dependencies=filter_deps)
-    async def handler(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def handler(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {"fields": sorted(str(f.field_name) for f in filters if isinstance(f, NotNullFilter))}
 
     app = Litestar(route_handlers=[handler])
@@ -629,7 +629,7 @@ def test_litestar_created_at_and_updated_at_do_not_cross_bind() -> None:
     filter_deps = create_filter_dependencies({"created_at": True, "updated_at": True})
 
     @get("/x", dependencies=filter_deps)
-    async def handler(filters: "SkipValidation[NamedDependency[list[FilterTypes]]]") -> dict[str, Any]:
+    async def handler(filters: "NamedDependency[SkipValidation[list[FilterTypes]]]") -> dict[str, Any]:
         return {
             "got": [
                 (f.field_name, f.before.isoformat() if f.before else None, f.after.isoformat() if f.after else None)
