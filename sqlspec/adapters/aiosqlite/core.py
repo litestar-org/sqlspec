@@ -306,13 +306,14 @@ def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, st
             continue
         quoted_schema = quote_identifier(schema_name)
         schema_cursor = None
+        schema_row = None
         try:
             schema_cursor = connection.execute(
                 f"SELECT type FROM {quoted_schema}.sqlite_master WHERE name = ? COLLATE NOCASE", (target_table,)
             )
             schema_row = schema_cursor.fetchone()
         except sqlite3.Error:
-            continue
+            pass
         finally:
             if schema_cursor is not None:
                 with contextlib.suppress(Exception):
