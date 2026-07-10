@@ -177,6 +177,21 @@ class QueryBuilder(ABC):
 
         return (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions)
 
+    def _init_query_builder(self, kwargs: "dict[str, Any]") -> None:
+        """Consume shared builder options from kwargs and initialize QueryBuilder state."""
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_init_options(kwargs)
+        )
+        QueryBuilder.__init__(
+            self,
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
+
     def _initialize_expression(self) -> None:
         """Initialize the base expression. Called after __init__."""
         self._expression = self._create_base_expression()
@@ -983,17 +998,7 @@ class ExpressionBuilder(QueryBuilder):
     __slots__ = ()
 
     def __init__(self, expression: exp.Expr, **kwargs: Any) -> None:
-        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_init_options(kwargs)
-        )
-        super().__init__(
-            dialect=dialect,
-            schema=schema,
-            enable_optimization=enable_optimization,
-            optimize_joins=optimize_joins,
-            optimize_predicates=optimize_predicates,
-            simplify_expressions=simplify_expressions,
-        )
+        self._init_query_builder(kwargs)
         if not is_expression(expression):
             self._raise_invalid_expression_type(expression)
         self._expression = expression

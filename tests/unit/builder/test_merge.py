@@ -896,3 +896,13 @@ def test_merge_corrupted_expression_state_raises_builder_error() -> None:
 
     with pytest.raises(SQLBuilderError, match="MERGE"):
         _BrokenMerge().when_matched_then_delete()
+
+
+def test_merge_defaults_disable_optimization_unlike_other_builders() -> None:
+    """Merge defaults enable_optimization=False while the other DML builders default to True."""
+    assert sql.merge().enable_optimization is False
+    assert sql.select("*").enable_optimization is True
+    assert sql.insert("t").enable_optimization is True
+    assert sql.update("t").enable_optimization is True
+    assert sql.delete().enable_optimization is True
+    assert Merge(enable_optimization=True).enable_optimization is True
