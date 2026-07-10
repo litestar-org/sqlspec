@@ -682,6 +682,231 @@ def _assert_bigquery_pages(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("streaming_native:bigquery", _STREAMING_SCOPE, _assert_bigquery_pages)
 
 
+class _StreamErrorProbe(Exception):
+    """Sentinel raised to force a mid-stream chunk fetch failure without a live database error."""
+
+
+class _SyncTransactionRecorder:
+    """Delegating transaction wrapper recording whether commit or rollback fired during stream close."""
+
+    def __init__(self, inner: Any, log: "list[str]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_log", log)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def commit(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("commit")
+        return object.__getattribute__(self, "_inner").commit(*args, **kwargs)
+
+    def rollback(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback")
+        return object.__getattribute__(self, "_inner").rollback(*args, **kwargs)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback" if exc_type is not None else "commit")
+        return object.__getattribute__(self, "_inner").__exit__(exc_type, exc, tb)
+
+
+class _AsyncTransactionRecorder:
+    """Delegating async transaction wrapper recording whether commit or rollback fired during stream close."""
+
+    def __init__(self, inner: Any, log: "list[str]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_log", log)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    async def commit(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("commit")
+        return await object.__getattribute__(self, "_inner").commit(*args, **kwargs)
+
+    async def rollback(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback")
+        return await object.__getattribute__(self, "_inner").rollback(*args, **kwargs)
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback" if exc_type is not None else "commit")
+        return await object.__getattribute__(self, "_inner").__aexit__(exc_type, exc, tb)
+
+
+class _SyncStreamFetchFailSource:
+    """Delegating sync stream source that forces the next chunk fetch to fail and delegates close to the origin."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def start(self) -> None:
+        self._inner.start()
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        raise _StreamErrorProbe("forced mid-stream fetch failure")
+
+    def close(self, error: bool = False) -> None:
+        self._inner.close(error=error)
+
+
+class _AsyncStreamFetchFailSource:
+    """Delegating async stream source that forces the next chunk fetch to fail and delegates close to the origin."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    async def start(self) -> None:
+        await self._inner.start()
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        raise _StreamErrorProbe("forced mid-stream fetch failure")
+
+    async def close(self, error: bool = False) -> None:
+        await self._inner.close(error=error)
+
+
+def _assert_sync_stream_error_close_rollback(driver: object, case: DriverCase) -> None:
+    """Assert a mid-stream fetch failure rolls back a stream-owned transaction instead of committing."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    stream = sync_driver.select_stream(table.select_ordered_sql, chunk_size=1)
+    iterator = iter(stream)
+    next(iterator)
+    real_source = stream._source  # pyright: ignore[reportPrivateUsage]
+    assert real_source._transaction is not None  # pyright: ignore[reportPrivateUsage]
+    log: list[str] = []
+    real_source._transaction = _SyncTransactionRecorder(real_source._transaction, log)  # pyright: ignore[reportPrivateUsage]
+    stream._source = _SyncStreamFetchFailSource(real_source)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(_StreamErrorProbe):
+        next(iterator)
+    assert log
+    assert log[0] == "rollback"
+    assert "commit" not in log
+    with contextlib.suppress(Exception):
+        sync_driver.rollback()
+    assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == case.streaming_row_count
+
+
+async def _assert_async_stream_error_close_rollback(driver: object, case: DriverCase) -> None:
+    """Assert a mid-stream fetch failure rolls back a stream-owned transaction instead of committing."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    stream = async_driver.select_stream(table.select_ordered_sql, chunk_size=1)
+    iterator = aiter(stream)
+    await anext(iterator)
+    real_source = stream._source  # pyright: ignore[reportPrivateUsage]
+    assert real_source._transaction is not None  # pyright: ignore[reportPrivateUsage]
+    log: list[str] = []
+    real_source._transaction = _AsyncTransactionRecorder(real_source._transaction, log)  # pyright: ignore[reportPrivateUsage]
+    stream._source = _AsyncStreamFetchFailSource(real_source)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(_StreamErrorProbe):
+        await anext(iterator)
+    assert log
+    assert log[0] == "rollback"
+    assert "commit" not in log
+    with contextlib.suppress(Exception):
+        await async_driver.rollback()
+    assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == case.streaming_row_count
+
+
+register_sync_extra_assertion("stream_error_close:pg", _STREAMING_SCOPE, _assert_sync_stream_error_close_rollback)
+register_async_extra_assertion("stream_error_close:pg", _STREAMING_SCOPE, _assert_async_stream_error_close_rollback)
+
+
+class _CursorCloseRecordingCursor:
+    """Delegating cursor recording every close call to detect start-failure cursor leaks."""
+
+    def __init__(self, inner: Any, closes: "list[int]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_closes", closes)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def close(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_closes").append(1)
+        return object.__getattribute__(self, "_inner").close(*args, **kwargs)
+
+
+async def _await_recording_cursor(awaitable: Any, closes: "list[int]") -> "_CursorCloseRecordingCursor":
+    """Await a coroutine-returning cursor factory and wrap the resolved cursor in a close recorder."""
+    real_cursor = await awaitable
+    return _CursorCloseRecordingCursor(real_cursor, closes)
+
+
+class _CursorCloseRecordingConnection:
+    """Delegating connection issuing close-recording cursors for stream start-failure probes."""
+
+    def __init__(self, inner: Any, closes: "list[int]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_closes", closes)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def cursor(self, *args: Any, **kwargs: Any) -> Any:
+        closes = object.__getattribute__(self, "_closes")
+        result = object.__getattribute__(self, "_inner").cursor(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return _await_recording_cursor(result, closes)
+        return _CursorCloseRecordingCursor(result, closes)
+
+
+def _assert_sync_stream_start_failure_cursor_cleanup(driver: object, case: DriverCase) -> None:
+    """Assert a stream start failure closes the opened cursor exactly once instead of leaking it."""
+    sync_driver = cast("SyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    original_connection = driver_any.connection
+    closes: list[int] = []
+    driver_any.connection = _CursorCloseRecordingConnection(original_connection, closes)
+    try:
+        bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+        with pytest.raises(Exception):
+            next(iter(bad_stream))
+        assert closes == [1]
+    finally:
+        driver_any.connection = original_connection
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+
+
+async def _assert_async_stream_start_failure_cursor_cleanup(driver: object, case: DriverCase) -> None:
+    """Assert a stream start failure closes the opened cursor exactly once instead of leaking it."""
+    async_driver = cast("AsyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    original_connection = driver_any.connection
+    closes: list[int] = []
+    driver_any.connection = _CursorCloseRecordingConnection(original_connection, closes)
+    try:
+        bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+        with pytest.raises(Exception):
+            await anext(aiter(bad_stream))
+        assert closes == [1]
+    finally:
+        driver_any.connection = original_connection
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+
+
+register_sync_extra_assertion(
+    "stream_cursor_cleanup:start_failure", _STREAMING_SCOPE, _assert_sync_stream_start_failure_cursor_cleanup
+)
+register_async_extra_assertion(
+    "stream_cursor_cleanup:start_failure", _STREAMING_SCOPE, _assert_async_stream_start_failure_cursor_cleanup
+)
+
+
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)
 
 
