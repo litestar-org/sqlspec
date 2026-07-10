@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from psqlpy import exceptions as psqlpy_exceptions
 
 from sqlspec.adapters.psqlpy import core as psqlpy_core
 from sqlspec.adapters.psqlpy.core import (
@@ -22,9 +23,43 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
+from sqlspec.exceptions import DataError, IntegrityError, OperationalError, PermissionDeniedError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
+
+
+@pytest.mark.parametrize(
+    ("native_type", "expected_type"),
+    [
+        (psqlpy_exceptions.DataError, DataError),
+        (psqlpy_exceptions.OperationalError, OperationalError),
+        (psqlpy_exceptions.IntegrityError, IntegrityError),
+    ],
+)
+def test_create_mapped_exception_falls_back_to_native_psqlpy_type(
+    native_type: type[Exception], expected_type: type[Exception]
+) -> None:
+    """Unmatched psqlpy errors retain their broad native classification."""
+    mapped = psqlpy_core.create_mapped_exception(native_type("opaque native failure"))
+
+    assert type(mapped) is expected_type
+
+
+def test_create_mapped_exception_message_match_precedes_native_type() -> None:
+    """Specific message classification takes precedence over the broad native type."""
+    error = psqlpy_exceptions.OperationalError("permission denied for relation accounts")
+
+    mapped = psqlpy_core.create_mapped_exception(error)
+
+    assert type(mapped) is PermissionDeniedError
+
+
+def test_create_mapped_exception_leaves_not_supported_error_generic() -> None:
+    """Native NotSupportedError remains generic until SQLSpec exposes a matching exception."""
+    mapped = psqlpy_core.create_mapped_exception(psqlpy_exceptions.NotSupportedError("opaque native failure"))
+
+    assert type(mapped) is SQLSpecError
 
 
 def test_format_execute_many_parameters_no_coercion_reuses_list_rows() -> None:
