@@ -63,9 +63,7 @@ def test_lazy_exports_preserve_missing_dependency_shim_identity(monkeypatch: pyt
 
 
 @pytest.mark.parametrize("export_name", ("Span", "Tracer", "Counter", "Gauge", "Histogram"))
-def test_observability_fallbacks_preserve_public_class_names(
-    monkeypatch: pytest.MonkeyPatch, export_name: str
-) -> None:
+def test_observability_fallbacks_preserve_public_class_names(monkeypatch: pytest.MonkeyPatch, export_name: str) -> None:
     """Laziness should not change the observable identity of fallback classes."""
 
     def missing_dependency(_module_name: str, _attr_name: str, fallback: object) -> object:
