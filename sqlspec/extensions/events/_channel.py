@@ -100,53 +100,6 @@ def resolve_event_poll_interval(
     return resolved
 
 
-def _resolve_event_type(payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> "str | None":
-    """Resolve event type from payload or metadata."""
-    if metadata and metadata.get("event_type"):
-        return str(metadata["event_type"])
-    if payload.get("event_type") is not None:
-        return str(payload["event_type"])
-    if payload.get("type") is not None:
-        return str(payload["type"])
-    return None
-
-
-_POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
-_EVENT_BACKENDS = frozenset({"notify", "notify_queue", "poll_queue", "aq", "txeventq"})
-_RETIRED_EVENT_BACKENDS = {
-    "listen_notify": "notify",
-    "listen_notify_durable": "notify_queue",
-    "table_queue": "poll_queue",
-}
-
-
-def _get_default_backend(adapter_name: "str | None") -> str:
-    """Return the default events backend for an adapter."""
-    if adapter_name in _POSTGRES_ADAPTERS:
-        return "notify"
-    return "poll_queue"
-
-
-def _resolve_backend_name(config: Any, extension_settings: "dict[str, Any]", adapter_name: "str | None") -> str:
-    """Resolve and validate event backend configuration."""
-    backend_name = extension_settings.get("backend")
-    if backend_name is None:
-        driver_features = getattr(config, "driver_features", {})
-        if isinstance(driver_features, dict):
-            backend_name = driver_features.get("events_backend")
-    if backend_name is None:
-        return _get_default_backend(adapter_name)
-    if backend_name in _RETIRED_EVENT_BACKENDS:
-        replacement = _RETIRED_EVENT_BACKENDS[backend_name]
-        msg = f"Event backend {backend_name!r} was removed; use {replacement!r}"
-        raise ImproperConfigurationError(msg)
-    if backend_name not in _EVENT_BACKENDS:
-        valid = ", ".join(sorted(_EVENT_BACKENDS))
-        msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
-        raise ImproperConfigurationError(msg)
-    return cast("str", backend_name)
-
-
 def load_native_backend(
     config: Any, backend_name: str | None, extension_settings: "dict[str, Any]", adapter_name: "str | None" = None
 ) -> Any | None:
@@ -218,240 +171,6 @@ def load_native_backend(
         )
         return None
     return backend
-
-
-def _resolve_event_backend(
-    config: Any,
-    extension_settings: "dict[str, Any]",
-    adapter_name: "str | None",
-    hints: "EventRuntimeHints",
-    *,
-    protocol_type: "type[Any]",
-) -> "tuple[Any, str]":
-    """Resolve the event backend and label for one configuration.
-
-    Falls back to the table queue backend when no native backend is available,
-    logging a warning when a non-default backend was requested.
-
-    Args:
-        config: Database configuration instance.
-        extension_settings: Events extension settings for the configuration.
-        adapter_name: Resolved adapter name, if any.
-        hints: Adapter event runtime hints.
-        protocol_type: Backend protocol the native backend must satisfy to
-            report its own backend name.
-
-    Returns:
-        Tuple of resolved backend and backend label.
-    """
-    queue_backend = build_queue_backend(config, extension_settings, adapter_name=adapter_name, hints=hints)
-    backend_name = _resolve_backend_name(config, extension_settings, adapter_name)
-    native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=adapter_name)
-    if native_backend is None:
-        if backend_name not in {None, "poll_queue"}:
-            log_with_context(
-                logger,
-                logging.WARNING,
-                "event.listen",
-                adapter_name=adapter_name,
-                backend_name=backend_name,
-                fallback_backend="poll_queue",
-                status="backend_unavailable",
-            )
-        return queue_backend, "poll_queue"
-    if isinstance(native_backend, protocol_type):
-        return native_backend, cast("str", native_backend.backend_name)
-    return native_backend, backend_name or "poll_queue"
-
-
-def _start_event_span(
-    runtime: "ObservabilityRuntime",
-    operation: str,
-    backend_name: str,
-    adapter_name: "str | None",
-    channel: "str | None" = None,
-    mode: str = "sync",
-) -> Any:
-    """Start an observability span for event operations."""
-    if not runtime.span_manager.is_enabled:
-        return None
-    attributes: dict[str, Any] = {
-        "sqlspec.events.operation": operation,
-        "sqlspec.events.backend": backend_name,
-        "sqlspec.events.mode": mode,
-    }
-    if adapter_name:
-        attributes["sqlspec.events.adapter"] = adapter_name
-    if channel:
-        attributes["sqlspec.events.channel"] = channel
-    return runtime.start_span(f"sqlspec.events.{operation}", attributes=attributes)
-
-
-def _end_event_span(
-    runtime: "ObservabilityRuntime", span: Any, *, error: "Exception | None" = None, result: "str | None" = None
-) -> None:
-    """End an observability span."""
-    if span is None:
-        return
-    if result is not None and has_span_attribute(span):
-        span.set_attribute("sqlspec.events.result", result)
-    runtime.end_span(span, error=error)
-
-
-@contextmanager
-def _event_span(
-    runtime: "ObservabilityRuntime",
-    operation: str,
-    backend_name: str,
-    adapter_name: "str | None",
-    channel: "str | None" = None,
-    *,
-    mode: str = "sync",
-    result: str,
-) -> "Iterator[Any]":
-    """Manage an observability span around one event operation.
-
-    Starts a span, ends it with ``error`` when the wrapped operation raises,
-    and ends it with ``result`` when the operation completes.
-    """
-    span = _start_event_span(runtime, operation, backend_name, adapter_name, channel, mode=mode)
-    try:
-        yield span
-    except Exception as error:
-        _end_event_span(runtime, span, error=error)
-        raise
-    _end_event_span(runtime, span, result=result)
-
-
-def _record_event_delivery(
-    runtime: "ObservabilityRuntime",
-    backend_name: str,
-    adapter_name: "str | None",
-    channel: str,
-    event: EventMessage,
-    mode: str,
-) -> None:
-    """Record delivery metrics and debug logging for iterated events."""
-    runtime.increment_metric("events.deliver")
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "event.receive",
-        adapter_name=adapter_name,
-        backend_name=backend_name,
-        channel=channel,
-        event_id=event.event_id,
-        event_type=_resolve_event_type(event.payload, event.metadata),
-        mode=mode,
-    )
-
-
-class _SyncEventIterator:
-    """Explicit sync iterator for event channel consumption."""
-
-    __slots__ = ("_adapter_name", "_backend", "_backend_name", "_channel", "_closed", "_poll_interval", "_runtime")
-
-    def __init__(
-        self,
-        *,
-        backend: "SyncEventBackendProtocol",
-        runtime: "ObservabilityRuntime",
-        backend_name: str,
-        adapter_name: "str | None",
-        channel: str,
-        poll_interval: float,
-    ) -> None:
-        self._backend = backend
-        self._runtime = runtime
-        self._backend_name = backend_name
-        self._adapter_name = adapter_name
-        self._channel = channel
-        self._poll_interval = poll_interval
-        self._closed = False
-
-    def __iter__(self) -> Iterator[EventMessage]:
-        """Return the iterator."""
-        return self
-
-    def __next__(self) -> EventMessage:
-        """Return the next available event."""
-        if self._closed:
-            raise StopIteration
-        while True:
-            span = _start_event_span(
-                self._runtime, "dequeue", self._backend_name, self._adapter_name, self._channel, mode="sync"
-            )
-            try:
-                event = self._backend.dequeue(self._channel, self._poll_interval)
-            except Exception as error:
-                _end_event_span(self._runtime, span, error=error)
-                raise
-            if event is None:
-                _end_event_span(self._runtime, span, result="empty")
-                continue
-            _end_event_span(self._runtime, span, result="delivered")
-            _record_event_delivery(
-                self._runtime, self._backend_name, self._adapter_name, self._channel, event, mode="sync"
-            )
-            return event
-
-    def close(self) -> None:
-        """Close the iterator."""
-        self._closed = True
-
-
-class _AsyncEventIterator:
-    """Explicit async iterator for event channel consumption."""
-
-    __slots__ = ("_adapter_name", "_backend", "_backend_name", "_channel", "_closed", "_poll_interval", "_runtime")
-
-    def __init__(
-        self,
-        *,
-        backend: "AsyncEventBackendProtocol",
-        runtime: "ObservabilityRuntime",
-        backend_name: str,
-        adapter_name: "str | None",
-        channel: str,
-        poll_interval: float,
-    ) -> None:
-        self._backend = backend
-        self._runtime = runtime
-        self._backend_name = backend_name
-        self._adapter_name = adapter_name
-        self._channel = channel
-        self._poll_interval = poll_interval
-        self._closed = False
-
-    def __aiter__(self) -> AsyncIterator[EventMessage]:
-        """Return the async iterator."""
-        return self
-
-    async def __anext__(self) -> EventMessage:
-        """Return the next available event."""
-        if self._closed:
-            raise StopAsyncIteration
-        while True:
-            span = _start_event_span(
-                self._runtime, "dequeue", self._backend_name, self._adapter_name, self._channel, mode="async"
-            )
-            try:
-                event = await self._backend.dequeue(self._channel, self._poll_interval)
-            except Exception as error:
-                _end_event_span(self._runtime, span, error=error)
-                raise
-            if event is None:
-                _end_event_span(self._runtime, span, result="empty")
-                continue
-            _end_event_span(self._runtime, span, result="delivered")
-            _record_event_delivery(
-                self._runtime, self._backend_name, self._adapter_name, self._channel, event, mode="async"
-            )
-            return event
-
-    async def aclose(self) -> None:
-        """Close the async iterator."""
-        self._closed = True
 
 
 class SyncEventChannel:
@@ -986,3 +705,284 @@ class AsyncEventChannel:
                     )
         finally:
             self._listeners.pop(listener_id, None)
+
+
+def _resolve_event_type(payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> "str | None":
+    """Resolve event type from payload or metadata."""
+    if metadata and metadata.get("event_type"):
+        return str(metadata["event_type"])
+    if payload.get("event_type") is not None:
+        return str(payload["event_type"])
+    if payload.get("type") is not None:
+        return str(payload["type"])
+    return None
+
+
+_POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
+_EVENT_BACKENDS = frozenset({"notify", "notify_queue", "poll_queue", "aq", "txeventq"})
+_RETIRED_EVENT_BACKENDS = {
+    "listen_notify": "notify",
+    "listen_notify_durable": "notify_queue",
+    "table_queue": "poll_queue",
+}
+
+
+def _get_default_backend(adapter_name: "str | None") -> str:
+    """Return the default events backend for an adapter."""
+    if adapter_name in _POSTGRES_ADAPTERS:
+        return "notify"
+    return "poll_queue"
+
+
+def _resolve_backend_name(config: Any, extension_settings: "dict[str, Any]", adapter_name: "str | None") -> str:
+    """Resolve and validate event backend configuration."""
+    backend_name = extension_settings.get("backend")
+    if backend_name is None:
+        driver_features = getattr(config, "driver_features", {})
+        if isinstance(driver_features, dict):
+            backend_name = driver_features.get("events_backend")
+    if backend_name is None:
+        return _get_default_backend(adapter_name)
+    if backend_name in _RETIRED_EVENT_BACKENDS:
+        replacement = _RETIRED_EVENT_BACKENDS[backend_name]
+        msg = f"Event backend {backend_name!r} was removed; use {replacement!r}"
+        raise ImproperConfigurationError(msg)
+    if backend_name not in _EVENT_BACKENDS:
+        valid = ", ".join(sorted(_EVENT_BACKENDS))
+        msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
+        raise ImproperConfigurationError(msg)
+    return cast("str", backend_name)
+
+
+def _resolve_event_backend(
+    config: Any,
+    extension_settings: "dict[str, Any]",
+    adapter_name: "str | None",
+    hints: "EventRuntimeHints",
+    *,
+    protocol_type: "type[Any]",
+) -> "tuple[Any, str]":
+    """Resolve the event backend and label for one configuration.
+
+    Falls back to the table queue backend when no native backend is available,
+    logging a warning when a non-default backend was requested.
+
+    Args:
+        config: Database configuration instance.
+        extension_settings: Events extension settings for the configuration.
+        adapter_name: Resolved adapter name, if any.
+        hints: Adapter event runtime hints.
+        protocol_type: Backend protocol the native backend must satisfy to
+            report its own backend name.
+
+    Returns:
+        Tuple of resolved backend and backend label.
+    """
+    queue_backend = build_queue_backend(config, extension_settings, adapter_name=adapter_name, hints=hints)
+    backend_name = _resolve_backend_name(config, extension_settings, adapter_name)
+    native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=adapter_name)
+    if native_backend is None:
+        if backend_name not in {None, "poll_queue"}:
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "event.listen",
+                adapter_name=adapter_name,
+                backend_name=backend_name,
+                fallback_backend="poll_queue",
+                status="backend_unavailable",
+            )
+        return queue_backend, "poll_queue"
+    if isinstance(native_backend, protocol_type):
+        return native_backend, cast("str", native_backend.backend_name)
+    return native_backend, backend_name or "poll_queue"
+
+
+def _start_event_span(
+    runtime: "ObservabilityRuntime",
+    operation: str,
+    backend_name: str,
+    adapter_name: "str | None",
+    channel: "str | None" = None,
+    mode: str = "sync",
+) -> Any:
+    """Start an observability span for event operations."""
+    if not runtime.span_manager.is_enabled:
+        return None
+    attributes: dict[str, Any] = {
+        "sqlspec.events.operation": operation,
+        "sqlspec.events.backend": backend_name,
+        "sqlspec.events.mode": mode,
+    }
+    if adapter_name:
+        attributes["sqlspec.events.adapter"] = adapter_name
+    if channel:
+        attributes["sqlspec.events.channel"] = channel
+    return runtime.start_span(f"sqlspec.events.{operation}", attributes=attributes)
+
+
+def _end_event_span(
+    runtime: "ObservabilityRuntime", span: Any, *, error: "Exception | None" = None, result: "str | None" = None
+) -> None:
+    """End an observability span."""
+    if span is None:
+        return
+    if result is not None and has_span_attribute(span):
+        span.set_attribute("sqlspec.events.result", result)
+    runtime.end_span(span, error=error)
+
+
+@contextmanager
+def _event_span(
+    runtime: "ObservabilityRuntime",
+    operation: str,
+    backend_name: str,
+    adapter_name: "str | None",
+    channel: "str | None" = None,
+    *,
+    mode: str = "sync",
+    result: str,
+) -> "Iterator[Any]":
+    """Manage an observability span around one event operation.
+
+    Starts a span, ends it with ``error`` when the wrapped operation raises,
+    and ends it with ``result`` when the operation completes.
+    """
+    span = _start_event_span(runtime, operation, backend_name, adapter_name, channel, mode=mode)
+    try:
+        yield span
+    except Exception as error:
+        _end_event_span(runtime, span, error=error)
+        raise
+    _end_event_span(runtime, span, result=result)
+
+
+def _record_event_delivery(
+    runtime: "ObservabilityRuntime",
+    backend_name: str,
+    adapter_name: "str | None",
+    channel: str,
+    event: EventMessage,
+    mode: str,
+) -> None:
+    """Record delivery metrics and debug logging for iterated events."""
+    runtime.increment_metric("events.deliver")
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "event.receive",
+        adapter_name=adapter_name,
+        backend_name=backend_name,
+        channel=channel,
+        event_id=event.event_id,
+        event_type=_resolve_event_type(event.payload, event.metadata),
+        mode=mode,
+    )
+
+
+class _SyncEventIterator:
+    """Explicit sync iterator for event channel consumption."""
+
+    __slots__ = ("_adapter_name", "_backend", "_backend_name", "_channel", "_closed", "_poll_interval", "_runtime")
+
+    def __init__(
+        self,
+        *,
+        backend: "SyncEventBackendProtocol",
+        runtime: "ObservabilityRuntime",
+        backend_name: str,
+        adapter_name: "str | None",
+        channel: str,
+        poll_interval: float,
+    ) -> None:
+        self._backend = backend
+        self._runtime = runtime
+        self._backend_name = backend_name
+        self._adapter_name = adapter_name
+        self._channel = channel
+        self._poll_interval = poll_interval
+        self._closed = False
+
+    def __iter__(self) -> Iterator[EventMessage]:
+        """Return the iterator."""
+        return self
+
+    def __next__(self) -> EventMessage:
+        """Return the next available event."""
+        if self._closed:
+            raise StopIteration
+        while True:
+            span = _start_event_span(
+                self._runtime, "dequeue", self._backend_name, self._adapter_name, self._channel, mode="sync"
+            )
+            try:
+                event = self._backend.dequeue(self._channel, self._poll_interval)
+            except Exception as error:
+                _end_event_span(self._runtime, span, error=error)
+                raise
+            if event is None:
+                _end_event_span(self._runtime, span, result="empty")
+                continue
+            _end_event_span(self._runtime, span, result="delivered")
+            _record_event_delivery(
+                self._runtime, self._backend_name, self._adapter_name, self._channel, event, mode="sync"
+            )
+            return event
+
+    def close(self) -> None:
+        """Close the iterator."""
+        self._closed = True
+
+
+class _AsyncEventIterator:
+    """Explicit async iterator for event channel consumption."""
+
+    __slots__ = ("_adapter_name", "_backend", "_backend_name", "_channel", "_closed", "_poll_interval", "_runtime")
+
+    def __init__(
+        self,
+        *,
+        backend: "AsyncEventBackendProtocol",
+        runtime: "ObservabilityRuntime",
+        backend_name: str,
+        adapter_name: "str | None",
+        channel: str,
+        poll_interval: float,
+    ) -> None:
+        self._backend = backend
+        self._runtime = runtime
+        self._backend_name = backend_name
+        self._adapter_name = adapter_name
+        self._channel = channel
+        self._poll_interval = poll_interval
+        self._closed = False
+
+    def __aiter__(self) -> AsyncIterator[EventMessage]:
+        """Return the async iterator."""
+        return self
+
+    async def __anext__(self) -> EventMessage:
+        """Return the next available event."""
+        if self._closed:
+            raise StopAsyncIteration
+        while True:
+            span = _start_event_span(
+                self._runtime, "dequeue", self._backend_name, self._adapter_name, self._channel, mode="async"
+            )
+            try:
+                event = await self._backend.dequeue(self._channel, self._poll_interval)
+            except Exception as error:
+                _end_event_span(self._runtime, span, error=error)
+                raise
+            if event is None:
+                _end_event_span(self._runtime, span, result="empty")
+                continue
+            _end_event_span(self._runtime, span, result="delivered")
+            _record_event_delivery(
+                self._runtime, self._backend_name, self._adapter_name, self._channel, event, mode="async"
+            )
+            return event
+
+    async def aclose(self) -> None:
+        """Close the async iterator."""
+        self._closed = True
