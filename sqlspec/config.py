@@ -676,6 +676,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
     migration_tracker_type: "ClassVar[type[Any]]"
+    _connection_context_class: "ClassVar[type[Any]]"
+    _session_factory_class: "ClassVar[type[Any]]"
+    _session_context_class: "ClassVar[type[Any]]"
+    _default_statement_config: "ClassVar[StatementConfig]"
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     supports_transactional_ddl: "ClassVar[bool]" = False
@@ -794,6 +798,23 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
 
+    def _provide_connection_impl(self, *args: Any, **kwargs: Any) -> Any:
+        """Build the connection context manager shared by pooled configs."""
+        return self._connection_context_class(self)
+
+    def _provide_session_impl(
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+    ) -> Any:
+        """Build the session context manager shared by pooled configs."""
+        handler = self._session_factory_class(self)
+        return self._session_context_class(
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or self._default_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
+
     def _has_initialized_attribute(self, attribute_name: str) -> bool:
         """Return whether a slot-backed attribute has been initialized."""
         try:
@@ -874,8 +895,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import
         parquet_dependency_needed = self.supports_native_parquet_export or self.supports_native_parquet_import
 
-        arrow_dependency_ready = self._dependency_available(ensure_pyarrow) if arrow_dependency_needed else False
-        parquet_dependency_ready = self._dependency_available(ensure_pyarrow) if parquet_dependency_needed else False
+        pyarrow_dependency_ready = (
+            self._dependency_available(ensure_pyarrow)
+            if (arrow_dependency_needed or parquet_dependency_needed)
+            else False
+        )
+        arrow_dependency_ready = pyarrow_dependency_ready if arrow_dependency_needed else False
+        parquet_dependency_ready = pyarrow_dependency_ready if parquet_dependency_needed else False
 
         capabilities: StorageCapabilities = {
             "arrow_export_enabled": bool(self.supports_native_arrow_export and arrow_dependency_ready),
@@ -1477,10 +1503,6 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
-    _connection_context_class: "ClassVar[type[Any]]"
-    _session_factory_class: "ClassVar[type[Any]]"
-    _session_context_class: "ClassVar[type[Any]]"
-    _default_statement_config: "ClassVar[StatementConfig]"
 
     def __init__(
         self,
@@ -1546,22 +1568,15 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide a database connection context manager."""
-        return cast("AbstractContextManager[ConnectionT]", self._connection_context_class(self))
+        return cast("AbstractContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
-        handler = self._session_factory_class(self)
         return cast(
             "AbstractContextManager[DriverT]",
-            self._session_context_class(
-                acquire_connection=handler.acquire_connection,
-                release_connection=handler.release_connection,
-                statement_config=statement_config or self.statement_config or self._default_statement_config,
-                driver_features=self.driver_features,
-                prepare_driver=self._prepare_driver,
-            ),
+            self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
         )
 
     @abstractmethod
@@ -1582,10 +1597,6 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
-    _connection_context_class: "ClassVar[type[Any]]"
-    _session_factory_class: "ClassVar[type[Any]]"
-    _session_context_class: "ClassVar[type[Any]]"
-    _default_statement_config: "ClassVar[StatementConfig]"
 
     def __init__(
         self,
@@ -1653,22 +1664,15 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a database connection context manager."""
-        return cast("AbstractAsyncContextManager[ConnectionT]", self._connection_context_class(self))
+        return cast("AbstractAsyncContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_session(
         self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
-        handler = self._session_factory_class(self)
         return cast(
             "AbstractAsyncContextManager[DriverT]",
-            self._session_context_class(
-                acquire_connection=handler.acquire_connection,
-                release_connection=handler.release_connection,
-                statement_config=statement_config or self.statement_config or self._default_statement_config,
-                driver_features=self.driver_features,
-                prepare_driver=self._prepare_driver,
-            ),
+            self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
         )
 
     @abstractmethod

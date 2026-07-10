@@ -237,6 +237,48 @@ def test_storage_capabilities_snapshot(monkeypatch):
     assert config.storage_capabilities()["arrow_export_enabled"] is False
 
 
+class _ArrowParquetConfig(_NoPoolSyncConfigBase):
+    driver_type = _DummyDriver
+    connection_type = object
+    supports_native_arrow_export = True
+    supports_native_arrow_import = True
+    supports_native_parquet_export = True
+    supports_native_parquet_import = True
+
+    def create_connection(self) -> object:
+        return object()
+
+    @contextmanager
+    def provide_connection(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+        yield object()
+
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+        yield object()
+
+
+def test_build_storage_capabilities_checks_pyarrow_once(monkeypatch):
+    call_count = 0
+
+    def counting_dependency_available(self, checker):
+        nonlocal call_count
+        call_count += 1
+        return True
+
+    monkeypatch.setattr(_ArrowParquetConfig, "_dependency_available", counting_dependency_available)
+    config = _ArrowParquetConfig()
+
+    call_count = 0
+    config.reset_storage_capabilities_cache()
+    capabilities = config.storage_capabilities()
+
+    assert call_count == 1
+    assert capabilities["arrow_export_enabled"] is True
+    assert capabilities["arrow_import_enabled"] is True
+    assert capabilities["parquet_export_enabled"] is True
+    assert capabilities["parquet_import_enabled"] is True
+
+
 def test_driver_features_seed_capabilities(monkeypatch):
     monkeypatch.setattr(_CapabilityConfig, "_dependency_available", staticmethod(lambda checker: False))
     config = _CapabilityConfig()
