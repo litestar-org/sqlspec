@@ -40,103 +40,6 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def _output_info(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an info message to logger or console."""
-    if use_logger:
-        if summary_only:
-            return
-        logger.info(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_warning(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output a warning message to logger or console."""
-    if use_logger:
-        logger.warning(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_error(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an error message to logger or console."""
-    if use_logger:
-        logger.error(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_exception(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an exception message to logger or console."""
-    if use_logger:
-        logger.exception(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _log_command_summary(
-    *,
-    use_logger: bool,
-    summary_only: bool,
-    command: str,
-    status: str,
-    revision: str,
-    dry_run: bool,
-    pending_count: int,
-    applied_count: int | None,
-    reverted_count: int | None,
-    duration_ms: int,
-    db_system: str | None,
-    bind_key: str | None,
-    config_name: str,
-    error: Exception | None = None,
-    allow_missing: bool | None = None,
-    auto_sync: bool | None = None,
-) -> None:
-    """Emit a single summary log entry for migration commands."""
-    if not use_logger or not summary_only:
-        return
-    level = logging.ERROR if status == "failed" else logging.INFO
-    extra_fields: dict[str, Any] = {
-        "command": command,
-        "status": status,
-        "revision": revision,
-        "dry_run": dry_run,
-        "pending_count": pending_count,
-        "duration_ms": duration_ms,
-        "db_system": db_system,
-        "bind_key": bind_key,
-        "config_name": config_name,
-    }
-    if applied_count is not None:
-        extra_fields["applied_count"] = applied_count
-    if reverted_count is not None:
-        extra_fields["reverted_count"] = reverted_count
-    if allow_missing is not None:
-        extra_fields["allow_missing"] = allow_missing
-    if auto_sync is not None:
-        extra_fields["auto_sync"] = auto_sync
-    if error is not None:
-        extra_fields["error_type"] = type(error).__name__
-    log_with_context(logger, level, "migration.command.summary", **extra_fields)
-
-
 MetadataBuilder = Callable[[dict[str, Any]], tuple[str | None, dict[str, Any]]]
 
 
@@ -249,33 +152,6 @@ def _command_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]
     revision = cast("str | None", args.get("revision"))
     metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
     return revision, metadata
-
-
-def _report_no_pending_migrations(use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool) -> None:
-    """Report that there are no pending migrations.
-
-    Args:
-        use_logger: Whether to output to logger instead of console.
-        echo: Whether to echo output to the console.
-        summary_only: Whether summary-only logging is enabled.
-        has_migrations: Whether any migrations exist at all.
-    """
-    if not has_migrations:
-        _output_info(
-            use_logger,
-            echo,
-            summary_only,
-            "No migrations found. Create your first migration with 'sqlspec create-migration'.",
-            rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
-        )
-    else:
-        _output_info(
-            use_logger,
-            echo,
-            summary_only,
-            "Already at latest version",
-            rich_message="[green]Already at latest version[/]",
-        )
 
 
 class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
@@ -2058,3 +1934,127 @@ def create_migration_commands(
     if config.is_async:
         return cast("AsyncMigrationCommands[AsyncConfigT]", AsyncMigrationCommands(cast("AsyncConfigT", config)))
     return cast("SyncMigrationCommands[SyncConfigT]", SyncMigrationCommands(cast("SyncConfigT", config)))
+
+
+def _output_info(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output an info message to logger or console."""
+    if use_logger:
+        if summary_only:
+            return
+        logger.info(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _output_warning(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output a warning message to logger or console."""
+    if use_logger:
+        logger.warning(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _output_error(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output an error message to logger or console."""
+    if use_logger:
+        logger.error(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _output_exception(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output an exception message to logger or console."""
+    if use_logger:
+        logger.exception(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _log_command_summary(
+    *,
+    use_logger: bool,
+    summary_only: bool,
+    command: str,
+    status: str,
+    revision: str,
+    dry_run: bool,
+    pending_count: int,
+    applied_count: int | None,
+    reverted_count: int | None,
+    duration_ms: int,
+    db_system: str | None,
+    bind_key: str | None,
+    config_name: str,
+    error: Exception | None = None,
+    allow_missing: bool | None = None,
+    auto_sync: bool | None = None,
+) -> None:
+    """Emit a single summary log entry for migration commands."""
+    if not use_logger or not summary_only:
+        return
+    level = logging.ERROR if status == "failed" else logging.INFO
+    extra_fields: dict[str, Any] = {
+        "command": command,
+        "status": status,
+        "revision": revision,
+        "dry_run": dry_run,
+        "pending_count": pending_count,
+        "duration_ms": duration_ms,
+        "db_system": db_system,
+        "bind_key": bind_key,
+        "config_name": config_name,
+    }
+    if applied_count is not None:
+        extra_fields["applied_count"] = applied_count
+    if reverted_count is not None:
+        extra_fields["reverted_count"] = reverted_count
+    if allow_missing is not None:
+        extra_fields["allow_missing"] = allow_missing
+    if auto_sync is not None:
+        extra_fields["auto_sync"] = auto_sync
+    if error is not None:
+        extra_fields["error_type"] = type(error).__name__
+    log_with_context(logger, level, "migration.command.summary", **extra_fields)
+
+
+def _report_no_pending_migrations(use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool) -> None:
+    """Report that there are no pending migrations.
+
+    Args:
+        use_logger: Whether to output to logger instead of console.
+        echo: Whether to echo output to the console.
+        summary_only: Whether summary-only logging is enabled.
+        has_migrations: Whether any migrations exist at all.
+    """
+    if not has_migrations:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "No migrations found. Create your first migration with 'sqlspec create-migration'.",
+            rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
+        )
+    else:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Already at latest version",
+            rich_message="[green]Already at latest version[/]",
+        )

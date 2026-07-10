@@ -357,6 +357,39 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         existing_lower = {col.lower() for col in existing_columns}
         return target_columns - existing_lower
 
+    @abstractmethod
+    def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
+        """Create the migration tracking table if it doesn't exist.
+
+        Implementations should also check for and add any missing columns
+        to support schema migrations from older versions.
+        """
+        ...
+
+    @abstractmethod
+    def get_current_version(self, driver: DriverT) -> "str | None | Awaitable[str | None]":
+        """Get the latest applied migration version."""
+        ...
+
+    @abstractmethod
+    def get_applied_migrations(
+        self, driver: DriverT
+    ) -> "list[AppliedMigrationRecord] | Awaitable[list[AppliedMigrationRecord]]":
+        """Get all applied migrations in order."""
+        ...
+
+    @abstractmethod
+    def record_migration(
+        self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
+    ) -> "None | Awaitable[None]":
+        """Record a successfully applied migration."""
+        ...
+
+    @abstractmethod
+    def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
+        """Remove a migration record."""
+        ...
+
     def _build_add_column_statement(self, column_name: str) -> "AlterTable | None":
         """Return an ALTER TABLE builder that adds ``column_name``.
 
@@ -394,39 +427,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """Return True when an exception indicates an autocommit-managed transaction."""
         exc_str = str(exc).lower()
         return "autocommit" in exc_str or "cannot commit" in exc_str
-
-    @abstractmethod
-    def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
-        """Create the migration tracking table if it doesn't exist.
-
-        Implementations should also check for and add any missing columns
-        to support schema migrations from older versions.
-        """
-        ...
-
-    @abstractmethod
-    def get_current_version(self, driver: DriverT) -> "str | None | Awaitable[str | None]":
-        """Get the latest applied migration version."""
-        ...
-
-    @abstractmethod
-    def get_applied_migrations(
-        self, driver: DriverT
-    ) -> "list[AppliedMigrationRecord] | Awaitable[list[AppliedMigrationRecord]]":
-        """Get all applied migrations in order."""
-        ...
-
-    @abstractmethod
-    def record_migration(
-        self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
-    ) -> "None | Awaitable[None]":
-        """Record a successfully applied migration."""
-        ...
-
-    @abstractmethod
-    def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
-        """Remove a migration record."""
-        ...
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

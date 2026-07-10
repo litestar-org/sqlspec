@@ -23,206 +23,6 @@ __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 logger = get_logger("sqlspec.migrations.tracker")
 
 
-def _extract_column_name(metadata: Any) -> "str | None":
-    """Extract column name from a metadata entry."""
-    if isinstance(metadata, Mapping):
-        value = metadata.get("column_name")
-        if value is None:
-            value = metadata.get("COLUMN_NAME")
-        return str(value).lower() if value is not None else None
-    value = getattr(metadata, "column_name", None)
-    if value is not None:
-        return str(value).lower()
-    return None
-
-
-def _extract_existing_columns(columns_data: "list[Any]") -> "set[str]":
-    """Return the set of existing tracking-table column names."""
-    return {name for col in columns_data if (name := _extract_column_name(col)) is not None}
-
-
-def _log_tracking_table_missing(driver: Any, version_table: str) -> None:
-    """Log that the tracking table has no columns to inspect."""
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        table=version_table,
-        operation="table_check",
-        status="missing",
-    )
-
-
-def _log_schema_current(driver: Any, version_table: str) -> None:
-    """Log that the tracking table schema already has all columns."""
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        table=version_table,
-        operation="schema_check",
-        status="current",
-    )
-
-
-def _log_schema_check_failed(driver: Any, version_table: str, exc: Exception) -> None:
-    """Log that a tracking-table schema check failed."""
-    log_with_context(
-        logger,
-        logging.ERROR,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        table=version_table,
-        operation="schema_check",
-        status="failed",
-        error_type=type(exc).__name__,
-    )
-
-
-def _log_column_added(driver: Any, version_table: str, column_name: str) -> None:
-    """Log that a column was added to the tracking table."""
-    log_with_context(
-        logger,
-        logging.INFO,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        table=version_table,
-        column_name=column_name,
-        operation="schema_update",
-        status="column_added",
-    )
-
-
-def _finalize_current_version(driver: Any, result: Any) -> "str | None":
-    """Extract, log, and return the current migration version from a query result."""
-    current = result.get_data()[0]["version_num"] if result.data else None
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.history",
-        db_system=resolve_db_system(type(driver).__name__),
-        current_version=current,
-        status="current",
-    )
-    return current
-
-
-def _finalize_applied_migrations(driver: Any, result: Any) -> "list[AppliedMigrationRecord]":
-    """Extract, log, and return applied migration records from a query result."""
-    applied = cast("list[AppliedMigrationRecord]", result.get_data())
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.history",
-        db_system=resolve_db_system(type(driver).__name__),
-        applied_count=len(applied),
-        status="listed",
-    )
-    return applied
-
-
-def _log_migration_recorded(driver: Any, version: str) -> None:
-    """Log that a migration was recorded."""
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        version=version,
-        operation="record",
-        status="recorded",
-    )
-
-
-def _log_migration_removed(driver: Any, version: str) -> None:
-    """Log that a migration record was removed."""
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        version=version,
-        operation="remove",
-        status="removed",
-    )
-
-
-def _resolve_version_update_miss(driver: Any, old_version: str, new_version: str, applied_versions: "set[str]") -> bool:
-    """Resolve a zero-row version update.
-
-    Args:
-        driver: The database driver in use.
-        old_version: Current timestamp version string.
-        new_version: New sequential version string.
-        applied_versions: Version numbers already recorded in the database.
-
-    Returns:
-        True when the update is a no-op re-run and should be skipped.
-
-    Raises:
-        ValueError: If neither old_version nor new_version found in database.
-    """
-    if new_version in applied_versions:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "migration.track",
-            db_system=resolve_db_system(type(driver).__name__),
-            old_version=old_version,
-            new_version=new_version,
-            operation="version_update",
-            status="skipped",
-        )
-        return True
-
-    msg = f"Migration version {old_version} not found in database"
-    raise ValueError(msg)
-
-
-def _log_version_updated(driver: Any, old_version: str, new_version: str) -> None:
-    """Log that a migration version record was updated."""
-    log_with_context(
-        logger,
-        logging.INFO,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        old_version=old_version,
-        new_version=new_version,
-        operation="version_update",
-        status="updated",
-    )
-
-
-def _log_squash_recorded(driver: Any, squashed_version: str, replaced_count: int) -> None:
-    """Log that a squashed migration record was written."""
-    log_with_context(
-        logger,
-        logging.INFO,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        squashed_version=squashed_version,
-        replaced_count=replaced_count,
-        operation="squash",
-        status="recorded",
-    )
-
-
-def _log_commit_skipped(driver: Any, exc: Exception) -> None:
-    """Log that a commit was skipped because the driver manages autocommit."""
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        operation="commit",
-        status="skipped",
-        reason="autocommit",
-        error_type=type(exc).__name__,
-    )
-
-
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Synchronous migration version tracker."""
 
@@ -711,3 +511,203 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_commit_skipped(driver, exc)
             else:
                 raise
+
+
+def _extract_column_name(metadata: Any) -> "str | None":
+    """Extract column name from a metadata entry."""
+    if isinstance(metadata, Mapping):
+        value = metadata.get("column_name")
+        if value is None:
+            value = metadata.get("COLUMN_NAME")
+        return str(value).lower() if value is not None else None
+    value = getattr(metadata, "column_name", None)
+    if value is not None:
+        return str(value).lower()
+    return None
+
+
+def _extract_existing_columns(columns_data: "list[Any]") -> "set[str]":
+    """Return the set of existing tracking-table column names."""
+    return {name for col in columns_data if (name := _extract_column_name(col)) is not None}
+
+
+def _log_tracking_table_missing(driver: Any, version_table: str) -> None:
+    """Log that the tracking table has no columns to inspect."""
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        table=version_table,
+        operation="table_check",
+        status="missing",
+    )
+
+
+def _log_schema_current(driver: Any, version_table: str) -> None:
+    """Log that the tracking table schema already has all columns."""
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        table=version_table,
+        operation="schema_check",
+        status="current",
+    )
+
+
+def _log_schema_check_failed(driver: Any, version_table: str, exc: Exception) -> None:
+    """Log that a tracking-table schema check failed."""
+    log_with_context(
+        logger,
+        logging.ERROR,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        table=version_table,
+        operation="schema_check",
+        status="failed",
+        error_type=type(exc).__name__,
+    )
+
+
+def _log_column_added(driver: Any, version_table: str, column_name: str) -> None:
+    """Log that a column was added to the tracking table."""
+    log_with_context(
+        logger,
+        logging.INFO,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        table=version_table,
+        column_name=column_name,
+        operation="schema_update",
+        status="column_added",
+    )
+
+
+def _finalize_current_version(driver: Any, result: Any) -> "str | None":
+    """Extract, log, and return the current migration version from a query result."""
+    current = result.get_data()[0]["version_num"] if result.data else None
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.history",
+        db_system=resolve_db_system(type(driver).__name__),
+        current_version=current,
+        status="current",
+    )
+    return current
+
+
+def _finalize_applied_migrations(driver: Any, result: Any) -> "list[AppliedMigrationRecord]":
+    """Extract, log, and return applied migration records from a query result."""
+    applied = cast("list[AppliedMigrationRecord]", result.get_data())
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.history",
+        db_system=resolve_db_system(type(driver).__name__),
+        applied_count=len(applied),
+        status="listed",
+    )
+    return applied
+
+
+def _log_migration_recorded(driver: Any, version: str) -> None:
+    """Log that a migration was recorded."""
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        version=version,
+        operation="record",
+        status="recorded",
+    )
+
+
+def _log_migration_removed(driver: Any, version: str) -> None:
+    """Log that a migration record was removed."""
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        version=version,
+        operation="remove",
+        status="removed",
+    )
+
+
+def _resolve_version_update_miss(driver: Any, old_version: str, new_version: str, applied_versions: "set[str]") -> bool:
+    """Resolve a zero-row version update.
+
+    Args:
+        driver: The database driver in use.
+        old_version: Current timestamp version string.
+        new_version: New sequential version string.
+        applied_versions: Version numbers already recorded in the database.
+
+    Returns:
+        True when the update is a no-op re-run and should be skipped.
+
+    Raises:
+        ValueError: If neither old_version nor new_version found in database.
+    """
+    if new_version in applied_versions:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "migration.track",
+            db_system=resolve_db_system(type(driver).__name__),
+            old_version=old_version,
+            new_version=new_version,
+            operation="version_update",
+            status="skipped",
+        )
+        return True
+
+    msg = f"Migration version {old_version} not found in database"
+    raise ValueError(msg)
+
+
+def _log_version_updated(driver: Any, old_version: str, new_version: str) -> None:
+    """Log that a migration version record was updated."""
+    log_with_context(
+        logger,
+        logging.INFO,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        old_version=old_version,
+        new_version=new_version,
+        operation="version_update",
+        status="updated",
+    )
+
+
+def _log_squash_recorded(driver: Any, squashed_version: str, replaced_count: int) -> None:
+    """Log that a squashed migration record was written."""
+    log_with_context(
+        logger,
+        logging.INFO,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        squashed_version=squashed_version,
+        replaced_count=replaced_count,
+        operation="squash",
+        status="recorded",
+    )
+
+
+def _log_commit_skipped(driver: Any, exc: Exception) -> None:
+    """Log that a commit was skipped because the driver manages autocommit."""
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.track",
+        db_system=resolve_db_system(type(driver).__name__),
+        operation="commit",
+        status="skipped",
+        reason="autocommit",
+        error_type=type(exc).__name__,
+    )
