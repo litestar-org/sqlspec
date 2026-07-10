@@ -393,19 +393,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             if not self.connection.in_transaction:
                 await self.connection.execute("BEGIN IMMEDIATE")
         except aiosqlite.Error as e:
-            max_retries = 3
-            for attempt in range(max_retries):
-                delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
-                await asyncio.sleep(delay)
-                try:
-                    await self.connection.execute("BEGIN IMMEDIATE")
-                except aiosqlite.Error:
-                    if attempt == max_retries - 1:
-                        break
-                else:
-                    return
-            msg = f"Failed to begin transaction after retries: {e}"
-            raise SQLSpecError(msg) from e
+            await _retry_begin_with_backoff(self.connection, e)
 
     async def commit(self) -> None:
         """Commit the current transaction."""
@@ -558,6 +546,37 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             True if connection is in an active transaction.
         """
         return bool(self.connection.in_transaction)
+
+
+async def _retry_begin_with_backoff(
+    connection: "AiosqliteConnection", initial_error: aiosqlite.Error, max_retries: int = 3
+) -> None:
+    """Retry ``BEGIN IMMEDIATE`` after SQLite reports a busy connection.
+
+    Aiosqlite surfaces SQLite lock contention through ``aiosqlite.Error``. Preserve
+    the existing bounded exponential-backoff behavior for every native error and
+    report the original failure if all retries are exhausted.
+
+    Args:
+        connection: Aiosqlite connection used to retry the transaction start.
+        initial_error: Error raised by the first transaction-start attempt.
+        max_retries: Maximum number of retry attempts.
+
+    Raises:
+        SQLSpecError: If every retry attempt fails.
+    """
+    for attempt in range(max_retries):
+        delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
+        await asyncio.sleep(delay)
+        try:
+            await connection.execute("BEGIN IMMEDIATE")
+        except aiosqlite.Error:
+            if attempt == max_retries - 1:
+                break
+        else:
+            return
+    msg = f"Failed to begin transaction after retries: {initial_error}"
+    raise SQLSpecError(msg) from initial_error
 
 
 register_driver_profile("aiosqlite", driver_profile)

@@ -22,6 +22,7 @@ from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.core.result import DMLResult
+from sqlspec.exceptions import SQLSpecError
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -160,6 +161,51 @@ class _WorkerConnection:
     async def executemany(self, sql: str, parameters: object) -> _SelectCursor:
         self.executemany_calls.append((sql, parameters))
         return self.cursor
+
+
+class _BeginConnection:
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.in_transaction = False
+        self.execute_calls = 0
+
+    async def execute(self, sql: str) -> None:
+        assert sql == "BEGIN IMMEDIATE"
+        self.execute_calls += 1
+        if self.execute_calls <= self.failures:
+            raise aiosqlite.Error("database is locked")
+
+
+async def test_begin_retries_native_error_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _BeginConnection(failures=2)
+    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.random.uniform", lambda *_args: 0.0)
+
+    await driver.begin()
+
+    assert connection.execute_calls == 3
+
+
+async def test_begin_raises_original_error_after_retry_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _BeginConnection(failures=4)
+    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.random.uniform", lambda *_args: 0.0)
+
+    with pytest.raises(SQLSpecError, match="Failed to begin transaction after retries") as exc_info:
+        await driver.begin()
+
+    assert connection.execute_calls == 4
+    assert isinstance(exc_info.value.__cause__, aiosqlite.Error)
 
 
 async def test_dispatch_execute_detects_record_row_format(monkeypatch: pytest.MonkeyPatch) -> None:
