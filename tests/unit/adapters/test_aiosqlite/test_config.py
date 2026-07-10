@@ -5,7 +5,12 @@ from typing import get_args, get_type_hints
 import pytest
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams, AiosqliteDriverFeatures
+from sqlspec.adapters.aiosqlite.config import (
+    AiosqliteConfig,
+    AiosqliteConnectionParams,
+    AiosqliteDriverFeatures,
+    AiosqlitePoolParams,
+)
 from sqlspec.adapters.aiosqlite.core import build_connection_config
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -58,6 +63,8 @@ def test_build_connection_config_filters_pool_keys_and_gates_autocommit(tmp_path
         "idle_timeout": 1.0,
         "operation_timeout": 1.5,
         "pool_recycle_seconds": 2.0,
+        "enable_optimizations": False,
+        "enable_foreign_keys": True,
         "extra": {"ignored": True},
     })
 
@@ -74,6 +81,8 @@ def test_build_connection_config_filters_pool_keys_and_gates_autocommit(tmp_path
     assert "idle_timeout" not in connection_config
     assert "operation_timeout" not in connection_config
     assert "pool_recycle_seconds" not in connection_config
+    assert "enable_optimizations" not in connection_config
+    assert "enable_foreign_keys" not in connection_config
     assert "extra" not in connection_config
 
     if hasattr(sqlite3, "LEGACY_TRANSACTION_CONTROL"):
@@ -91,6 +100,8 @@ async def test_create_pool_routes_pool_settings_without_leaking_to_connect_kwarg
             "health_check_interval": 0.25,
             "iter_chunk_size": 512,
             "isolation_level": None,
+            "enable_optimizations": False,
+            "enable_foreign_keys": True,
         }
     )
 
@@ -99,10 +110,14 @@ async def test_create_pool_routes_pool_settings_without_leaking_to_connect_kwarg
         assert pool._pool_size == 4
         assert pool._min_size == 2
         assert pool._health_check_interval == 0.25
+        assert pool._enable_optimizations is False
+        assert pool._enable_foreign_keys is True
         assert pool._connection_parameters["iter_chunk_size"] == 512
         assert pool._connection_parameters["isolation_level"] is None
         assert "min_size" not in pool._connection_parameters
         assert "health_check_interval" not in pool._connection_parameters
+        assert "enable_optimizations" not in pool._connection_parameters
+        assert "enable_foreign_keys" not in pool._connection_parameters
     finally:
         await pool.close()
 
@@ -114,6 +129,13 @@ def test_config_accepts_pathlike_database_without_coercing_connection_value(tmp_
 
     assert config.connection_config["database"] == db_path
     assert isinstance(config.connection_config["database"], Path)
+
+
+def test_pool_params_declare_pragma_flags() -> None:
+    annotations = get_type_hints(AiosqlitePoolParams, include_extras=True)
+
+    assert annotations["enable_optimizations"] is not None
+    assert annotations["enable_foreign_keys"] is not None
 
 
 def test_driver_features_runtime_keys_declared() -> None:

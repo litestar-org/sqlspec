@@ -250,6 +250,8 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Dictionary with connection parameters.
     """
     excluded_keys = {
+        "enable_foreign_keys",
+        "enable_optimizations",
         "pool_size",
         "min_size",
         "connect_timeout",

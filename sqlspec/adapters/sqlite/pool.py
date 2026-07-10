@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
@@ -19,6 +19,10 @@ __all__ = ("SqliteConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlite"
+SQLITE_BUSY_TIMEOUT: Final = 5000
+SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS: Final = False
+SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
+SQLITE_MEMORY_CACHE_SIZE: Final = -16000
 
 
 def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":
@@ -99,6 +103,7 @@ class SqliteConnectionPool:
 
     __slots__ = (
         "_connection_parameters",
+        "_enable_foreign_keys",
         "_enable_optimizations",
         "_health_check_interval",
         "_on_connection_create",
@@ -111,7 +116,8 @@ class SqliteConnectionPool:
     def __init__(
         self,
         connection_parameters: "dict[str, Any]",
-        enable_optimizations: bool = True,
+        enable_optimizations: bool = SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS,
+        enable_foreign_keys: bool = SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS,
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[SqliteConnection], None] | None" = None,
@@ -122,6 +128,7 @@ class SqliteConnectionPool:
         Args:
             connection_parameters: SQLite connection parameters
             enable_optimizations: Whether to apply performance PRAGMAs
+            enable_foreign_keys: Whether to enable foreign-key enforcement
             recycle_seconds: Connection recycle time in seconds (default 24h)
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Callback executed when connection is created
@@ -132,6 +139,7 @@ class SqliteConnectionPool:
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
         self._enable_optimizations = enable_optimizations
+        self._enable_foreign_keys = enable_foreign_keys
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
@@ -150,27 +158,34 @@ class SqliteConnectionPool:
         """Create a new SQLite connection with optimizations."""
         connection = sqlite3.connect(**self._connection_parameters)
 
-        if self._enable_optimizations:
-            database = self._connection_parameters.get("database", ":memory:")
-            is_memory = database == ":memory:" or "mode=memory" in str(database)
+        try:
+            if self._enable_optimizations:
+                database = self._connection_parameters.get("database", ":memory:")
+                is_memory = database == ":memory:" or "mode=memory" in str(database)
 
-            if is_memory:
-                connection.execute("PRAGMA journal_mode = MEMORY")
-                connection.execute("PRAGMA synchronous = OFF")
-                connection.execute("PRAGMA temp_store = MEMORY")
-            else:
-                connection.execute("PRAGMA journal_mode = WAL")
-                connection.execute("PRAGMA synchronous = NORMAL")
-                connection.execute("PRAGMA busy_timeout = 5000")
+                if is_memory:
+                    connection.execute("PRAGMA journal_mode = MEMORY")
+                    connection.execute("PRAGMA synchronous = OFF")
+                    connection.execute("PRAGMA temp_store = MEMORY")
+                    connection.execute(f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
+                else:
+                    connection.execute("PRAGMA journal_mode = WAL")
+                    connection.execute("PRAGMA synchronous = NORMAL")
 
-            connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
 
-        if self._runtime_setup is not None:
-            _apply_runtime_setup(connection, self._runtime_setup)
+            if self._enable_foreign_keys:
+                connection.execute("PRAGMA foreign_keys = ON")
 
-        # Call user-provided callback after internal setup
-        if self._on_connection_create is not None:
-            self._on_connection_create(connection)
+            if self._runtime_setup is not None:
+                _apply_runtime_setup(connection, self._runtime_setup)
+
+            if self._on_connection_create is not None:
+                self._on_connection_create(connection)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                connection.close()
+            raise
 
         return connection  # type: ignore[no-any-return]
 

@@ -55,6 +55,7 @@ class SqliteConnectionParams(TypedDict):
     pool_recycle_seconds: NotRequired[int]
     health_check_interval: NotRequired[float]
     enable_optimizations: NotRequired[bool]
+    enable_foreign_keys: NotRequired[bool]
     extra: NotRequired[dict[str, Any]]
 
 
@@ -326,6 +327,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         enable_optimizations = self.connection_config.get("enable_optimizations")
         if enable_optimizations is not None:
             pool_kwargs["enable_optimizations"] = enable_optimizations
+
+        enable_foreign_keys = self.connection_config.get("enable_foreign_keys")
+        if enable_foreign_keys is not None:
+            pool_kwargs["enable_foreign_keys"] = enable_foreign_keys
 
         pool = SqliteConnectionPool(
             connection_parameters=config_dict,

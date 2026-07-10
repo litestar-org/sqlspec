@@ -46,6 +46,16 @@ def test_build_connection_config_drops_other_none_values() -> None:
     assert connection_config == {"database": ":memory:", "isolation_level": None}
 
 
+def test_build_connection_config_filters_pragma_pool_flags() -> None:
+    connection_config = build_connection_config({
+        "database": ":memory:",
+        "enable_optimizations": False,
+        "enable_foreign_keys": True,
+    })
+
+    assert connection_config == {"database": ":memory:"}
+
+
 def test_build_connection_config_merges_extra_as_driver_kwargs() -> None:
     """extra should be a normalized escape hatch for sqlite3.connect() keyword arguments."""
     connection_config = build_connection_config({
@@ -89,6 +99,7 @@ def test_sqlite_connection_params_describe_current_sync_config_surface() -> None
     assert annotations["pool_recycle_seconds"] is not None
     assert annotations["health_check_interval"] is not None
     assert annotations["enable_optimizations"] is not None
+    assert annotations["enable_foreign_keys"] is not None
     assert annotations["extra"] is not None
 
 
@@ -104,6 +115,15 @@ def test_sqlite_config_accepts_pathlike_database(tmp_path: Path) -> None:
         session.execute("CREATE TABLE pathlike_config_test (id INTEGER PRIMARY KEY)")
     config.close_pool()
     assert database_path.exists()
+
+
+def test_sqlite_config_passes_pragma_flags_to_pool() -> None:
+    config = SqliteConfig(connection_config={"enable_optimizations": False, "enable_foreign_keys": True})
+
+    pool = config._create_pool()
+
+    assert pool._enable_optimizations is False
+    assert pool._enable_foreign_keys is True
 
 
 def test_driver_features_runtime_keys_declared() -> None:

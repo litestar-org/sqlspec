@@ -75,6 +75,8 @@ class AiosqlitePoolParams(AiosqliteConnectionParams):
     idle_timeout: NotRequired[float]
     operation_timeout: NotRequired[float]
     health_check_interval: NotRequired[float]
+    enable_optimizations: NotRequired[bool]
+    enable_foreign_keys: NotRequired[bool]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -388,6 +390,13 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         health_check_interval = self.connection_config.get("health_check_interval")
         if health_check_interval is None:
             health_check_interval = 30.0
+        pool_kwargs: dict[str, Any] = {}
+        enable_optimizations = self.connection_config.get("enable_optimizations")
+        if enable_optimizations is not None:
+            pool_kwargs["enable_optimizations"] = enable_optimizations
+        enable_foreign_keys = self.connection_config.get("enable_foreign_keys")
+        if enable_foreign_keys is not None:
+            pool_kwargs["enable_foreign_keys"] = enable_foreign_keys
 
         pool = AiosqliteConnectionPool(
             connection_parameters=build_connection_config(self.connection_config),
@@ -399,6 +408,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             health_check_interval=health_check_interval,
             on_connection_create=self._user_connection_hook,
             runtime_setup=self._runtime_setup,
+            **pool_kwargs,
         )
 
         if self.driver_features.get("enable_custom_adapters", False):
