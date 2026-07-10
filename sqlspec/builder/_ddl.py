@@ -238,15 +238,21 @@ class DDLBuilder(QueryBuilder):
 
 
 @trait
-class _DropDDLMixin:
+class _IfExistsDDLMixin:
     __slots__ = ()
 
-    _cascade: bool | None
     _if_exists: bool
 
     def if_exists(self) -> Self:
         cast("Any", self)._if_exists = True
         return self
+
+
+@trait
+class _CascadeRestrictDDLMixin:
+    __slots__ = ()
+
+    _cascade: "bool | None"
 
     def cascade(self) -> Self:
         cast("Any", self)._cascade = True
@@ -254,6 +260,17 @@ class _DropDDLMixin:
 
     def restrict(self) -> Self:
         cast("Any", self)._cascade = False
+        return self
+
+
+@trait
+class _IfNotExistsDDLMixin:
+    __slots__ = ()
+
+    _if_not_exists: bool
+
+    def if_not_exists(self) -> Self:
+        cast("Any", self)._if_not_exists = True
         return self
 
 
@@ -345,7 +362,7 @@ class ConstraintDefinition:
         self.initially_deferred = initially_deferred
 
 
-class CreateTable(DDLBuilder):
+class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE TABLE statements with columns and constraints."""
 
     __slots__ = (
@@ -377,11 +394,6 @@ class CreateTable(DDLBuilder):
     def in_schema(self, schema_name: str) -> "Self":
         """Set the schema for the table."""
         self._schema = schema_name
-        return self
-
-    def if_not_exists(self) -> "Self":
-        """Add IF NOT EXISTS clause."""
-        self._if_not_exists = True
         return self
 
     def temporary(self) -> "Self":
@@ -648,7 +660,7 @@ class CreateTable(DDLBuilder):
         return any(c.name == col_name and c.primary_key for c in self._columns)
 
 
-class DropTable(DDLBuilder, _DropDDLMixin):
+class DropTable(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_table_name")
@@ -677,7 +689,7 @@ class DropTable(DDLBuilder, _DropDDLMixin):
         )
 
 
-class DropIndex(DDLBuilder, _DropDDLMixin):
+class DropIndex(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_index_name", "_table_name")
@@ -715,7 +727,7 @@ class DropIndex(DDLBuilder, _DropDDLMixin):
         )
 
 
-class DropView(DDLBuilder, _DropDDLMixin):
+class DropView(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_view_name")
@@ -744,7 +756,7 @@ class DropView(DDLBuilder, _DropDDLMixin):
         )
 
 
-class DropSchema(DDLBuilder, _DropDDLMixin):
+class DropSchema(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_schema_name")
@@ -773,7 +785,7 @@ class DropSchema(DDLBuilder, _DropDDLMixin):
         )
 
 
-class DropMaterializedView(DDLBuilder, _DropDDLMixin):
+class DropMaterializedView(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
     """Builder for DROP MATERIALIZED VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     __slots__ = ("_cascade", "_if_exists", "_view_name")
@@ -806,7 +818,7 @@ class DropMaterializedView(DDLBuilder, _DropDDLMixin):
         )
 
 
-class CreateIndex(DDLBuilder):
+class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...)."""
 
     __slots__ = ("_columns", "_if_not_exists", "_index_name", "_table_name", "_unique", "_using", "_where")
@@ -845,10 +857,6 @@ class CreateIndex(DDLBuilder):
 
     def unique(self) -> Self:
         self._unique = True
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def using(self, method: str) -> Self:
@@ -896,7 +904,7 @@ class CreateIndex(DDLBuilder):
         return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
 
 
-class Truncate(DDLBuilder):
+class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
     """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
 
     __slots__ = ("_cascade", "_identity", "_table_name")
@@ -915,14 +923,6 @@ class Truncate(DDLBuilder):
 
     def table(self, name: str) -> Self:
         self._table_name = name
-        return self
-
-    def cascade(self) -> Self:
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        self._cascade = False
         return self
 
     def restart_identity(self) -> Self:
@@ -981,7 +981,7 @@ class AlterOperation:
         self.using_expression = using_expression
 
 
-class CreateSchema(DDLBuilder):
+class CreateSchema(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE SCHEMA [IF NOT EXISTS] schema_name [AUTHORIZATION user_name]."""
 
     __slots__ = ("_authorization", "_if_not_exists", "_schema_name")
@@ -1000,10 +1000,6 @@ class CreateSchema(DDLBuilder):
 
     def name(self, schema_name: str) -> Self:
         self._schema_name = schema_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def authorization(self, user_name: str) -> Self:
@@ -1027,7 +1023,7 @@ class CreateSchema(DDLBuilder):
         )
 
 
-class CreateTableAsSelect(DDLBuilder):
+class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
 
     Methods:
@@ -1048,10 +1044,6 @@ class CreateTableAsSelect(DDLBuilder):
 
     def name(self, table_name: str) -> Self:
         self._table_name = table_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def columns(self, *cols: str) -> Self:
@@ -1089,7 +1081,7 @@ class CreateTableAsSelect(DDLBuilder):
         )
 
 
-class CreateMaterializedView(DDLBuilder):
+class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ..."""
 
     __slots__ = (
@@ -1126,10 +1118,6 @@ class CreateMaterializedView(DDLBuilder):
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def columns(self, *cols: str) -> Self:
@@ -1206,7 +1194,7 @@ class CreateMaterializedView(DDLBuilder):
         )
 
 
-class CreateView(DDLBuilder):
+class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ..."""
 
     __slots__ = ("_columns", "_hints", "_if_not_exists", "_select_query", "_view_name")
@@ -1227,10 +1215,6 @@ class CreateView(DDLBuilder):
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def columns(self, *cols: str) -> Self:
@@ -1272,7 +1256,7 @@ class CreateView(DDLBuilder):
         )
 
 
-class AlterTable(DDLBuilder):
+class AlterTable(DDLBuilder, _IfExistsDDLMixin):
     """Builder for ALTER TABLE operations."""
 
     __slots__ = ("_if_exists", "_operations", "_schema", "_table_name")
@@ -1283,11 +1267,6 @@ class AlterTable(DDLBuilder):
         self._operations: list[AlterOperation] = []
         self._schema: str | None = None
         self._if_exists = False
-
-    def if_exists(self) -> "Self":
-        """Add IF EXISTS clause."""
-        self._if_exists = True
-        return self
 
     def add_column(
         self,
