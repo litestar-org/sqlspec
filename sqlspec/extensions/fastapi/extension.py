@@ -1,8 +1,7 @@
 from typing import TYPE_CHECKING, Any, overload
 
-from fastapi import FastAPI, Request
+from fastapi import Request
 
-from sqlspec.base import SQLSpec
 from sqlspec.extensions._framework_common import extract_extension_settings
 from sqlspec.extensions.fastapi.providers import DEPENDENCY_DEFAULTS
 from sqlspec.extensions.fastapi.providers import provide_filters as _provide_filters
@@ -35,15 +34,6 @@ class SQLSpecPlugin(_StarlettePlugin):
     Extends Starlette integration with dependency injection helpers for FastAPI's
     Depends() system.
     """
-
-    def __init__(self, sqlspec: SQLSpec, app: "FastAPI | None" = None) -> None:
-        """Initialize SQLSpec FastAPI extension.
-
-        Args:
-            sqlspec: Pre-configured SQLSpec instance with registered configs.
-            app: Optional FastAPI application to initialize immediately.
-        """
-        super().__init__(sqlspec, app)
 
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract FastAPI settings from config.extension_config.
