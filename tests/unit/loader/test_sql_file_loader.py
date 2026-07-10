@@ -362,6 +362,17 @@ SELECT * FROM users WHERE id = 2;
     assert "Duplicate statement name: get_user" in str(exc_info.value)
 
 
+def test_parse_error_duplicate_names_reports_line_number() -> None:
+    """Duplicate-name parse errors report the 1-based line of the duplicate marker."""
+    content = "-- name: get_user\nSELECT 1;\n-- name: get_user\nSELECT 2;\n"
+
+    with pytest.raises(SQLFileParseError) as exc_info:
+        SQLFileLoader._parse_statements(content, "test.sql")
+
+    assert "(line 3)" in str(exc_info.value)
+    assert exc_info.value.line == 3
+
+
 def test_parse_invalid_dialect_storage() -> None:
     """Test that invalid dialect names are stored as-is without warnings."""
     content = """

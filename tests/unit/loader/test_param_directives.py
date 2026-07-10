@@ -90,6 +90,14 @@ def test_malformed_param_raises_in_strict_mode() -> None:
         SQLFileLoader._parse_statements(content, "test.sql", strict_parameter_annotations=True)
 
 
+def test_malformed_param_strict_error_reports_line_number() -> None:
+    content = "-- name: q\n-- param: oops\nselect 1\n"
+    with pytest.raises(SQLFileParseError) as exc_info:
+        SQLFileLoader._parse_statements(content, "test.sql", strict_parameter_annotations=True)
+    assert "(line 2)" in str(exc_info.value)
+    assert exc_info.value.line == 2
+
+
 def test_add_named_sql_with_parameters() -> None:
     loader = SQLFileLoader()
     decls = [ParameterDeclaration("a", "int")]
