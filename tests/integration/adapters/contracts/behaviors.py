@@ -18,7 +18,13 @@ from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.data_dictionary import VersionInfo
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+)
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -123,6 +129,12 @@ class SyncContractDriver(Protocol):
 
     def rollback(self) -> None: ...
 
+    def create_savepoint(self, name: str) -> None: ...
+
+    def release_savepoint(self, name: str) -> None: ...
+
+    def rollback_to_savepoint(self, name: str) -> None: ...
+
     def execute(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
     def execute_many(self, statement: object, parameters: object, /, **kwargs: Any) -> SQLResult: ...
@@ -162,6 +174,12 @@ class AsyncContractDriver(Protocol):
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
+
+    async def create_savepoint(self, name: str) -> None: ...
+
+    async def release_savepoint(self, name: str) -> None: ...
+
+    async def rollback_to_savepoint(self, name: str) -> None: ...
 
     async def execute(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
@@ -1193,6 +1211,116 @@ async def assert_async_transaction_semantics_contract(driver: object, case: Driv
             await async_driver.rollback()
         await async_driver.execute(table.delete_sql)
         await async_driver.commit()
+
+
+_UNSAFE_SAVEPOINT_NAME = "sp1; SELECT 1"
+_SAVEPOINT_ROWS = (("savepoint-a", 10, None), ("savepoint-b", 20, None), ("savepoint-c", 30, None))
+
+
+def assert_sync_savepoint_unsafe_name_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync savepoint operations reject unsafe SQL identifiers before execution."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    sync_driver = cast("SyncContractDriver", driver)
+
+    with pytest.raises(TransactionError):
+        sync_driver.create_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        sync_driver.rollback_to_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        sync_driver.release_savepoint(_UNSAFE_SAVEPOINT_NAME)
+
+
+async def assert_async_savepoint_unsafe_name_contract(driver: object, case: DriverCase) -> None:
+    """Assert async savepoint operations reject unsafe SQL identifiers before execution."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    async_driver = cast("AsyncContractDriver", driver)
+
+    with pytest.raises(TransactionError):
+        await async_driver.create_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        await async_driver.rollback_to_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        await async_driver.release_savepoint(_UNSAFE_SAVEPOINT_NAME)
+
+
+def assert_sync_savepoint_round_trip_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync savepoints retain A/C while rolling back post-savepoint row B."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    row_a, row_b, row_c = _SAVEPOINT_ROWS
+
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    try:
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, row_a)
+        sync_driver.create_savepoint("sp1")
+        sync_driver.execute(table.insert_qmark_sql, row_b)
+        sync_driver.rollback_to_savepoint("sp1")
+
+        assert sync_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_a[0],)) is not None
+        assert sync_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_b[0],)) is None
+
+        sync_driver.execute(table.insert_qmark_sql, row_c)
+        sync_driver.release_savepoint("sp1")
+        sync_driver.commit()
+
+        assert_result_data(
+            sync_driver.execute(table.select_ordered_sql),
+            (
+                {"name": row_a[0], "value": row_a[1], "note": row_a[2]},
+                {"name": row_c[0], "value": row_c[1], "note": row_c[2]},
+            ),
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        with contextlib.suppress(Exception):
+            sync_driver.execute(table.delete_sql)
+            sync_driver.commit()
+
+
+async def assert_async_savepoint_round_trip_contract(driver: object, case: DriverCase) -> None:
+    """Assert async savepoints retain A/C while rolling back post-savepoint row B."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    row_a, row_b, row_c = _SAVEPOINT_ROWS
+
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    try:
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, row_a)
+        await async_driver.create_savepoint("sp1")
+        await async_driver.execute(table.insert_qmark_sql, row_b)
+        await async_driver.rollback_to_savepoint("sp1")
+
+        assert await async_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_a[0],)) is not None
+        assert await async_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_b[0],)) is None
+
+        await async_driver.execute(table.insert_qmark_sql, row_c)
+        await async_driver.release_savepoint("sp1")
+        await async_driver.commit()
+
+        assert_result_data(
+            await async_driver.execute(table.select_ordered_sql),
+            (
+                {"name": row_a[0], "value": row_a[1], "note": row_a[2]},
+                {"name": row_c[0], "value": row_c[1], "note": row_c[2]},
+            ),
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        with contextlib.suppress(Exception):
+            await async_driver.execute(table.delete_sql)
+            await async_driver.commit()
 
 
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
