@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.tracker")
+_console = Console()
 
 
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
@@ -35,7 +36,6 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        console = Console()
         try:
             if self.version_table_schema:
                 columns_data = driver.data_dictionary.get_columns(
@@ -53,34 +53,22 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 return
 
             if self._should_echo():
-                console.print(
+                _console.print(
                     f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
                 )
 
-            for col_name in sorted(missing_columns):
-                self._add_column(driver, col_name)
+            for col_name, statement in self._add_column_statements(missing_columns):
+                driver.execute(statement)
+                _log_column_added(driver, self.version_table, col_name)
 
             driver.commit()
             if self._should_echo():
-                console.print("[green]Migration tracking table schema updated successfully[/]")
+                _console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as exc:
             with suppress(Exception):
                 driver.rollback()
             _log_schema_check_failed(driver, self.version_table, exc)
-
-    def _add_column(self, driver: "SyncDriverAdapterBase", column_name: str) -> None:
-        """Add a single column to the tracking table.
-
-        Args:
-            driver: The database driver to use.
-            column_name: Name of the column to add (lowercase).
-        """
-        statement = self._build_add_column_statement(column_name)
-        if statement is None:
-            return
-        driver.execute(statement)
-        _log_column_added(driver, self.version_table, column_name)
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -158,7 +146,13 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         self._safe_commit(driver)
         _log_migration_removed(driver, version)
 
-    def update_version_record(self, driver: "SyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+    def update_version_record(
+        self,
+        driver: "SyncDriverAdapterBase",
+        old_version: str,
+        new_version: str,
+        applied_versions: "set[str] | None" = None,
+    ) -> None:
         """Update migration version record from timestamp to sequential.
 
         Updates version_num and version_type while preserving execution_sequence,
@@ -171,6 +165,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver: The database driver to use.
             old_version: Current timestamp version string.
             new_version: New sequential version string.
+            applied_versions: Previously loaded version set for batch reuse.
 
         Raises:
             ValueError: If neither old_version nor new_version found in database.
@@ -180,8 +175,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         result = driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = driver.execute(self._applied_migrations_query())
-            applied_versions = self._extract_applied_versions(check_result)
+            if applied_versions is None:
+                check_result = driver.execute(self._applied_migrations_query())
+                applied_versions = self._extract_applied_versions(check_result)
             if _resolve_version_update_miss(driver, old_version, new_version, applied_versions):
                 return
 
@@ -280,7 +276,6 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        console = Console()
         try:
             if self.version_table_schema:
                 columns_data = await driver.data_dictionary.get_columns(
@@ -298,34 +293,22 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 return
 
             if self._should_echo():
-                console.print(
+                _console.print(
                     f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
                 )
 
-            for col_name in sorted(missing_columns):
-                await self._add_column(driver, col_name)
+            for col_name, statement in self._add_column_statements(missing_columns):
+                await driver.execute(statement)
+                _log_column_added(driver, self.version_table, col_name)
 
             await driver.commit()
             if self._should_echo():
-                console.print("[green]Migration tracking table schema updated successfully[/]")
+                _console.print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as exc:
             with suppress(Exception):
                 await driver.rollback()
             _log_schema_check_failed(driver, self.version_table, exc)
-
-    async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
-        """Add a single column to the tracking table.
-
-        Args:
-            driver: The database driver to use.
-            column_name: Name of the column to add (lowercase).
-        """
-        statement = self._build_add_column_statement(column_name)
-        if statement is None:
-            return
-        await driver.execute(statement)
-        _log_column_added(driver, self.version_table, column_name)
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -403,7 +386,13 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         await self._safe_commit(driver)
         _log_migration_removed(driver, version)
 
-    async def update_version_record(self, driver: "AsyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+    async def update_version_record(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        old_version: str,
+        new_version: str,
+        applied_versions: "set[str] | None" = None,
+    ) -> None:
         """Update migration version record from timestamp to sequential.
 
         Updates version_num and version_type while preserving execution_sequence,
@@ -416,6 +405,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: The database driver to use.
             old_version: Current timestamp version string.
             new_version: New sequential version string.
+            applied_versions: Previously loaded version set for batch reuse.
 
         Raises:
             ValueError: If neither old_version nor new_version found in database.
@@ -425,8 +415,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         result = await driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = await driver.execute(self._applied_migrations_query())
-            applied_versions = self._extract_applied_versions(check_result)
+            if applied_versions is None:
+                check_result = await driver.execute(self._applied_migrations_query())
+                applied_versions = self._extract_applied_versions(check_result)
             if _resolve_version_update_miss(driver, old_version, new_version, applied_versions):
                 return
 

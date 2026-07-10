@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING, Any, Literal, cast, overload
 from sqlspec.core import SQL
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.loaders import get_migration_loader
+from sqlspec.migrations.loaders import _load_migration_sql, get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
-from sqlspec.migrations.version import parse_version
+from sqlspec.migrations.version import _format_sequential_version, parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.sync_tools import async_, await_
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -109,6 +109,11 @@ class BaseMigrationRunner(ABC):
             value: True to enable logging, False for silent mode (CLI default).
         """
         self.use_logger = value
+
+    def set_driver(self, driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase") -> None:
+        """Bind the active session driver to the migration context."""
+        if self.context is not None:
+            self.context.driver = driver
 
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""
@@ -246,7 +251,7 @@ class BaseMigrationRunner(ABC):
 
         parts = name_without_ext.split("_", 1)
         if parts and parts[0].isdigit():
-            return parts[0] if len(parts[0]) > timestamp_min_length else parts[0].zfill(4)
+            return parts[0] if len(parts[0]) > timestamp_min_length else _format_sequential_version(parts[0])
 
         return None
 
@@ -558,9 +563,9 @@ class BaseMigrationRunner(ABC):
         exc: Exception,
     ) -> None:
         """Close the observability span and log failure for a migration."""
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
         runtime = self.runtime
         if runtime is not None:
-            duration_ms = int((time.perf_counter() - start_time) * 1000)
             runtime.increment_metric(f"migrations.{operation}.errors")
             runtime.end_migration_span(span, duration_ms=duration_ms, error=exc)
         self._log_migration_event(
@@ -568,7 +573,7 @@ class BaseMigrationRunner(ABC):
             event,
             db_system=resolve_db_system(type(driver).__name__),
             version=migration.get("version"),
-            duration_ms=int((time.perf_counter() - start_time) * 1000),
+            duration_ms=duration_ms,
             error_type=type(exc).__name__,
             status="failed",
         )
@@ -714,6 +719,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
+        self.set_driver(driver)
         upgrade_sql_list = self._migration_sql(migration, "up")
         if upgrade_sql_list is None:
             self._log_migration_missing(driver, migration, "upgrade", "migration.apply")
@@ -757,6 +763,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
+        self.set_driver(driver)
         downgrade_sql_list = self._migration_sql(migration, "down")
         if downgrade_sql_list is None:
             self._log_migration_missing(driver, migration, "downgrade", "migration.rollback")
@@ -803,8 +810,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         file_path, loader = migration["file_path"], migration["loader"]
 
         try:
-            method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = await_(method, raise_sync_error=False)(file_path)
+            sql_statements = _load_migration_sql(loader, file_path, direction)
         except Exception as e:
             self._handle_migration_sql_error(migration, direction, e)
             return None
@@ -832,8 +838,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 )
 
                 try:
-                    up_sql = await_(loader.get_up_sql, raise_sync_error=False)(file_path)
-                    down_sql = await_(loader.get_down_sql, raise_sync_error=False)(file_path)
+                    up_sql = _load_migration_sql(loader, file_path, "up")
+                    down_sql = _load_migration_sql(loader, file_path, "down")
 
                     if up_sql:
                         all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
@@ -947,6 +953,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
+        self.set_driver(driver)
         upgrade_sql_list = await self._migration_sql(migration, "up")
         if upgrade_sql_list is None:
             self._log_migration_missing(driver, migration, "upgrade", "migration.apply")
@@ -990,6 +997,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
+        self.set_driver(driver)
         downgrade_sql_list = await self._migration_sql(migration, "down")
         if downgrade_sql_list is None:
             self._log_migration_missing(driver, migration, "downgrade", "migration.rollback")

@@ -285,7 +285,7 @@ def down():
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
@@ -293,7 +293,7 @@ def down():
         mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 
@@ -328,7 +328,7 @@ async def down():
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
@@ -336,7 +336,7 @@ async def down():
         mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 
@@ -370,7 +370,7 @@ async def down():
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
@@ -378,7 +378,7 @@ async def down():
         mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 
@@ -497,7 +497,7 @@ async def down():
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
@@ -505,7 +505,7 @@ async def down():
         mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         all_metadata = []
         for migration_file in migration_files:

@@ -43,21 +43,10 @@ class SQLTemplateDefinition:
     def render(self, context: "Mapping[str, str]") -> str:
         """Render the SQL template using the supplied context."""
 
-        rendered_lines: list[str] = [self._format(self.header, context)]
-        rendered_lines.extend(self._format(line, context) for line in self.metadata if line)
-        rendered_lines.extend(("", self._format(self.body, context)))
+        rendered_lines: list[str] = [_format_template(self.header, context, "SQL")]
+        rendered_lines.extend(_format_template(line, context, "SQL") for line in self.metadata if line)
+        rendered_lines.extend(("", _format_template(self.body, context, "SQL")))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
-
-    def _format(self, template: str, context: "Mapping[str, str]") -> str:
-        try:
-            return template.format_map(context)
-        except KeyError as exc:  # pragma: no cover
-            missing = str(exc).strip("'")
-            msg = f"Missing template variable '{missing}' in SQL template"
-            raise TemplateValidationError(msg) from exc
-        except ValueError as exc:  # pragma: no cover
-            msg = f"Invalid SQL template fragment: {exc}"
-            raise TemplateValidationError(msg) from exc
 
 
 @dataclass(slots=True)
@@ -72,24 +61,13 @@ class PythonTemplateDefinition:
     def render(self, context: "Mapping[str, str]") -> str:
         """Render the Python template using the supplied context."""
 
-        docstring_block = f'"""{self._format(self.docstring, context)}"""'
+        docstring_block = f'"""{_format_template(self.docstring, context, "Python")}"""'
         rendered_lines: list[str] = [docstring_block, ""]
         rendered_lines.extend(self.imports)
         if self.imports:
             rendered_lines.append("")
-        rendered_lines.append(self._format(self.body, context))
+        rendered_lines.append(_format_template(self.body, context, "Python"))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
-
-    def _format(self, template: str, context: "Mapping[str, str]") -> str:
-        try:
-            return template.format_map(context)
-        except KeyError as exc:  # pragma: no cover
-            missing = str(exc).strip("'")
-            msg = f"Missing template variable '{missing}' in Python template"
-            raise TemplateValidationError(msg) from exc
-        except ValueError as exc:  # pragma: no cover
-            msg = f"Invalid Python template fragment: {exc}"
-            raise TemplateValidationError(msg) from exc
 
 
 @dataclass(slots=True)
@@ -184,6 +162,18 @@ def _coerce_string_list(value: Any, default: "list[str]") -> "list[str]":
 def _normalize_newlines(lines: "list[str]") -> "list[str]":
     normalized: list[str] = [line.rstrip("\r") for line in lines]
     return normalized
+
+
+def _format_template(template: str, context: "Mapping[str, str]", template_kind: str) -> str:
+    try:
+        return template.format_map(context)
+    except KeyError as exc:  # pragma: no cover
+        missing = str(exc).strip("'")
+        msg = f"Missing template variable '{missing}' in {template_kind} template"
+        raise TemplateValidationError(msg) from exc
+    except ValueError as exc:  # pragma: no cover
+        msg = f"Invalid {template_kind} template fragment: {exc}"
+        raise TemplateValidationError(msg) from exc
 
 
 _DEFAULT_TITLE = "SQLSpec Migration"

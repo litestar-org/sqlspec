@@ -210,7 +210,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
 
-            current = self.tracker.get_current_version(driver)
+            applied: list[AppliedMigrationRecord] = []
+            if verbose:
+                applied = self.tracker.get_applied_migrations(driver)
+                current = applied[-1]["version_num"] if applied else None
+            else:
+                current = self.tracker.get_current_version(driver)
             if not current:
                 log_with_context(
                     logger,
@@ -227,10 +232,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             console.print(f"[green]Current version:[/] {current}")
 
-            applied: list[AppliedMigrationRecord] = []
             if verbose:
-                applied = self.tracker.get_applied_migrations(driver)
-
                 table = Table(title="Applied Migrations")
                 table.add_column("Version", style="cyan")
                 table.add_column("Description")
@@ -465,7 +467,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     if file_path:
                         migration = self.runner.load_migration(file_path, new_version)
                         if migration["checksum"] == applied_checksum:
-                            self.tracker.update_version_record(driver, old_version, new_version)
+                            self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=set(applied_map)
+                            )
                             if use_logger:
                                 if not summary_only:
                                     logger.info("Reconciled version: %s -> %s", old_version, new_version)
@@ -555,6 +559,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
 
@@ -695,6 +700,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
                 applied: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
@@ -1003,7 +1009,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     updated_count = 0
                     for old_version, new_version in conversion_map.items():
                         if old_version in applied_versions:
-                            self.tracker.update_version_record(driver, old_version, new_version)
+                            self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=applied_versions
+                            )
                             updated_count += 1
 
                     if updated_count > 0:
@@ -1079,7 +1087,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
-            current = await self.tracker.get_current_version(driver)
+            applied: list[AppliedMigrationRecord] = []
+            if verbose:
+                applied = await self.tracker.get_applied_migrations(driver)
+                current = applied[-1]["version_num"] if applied else None
+            else:
+                current = await self.tracker.get_current_version(driver)
             if not current:
                 log_with_context(
                     logger,
@@ -1095,9 +1108,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return None
 
             console.print(f"[green]Current version:[/] {current}")
-            applied: list[AppliedMigrationRecord] = []
             if verbose:
-                applied = await self.tracker.get_applied_migrations(driver)
                 table = Table(title="Applied Migrations")
                 table.add_column("Version", style="cyan")
                 table.add_column("Description")
@@ -1332,7 +1343,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     if file_path:
                         migration = await self.runner.load_migration(file_path, new_version)
                         if migration["checksum"] == applied_checksum:
-                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            await self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=set(applied_map)
+                            )
                             if use_logger:
                                 if not summary_only:
                                     logger.info("Reconciled version: %s -> %s", old_version, new_version)
@@ -1422,6 +1435,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             async with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
@@ -1564,6 +1578,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             async with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
@@ -1900,7 +1915,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     updated_count = 0
                     for old_version, new_version in conversion_map.items():
                         if old_version in applied_versions:
-                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            await self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=applied_versions
+                            )
                             updated_count += 1
 
                     if updated_count > 0:

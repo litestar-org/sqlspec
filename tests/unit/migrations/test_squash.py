@@ -448,6 +448,78 @@ def test_apply_squash_apply_squash_dry_run(tmp_path: Path) -> None:
     assert not (tmp_path / "0001_release.sql").exists()
 
 
+def test_apply_squash_skips_already_completed_plan(tmp_path: Path) -> None:
+    """Reapplying a completed squash should be a no-op."""
+    from unittest.mock import Mock
+
+    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+
+    target = tmp_path / "0001_release.sql"
+    target.write_text("-- already squashed")
+    runner = Mock()
+    squasher = MigrationSquasher(tmp_path, runner)
+    plan = SquashPlan(
+        source_migrations=[("0001", tmp_path / "0001_initial.sql")],
+        target_version="0001",
+        target_path=target,
+        description="release",
+        source_versions=["0001"],
+    )
+
+    squasher.apply_squash([plan])
+
+    runner.load_migration.assert_not_called()
+    assert target.read_text() == "-- already squashed"
+
+
+def test_apply_squash_rejects_partial_prior_run(tmp_path: Path) -> None:
+    """A target plus remaining sources is an inconsistent partial squash."""
+    from unittest.mock import Mock
+
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+
+    source = tmp_path / "0001_initial.sql"
+    target = tmp_path / "0001_release.sql"
+    source.write_text("-- source")
+    target.write_text("-- partial target")
+    squasher = MigrationSquasher(tmp_path, Mock())
+    plan = SquashPlan(
+        source_migrations=[("0001", source)],
+        target_version="0001",
+        target_path=target,
+        description="release",
+        source_versions=["0001"],
+    )
+
+    with pytest.raises(SquashValidationError, match="partially applied"):
+        squasher.apply_squash([plan])
+
+
+def test_apply_squash_rejects_mixed_extension_namespaces(tmp_path: Path) -> None:
+    """A manual squash plan must not combine different extension namespaces."""
+    from unittest.mock import Mock
+
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+
+    source_a = tmp_path / "ext_a_0001.sql"
+    source_b = tmp_path / "ext_b_0001.sql"
+    source_a.write_text("-- a")
+    source_b.write_text("-- b")
+    squasher = MigrationSquasher(tmp_path, Mock())
+    plan = SquashPlan(
+        source_migrations=[("ext_a_0001", source_a), ("ext_b_0001", source_b)],
+        target_version="ext_a_0001",
+        target_path=tmp_path / "ext_a_0001_release.sql",
+        description="release",
+        source_versions=["ext_a_0001", "ext_b_0001"],
+    )
+
+    with pytest.raises(SquashValidationError, match="different extensions"):
+        squasher.apply_squash([plan])
+
+
 def test_apply_squash_apply_squash_writes_squashed_file(tmp_path: Path) -> None:
     """Test apply_squash writes the squashed migration file."""
     from unittest.mock import Mock

@@ -53,11 +53,6 @@ class MigrationGap:
     def __post_init__(self) -> None:
         object.__setattr__(self, "applied_after", list(self.applied_after))
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, MigrationGap):
-            return NotImplemented
-        return self.missing_version == other.missing_version and self.applied_after == other.applied_after
-
     def __hash__(self) -> int:
         return hash((self.missing_version, tuple(self.applied_after)))
 
@@ -214,7 +209,14 @@ def validate_squash_range(
     Raises:
         SquashValidationError: If validation fails (invalid range, missing versions, gaps).
     """
-    if int(start_version) > int(end_version):
+    try:
+        start_int = int(start_version)
+        end_int = int(end_version)
+    except ValueError as exc:
+        msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
+        raise SquashValidationError(msg) from exc
+
+    if start_int > end_int:
         msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
         raise SquashValidationError(msg)
 
@@ -227,8 +229,6 @@ def validate_squash_range(
         msg = f"End version {end_version} not found in migrations"
         raise SquashValidationError(msg)
 
-    start_int = int(start_version)
-    end_int = int(end_version)
     result: list[tuple[str, Path]] = []
 
     for version, path in migrations:

@@ -88,6 +88,67 @@ async def test_migration_commands_async_current_delegation(async_config: Aiosqli
         assert result == "test_version"
 
 
+def test_sync_current_verbose_reuses_applied_migration_query(sync_config: SqliteConfig) -> None:
+    """Verbose current output should derive the current version from its history query."""
+    commands = SyncMigrationCommands(sync_config)
+    driver = MagicMock()
+    session = MagicMock()
+    session.__enter__.return_value = driver
+    commands.tracker = MagicMock()
+    commands.tracker.get_applied_migrations.return_value = [
+        {
+            "version_num": "0001",
+            "version_type": "sequential",
+            "execution_sequence": 1,
+            "description": "initial",
+            "applied_at": "now",
+            "execution_time_ms": 1,
+            "checksum": "abc",
+            "applied_by": "tester",
+            "replaces": None,
+        }
+    ]
+
+    with patch.object(sync_config, "provide_session", return_value=session):
+        assert commands.current(verbose=True) == "0001"
+
+    commands.tracker.get_current_version.assert_not_called()
+    commands.tracker.get_applied_migrations.assert_called_once_with(driver)
+
+
+async def test_async_current_verbose_reuses_applied_migration_query(async_config: AiosqliteConfig) -> None:
+    """Async verbose current output should also issue one history query."""
+    commands = AsyncMigrationCommands(async_config)
+    driver = MagicMock()
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=driver)
+    session.__aexit__ = AsyncMock(return_value=None)
+    commands.tracker = MagicMock()
+    commands.tracker.ensure_tracking_table = AsyncMock()
+    commands.tracker.get_current_version = AsyncMock()
+    commands.tracker.get_applied_migrations = AsyncMock(
+        return_value=[
+            {
+                "version_num": "0001",
+                "version_type": "sequential",
+                "execution_sequence": 1,
+                "description": "initial",
+                "applied_at": "now",
+                "execution_time_ms": 1,
+                "checksum": "abc",
+                "applied_by": "tester",
+                "replaces": None,
+            }
+        ]
+    )
+
+    with patch.object(async_config, "provide_session", return_value=session):
+        assert await commands.current(verbose=True) == "0001"
+
+    commands.tracker.get_current_version.assert_not_awaited()
+    commands.tracker.get_applied_migrations.assert_awaited_once_with(driver)
+
+
 def test_migration_commands_sync_upgrade_delegation(sync_config: SqliteConfig) -> None:
     """Test that sync config upgrade is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "upgrade") as mock_upgrade:

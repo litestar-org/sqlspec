@@ -96,6 +96,26 @@ def create_test_migration_runner(migrations_path: Path = Path("/test")) -> SyncM
     return StubMigrationRunner(migrations_path)
 
 
+def test_error_span_uses_one_duration_value(tmp_path: Path) -> None:
+    """Span and log metadata should share one elapsed-time measurement."""
+    runtime = Mock()
+    runner = SyncMigrationRunner(tmp_path, runtime=runtime)
+    driver = Mock()
+    migration = {"version": "0001"}
+
+    with (
+        patch("sqlspec.migrations.runner.time.perf_counter", side_effect=[10.0, 11.0]),
+        patch.object(runner, "_log_migration_event") as log_event,
+    ):
+        runner._finish_migration_span_error(  # pyright: ignore[reportPrivateUsage]
+            Mock(), driver, migration, "upgrade", "migration.apply", 9.0, RuntimeError("boom")
+        )
+
+    span_duration = runtime.end_migration_span.call_args.kwargs["duration_ms"]
+    log_duration = log_event.call_args.kwargs["duration_ms"]
+    assert span_duration == log_duration
+
+
 def create_migration_runner_with_sync_files(migrations_path: Path) -> SyncMigrationRunner:
     """Create a migration runner with sync file discovery."""
 
@@ -524,14 +544,14 @@ def test_load_migration_metadata_prefers_python_docstring(tmp_path: Path) -> Non
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_loader.get_up_sql = Mock(return_value=["SELECT 1"])
         mock_loader.get_down_sql = Mock(return_value=None)
         mock_get_loader.return_value = mock_loader
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 
@@ -665,7 +685,7 @@ def down():
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
@@ -673,7 +693,7 @@ def down():
         mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 

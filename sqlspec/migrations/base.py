@@ -407,6 +407,21 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
         )
 
+    def _add_column_statements(self, missing_columns: "set[str]") -> "list[tuple[str, AlterTable]]":
+        """Build all missing-column statements from one target-DDL snapshot."""
+        target_columns = {column.name.lower(): column for column in self._tracking_table_ddl().columns}
+        statements: list[tuple[str, AlterTable]] = []
+        for column_name in sorted(missing_columns):
+            column = target_columns.get(column_name)
+            if column is not None:
+                statements.append((
+                    column_name,
+                    sql.alter_table(self.version_table).add_column(
+                        name=column.name, dtype=column.dtype, default=column.default, not_null=column.not_null
+                    ),
+                ))
+        return statements
+
     def _derive_version_type(self, version: str) -> str:
         """Return the version-format type ('sequential' or 'timestamp') for a version."""
         return parse_version(version).type.value
@@ -442,7 +457,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             config: The SQLSpec configuration.
         """
         self.config = config
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
 
         self.version_table = migration_config.get("version_table_name", "ddl_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
@@ -692,21 +707,21 @@ out-of-order migrations gracefully.
         """
         if method_value:
             return True
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
         return bool(migration_config.get("use_logger", False))
 
     def _resolve_echo(self, method_value: "bool | None") -> bool:
         """Resolve effective echo setting."""
         if method_value is not None:
             return bool(method_value)
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
         return bool(migration_config.get("echo", True))
 
     def _resolve_summary_only(self, method_value: "bool | None") -> bool:
         """Resolve effective summary_only setting."""
         if method_value is not None:
             return bool(method_value)
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
         return bool(migration_config.get("summary_only", False))
 
     def _resolve_output_policy(

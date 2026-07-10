@@ -328,7 +328,13 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         driver.execute(remove_sql)
         driver.commit()
 
-    def update_version_record(self, driver: "SyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+    def update_version_record(
+        self,
+        driver: "SyncDriverAdapterBase",
+        old_version: str,
+        new_version: str,
+        applied_versions: "set[str] | None" = None,
+    ) -> None:
         """Update migration version record from timestamp to sequential.
 
         Updates version_num and version_type while preserving execution_sequence,
@@ -341,6 +347,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             driver: The database driver to use.
             old_version: Current timestamp version string.
             new_version: New sequential version string.
+            applied_versions: Previously loaded version set for batch reuse.
 
         Raises:
             ValueError: If neither old_version nor new_version found in database.
@@ -351,8 +358,11 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         result = driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = driver.execute(self._applied_migrations_query())
-            applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
+            if applied_versions is None:
+                check_result = driver.execute(self._applied_migrations_query())
+                applied_versions = (
+                    {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
+                )
 
             if new_version in applied_versions:
                 logger.debug("Version already updated: %s -> %s", old_version, new_version)
@@ -530,7 +540,13 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         await driver.execute(remove_sql)
         await driver.commit()
 
-    async def update_version_record(self, driver: "AsyncDriverAdapterBase", old_version: str, new_version: str) -> None:
+    async def update_version_record(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        old_version: str,
+        new_version: str,
+        applied_versions: "set[str] | None" = None,
+    ) -> None:
         """Update migration version record from timestamp to sequential.
 
         Updates version_num and version_type while preserving execution_sequence,
@@ -543,6 +559,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             driver: The database driver to use.
             old_version: Current timestamp version string.
             new_version: New sequential version string.
+            applied_versions: Previously loaded version set for batch reuse.
 
         Raises:
             ValueError: If neither old_version nor new_version found in database.
@@ -553,8 +570,11 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         result = await driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
 
         if result.rows_affected == 0:
-            check_result = await driver.execute(self._applied_migrations_query())
-            applied_versions = {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
+            if applied_versions is None:
+                check_result = await driver.execute(self._applied_migrations_query())
+                applied_versions = (
+                    {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
+                )
 
             if new_version in applied_versions:
                 logger.debug("Version already updated: %s -> %s", old_version, new_version)
