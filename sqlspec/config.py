@@ -758,63 +758,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         self._storage_capabilities = None
 
-    def _reject_unexpected_kwargs(self, kwargs: "dict[str, Any]") -> None:
-        """Raise ``TypeError`` when construction receives unrecognized keyword arguments."""
-        if kwargs:
-            unexpected = ", ".join(sorted(kwargs))
-            msg = f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
-            raise TypeError(msg)
-
-    def _init_config_state(
-        self,
-        *,
-        connection_config: "dict[str, Any] | None",
-        connection_instance: "Any",
-        migration_config: "dict[str, Any] | MigrationConfig | None",
-        statement_config: "StatementConfig | None",
-        driver_features: "dict[str, Any] | None",
-        bind_key: "str | None",
-        extension_config: "ExtensionConfigs | None",
-        observability_config: "ObservabilityConfig | None",
-        default_dialect: str,
-    ) -> None:
-        """Populate the configuration state shared by every base config class.
-
-        Assigns identity and connection attributes, initializes observability and
-        migration components, resolves the statement configuration against
-        ``default_dialect``, seeds runtime driver features from storage
-        capabilities, and attaches lifecycle and observability extensions.
-        """
-        self.bind_key = bind_key
-        self.connection_instance = connection_instance
-        self.connection_config = connection_config or {}
-        self.extension_config = extension_config or {}
-        self.migration_config = migration_config or {}
-        self._init_observability(observability_config)
-        self._initialize_migration_components()
-        self.statement_config = statement_config or build_default_statement_config(default_dialect)
-        self._storage_capabilities = None
-        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
-        self._attach_lifecycle_hooks()
-        self._configure_observability_extensions()
-
-    def _provide_connection_impl(self, *args: Any, **kwargs: Any) -> Any:
-        """Build the connection context manager shared by pooled configs."""
-        return self._connection_context_class(self)
-
-    def _provide_session_impl(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
-    ) -> Any:
-        """Build the session context manager shared by pooled configs."""
-        handler = self._session_factory_class(self)
-        return self._session_context_class(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config or self.statement_config or self._default_statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
-
     def _has_initialized_attribute(self, attribute_name: str) -> bool:
         """Return whether a slot-backed attribute has been initialized."""
         try:
@@ -1252,6 +1195,63 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             yes: Skip confirmation prompt. Defaults to False.
         """
         raise NotImplementedError
+
+    def _reject_unexpected_kwargs(self, kwargs: "dict[str, Any]") -> None:
+        """Raise ``TypeError`` when construction receives unrecognized keyword arguments."""
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            msg = f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
+            raise TypeError(msg)
+
+    def _init_config_state(
+        self,
+        *,
+        connection_config: "dict[str, Any] | None",
+        connection_instance: "Any",
+        migration_config: "dict[str, Any] | MigrationConfig | None",
+        statement_config: "StatementConfig | None",
+        driver_features: "dict[str, Any] | None",
+        bind_key: "str | None",
+        extension_config: "ExtensionConfigs | None",
+        observability_config: "ObservabilityConfig | None",
+        default_dialect: str,
+    ) -> None:
+        """Populate the configuration state shared by every base config class.
+
+        Assigns identity and connection attributes, initializes observability and
+        migration components, resolves the statement configuration against
+        ``default_dialect``, seeds runtime driver features from storage
+        capabilities, and attaches lifecycle and observability extensions.
+        """
+        self.bind_key = bind_key
+        self.connection_instance = connection_instance
+        self.connection_config = connection_config or {}
+        self.extension_config = extension_config or {}
+        self.migration_config = migration_config or {}
+        self._init_observability(observability_config)
+        self._initialize_migration_components()
+        self.statement_config = statement_config or build_default_statement_config(default_dialect)
+        self._storage_capabilities = None
+        self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
+        self._attach_lifecycle_hooks()
+        self._configure_observability_extensions()
+
+    def _provide_connection_impl(self, *args: Any, **kwargs: Any) -> Any:
+        """Build the connection context manager shared by pooled configs."""
+        return self._connection_context_class(self)
+
+    def _provide_session_impl(
+        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+    ) -> Any:
+        """Build the session context manager shared by pooled configs."""
+        handler = self._session_factory_class(self)
+        return self._session_context_class(
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or self._default_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
 
 class _SyncMigrationMixin:

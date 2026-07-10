@@ -102,14 +102,6 @@ class SQLSpec:
         """
         return self._configs
 
-    def _ensure_registered(
-        self,
-        config: "NoPoolSyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any]",
-    ) -> None:
-        """Register the configuration when it is not already tracked."""
-        if id(config) not in self._configs:
-            self.add_config(config)
-
     @overload
     def get_connection(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
@@ -613,6 +605,14 @@ class SQLSpec:
         if self._loader is None:
             return []
         return self._loader.list_files()
+
+    def _ensure_registered(
+        self,
+        config: "NoPoolSyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any]",
+    ) -> None:
+        """Register the configuration when it is not already tracked."""
+        if id(config) not in self._configs:
+            self.add_config(config)
 
     def _ensure_loader(self) -> SQLFileLoader:
         if self._loader is None:
