@@ -164,6 +164,18 @@ def test_sync_context_manager_exception_exit_closes() -> None:
     assert source.close_errors == [True]
 
 
+def test_sync_close_does_not_retry_when_source_raises_type_error() -> None:
+    class RaisingClose(FakeSyncSource):
+        def close(self, error: bool = False) -> None:
+            super().close(error=error)
+            raise TypeError("close boom")
+
+    source = RaisingClose([])
+    _sync_stream(source).close()
+
+    assert source.close_calls == 1
+
+
 # --------------------------------------------------------------------------- #
 # AsyncRowStream
 # --------------------------------------------------------------------------- #
@@ -253,6 +265,18 @@ async def test_async_context_manager_exception_exit_closes() -> None:
             raise ValueError("boom")
     assert source.close_calls == 1
     assert source.close_errors == [True]
+
+
+async def test_async_close_does_not_retry_when_source_raises_type_error() -> None:
+    class RaisingClose(FakeAsyncSource):
+        async def close(self, error: bool = False) -> None:
+            await super().close(error=error)
+            raise TypeError("close boom")
+
+    source = RaisingClose([])
+    await _async_stream(source).aclose()
+
+    assert source.close_calls == 1
 
 
 # --------------------------------------------------------------------------- #

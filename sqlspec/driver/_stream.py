@@ -141,13 +141,8 @@ class SyncRowStream(Generic[RowT]):
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
-        try:
+        with contextlib.suppress(Exception):
             self._source.close(error=error)
-        except TypeError:
-            with contextlib.suppress(Exception):
-                self._source.close()
-        except Exception:
-            return
 
 
 class AsyncRowStream(Generic[RowT]):
@@ -228,13 +223,8 @@ class AsyncRowStream(Generic[RowT]):
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
-        try:
+        with contextlib.suppress(Exception):
             await self._source.close(error=error)
-        except TypeError:
-            with contextlib.suppress(Exception):
-                await self._source.close()
-        except Exception:
-            return
 
 
 class EagerSyncRowSource:
