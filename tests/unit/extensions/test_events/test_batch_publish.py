@@ -12,6 +12,7 @@ from sqlspec.core import StatementConfig
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import AsyncEventChannel, AsyncTableEventQueue, SyncEventChannel, SyncTableEventQueue
 from sqlspec.observability import ObservabilityRuntime
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -53,6 +54,52 @@ class _AsyncBatchBackend(_AsyncFallbackBackend):
     async def publish_many(self, events: "list[tuple[str, dict[str, Any], dict[str, Any] | None]]") -> list[str]:
         self.batches.append(events)
         return [f"batch-{index}" for index in range(len(events))]
+
+
+class _RaisingSyncBatchBackend(_SyncFallbackBackend):
+    def publish_many(self, _events: Any) -> list[str]:
+        msg = "sync batch failed"
+        raise RuntimeError(msg)
+
+
+class _RaisingAsyncBatchBackend(_AsyncFallbackBackend):
+    async def publish_many(self, _events: Any) -> list[str]:
+        msg = "async batch failed"
+        raise RuntimeError(msg)
+
+
+class _RecordingSpan:
+    def __init__(self) -> None:
+        self.closed = False
+        self.error: Exception | None = None
+
+    def end(self) -> None:
+        self.closed = True
+
+    def record_exception(self, error: Exception) -> None:
+        self.error = error
+
+    def set_attribute(self, _name: str, _value: Any) -> None:
+        return None
+
+
+class _RecordingSpanManager:
+    is_enabled = True
+
+    def __init__(self) -> None:
+        self.started: list[_RecordingSpan] = []
+        self.finished: list[_RecordingSpan] = []
+
+    def start_span(self, _name: str, _attributes: "dict[str, Any]") -> _RecordingSpan:
+        span = _RecordingSpan()
+        self.started.append(span)
+        return span
+
+    def end_span(self, span: _RecordingSpan, error: "Exception | None" = None) -> None:
+        if error is not None:
+            span.record_exception(error)
+        span.end()
+        self.finished.append(span)
 
 
 def test_sync_event_channel_publish_many_falls_back_after_prevalidation(tmp_path: Any) -> None:
@@ -98,6 +145,38 @@ async def test_async_event_channel_publish_many_prefers_backend_batch(tmp_path: 
     assert ids == ["batch-0", "batch-1"]
     assert backend.batches == [events]
     assert backend.published == []
+
+
+def test_sync_event_channel_publish_many_finishes_error_span(tmp_path: Any) -> None:
+    backend = _RaisingSyncBatchBackend()
+    channel = SyncEventChannel(SqliteConfig(connection_config={"database": str(tmp_path / "sync_error.db")}))
+    channel._backend = backend  # type: ignore[assignment]
+    span_manager = _RecordingSpanManager()
+    channel._runtime.span_manager = cast("Any", span_manager)
+
+    with pytest.raises(RuntimeError, match="sync batch failed"):
+        channel.publish_many([("events", {}, None)])
+
+    assert len(span_manager.started) == 1
+    assert span_manager.finished == span_manager.started
+    assert span_manager.finished[0].closed is True
+    assert isinstance(span_manager.finished[0].error, RuntimeError)
+
+
+async def test_async_event_channel_publish_many_finishes_error_span(tmp_path: Any) -> None:
+    backend = _RaisingAsyncBatchBackend()
+    channel = AsyncEventChannel(AiosqliteConfig(connection_config={"database": str(tmp_path / "async_error.db")}))
+    channel._backend = backend  # type: ignore[assignment]
+    span_manager = _RecordingSpanManager()
+    channel._runtime.span_manager = cast("Any", span_manager)
+
+    with pytest.raises(RuntimeError, match="async batch failed"):
+        await channel.publish_many([("events", {}, None)])
+
+    assert len(span_manager.started) == 1
+    assert span_manager.finished == span_manager.started
+    assert span_manager.finished[0].closed is True
+    assert isinstance(span_manager.finished[0].error, RuntimeError)
 
 
 class _SyncDriver:
@@ -171,6 +250,7 @@ def test_sync_table_queue_publish_many_uses_one_session_statement_and_commit() -
     assert config.sessions == 1
     assert len(config.driver.execute_many_calls) == 1
     assert len(config.driver.execute_many_calls[0][1]) == 1_000
+    assert [record["event_id"] for record in config.driver.execute_many_calls[0][1]] == ids
     assert config.driver.commits == 1
 
 
@@ -185,6 +265,7 @@ async def test_async_table_queue_publish_many_uses_one_session_statement_and_com
     assert config.sessions == 1
     assert len(config.driver.execute_many_calls) == 1
     assert len(config.driver.execute_many_calls[0][1]) == 1_000
+    assert [record["event_id"] for record in config.driver.execute_many_calls[0][1]] == ids
     assert config.driver.commits == 1
 
 
@@ -294,6 +375,7 @@ async def test_async_postgres_notify_publish_many_uses_one_session_and_batch_sta
     assert config.sessions == 1
     assert len(config.driver.execute_many_calls) == 1
     assert len(config.driver.execute_many_calls[0][1]) == 1_000
+    assert _notify_event_ids(config.driver.execute_many_calls[0][1]) == ids
     assert config.driver.commits == 1
 
 
@@ -310,6 +392,7 @@ def test_psycopg_sync_notify_publish_many_uses_one_session_and_batch_statement()
     assert config.sessions == 1
     assert len(config.driver.execute_many_calls) == 1
     assert len(config.driver.execute_many_calls[0][1]) == 1_000
+    assert _notify_event_ids(config.driver.execute_many_calls[0][1]) == ids
     assert config.driver.commits == 1
 
 
@@ -354,6 +437,8 @@ async def test_async_postgres_hybrid_publish_many_bulk_inserts_and_marks_each_ch
     assert config.sessions == 1
     assert len(config.driver.execute_many_calls) == 2
     assert [len(call[1]) for call in config.driver.execute_many_calls] == [1_000, 2]
+    assert [record["event_id"] for record in config.driver.execute_many_calls[0][1]] == ids
+    assert _notify_channels(config.driver.execute_many_calls[1][1]) == ["channel_0", "channel_1"]
     assert config.driver.commits == 1
 
 
@@ -370,4 +455,25 @@ def test_psycopg_sync_hybrid_publish_many_bulk_inserts_and_marks_each_channel_on
     assert config.sessions == 1
     assert len(config.driver.execute_many_calls) == 2
     assert [len(call[1]) for call in config.driver.execute_many_calls] == [1_000, 2]
+    assert [record["event_id"] for record in config.driver.execute_many_calls[0][1]] == ids
+    assert _notify_channels(config.driver.execute_many_calls[1][1]) == ["channel_0", "channel_1"]
     assert config.driver.commits == 1
+
+
+def _notify_event_ids(parameters: "list[Any]") -> list[str]:
+    event_ids: list[str] = []
+    for parameters_row in parameters:
+        payload = parameters_row["payload"] if isinstance(parameters_row, dict) else parameters_row[1]
+        decoded = from_json(payload)
+        assert isinstance(decoded, dict)
+        event_id = decoded.get("event_id")
+        assert isinstance(event_id, str)
+        event_ids.append(event_id)
+    return event_ids
+
+
+def _notify_channels(parameters: "list[Any]") -> list[str]:
+    return [
+        parameters_row["channel"] if isinstance(parameters_row, dict) else parameters_row[0]
+        for parameters_row in parameters
+    ]
