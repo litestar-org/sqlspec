@@ -23,6 +23,7 @@ from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+    from sqlspec.extensions.events._hints import EventRuntimeHints
     from sqlspec.extensions.events._protocols import AsyncEventHandler, SyncEventHandler
     from sqlspec.observability import ObservabilityRuntime
 
@@ -217,6 +218,50 @@ def load_native_backend(
         )
         return None
     return backend
+
+
+def _resolve_event_backend(
+    config: Any,
+    extension_settings: "dict[str, Any]",
+    adapter_name: "str | None",
+    hints: "EventRuntimeHints",
+    *,
+    protocol_type: "type[Any]",
+) -> "tuple[Any, str]":
+    """Resolve the event backend and label for one configuration.
+
+    Falls back to the table queue backend when no native backend is available,
+    logging a warning when a non-default backend was requested.
+
+    Args:
+        config: Database configuration instance.
+        extension_settings: Events extension settings for the configuration.
+        adapter_name: Resolved adapter name, if any.
+        hints: Adapter event runtime hints.
+        protocol_type: Backend protocol the native backend must satisfy to
+            report its own backend name.
+
+    Returns:
+        Tuple of resolved backend and backend label.
+    """
+    queue_backend = build_queue_backend(config, extension_settings, adapter_name=adapter_name, hints=hints)
+    backend_name = _resolve_backend_name(config, extension_settings, adapter_name)
+    native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=adapter_name)
+    if native_backend is None:
+        if backend_name not in {None, "poll_queue"}:
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "event.listen",
+                adapter_name=adapter_name,
+                backend_name=backend_name,
+                fallback_backend="poll_queue",
+                status="backend_unavailable",
+            )
+        return queue_backend, "poll_queue"
+    if isinstance(native_backend, protocol_type):
+        return native_backend, cast("str", native_backend.backend_name)
+    return native_backend, backend_name or "poll_queue"
 
 
 def _start_event_span(
@@ -436,28 +481,10 @@ class SyncEventChannel:
             extension_settings.get("event_poll_interval"), extension_settings.get("poll_interval"), hints.poll_interval
         )
         self._poll_interval_default = self._event_poll_interval
-        queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
-        backend_name = _resolve_backend_name(config, extension_settings, self._adapter_name)
-        native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
-        if native_backend is None:
-            if backend_name not in {None, "poll_queue"}:
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    "event.listen",
-                    adapter_name=self._adapter_name,
-                    backend_name=backend_name,
-                    fallback_backend="poll_queue",
-                    status="backend_unavailable",
-                )
-            self._backend = cast("SyncEventBackendProtocol", queue_backend)
-            backend_label = "poll_queue"
-        else:
-            self._backend = cast("SyncEventBackendProtocol", native_backend)
-            if isinstance(native_backend, SyncEventBackendProtocol):
-                backend_label = native_backend.backend_name
-            else:
-                backend_label = backend_name or "poll_queue"
+        backend, backend_label = _resolve_event_backend(
+            config, extension_settings, self._adapter_name, hints, protocol_type=SyncEventBackendProtocol
+        )
+        self._backend = cast("SyncEventBackendProtocol", backend)
         self._config = config
         self._backend_name = backend_label
         self._runtime = config.get_observability_runtime()
@@ -723,28 +750,10 @@ class AsyncEventChannel:
             extension_settings.get("event_poll_interval"), extension_settings.get("poll_interval"), hints.poll_interval
         )
         self._poll_interval_default = self._event_poll_interval
-        queue_backend = build_queue_backend(config, extension_settings, adapter_name=self._adapter_name, hints=hints)
-        backend_name = _resolve_backend_name(config, extension_settings, self._adapter_name)
-        native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=self._adapter_name)
-        if native_backend is None:
-            if backend_name not in {None, "poll_queue"}:
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    "event.listen",
-                    adapter_name=self._adapter_name,
-                    backend_name=backend_name,
-                    fallback_backend="poll_queue",
-                    status="backend_unavailable",
-                )
-            self._backend = cast("AsyncEventBackendProtocol", queue_backend)
-            backend_label = "poll_queue"
-        else:
-            self._backend = cast("AsyncEventBackendProtocol", native_backend)
-            if isinstance(native_backend, AsyncEventBackendProtocol):
-                backend_label = native_backend.backend_name
-            else:
-                backend_label = backend_name or "poll_queue"
+        backend, backend_label = _resolve_event_backend(
+            config, extension_settings, self._adapter_name, hints, protocol_type=AsyncEventBackendProtocol
+        )
+        self._backend = cast("AsyncEventBackendProtocol", backend)
         self._config = config
         self._backend_name = backend_label
         self._runtime = config.get_observability_runtime()
