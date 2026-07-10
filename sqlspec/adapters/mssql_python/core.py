@@ -8,6 +8,7 @@ from sqlspec.core.parameters import ParameterStyle
 from sqlspec.core.parameters._registry import build_statement_config_from_profile
 from sqlspec.core.parameters._types import DriverParameterProfile
 from sqlspec.exceptions import (
+    CheckViolationError,
     DatabaseConnectionError,
     DataError,
     DeadlockError,
@@ -41,6 +42,7 @@ __all__ = (
 )
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
+_MSSQL_CONSTRAINT_547: Final[int] = 547
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
 _CONNECTION_STRING_KEYS: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
@@ -77,7 +79,6 @@ _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
-    547: (ForeignKeyViolationError, "foreign key or check constraint violation"),
     515: (NotNullViolationError, "not-null constraint violation"),
     18456: (PermissionDeniedError, "permission denied"),
     4060: (DatabaseConnectionError, "database connection error"),
@@ -92,6 +93,13 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a mssql-python exception to SQLSpec's exception hierarchy."""
     error_number = _extract_error_number(error)
+    if error_number == _MSSQL_CONSTRAINT_547:
+        message = str(error)
+        if "check constraint" in message.lower():
+            return CheckViolationError(f"SQL Server error 547: check constraint violation. Original error: {error}")
+        return ForeignKeyViolationError(
+            f"SQL Server error 547: foreign key constraint violation. Original error: {error}"
+        )
     if error_number is not None:
         mapping = _ERROR_CODE_MAPPING.get(error_number)
         if mapping is not None:

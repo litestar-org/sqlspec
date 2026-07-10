@@ -5,7 +5,12 @@ from typing import Any
 import pytest
 
 from sqlspec.core import SQL, ParameterStyle
-from sqlspec.exceptions import DatabaseConnectionError, UniqueViolationError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    ForeignKeyViolationError,
+    UniqueViolationError,
+)
 
 
 def test_profile_uses_tsql_and_pyformat_execution() -> None:
@@ -79,6 +84,43 @@ def test_create_mapped_exception_maps_tsql_error_numbers(message: str, expected_
 
     assert isinstance(exc, expected_type)
     assert "SQL Server error" in str(exc)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_type", "expected_detail"),
+    [
+        (
+            'The INSERT statement conflicted with the FOREIGN KEY constraint "FK_Orders_Customers". (547)',
+            ForeignKeyViolationError,
+            "foreign key constraint violation",
+        ),
+        (
+            'The UPDATE statement conflicted with the CHECK constraint "CK_Employee_Salary". (547)',
+            CheckViolationError,
+            "check constraint violation",
+        ),
+        (
+            'The UPDATE statement conflicted with the check constraint "CK_Employee_Salary". (547)',
+            CheckViolationError,
+            "check constraint violation",
+        ),
+        (
+            'The DELETE statement conflicted with constraint "Unknown_Constraint". (547)',
+            ForeignKeyViolationError,
+            "foreign key constraint violation",
+        ),
+    ],
+)
+def test_create_mapped_exception_disambiguates_547_check_vs_foreign_key(
+    message: str, expected_type: type[Exception], expected_detail: str
+) -> None:
+    """SQL Server 547 distinguishes CHECK from foreign-key constraint violations."""
+    from sqlspec.adapters.pymssql.core import create_mapped_exception
+
+    mapped = create_mapped_exception(Exception(message))
+
+    assert isinstance(mapped, expected_type)
+    assert expected_detail in str(mapped)
 
 
 def test_normalize_execute_many_parameters_passes_through() -> None:
