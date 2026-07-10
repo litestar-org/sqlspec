@@ -18,6 +18,7 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 
@@ -130,7 +131,7 @@ def test_registry_first_load_is_thread_safe(monkeypatch: pytest.MonkeyPatch) -> 
             return NumpyArray
         return NumpyGeneric
 
-    def copy_registry() -> dict[type, object]:
+    def copy_registry() -> dict[type, Any]:
         start_readers.wait(timeout=5)
         return registry.copy()
 
