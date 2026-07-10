@@ -2,6 +2,7 @@
 """Extended unit tests for EventChannel configuration and backend selection."""
 
 import asyncio
+import threading
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from sqlspec import ObservabilityRuntime
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
-from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+from sqlspec.extensions.events import AsyncEventChannel, AsyncEventListener, SyncEventChannel, SyncEventListener
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -31,6 +32,33 @@ def test_event_channel_adapter_name_resolution(tmp_path) -> None:
     channel = SyncEventChannel(config)
 
     assert channel._adapter_name == "sqlite"
+
+
+async def test_async_event_listener_stop_cancels_blocked_wait() -> None:
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(asyncio.Event().wait())
+    listener = AsyncEventListener("listener", "events", task, stop_event, 60.0)
+
+    await asyncio.wait_for(listener.stop(), timeout=0.1)
+
+    assert stop_event.is_set()
+    assert task.cancelled()
+
+
+def test_sync_event_listener_stop_uses_bounded_join(monkeypatch: pytest.MonkeyPatch) -> None:
+    blocker = threading.Event()
+    thread = threading.Thread(target=blocker.wait, daemon=True)
+    thread.start()
+    stop_event = threading.Event()
+    listener = SyncEventListener("listener", "events", thread, stop_event, 60.0)
+    monkeypatch.setattr("sqlspec.extensions.events._channel._LISTENER_SHUTDOWN_TIMEOUT", 0.01)
+
+    listener.stop()
+
+    assert stop_event.is_set()
+    assert thread.is_alive()
+    blocker.set()
+    thread.join(timeout=0.1)
 
 
 def test_event_channel_default_poll_interval(tmp_path) -> None:

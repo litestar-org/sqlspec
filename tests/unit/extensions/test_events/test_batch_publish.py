@@ -2,6 +2,7 @@
 """Batch publication contract tests for event channels and backends."""
 
 from contextlib import asynccontextmanager, contextmanager
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -181,25 +182,54 @@ async def test_async_event_channel_publish_many_finishes_error_span(tmp_path: An
 
 class _SyncDriver:
     def __init__(self) -> None:
+        self.begins = 0
         self.commits = 0
+        self.rollbacks = 0
+        self.connection = SimpleNamespace(autocommit=False)
+        self.fail_execute_many_call: int | None = None
         self.execute_calls: list[Any] = []
         self.execute_many_calls: list[tuple[Any, list[dict[str, Any]], Any]] = []
+
+    def begin(self) -> None:
+        self.begins += 1
+        self.connection.autocommit = False
 
     def execute(self, statement: Any) -> None:
         self.execute_calls.append(statement)
 
     def execute_many(self, statement: Any, parameters: Any, *, statement_config: Any = None) -> None:
         self.execute_many_calls.append((statement, list(parameters), statement_config))
+        if self.fail_execute_many_call == len(self.execute_many_calls):
+            raise RuntimeError("marker publish failed")
 
     def commit(self) -> None:
         self.commits += 1
 
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+class _AsyncConnection:
+    def __init__(self) -> None:
+        self.autocommit = False
+
+    async def set_autocommit(self, value: bool) -> None:
+        self.autocommit = value
+
 
 class _AsyncDriver:
     def __init__(self) -> None:
+        self.begins = 0
         self.commits = 0
+        self.rollbacks = 0
+        self.connection = _AsyncConnection()
+        self.fail_execute_many_call: int | None = None
         self.execute_calls: list[Any] = []
         self.execute_many_calls: list[tuple[Any, list[dict[str, Any]], Any]] = []
+
+    async def begin(self) -> None:
+        self.begins += 1
+        self.connection.autocommit = False
 
     async def execute(self, statement: Any) -> None:
         self.execute_calls.append(statement)
@@ -209,9 +239,14 @@ class _AsyncDriver:
 
     async def execute_many(self, statement: Any, parameters: Any, *, statement_config: Any = None) -> None:
         self.execute_many_calls.append((statement, list(parameters), statement_config))
+        if self.fail_execute_many_call == len(self.execute_many_calls):
+            raise RuntimeError("marker publish failed")
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
 
 class _SyncQueueConfig:
@@ -344,6 +379,10 @@ class _HybridQueue:
     _insert_statement = "INSERT INTO sqlspec_event_queue VALUES (:event_id)"
     _statement_config = StatementConfig(dialect="postgres")
 
+    @staticmethod
+    def _batch_insert_parameters(events: Any) -> Any:
+        return SyncTableEventQueue._batch_insert_parameters(events)
+
 
 def _asyncpg_notify_backend(config: Any) -> Any:
     pytest.importorskip("asyncpg")
@@ -387,7 +426,30 @@ async def test_async_postgres_notify_publish_many_uses_one_session_and_batch_sta
     assert len(config.driver.execute_many_calls) == 1
     assert len(config.driver.execute_many_calls[0][1]) == 1_000
     assert _notify_event_ids(config.driver.execute_many_calls[0][1]) == ids
+    assert config.driver.begins == 1
     assert config.driver.commits == 1
+    assert config.driver.rollbacks == 0
+
+
+@pytest.mark.parametrize(
+    "config_type,backend_factory",
+    [
+        (_AsyncpgConfig, _asyncpg_notify_backend),
+        (_PsycopgAsyncConfig, _psycopg_async_notify_backend),
+        (_PsqlpyConfig, _psqlpy_notify_backend),
+    ],
+)
+async def test_async_postgres_notify_batch_failure_rolls_back(config_type: Any, backend_factory: Any) -> None:
+    config = config_type()
+    config.driver.fail_execute_many_call = 1
+    backend = backend_factory(config)
+
+    with pytest.raises(RuntimeError, match="marker publish failed"):
+        await backend.publish_many(_events(4))
+
+    assert config.driver.begins == 1
+    assert config.driver.commits == 0
+    assert config.driver.rollbacks == 1
 
 
 def test_psycopg_sync_notify_publish_many_uses_one_session_and_batch_statement() -> None:
@@ -404,7 +466,9 @@ def test_psycopg_sync_notify_publish_many_uses_one_session_and_batch_statement()
     assert len(config.driver.execute_many_calls) == 1
     assert len(config.driver.execute_many_calls[0][1]) == 1_000
     assert _notify_event_ids(config.driver.execute_many_calls[0][1]) == ids
+    assert config.driver.begins == 1
     assert config.driver.commits == 1
+    assert config.driver.rollbacks == 0
 
 
 def _asyncpg_hybrid_backend(config: Any) -> Any:
@@ -452,7 +516,42 @@ async def test_async_postgres_hybrid_publish_many_bulk_inserts_and_marks_each_ch
     marker_parameters = config.driver.execute_many_calls[1][1]
     assert _notify_channels(marker_parameters) == ["channel_0", "channel_1"]
     assert _notify_batch_markers(marker_parameters) == [500, 500]
+    assert config.driver.begins == 1
     assert config.driver.commits == 1
+    assert config.driver.rollbacks == 0
+
+
+@pytest.mark.parametrize(
+    "config_type,backend_factory",
+    [
+        (_AsyncpgConfig, _asyncpg_hybrid_backend),
+        (_PsycopgAsyncConfig, _psycopg_async_hybrid_backend),
+        (_PsqlpyConfig, _psqlpy_hybrid_backend),
+    ],
+)
+async def test_async_postgres_hybrid_marker_failure_rolls_back_batch(config_type: Any, backend_factory: Any) -> None:
+    config = config_type()
+    config.driver.fail_execute_many_call = 2
+    backend = backend_factory(config)
+
+    with pytest.raises(RuntimeError, match="marker publish failed"):
+        await backend.publish_many(_events(4))
+
+    assert config.driver.begins == 1
+    assert config.driver.commits == 0
+    assert config.driver.rollbacks == 1
+
+
+async def test_psycopg_async_hybrid_marker_failure_restores_autocommit() -> None:
+    config = _PsycopgAsyncConfig()
+    config.driver.connection.autocommit = True
+    config.driver.fail_execute_many_call = 2
+    backend = _psycopg_async_hybrid_backend(config)
+
+    with pytest.raises(RuntimeError, match="marker publish failed"):
+        await backend.publish_many(_events(4))
+
+    assert config.driver.connection.autocommit is True
 
 
 @pytest.mark.parametrize(
@@ -495,7 +594,27 @@ def test_psycopg_sync_hybrid_publish_many_bulk_inserts_and_marks_each_channel_on
     marker_parameters = config.driver.execute_many_calls[1][1]
     assert _notify_channels(marker_parameters) == ["channel_0", "channel_1"]
     assert _notify_batch_markers(marker_parameters) == [500, 500]
+    assert config.driver.begins == 1
     assert config.driver.commits == 1
+    assert config.driver.rollbacks == 0
+
+
+def test_psycopg_sync_hybrid_marker_failure_rolls_back_batch_and_restores_autocommit() -> None:
+    pytest.importorskip("psycopg")
+    from sqlspec.adapters.psycopg.events.backend import PsycopgSyncHybridEventsBackend
+
+    config = _PsycopgSyncConfig()
+    config.driver.connection.autocommit = True
+    config.driver.fail_execute_many_call = 2
+    backend = PsycopgSyncHybridEventsBackend(config, _HybridQueue())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="marker publish failed"):
+        backend.publish_many(_events(4))
+
+    assert config.driver.begins == 1
+    assert config.driver.commits == 0
+    assert config.driver.rollbacks == 1
+    assert config.driver.connection.autocommit is True
 
 
 def test_psycopg_sync_hybrid_single_and_batch_preserve_empty_metadata() -> None:

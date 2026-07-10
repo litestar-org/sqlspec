@@ -52,6 +52,12 @@ Unreleased
 * Durable notification queues now drain all rows represented by a batch marker,
   suppress duplicate markers, and recover missed markers through periodic
   durable reconciliation.
+* Durable batch publication now preserves input delivery order, rolls back row
+  inserts when marker publication fails, and drains all recovered rows after a
+  lost marker without another native wait per event.
+* Event listener shutdown now cancels async waits concurrently and bounds sync
+  thread joins. Empty table queues do not poll faster than
+  ``event_poll_interval``.
 
 **Docs:**
 

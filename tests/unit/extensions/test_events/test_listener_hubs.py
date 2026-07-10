@@ -318,8 +318,11 @@ _PsycopgSyncNativeConfig.__module__ = "sqlspec.adapters.psycopg.config"
 
 
 class _TimeoutHub:
+    def __init__(self) -> None:
+        self.dequeue_calls = 0
+
     async def dequeue(self, _channel: str, _poll_interval: float) -> None:
-        return None
+        self.dequeue_calls += 1
 
 
 class _SyncTimeoutHub:
@@ -389,6 +392,16 @@ class _EmptyQueueFallback(_QueueFallback):
     async def dequeue(self, channel: str, poll_interval: float | None = None) -> None:
         self.dequeue_calls.append((channel, poll_interval))
         return
+
+
+class _RecoveringQueueFallback(_QueueFallback):
+    def __init__(self) -> None:
+        super().__init__()
+        self._remaining: list[EventMessage | None] = [self.event, self.event, None]
+
+    async def dequeue(self, channel: str, poll_interval: float | None = None) -> EventMessage | None:
+        self.dequeue_calls.append((channel, poll_interval))
+        return self._remaining.pop(0)
 
 
 class _SyncQueueFallback:
@@ -705,7 +718,7 @@ def test_psycopg_sync_listener_hub_reconnects_and_releases_listener_contexts() -
 async def test_asyncpg_hybrid_dequeue_polls_durable_queue_after_notify_timeout() -> None:
     config = _HybridConfig()
     await _assert_dropped_marker_recovers(
-        AsyncpgHybridEventsBackend(config, _QueueFallback()),  # type: ignore[arg-type]
+        AsyncpgHybridEventsBackend(config, _RecoveringQueueFallback()),  # type: ignore[arg-type]
         config,
     )
 
@@ -716,7 +729,7 @@ async def test_psycopg_hybrid_dequeue_polls_durable_queue_after_notify_timeout()
 
     config = _PsycopgHybridConfig()
     await _assert_dropped_marker_recovers(
-        PsycopgAsyncHybridEventsBackend(config, _QueueFallback()),  # type: ignore[arg-type]
+        PsycopgAsyncHybridEventsBackend(config, _RecoveringQueueFallback()),  # type: ignore[arg-type]
         config,
     )
 
@@ -727,7 +740,7 @@ async def test_psqlpy_hybrid_dequeue_polls_durable_queue_after_notify_timeout() 
 
     config = _PsqlpyHybridConfig()
     await _assert_dropped_marker_recovers(
-        PsqlpyHybridEventsBackend(config, _QueueFallback()),  # type: ignore[arg-type]
+        PsqlpyHybridEventsBackend(config, _RecoveringQueueFallback()),  # type: ignore[arg-type]
         config,
     )
 
@@ -919,12 +932,18 @@ async def test_psycopg_async_hub_registers_pool_destroying_hook_after_subscribe(
 
 async def _assert_dropped_marker_recovers(backend: Any, config: _HybridConfig) -> None:
     queue = backend._queue
-    backend._hub = _TimeoutHub()
+    hub = _TimeoutHub()
+    backend._hub = hub
 
-    event = await backend.dequeue("alerts", 0.25)
+    first = await backend.dequeue("alerts", 0.25)
+    second = await backend.dequeue("alerts", 0.25)
+    exhausted = await backend.dequeue("alerts", 0.25)
 
-    assert event is queue.event
-    assert queue.dequeue_calls == [("alerts", None)]
+    assert first is queue.event
+    assert second is queue.event
+    assert exhausted is None
+    assert hub.dequeue_calls == 1
+    assert queue.dequeue_calls == [("alerts", None), ("alerts", None), ("alerts", None)]
     metric_names = [name for name, _ in config.runtime.metrics]
     assert "events.marker.miss" in metric_names
     assert "events.poll.fallback" in metric_names

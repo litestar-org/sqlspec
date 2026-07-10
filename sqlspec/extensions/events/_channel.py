@@ -6,6 +6,7 @@ import inspect
 import logging
 import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
@@ -37,6 +38,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.events.channel")
+_LISTENER_SHUTDOWN_TIMEOUT = 0.5
 
 
 @dataclass(slots=True)
@@ -53,6 +55,8 @@ class AsyncEventListener:
         """Signal the listener to stop and await task completion."""
         self.stop_event.set()
         if not self.task.done():
+            self.task.cancel()
+        with suppress(asyncio.CancelledError):
             await self.task
 
 
@@ -69,7 +73,7 @@ class SyncEventListener:
     def stop(self) -> None:
         """Signal the listener to stop and join the thread."""
         self.stop_event.set()
-        self.thread.join()
+        self.thread.join(timeout=_LISTENER_SHUTDOWN_TIMEOUT)
 
 
 def resolve_poll_interval(poll_interval: "float | None", default: float) -> float:
@@ -618,15 +622,21 @@ class SyncEventChannel:
         """Shutdown the event channel and release backend resources."""
         started_at = perf_counter()
         span = _start_event_span(self._runtime, "shutdown", self._backend_name, self._adapter_name, mode="sync")
+        listeners = list(self._listeners.values())
+        self._listeners.clear()
+        for listener in listeners:
+            listener.stop_event.set()
         try:
-            for listener_id in list(self._listeners):
-                self.stop_listener(listener_id)
             self._backend.shutdown()
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
         finally:
+            deadline = started_at + _LISTENER_SHUTDOWN_TIMEOUT
+            for listener in listeners:
+                listener.thread.join(timeout=max(deadline - perf_counter(), 0.0))
             self._runtime.record_metric("events.shutdown.duration_ms", (perf_counter() - started_at) * 1000)
+        self._runtime.increment_metric("events.listener.stop", len(listeners))
         _end_event_span(self._runtime, span, result="shutdown")
         self._runtime.increment_metric("events.shutdown")
 
@@ -915,15 +925,17 @@ class AsyncEventChannel:
         """Shutdown the event channel and release backend resources."""
         started_at = perf_counter()
         span = _start_event_span(self._runtime, "shutdown", self._backend_name, self._adapter_name, mode="async")
+        listeners = list(self._listeners.values())
+        self._listeners.clear()
         try:
-            for listener_id in list(self._listeners):
-                await self.stop_listener(listener_id)
+            await asyncio.gather(*(listener.stop() for listener in listeners))
             await self._backend.shutdown()
         except Exception as error:
             _end_event_span(self._runtime, span, error=error)
             raise
         finally:
             self._runtime.record_metric("events.shutdown.duration_ms", (perf_counter() - started_at) * 1000)
+        self._runtime.increment_metric("events.listener.stop", len(listeners))
         _end_event_span(self._runtime, span, result="shutdown")
         self._runtime.increment_metric("events.shutdown")
 

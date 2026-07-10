@@ -33,7 +33,6 @@ _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"
 _ACKED_STATUS = "acked"
 _DEFAULT_TABLE = "sqlspec_event_queue"
-_INITIAL_EMPTY_POLL_BACKOFF = 0.05
 _MAX_EMPTY_POLL_CHANNELS = 1_024
 
 
@@ -100,7 +99,7 @@ class _BaseTableEventQueue:
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
-        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC"
+        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC, event_id ASC"
         locking_clause = ""
         if select_for_update:
             locking_clause = " FOR UPDATE"
@@ -133,8 +132,8 @@ class _BaseTableEventQueue:
             return 0.0
         if channel not in self._empty_poll_delays and len(self._empty_poll_delays) >= _MAX_EMPTY_POLL_CHANNELS:
             self._empty_poll_delays.pop(next(iter(self._empty_poll_delays)))
-        delay = min(self._empty_poll_delays.get(channel, _INITIAL_EMPTY_POLL_BACKOFF), poll_interval)
-        self._empty_poll_delays[channel] = min(delay * 2, poll_interval)
+        delay = poll_interval
+        self._empty_poll_delays[channel] = delay
         self._runtime.record_metric("events.poll.backoff", delay)
         return delay
 
@@ -185,7 +184,7 @@ class _BaseTableEventQueue:
         now = cls._utcnow()
         event_ids: list[str] = []
         records: list[dict[str, Any]] = []
-        for channel, payload, metadata in events:
+        for index, (channel, payload, metadata) in enumerate(events):
             event_id = uuid4().hex
             event_ids.append(event_id)
             records.append({
@@ -197,7 +196,7 @@ class _BaseTableEventQueue:
                 "available_at": now,
                 "lease_expires_at": None,
                 "attempts": 0,
-                "created_at": now,
+                "created_at": now + timedelta(microseconds=index),
             })
         return event_ids, records
 

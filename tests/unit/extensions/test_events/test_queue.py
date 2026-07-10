@@ -56,7 +56,7 @@ def test_sync_table_queue_empty_poll_backoff_is_bounded_and_resets(
     assert queue.dequeue("alerts", 0.08) is not None
     assert queue.dequeue("alerts", 0.08) is None
 
-    assert sleeps == [0.05, 0.08, 0.01, 0.05]
+    assert sleeps == [0.08, 0.08, 0.01, 0.08]
 
 
 async def test_async_table_queue_empty_poll_backoff_is_bounded_and_resets(
@@ -88,7 +88,7 @@ async def test_async_table_queue_empty_poll_backoff_is_bounded_and_resets(
     assert await queue.dequeue("alerts", 0.08) is not None
     assert await queue.dequeue("alerts", 0.08) is None
 
-    assert sleeps == [0.05, 0.08, 0.01, 0.05]
+    assert sleeps == [0.08, 0.08, 0.01, 0.08]
 
 
 def test_table_queue_empty_poll_backoff_state_is_bounded(tmp_path: Any) -> None:
@@ -100,6 +100,16 @@ def test_table_queue_empty_poll_backoff_state_is_bounded(tmp_path: Any) -> None:
 
     assert len(queue._empty_poll_delays) == 1_024
     assert "channel-0" not in queue._empty_poll_delays
+
+
+def test_table_queue_batch_records_have_deterministic_created_order() -> None:
+    _, records = SyncTableEventQueue._batch_insert_parameters([
+        ("events", {"index": index}, None) for index in range(3)
+    ])
+
+    created_at = [record["created_at"] for record in records]
+    assert created_at == sorted(created_at)
+    assert len(set(created_at)) == 3
 
 
 def test_table_event_queue_default_table_name(tmp_path) -> None:

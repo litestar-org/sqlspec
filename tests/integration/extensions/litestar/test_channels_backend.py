@@ -52,6 +52,11 @@ async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> 
             decoded = msgspec.json.decode(payload)
             assert decoded["action"] == "hello"
 
+            await backend.publish_many((b"first", b"second"), ("notifications",))
+            first = await asyncio.wait_for(_next_event(subscriber), timeout=3.0)
+            second = await asyncio.wait_for(_next_event(subscriber), timeout=3.0)
+            assert (first, second) == (b"first", b"second")
+
             await plugin.unsubscribe(subscriber)
 
         await config.close_pool()

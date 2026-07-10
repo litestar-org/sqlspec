@@ -34,13 +34,16 @@ _MAX_SEEN_MARKERS = 1_024
 
 
 class _MarkerDrainState:
-    __slots__ = ("_pending", "_seen")
+    __slots__ = ("_pending", "_recovering", "_seen")
 
     def __init__(self) -> None:
         self._pending: dict[str, int] = {}
+        self._recovering: set[str] = set()
         self._seen: dict[tuple[str, str], None] = {}
 
     def take(self, channel: str) -> bool:
+        if channel in self._recovering:
+            return True
         pending = self._pending.get(channel, 0)
         if pending <= 0:
             return False
@@ -60,11 +63,18 @@ class _MarkerDrainState:
             self._pending[channel] = self._pending.get(channel, 0) + max(batch_size, 1)
         return is_new, self.take(channel)
 
+    def begin_recovery(self, channel: str) -> None:
+        if channel not in self._recovering and len(self._recovering) >= _MAX_SEEN_MARKERS:
+            self._recovering.pop()
+        self._recovering.add(channel)
+
     def clear(self, channel: str) -> None:
         self._pending.pop(channel, None)
+        self._recovering.discard(channel)
 
     def reset(self) -> None:
         self._pending.clear()
+        self._recovering.clear()
         self._seen.clear()
 
 
@@ -117,7 +127,12 @@ class PsqlpyEventsBackend:
             parameters.append((channel, encode_notify_payload(event_id, payload, metadata)))
         self._runtime.increment_metric("events.publisher.session")
         async with self._config.provide_session() as driver:
-            await driver.execute_many("SELECT pg_notify($1, $2)", parameters)
+            await driver.begin()
+            try:
+                await driver.execute_many("SELECT pg_notify($1, $2)", parameters)
+            except BaseException:
+                await driver.rollback()
+                raise
             await driver.commit()
         self._runtime.increment_metric("events.publisher.statement")
         self._runtime.increment_metric("events.publish.native", len(parameters))
@@ -191,24 +206,9 @@ class PsqlpyHybridEventsBackend:
         """Persist a batch and publish one compact wakeup marker per channel."""
         if not events:
             return []
-        now = datetime.now(timezone.utc)
-        event_ids: list[str] = []
-        records: list[dict[str, Any]] = []
+        event_ids, records = self._queue._batch_insert_parameters(events)
         marker_counts: dict[str, int] = {}
-        for channel, payload, metadata in events:
-            event_id = uuid4().hex
-            event_ids.append(event_id)
-            records.append({
-                "event_id": event_id,
-                "channel": channel,
-                "payload_json": to_json(payload),
-                "metadata_json": to_json(metadata) if metadata is not None else None,
-                "status": "pending",
-                "available_at": now,
-                "lease_expires_at": None,
-                "attempts": 0,
-                "created_at": now,
-            })
+        for channel, _payload, _metadata in events:
             marker_counts[channel] = marker_counts.get(channel, 0) + 1
         marker_id = uuid4().hex
         markers = [
@@ -217,10 +217,15 @@ class PsqlpyHybridEventsBackend:
         ]
         self._runtime.increment_metric("events.publisher.session")
         async with self._config.provide_session() as driver:
-            await driver.execute_many(
-                self._queue._insert_statement, records, statement_config=self._queue._statement_config
-            )
-            await driver.execute_many("SELECT pg_notify($1, $2)", markers)
+            await driver.begin()
+            try:
+                await driver.execute_many(
+                    self._queue._insert_statement, records, statement_config=self._queue._statement_config
+                )
+                await driver.execute_many("SELECT pg_notify($1, $2)", markers)
+            except BaseException:
+                await driver.rollback()
+                raise
             await driver.commit()
         self._runtime.increment_metric("events.publisher.statement", 2)
         self._runtime.increment_metric("events.publish.native", len(records))
@@ -268,6 +273,7 @@ class PsqlpyHybridEventsBackend:
         if event is None:
             self._runtime.increment_metric("events.listener.timeout")
             return None
+        self._marker_state.begin_recovery(channel)
         self._runtime.increment_metric("events.marker.miss")
         _record_dequeue_result(self._runtime, event)
         return event
