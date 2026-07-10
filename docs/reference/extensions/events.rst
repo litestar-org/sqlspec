@@ -47,10 +47,11 @@ backend owns its own listener hub that:
   cannot race on driver-level statements that share the connection.
 
 The listener lease is held for the backend lifetime. Publishers use separate,
-short-lived pooled sessions, so a shared PostgreSQL pool must configure
-``max_size >= 2``: one connection for the listener and at least one for
-publication. Native backend construction rejects a configured pool of size one
-instead of allowing publication to deadlock behind the listener.
+short-lived pooled sessions, so a shared PostgreSQL pool must configure at
+least two connections: ``max_size >= 2`` for asyncpg/psycopg and
+``max_db_pool_size >= 2`` for psqlpy. Native backend construction rejects a
+configured pool of size one instead of allowing publication to deadlock behind
+the listener.
 
 The Oracle native backends (``aq`` and
 ``txeventq``) use an analogous pattern: a per-channel

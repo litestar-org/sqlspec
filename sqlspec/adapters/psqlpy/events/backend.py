@@ -206,11 +206,11 @@ def create_event_backend(
 
 
 def _validate_listener_pool_capacity(config: "PsqlpyConfig") -> None:
-    max_size = config.connection_config.get("max_size")
+    max_size = config.connection_config.get("max_db_pool_size")
     if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
         msg = (
             f"{type(config).__name__} native event listeners require "
-            f"pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
+            f"pool max_db_pool_size >= {_MIN_LISTENER_POOL_SIZE}"
         )
         raise ImproperConfigurationError(msg)
 

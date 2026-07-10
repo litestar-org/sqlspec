@@ -197,9 +197,9 @@ def test_psqlpy_factory_rejects_single_connection_listener_pool() -> None:
     from sqlspec.adapters.psqlpy.events.backend import create_event_backend
     from sqlspec.exceptions import ImproperConfigurationError
 
-    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test", "max_size": 1})
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost/test", "max_db_pool_size": 1})
 
-    with pytest.raises(ImproperConfigurationError, match="max_size >= 2"):
+    with pytest.raises(ImproperConfigurationError, match="max_db_pool_size >= 2"):
         create_event_backend(config, "notify", {})
 
 
