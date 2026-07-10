@@ -167,12 +167,12 @@ class PluginConfigState:
     enable_sqlcommenter_middleware: bool
     correlation_headers: tuple[str, ...] = field(init=False)
     disable_di: bool
-    connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
-    pool_provider: "Callable[[State, Scope], Any]" = field(init=False)
-    session_provider: "Callable[..., AsyncGenerator[Any, None]]" = field(init=False)
-    before_send_handler: "BeforeMessageSendHookHandler" = field(init=False)
-    lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(init=False)
-    annotation: "type[DatabaseConfigProtocol[Any, Any, Any]]" = field(init=False)
+    connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
+    pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
+    session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
+    before_send_handler: "BeforeMessageSendHookHandler | None" = field(default=None, init=False)
+    lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]] | None" = field(default=None, init=False)
+    annotation: "type[DatabaseConfigProtocol[Any, Any, Any]] | None" = field(default=None, init=False)
 
 
 class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
@@ -348,6 +348,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             signature_namespace.update(state.config.get_signature_namespace())
 
             if not state.disable_di:
+                if (
+                    state.connection_provider is None
+                    or state.pool_provider is None
+                    or state.session_provider is None
+                    or state.before_send_handler is None
+                    or state.lifespan_handler is None
+                ):
+                    self._raise_di_handlers_not_initialized(state.session_key)
                 app_config.before_send.append(state.before_send_handler)
                 app_config.lifespan.append(state.lifespan_handler)
                 app_config.dependencies.update({
@@ -411,7 +419,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             List of annotations.
         """
-        return [cast("type[AnyDatabaseConfig]", state.annotation) for state in self._plugin_configs]
+        annotations: list[type[AnyDatabaseConfig]] = []
+        for state in self._plugin_configs:
+            if state.annotation is None:
+                self._raise_plugin_not_registered()
+            annotations.append(cast("type[AnyDatabaseConfig]", state.annotation))
+        return annotations
 
     def get_annotation(self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig]") -> "type[AnyDatabaseConfig]":
         """Return the annotation for the given configuration.
@@ -426,6 +439,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             The annotation for the configuration.
         """
         state = self._get_plugin_state(key)
+        if state.annotation is None:
+            self._raise_plugin_not_registered()
         return cast("type[AnyDatabaseConfig]", state.annotation)
 
     @overload
@@ -778,6 +793,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     return state
 
         for state in self._plugin_configs:
+            if state.annotation is None:
+                self._raise_plugin_not_registered()
             if key in {state.config, state.annotation}:
                 return state
 
@@ -808,6 +825,22 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         msg = f"No database connection found in scope for key '{connection_key}'. "
         msg += "Ensure the connection dependency is properly configured and available."
         raise ImproperConfigurationError(detail=msg)
+
+    def _raise_plugin_not_registered(self) -> NoReturn:
+        """Raise error when plugin state is accessed before app registration."""
+        msg = (
+            "SQLSpec plugin has not been registered with a Litestar application. "
+            "Register the plugin via Litestar(plugins=[...]) so on_app_init runs before accessing annotations."
+        )
+        raise ImproperConfigurationError(msg)
+
+    def _raise_di_handlers_not_initialized(self, session_key: str) -> NoReturn:
+        """Raise error when DI handlers are missing for a DI-enabled configuration."""
+        msg = (
+            f"Dependency injection handlers were not initialized for configuration '{session_key}'. "
+            "Handlers are created during plugin construction for configurations with dependency injection enabled."
+        )
+        raise ImproperConfigurationError(msg)
 
     def _raise_config_not_found(self, key: Any) -> NoReturn:
         """Raise error when configuration is not found."""
