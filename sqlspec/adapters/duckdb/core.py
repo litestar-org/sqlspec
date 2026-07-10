@@ -1,8 +1,10 @@
 """DuckDB adapter compiled helpers."""
 
+import contextlib
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
+from uuid import UUID
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -344,3 +346,59 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
 
 
 default_statement_config = build_statement_config()
+
+
+class _DuckDBStreamSource:
+    """Native DuckDB chunk source backed by an Arrow record batch reader."""
+
+    __slots__ = ("_chunk_size", "_description", "_open_reader", "_parameters", "_reader", "_sql")
+
+    def __init__(
+        self,
+        open_reader: "Callable[[str, Any, int], tuple[Any, list[Any] | None]]",
+        sql: str,
+        parameters: Any,
+        chunk_size: int,
+    ) -> None:
+        self._chunk_size = chunk_size
+        self._description: list[Any] | None = None
+        self._open_reader = open_reader
+        self._parameters = parameters
+        self._reader: Any | None = None
+        self._sql = sql
+
+    def start(self) -> None:
+        self._reader, self._description = self._open_reader(self._sql, self._parameters, self._chunk_size)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        reader = self._reader
+        if reader is None:
+            return []
+        try:
+            batch = reader.read_next_batch()
+        except StopIteration:
+            return []
+        rows = cast("list[dict[str, Any]]", batch.to_pylist())
+        _restore_uuid_columns(rows, self._description)
+        return rows
+
+    def close(self, error: bool = False) -> None:
+        reader = self._reader
+        self._reader = None
+        if reader is not None:
+            with contextlib.suppress(Exception):
+                reader.close()
+
+
+def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] | None") -> None:
+    """Restore DuckDB UUID columns after Arrow materialization."""
+    if not rows or not description:
+        return
+    uuid_columns = [column[0] for column in description if len(column) > 1 and str(column[1]).upper() == "UUID"]
+    if not uuid_columns:
+        return
+    for row in rows:
+        for column in uuid_columns:
+            value = row.get(column)
+            if isinstance(value, str):
+                row[column] = UUID(value)

@@ -2,15 +2,17 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 from uuid import UUID
 
 import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.core import _DuckDBStreamSource
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.core.result import DMLResult
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError, NotFoundError
 
 
 @contextmanager
@@ -108,6 +110,79 @@ def test_select_arrow_path_restores_uuid_columns_only() -> None:
     assert str(row["id"]) == uuid_value
     assert row["text_id"] == uuid_value
     assert isinstance(row["text_id"], str)
+
+
+def test_select_stream_native_only_reads_bounded_rows() -> None:
+    with _seed_driver() as driver:
+        with driver.select_stream(
+            "SELECT id, name FROM arrow_streaming ORDER BY id", chunk_size=2, native_only=True
+        ) as stream:
+            rows = list(stream)
+
+    assert rows == [
+        {"id": 1, "name": "alpha"},
+        {"id": 2, "name": "beta"},
+        {"id": 3, "name": "gamma"},
+        {"id": 4, "name": "delta"},
+        {"id": 5, "name": "epsilon"},
+    ]
+
+
+def test_select_stream_restores_uuid_columns_per_batch() -> None:
+    uuid_value = "550e8400-e29b-41d4-a716-446655440000"
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE uuid_stream (id UUID, text_id VARCHAR)")
+        driver.execute("INSERT INTO uuid_stream VALUES (?, ?), (?, ?)", uuid_value, uuid_value, uuid_value, uuid_value)
+
+        with driver.select_stream("SELECT id, text_id FROM uuid_stream", chunk_size=1, native_only=True) as stream:
+            rows = list(stream)
+
+    assert len(rows) == 2
+    assert all(isinstance(row["id"], UUID) for row in rows)
+    assert all(str(row["id"]) == uuid_value for row in rows)
+    assert all(row["text_id"] == uuid_value for row in rows)
+    assert all(isinstance(row["text_id"], str) for row in rows)
+
+
+def test_select_stream_maps_duckdb_exceptions() -> None:
+    with _seed_driver() as driver:
+        with pytest.raises(NotFoundError):
+            with driver.select_stream("SELECT * FROM missing_stream_table", native_only=True) as stream:
+                list(stream)
+
+
+def test_select_stream_missing_pyarrow_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _seed_driver() as driver:
+
+        def raise_missing_pyarrow() -> None:
+            raise MissingDependencyError("pyarrow")
+
+        monkeypatch.setattr("sqlspec.adapters.duckdb.driver.ensure_pyarrow", raise_missing_pyarrow)
+
+        with pytest.raises(MissingDependencyError):
+            with driver.select_stream("SELECT id FROM arrow_streaming", native_only=True) as stream:
+                list(stream)
+
+
+def test_duckdb_stream_source_closes_record_batch_reader() -> None:
+    class _ReaderSpy:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    reader = _ReaderSpy()
+
+    def open_reader(sql: str, parameters: Any, chunk_size: int) -> "tuple[Any, list[Any] | None]":
+        return reader, []
+
+    source = _DuckDBStreamSource(open_reader, "SELECT 1", (), 1)
+
+    source.start()
+    source.close()
+
+    assert reader.closed is True
 
 
 def test_missing_pyarrow_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:

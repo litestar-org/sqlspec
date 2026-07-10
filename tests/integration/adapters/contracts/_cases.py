@@ -151,6 +151,7 @@ SYNC_DRIVER_CASES = (
         id="duckdb-sync",
         supports_arrow_streaming=True,
         supports_native_arrow=True,
+        supports_native_row_streaming=True,
         arrow_reader_honors_batch_size=True,
         fixture_name="contract_duckdb_driver",
         adapter="duckdb",
