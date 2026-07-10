@@ -13,7 +13,9 @@ import ipaddress
 import json
 import subprocess
 import sys
+import threading
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 
@@ -104,6 +106,90 @@ else:
 """
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_registry_first_load_is_thread_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent first readers should wait for the complete optional registry."""
+
+    class NumpyArray:
+        pass
+
+    class NumpyGeneric:
+        pass
+
+    first_import_started = threading.Event()
+    release_first_import = threading.Event()
+    start_readers = threading.Barrier(3)
+    registry = serializer_json._LazyTypeEncoders({})
+
+    def import_optional_type(_module_name: str, attr_name: str) -> type:
+        if attr_name == "ndarray":
+            first_import_started.set()
+            if not release_first_import.wait(timeout=5):
+                pytest.fail("timed out waiting to release the first optional import")
+            return NumpyArray
+        return NumpyGeneric
+
+    def copy_registry() -> dict[type, object]:
+        start_readers.wait(timeout=5)
+        return registry.copy()
+
+    monkeypatch.setattr(serializer_json, "NUMPY_INSTALLED", True)
+    monkeypatch.setattr(serializer_json, "PYDANTIC_INSTALLED", False)
+    monkeypatch.setattr(serializer_json, "import_optional_attr", import_optional_type)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(copy_registry) for _ in range(2)]
+        start_readers.wait(timeout=5)
+        assert first_import_started.wait(timeout=5)
+        completed_before_release, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
+        release_first_import.set()
+        results = [future.result(timeout=5) for future in futures]
+
+    assert not completed_before_release
+    assert all(NumpyArray in result and NumpyGeneric in result for result in results)
+
+
+def test_registry_retries_after_optional_registration_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed optional registration should publish nothing and remain retryable."""
+
+    class NumpyArray:
+        pass
+
+    class NumpyGeneric:
+        pass
+
+    attempts: list[str] = []
+    fail_generic = True
+    registry = serializer_json._LazyTypeEncoders({})
+
+    def import_optional_type(_module_name: str, attr_name: str) -> type:
+        nonlocal fail_generic
+        attempts.append(attr_name)
+        if attr_name == "ndarray":
+            return NumpyArray
+        if fail_generic:
+            fail_generic = False
+            msg = "generic import failed"
+            raise ImportError(msg)
+        return NumpyGeneric
+
+    monkeypatch.setattr(serializer_json, "NUMPY_INSTALLED", True)
+    monkeypatch.setattr(serializer_json, "PYDANTIC_INSTALLED", False)
+    monkeypatch.setattr(serializer_json, "import_optional_attr", import_optional_type)
+
+    with pytest.raises(ImportError, match="generic import failed"):
+        registry.copy()
+
+    assert registry._loaded is False
+    assert dict.copy(registry) == {}
+
+    loaded = registry.copy()
+
+    assert registry._loaded is True
+    assert NumpyArray in loaded
+    assert NumpyGeneric in loaded
+    assert attempts == ["ndarray", "generic", "ndarray", "generic"]
 
 
 def test_registry_covers_required_types() -> None:

@@ -83,6 +83,32 @@ def test_observability_fallbacks_preserve_public_class_names(monkeypatch: pytest
     assert pickle.loads(pickle.dumps(fallback)) is fallback
 
 
+@pytest.mark.parametrize(
+    ("export_name", "stub_name"),
+    (("cattrs_structure", "cattrs_structure_stub"), ("cattrs_unstructure", "cattrs_unstructure_stub")),
+)
+def test_cattrs_fallbacks_preserve_public_function_identity(
+    monkeypatch: pytest.MonkeyPatch, export_name: str, stub_name: str
+) -> None:
+    """Missing cattrs exports should retain their advertised function identity."""
+
+    def missing_dependency(_module_name: str, _attr_name: str, fallback: object) -> object:
+        return fallback
+
+    monkeypatch.delitem(public_typing.__dict__, export_name, raising=False)
+    monkeypatch.delitem(private_typing.__dict__, export_name, raising=False)
+    monkeypatch.delattr(private_typing, stub_name)
+    monkeypatch.setattr(private_typing, "resolve_optional_attr", missing_dependency)
+
+    fallback = getattr(public_typing, export_name)
+
+    assert fallback is getattr(private_typing, export_name)
+    assert fallback.__name__ == export_name
+    assert fallback.__qualname__ == export_name
+    assert repr(fallback).startswith(f"<function {export_name} at ")
+    assert pickle.loads(pickle.dumps(fallback)) is fallback
+
+
 def test_get_type_adapter_resolves_lazy_pydantic_exports(monkeypatch: pytest.MonkeyPatch) -> None:
     """The helper should resolve lazy globals explicitly for normal and fail-fast adapters."""
     created: list[object] = []

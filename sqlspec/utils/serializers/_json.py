@@ -4,6 +4,7 @@ import contextlib
 import datetime
 import enum
 import json
+import threading
 import uuid as uuid_mod
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
@@ -117,25 +118,31 @@ def _default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
 class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
     """Load optional type keys when the public registry is first used."""
 
-    __slots__ = ("_loaded",)
+    __slots__ = ("_load_lock", "_loaded")
     __hash__ = None
 
     def __init__(self, encoders: "dict[type, Callable[[Any], Any]]") -> None:
         super().__init__(encoders)
+        self._load_lock = threading.Lock()
         self._loaded = False
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
-        if NUMPY_INSTALLED:
-            ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
-            generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
-            dict.__setitem__(self, ndarray, lambda value: value.tolist())
-            dict.__setitem__(self, generic, lambda value: value.item())
-        if PYDANTIC_INSTALLED:
-            base_model = cast("type[Any]", import_optional_attr("pydantic", "BaseModel"))
-            dict.__setitem__(self, base_model, _dump_pydantic_model)
+        with self._load_lock:
+            if self._loaded:
+                return
+            optional_encoders: dict[type, Callable[[Any], Any]] = {}
+            if NUMPY_INSTALLED:
+                ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
+                generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
+                optional_encoders[ndarray] = lambda value: value.tolist()
+                optional_encoders[generic] = lambda value: value.item()
+            if PYDANTIC_INSTALLED:
+                base_model = cast("type[Any]", import_optional_attr("pydantic", "BaseModel"))
+                optional_encoders[base_model] = _dump_pydantic_model
+            dict.update(self, optional_encoders)
+            self._loaded = True
 
     def __contains__(self, key: object) -> bool:
         self._ensure_loaded()

@@ -705,7 +705,11 @@ _ATTRS_FIELD_SHIM = attrs_field_stub
 _ATTRS_FIELDS_SHIM = attrs_fields_stub
 _ATTRS_HAS_SHIM = attrs_has_stub
 _CATTRS_STRUCTURE_SHIM = cattrs_structure_stub
+_CATTRS_STRUCTURE_SHIM.__name__ = "cattrs_structure"
+_CATTRS_STRUCTURE_SHIM.__qualname__ = "cattrs_structure"
 _CATTRS_UNSTRUCTURE_SHIM = cattrs_unstructure_stub
+_CATTRS_UNSTRUCTURE_SHIM.__name__ = "cattrs_unstructure"
+_CATTRS_UNSTRUCTURE_SHIM.__qualname__ = "cattrs_unstructure"
 _LAZY_EXPORTS: "dict[str, tuple[str, str | None, Any]]" = {
     "ArrowRecordBatch": ("pyarrow", "RecordBatch", _ARROW_RECORD_BATCH_SHIM),
     "ArrowRecordBatchReader": ("pyarrow", "RecordBatchReader", _ARROW_RECORD_BATCH_READER_SHIM),
