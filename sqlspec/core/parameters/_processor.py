@@ -520,7 +520,7 @@ class ParameterProcessor:
         )
         if result is None:
             return None
-        return cast("ConvertedParameters", result)
+        return result
 
     def _store_cached_result(
         self, cache_key: Any | None, result: "ParameterProcessingResult"

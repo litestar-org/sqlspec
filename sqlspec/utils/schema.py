@@ -419,7 +419,7 @@ def _list_alias(schema_type: type) -> Any:
     try:
         return _LIST_ALIAS_CACHE[schema_type]
     except KeyError:
-        alias = list[schema_type]
+        alias = list[schema_type]  # type: ignore[valid-type]
         _LIST_ALIAS_CACHE[schema_type] = alias
         return alias
 
