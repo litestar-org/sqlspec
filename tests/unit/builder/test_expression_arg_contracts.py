@@ -107,3 +107,13 @@ def test_builder_expressions_satisfy_required_sqlglot_arguments() -> None:
     assert [(type(expression).__name__, expression.error_messages()) for expression in expressions] == [
         (type(expression).__name__, []) for expression in expressions
     ]
+
+
+def test_materialized_view_with_data_renders_postgres_clause() -> None:
+    expression = sql.create_materialized_view("mv").as_select("SELECT 1").with_data()._create_base_expression()
+    assert expression.sql(dialect="postgres") == "CREATE MATERIALIZED_VIEW mv AS SELECT 1 WITH DATA"
+
+
+def test_materialized_view_no_data_renders_postgres_clause() -> None:
+    expression = sql.create_materialized_view("mv").as_select("SELECT 1").no_data()._create_base_expression()
+    assert expression.sql(dialect="postgres") == "CREATE MATERIALIZED_VIEW mv AS SELECT 1 WITH NO DATA"

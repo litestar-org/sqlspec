@@ -1173,11 +1173,7 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         for k, v in self._storage_parameters.items():
             props.append(exp.Property(this=exp.to_identifier(k), value=exp.convert(str(v))))
         if self._with_data is not None:
-            props.append(
-                exp.Property(
-                    this=exp.to_identifier("WITH_DATA" if self._with_data else "NO_DATA"), value=exp.Var(this="")
-                )
-            )
+            props.append(exp.WithDataProperty(no=not self._with_data))
         props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
         properties_node = _wrap_properties(props)
 
