@@ -9,6 +9,7 @@ The class list mirrors the shipped adapter ``adk`` exports and catches drift
 when a concrete store no longer satisfies the base contract.
 """
 
+import ast
 import importlib
 import inspect
 from typing import cast
@@ -166,6 +167,43 @@ def test_adk_store_registration_validator_resolves_sqlite_store_classes() -> Non
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
 
     _ensure_adk_store_registration(config)
+
+
+@pytest.mark.parametrize(
+    "class_path",
+    [
+        "sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore",
+        "sqlspec.adapters.psycopg.adk.PsycopgSyncADKMemoryStore",
+        "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore",
+        "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore",
+        "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKStore",
+        "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKMemoryStore",
+        "sqlspec.adapters.oracledb.adk.OracleSyncADKStore",
+        "sqlspec.adapters.oracledb.adk.OracleSyncADKMemoryStore",
+        "sqlspec.adapters.sqlite.adk.SqliteADKStore",
+        "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
+    ],
+)
+def test_sync_store_public_methods_do_not_delegate_to_private_mirrors(class_path: str) -> None:
+    cls = _load_class(class_path)
+    tree = ast.parse(inspect.getsource(cls))
+
+    has_delegate = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+            continue
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "self"
+                and child.func.attr.startswith("_")
+                and child.func.attr[1:] == node.name
+            ):
+                has_delegate = True
+
+    assert not has_delegate
 
 
 def test_adk_store_registration_validator_resolves_duckdb_store_classes() -> None:

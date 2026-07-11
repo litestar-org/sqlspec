@@ -31,6 +31,131 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
 
 
+_ADK_SESSIONS_TABLE_DDL_TEMPLATE = ",\n            {0}"
+
+_ADK_SESSIONS_TABLE_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL{1},\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{2}_app_user\n"
+    "            ON {3}(app_name, user_id);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{4}_update_time\n"
+    "            ON {5}(update_time DESC);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{6}_state\n"
+    "            ON {7} USING GIN (state)\n"
+    "            WHERE state != '{{}}'::jsonb;\n"
+    "        "
+)
+
+_ADK_EVENTS_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            invocation_id VARCHAR(256),\n"
+    "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            event_data JSONB NOT NULL{1},\n"
+    "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
+    "            ON {4}(session_id, timestamp ASC){5};\n"
+    "        {6}\n"
+    "        "
+)
+
+_ADK_APP_STATES_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) PRIMARY KEY,\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "        "
+)
+
+_ADK_USER_STATES_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            PRIMARY KEY (app_name, user_id)\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "        "
+)
+
+_ADK_METADATA_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            key VARCHAR(128) PRIMARY KEY,\n"
+    "            value VARCHAR(512) NOT NULL\n"
+    "        );\n"
+    "        "
+)
+
+_ADK_METADATA_SEED_SQL_TEMPLATE = (
+    "\n"
+    "        INSERT INTO {0} (key, value)\n"
+    "        VALUES ('schema_version', '1')\n"
+    "        ON CONFLICT (key) DO NOTHING\n"
+    "        "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{0}_fts\n"
+    "            ON {1} USING GIN (to_tsvector('english', content_text));\n"
+    "            "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+    "            author VARCHAR(256){1},\n"
+    "            timestamp TIMESTAMPTZ NOT NULL,\n"
+    "            content_json JSONB NOT NULL,\n"
+    "            content_text TEXT NOT NULL,\n"
+    "            metadata_json JSONB,\n"
+    "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        );\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{2}_app_user_time\n"
+    "            ON {3}(app_name, user_id, timestamp DESC);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{4}_session\n"
+    "            ON {5}(session_id);\n"
+    "        {6}\n"
+    "        "
+)
+
+_ADK_POSTGRES_EVENT_DDL_OPTIONS_TEMPLATE = (
+    "\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{0}_author_gc\n"
+    "            ON {1}(session_id, author_gc, timestamp ASC);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{2}_node_path_gc\n"
+    "            ON {3}(session_id, node_path_gc, timestamp ASC);\n"
+    "        "
+)
+
+
 class PsycopgADKConfig(ADKConfig):
     """Psycopg-specific ADK extension settings.
 
@@ -458,28 +583,18 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
+        return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
+            self._session_table,
+            owner_id_line,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+        )
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -487,55 +602,27 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             adk_config, self._events_table
         )
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
-        {generated_indexes}
-        """
+        return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
+            self._events_table,
+            generated_columns,
+            self._session_table,
+            self._events_table,
+            self._events_table,
+            covering_columns,
+            generated_indexes,
+        )
 
     async def _app_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-        """
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table)
 
     async def _user_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (app_name, user_id)
-        ) WITH (fillfactor = 80);
-        """
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table)
 
     async def _metadata_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
-            key VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        );
-        """
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
     async def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
-        """
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -566,196 +653,6 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
-
-    def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
-
-    def get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
-
-    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        self._update_session_state(app_name, user_id, session_id, state)
-
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
-
-    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete session and associated events."""
-        self._delete_session(app_name, user_id, session_id)
-
-    def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        self._append_event(event_record)
-
-    def append_event_and_update_state(
-        self,
-        event_record: EventRecord,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
-        """Atomically append an event and update session + scoped state."""
-        return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
-        )
-
-    def get_events(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
-
-    def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
-        return self._delete_expired_events(before)
-
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        return self._delete_idle_sessions(updated_before)
-
-    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        """Return app-scoped state for an application."""
-        return self._get_app_state(app_name)
-
-    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        """Return user-scoped state for an application user."""
-        return self._get_user_state(app_name, user_id)
-
-    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        """Insert or replace app-scoped state for an application."""
-        self._upsert_app_state(app_name, state)
-
-    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        """Insert or replace user-scoped state for an application user."""
-        self._upsert_user_state(app_name, user_id, state)
-
-    def get_metadata(self, key: str) -> "str | None":
-        """Return a value from the ADK internal metadata table."""
-        return self._get_metadata(key)
-
-    def set_metadata(self, key: str, value: str) -> None:
-        """Set a value in the ADK internal metadata table."""
-        self._set_metadata(key, value)
-
-    def _sessions_table_ddl(self) -> str:
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
-
-    def _events_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
-            adk_config, self._events_table
-        )
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
-        {generated_indexes}
-        """
-
-    def _app_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-        """
-
-    def _user_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (app_name, user_id)
-        ) WITH (fillfactor = 80);
-        """
-
-    def _metadata_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
-            key VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        );
-        """
-
-    def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
-        """
-
-    def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
-
-    def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
-
-    def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
-
-    def _drop_tables_sql(self) -> "list[str]":
-        return [
-            self._drop_metadata_table_sql(),
-            self._drop_user_states_table_sql(),
-            self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
-        ]
-
-    def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
@@ -764,9 +661,10 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             driver.execute_script(self._metadata_table_ddl())
             driver.execute_script(self._metadata_seed_sql())
 
-    def _create_session(
+    def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
+        """Create a new session."""
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -786,15 +684,16 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, params)
 
-        result = self._get_session(app_name, user_id, session_id)
+        result = self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
         return result
 
-    def _get_session(
-        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
+        """Get session by ID."""
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             query = pg_sql.SQL("""
             UPDATE {table}
@@ -830,7 +729,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
         query = pg_sql.SQL("""
         UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
@@ -840,15 +740,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
-    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (app_name, user_id, session_id))
-
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
         if user_id is None:
             query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -885,30 +778,21 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def _insert_event(self, event_record: EventRecord) -> None:
-        insert_query = pg_sql.SQL("""
-        INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
-        """).format(table=pg_sql.Identifier(self._events_table))
-
-        event_data_value = event_record["event_data"]
-        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
+    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and associated events."""
+        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                insert_query,
-                (
-                    event_record["id"],
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["timestamp"],
-                    jsonb_value,
-                ),
-            )
-            conn.commit()
+            cur.execute(query, (app_name, user_id, session_id))
 
-    def _append_event_and_update_state(
+    def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
+
+    def append_event_and_update_state(
         self,
         event_record: EventRecord,
         app_name: str,
@@ -919,6 +803,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
+        """Atomically append an event and update session + scoped state."""
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
             id, session_id, invocation_id, timestamp, event_data
@@ -985,7 +870,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             update_time=row["update_time"],
         )
 
-    def _get_events(
+    def get_events(
         self,
         app_name: str,
         user_id: str,
@@ -993,6 +878,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
+        """Get events for a session."""
         if limit == 0:
             return []
 
@@ -1042,7 +928,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def _delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
         query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
             table=pg_sql.Identifier(self._events_table)
         )
@@ -1055,7 +942,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return 0
 
-    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
         query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
             table=pg_sql.Identifier(self._session_table)
         )
@@ -1068,7 +956,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return 0
 
-    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
         query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s").format(
             table=pg_sql.Identifier(self._app_state_table)
         )
@@ -1081,7 +970,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
         query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s AND user_id = %s").format(
             table=pg_sql.Identifier(self._user_state_table)
         )
@@ -1094,7 +984,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
         query = pg_sql.SQL("""
         INSERT INTO {table} (app_name, state, update_time)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
@@ -1107,7 +998,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             cur.execute(query, (app_name, Jsonb(state)))
             conn.commit()
 
-    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
         query = pg_sql.SQL("""
         INSERT INTO {table} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
@@ -1120,7 +1012,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             cur.execute(query, (app_name, user_id, Jsonb(state)))
             conn.commit()
 
-    def _get_metadata(self, key: str) -> "str | None":
+    def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
         query = pg_sql.SQL("SELECT value FROM {table} WHERE key = %s").format(
             table=pg_sql.Identifier(self._metadata_table)
         )
@@ -1133,7 +1026,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return None
 
-    def _set_metadata(self, key: str, value: str) -> None:
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
         query = pg_sql.SQL("""
         INSERT INTO {table} (key, value)
         VALUES (%s, %s)
@@ -1144,9 +1038,90 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             cur.execute(query, (key, value))
             conn.commit()
 
-    def _append_event(self, event_record: EventRecord) -> None:
-        """Synchronous implementation of append_event."""
-        self._insert_event(event_record)
+    def _sessions_table_ddl(self) -> str:
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
+
+        return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
+            self._session_table,
+            owner_id_line,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+        )
+
+    def _events_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
+            adk_config, self._events_table
+        )
+
+        return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
+            self._events_table,
+            generated_columns,
+            self._session_table,
+            self._events_table,
+            self._events_table,
+            covering_columns,
+            generated_indexes,
+        )
+
+    def _app_states_table_ddl(self) -> str:
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table)
+
+    def _user_states_table_ddl(self) -> str:
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table)
+
+    def _metadata_table_ddl(self) -> str:
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
+
+    def _metadata_seed_sql(self) -> str:
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
+
+    def _drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _drop_tables_sql(self) -> "list[str]":
+        return [
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
+
+    def _insert_event(self, event_record: EventRecord) -> None:
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s)
+        """).format(table=pg_sql.Identifier(self._events_table))
+
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                insert_query,
+                (
+                    event_record["id"],
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            conn.commit()
 
 
 class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
@@ -1258,37 +1233,21 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         """Get PostgreSQL CREATE TABLE SQL for memory entries."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
+            self._memory_table,
+            owner_id_line,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
@@ -1346,67 +1305,6 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
-
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return self._insert_memory_entries(entries, owner_id)
-
-    def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
-
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
-
-    def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
-
-    def _memory_table_ddl(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
-
-    def _drop_memory_table_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements."""
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
-
-    def _create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
         if not self._enabled:
             return
@@ -1414,7 +1312,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
 
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1459,9 +1358,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         return inserted_count
 
-    def _search_entries(
+    def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1478,6 +1378,55 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        """Delete all memory entries for a specific session."""
+        sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
+            table=pg_sql.Identifier(self._memory_table)
+        )
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (session_id,))
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        """Delete memory entries older than specified days."""
+        sql = pg_sql.SQL(
+            """
+        DELETE FROM {table}
+        WHERE inserted_at < CURRENT_TIMESTAMP - {interval}::interval
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def _memory_table_ddl(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
+            self._memory_table,
+            owner_id_line,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+        )
+
+    def _drop_memory_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
@@ -1518,29 +1467,6 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
-
-    def _delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
-            table=pg_sql.Identifier(self._memory_table)
-        )
-
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql, (session_id,))
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-
-    def _delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        sql = pg_sql.SQL(
-            """
-        DELETE FROM {table}
-        WHERE inserted_at < CURRENT_TIMESTAMP - {interval}::interval
-        """
-        ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
-
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql)
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":
@@ -1614,14 +1540,9 @@ def _postgres_event_ddl_options(adk_config: PsycopgADKConfig, events_table: str)
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED,
             node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED"""
-        generated_indexes = f"""
-
-        CREATE INDEX IF NOT EXISTS idx_{events_table}_author_gc
-            ON {events_table}(session_id, author_gc, timestamp ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_{events_table}_node_path_gc
-            ON {events_table}(session_id, node_path_gc, timestamp ASC);
-        """
+        generated_indexes = _ADK_POSTGRES_EVENT_DDL_OPTIONS_TEMPLATE.format(
+            events_table, events_table, events_table, events_table
+        )
 
     covering_columns = ""
     if adk_config.get("enable_covering_indexes", False):

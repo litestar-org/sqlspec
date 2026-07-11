@@ -31,6 +31,130 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.cockroach_psycopg.adk.store")
 
 
+_ADK_SESSIONS_TABLE_DDL_TEMPLATE = ",\n            {0}"
+
+_ADK_SESSIONS_TABLE_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL{1},\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ){2};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{3}_app_user\n"
+    "            ON {4}(app_name, user_id){5};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{6}_update_time\n"
+    "            ON {7}(update_time DESC){8};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{9}_state\n"
+    "            ON {10} USING GIN (state)\n"
+    "            WHERE state != '{{}}'::jsonb;\n"
+    "        "
+)
+
+_ADK_EVENTS_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            invocation_id VARCHAR(256),\n"
+    "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            event_data JSONB NOT NULL,\n"
+    "            FOREIGN KEY (session_id) REFERENCES {1}(id) ON DELETE CASCADE\n"
+    "        ){2};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
+    "            ON {4}(session_id, timestamp ASC){5}{6};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{7}_event_data\n"
+    "            ON {8} USING GIN (event_data);\n"
+    "        "
+)
+
+_ADK_APP_STATES_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) PRIMARY KEY,\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ){1};\n"
+    "        "
+)
+
+_ADK_USER_STATES_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            PRIMARY KEY (app_name, user_id)\n"
+    "        ){1};\n"
+    "        "
+)
+
+_ADK_METADATA_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            key VARCHAR(128) PRIMARY KEY,\n"
+    "            value VARCHAR(512) NOT NULL\n"
+    "        ){1};\n"
+    "        "
+)
+
+_ADK_METADATA_SEED_SQL_TEMPLATE = (
+    "\n"
+    "        INSERT INTO {0} (key, value)\n"
+    "        VALUES ('schema_version', '1')\n"
+    "        ON CONFLICT (key) DO NOTHING\n"
+    "        "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{0}_fts\n"
+    "            ON {1} USING GIN (to_tsvector('english', content_text));\n"
+    "            "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{0}_content_trgm\n"
+    "            ON {1} USING GIN (content_text gin_trgm_ops);\n"
+    "            "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+    "            author VARCHAR(256){1},\n"
+    "            timestamp TIMESTAMPTZ NOT NULL,\n"
+    "            content_json JSONB NOT NULL,\n"
+    "            content_text TEXT NOT NULL,\n"
+    "            metadata_json JSONB,\n"
+    "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ){2};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{3}_app_user_time\n"
+    "            ON {4}(app_name, user_id, timestamp DESC){5};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{6}_session\n"
+    "            ON {7}(session_id);\n"
+    "        {8}\n"
+    "        {9}\n"
+    "        "
+)
+
+
 class CockroachPsycopgADKConfig(ADKConfig):
     """CockroachDB psycopg ADK extension settings.
 
@@ -436,31 +560,24 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ){session_locality};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id){session_storing_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC){hash_shard_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
+        return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
+            self._session_table,
+            owner_id_line,
+            session_locality,
+            self._session_table,
+            self._session_table,
+            session_storing_clause,
+            self._session_table,
+            self._session_table,
+            hash_shard_clause,
+            self._session_table,
+            self._session_table,
+        )
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -468,66 +585,38 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ){events_locality};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
-            ON {self._events_table} USING GIN (event_data);
-        """
+        return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
+            self._events_table,
+            self._session_table,
+            events_locality,
+            self._events_table,
+            self._events_table,
+            hash_shard_clause,
+            events_storing_clause,
+            self._events_table,
+            self._events_table,
+        )
 
     async def _app_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ){app_state_locality};
-        """
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table, app_state_locality)
 
     async def _user_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (app_name, user_id)
-        ){user_state_locality};
-        """
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table, user_state_locality)
 
     async def _metadata_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
-            key VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        ){metadata_locality};
-        """
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table, metadata_locality)
 
     async def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
-        """
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -558,211 +647,6 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
-
-    def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
-
-    def get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
-
-    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
-        self._update_session_state(app_name, user_id, session_id, state)
-
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
-
-    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete session and associated events."""
-        self._delete_session(app_name, user_id, session_id)
-
-    def append_event(self, event_record: EventRecord) -> None:
-        """Append an event to a session."""
-        self._append_event(event_record)
-
-    def append_event_and_update_state(
-        self,
-        event_record: EventRecord,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
-        """Atomically append an event and update session + scoped state."""
-        return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
-        )
-
-    def get_events(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[EventRecord]":
-        """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
-
-    def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
-        return self._delete_expired_events(before)
-
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        return self._delete_idle_sessions(updated_before)
-
-    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        """Return app-scoped state for an application."""
-        return self._get_app_state(app_name)
-
-    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        """Return user-scoped state for an application user."""
-        return self._get_user_state(app_name, user_id)
-
-    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        """Insert or replace app-scoped state for an application."""
-        self._upsert_app_state(app_name, state)
-
-    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        """Insert or replace user-scoped state for an application user."""
-        self._upsert_user_state(app_name, user_id, state)
-
-    def get_metadata(self, key: str) -> "str | None":
-        """Return a value from the ADK internal metadata table."""
-        return self._get_metadata(key)
-
-    def set_metadata(self, key: str, value: str) -> None:
-        """Set a value in the ADK internal metadata table."""
-        self._set_metadata(key, value)
-
-    def _sessions_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-        session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ){session_locality};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id){session_storing_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC){hash_shard_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
-
-    def _events_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ){events_locality};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
-            ON {self._events_table} USING GIN (event_data);
-        """
-
-    def _app_states_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ){app_state_locality};
-        """
-
-    def _user_states_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (app_name, user_id)
-        ){user_state_locality};
-        """
-
-    def _metadata_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
-            key VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        ){metadata_locality};
-        """
-
-    def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
-        """
-
-    def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
-
-    def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
-
-    def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
-
-    def _drop_tables_sql(self) -> "list[str]":
-        return [
-            self._drop_metadata_table_sql(),
-            self._drop_user_states_table_sql(),
-            self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
-        ]
-
-    def _create_tables(self) -> None:
         with self._config.provide_session() as driver:
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
@@ -771,9 +655,10 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             driver.execute_script(self._metadata_table_ddl())
             driver.execute_script(self._metadata_seed_sql())
 
-    def _create_session(
+    def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
+        """Create a new session."""
         state_json = Jsonb(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -793,15 +678,16 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             cur.execute(sql.encode(), params)
             conn.commit()
 
-        result = self._get_session(app_name, user_id, session_id)
+        result = self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Session creation failed"
             raise RuntimeError(msg)
         return result
 
-    def _get_session(
-        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
+    def get_session(
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
+        """Get session by ID."""
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             sql = f"""
             UPDATE {self._session_table}
@@ -835,7 +721,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return None
 
-    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+        """Update session state."""
         sql = f"""
         UPDATE {self._session_table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
@@ -846,14 +733,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
             conn.commit()
 
-    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, user_id, session_id))
-            conn.commit()
-
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+        """List sessions for an app."""
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -890,29 +771,20 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return []
 
-    def _insert_event(self, event_record: EventRecord) -> None:
-        sql = f"""
-        INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
-        """
-        event_data_value = event_record["event_data"]
-        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
+    def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
+        """Delete session and associated events."""
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                sql.encode(),
-                (
-                    event_record["id"],
-                    event_record["session_id"],
-                    event_record["invocation_id"],
-                    event_record["timestamp"],
-                    jsonb_value,
-                ),
-            )
+            cur.execute(sql.encode(), (app_name, user_id, session_id))
             conn.commit()
 
-    def _append_event_and_update_state(
+    def append_event(self, event_record: EventRecord) -> None:
+        """Append an event to a session."""
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
+
+    def append_event_and_update_state(
         self,
         event_record: EventRecord,
         app_name: str,
@@ -923,6 +795,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
+        """Atomically append an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, session_id, invocation_id, timestamp, event_data
@@ -979,7 +852,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             update_time=row["update_time"],
         )
 
-    def _get_events(
+    def get_events(
         self,
         app_name: str,
         user_id: str,
@@ -987,6 +860,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
+        """Get events for a session."""
         if limit == 0:
             return []
 
@@ -1030,7 +904,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return []
 
-    def _delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime") -> int:
+        """Delete events older than the given timestamp."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
 
         try:
@@ -1041,7 +916,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return 0
 
-    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+        """Delete sessions whose update_time predates the given threshold."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
 
         try:
@@ -1052,7 +928,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return 0
 
-    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+        """Return app-scoped state for an application."""
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
         try:
@@ -1063,7 +940,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return None
 
-    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Return user-scoped state for an application user."""
         sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
 
         try:
@@ -1074,7 +952,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return None
 
-    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        """Insert or replace app-scoped state for an application."""
         sql = f"""
         UPSERT INTO {self._app_state_table} (app_name, state, update_time)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
@@ -1084,7 +963,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             cur.execute(sql.encode(), (app_name, Jsonb(state)))
             conn.commit()
 
-    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        """Insert or replace user-scoped state for an application user."""
         sql = f"""
         UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
@@ -1094,7 +974,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
             conn.commit()
 
-    def _get_metadata(self, key: str) -> "str | None":
+    def get_metadata(self, key: str) -> "str | None":
+        """Return a value from the ADK internal metadata table."""
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
 
         try:
@@ -1105,7 +986,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return None
 
-    def _set_metadata(self, key: str, value: str) -> None:
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set a value in the ADK internal metadata table."""
         sql = f"""
         UPSERT INTO {self._metadata_table} (key, value)
         VALUES (%s, %s)
@@ -1115,9 +997,107 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             cur.execute(sql.encode(), (key, value))
             conn.commit()
 
-    def _append_event(self, event_record: EventRecord) -> None:
-        """Synchronous implementation of append_event."""
-        self._insert_event(event_record)
+    def _sessions_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
+        session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
+
+        return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
+            self._session_table,
+            owner_id_line,
+            session_locality,
+            self._session_table,
+            self._session_table,
+            session_storing_clause,
+            self._session_table,
+            self._session_table,
+            hash_shard_clause,
+            self._session_table,
+            self._session_table,
+        )
+
+    def _events_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+
+        return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
+            self._events_table,
+            self._session_table,
+            events_locality,
+            self._events_table,
+            self._events_table,
+            hash_shard_clause,
+            events_storing_clause,
+            self._events_table,
+            self._events_table,
+        )
+
+    def _app_states_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
+
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table, app_state_locality)
+
+    def _user_states_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
+
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table, user_state_locality)
+
+    def _metadata_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
+
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table, metadata_locality)
+
+    def _metadata_seed_sql(self) -> str:
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
+
+    def _drop_app_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+
+    def _drop_user_states_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+
+    def _drop_metadata_table_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+
+    def _drop_tables_sql(self) -> "list[str]":
+        return [
+            self._drop_metadata_table_sql(),
+            self._drop_user_states_table_sql(),
+            self._drop_app_states_table_sql(),
+            f"DROP TABLE IF EXISTS {self._events_table}",
+            f"DROP TABLE IF EXISTS {self._session_table}",
+        ]
+
+    def _insert_event(self, event_record: EventRecord) -> None:
+        sql = f"""
+        INSERT INTO {self._events_table} (
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                sql.encode(),
+                (
+                    event_record["id"],
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            conn.commit()
 
 
 class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsycopgAsyncConfig"]):
@@ -1250,46 +1230,29 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         adk_config = _adk_config(self._config)
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
         trigram_index = ""
         if adk_config.get("enable_memory_trigram_index", False):
-            trigram_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_content_trgm
-            ON {self._memory_table} USING GIN (content_text gin_trgm_ops);
-            """
+            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table, self._memory_table)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ){memory_locality};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC){hash_shard_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        {trigram_index}
-        """
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
+            self._memory_table,
+            owner_id_line,
+            memory_locality,
+            self._memory_table,
+            self._memory_table,
+            hash_shard_clause,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+            trigram_index,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
@@ -1305,82 +1268,14 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
-
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return self._insert_memory_entries(entries, owner_id)
-
-    def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
-
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
-
-    def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
-
-    def _memory_table_ddl(self) -> str:
-        adk_config = _adk_config(self._config)
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-        memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
-        trigram_index = ""
-        if adk_config.get("enable_memory_trigram_index", False):
-            trigram_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_content_trgm
-            ON {self._memory_table} USING GIN (content_text gin_trgm_ops);
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ){memory_locality};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC){hash_shard_clause};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        {trigram_index}
-        """
-
-    def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
-
-    def _create_tables(self) -> None:
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
 
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1423,9 +1318,10 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                     inserted_count += cur.rowcount
         return inserted_count
 
-    def _search_entries(
+    def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1464,7 +1360,8 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
         return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
 
-    def _delete_entries_by_session(self, session_id: str) -> int:
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1475,7 +1372,8 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
-    def _delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1488,6 +1386,37 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             cur.execute(sql.encode())
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def _memory_table_ddl(self) -> str:
+        adk_config = _adk_config(self._config)
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
+        memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
+        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+        trigram_index = ""
+        if adk_config.get("enable_memory_trigram_index", False):
+            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table, self._memory_table)
+
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
+            self._memory_table,
+            owner_id_line,
+            memory_locality,
+            self._memory_table,
+            self._memory_table,
+            hash_shard_clause,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+            trigram_index,
+        )
+
+    def _drop_memory_table_sql(self) -> "list[str]":
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
 
 def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":

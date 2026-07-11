@@ -261,10 +261,7 @@ class SQLSpecArtifactService(BaseArtifactService):
 
         # Write content first (fail-fast before metadata)
         backend = self._registry.get(self._artifact_storage_uri)
-        if hasattr(backend, "write_bytes_async"):
-            await backend.write_bytes_async(content_path, content_bytes)
-        else:
-            backend.write_bytes_sync(content_path, content_bytes)
+        await _call_storage_backend(backend, "write_bytes_async", "write_bytes_sync", content_path, content_bytes)
 
         # Insert metadata row
         from datetime import datetime, timezone
@@ -335,10 +332,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
 
         backend = self._registry.get(self._artifact_storage_uri)
-        if hasattr(backend, "read_bytes_async"):
-            content_bytes = await backend.read_bytes_async(content_path)
-        else:
-            content_bytes = backend.read_bytes_sync(content_path)
+        content_bytes = await _call_storage_backend(backend, "read_bytes_async", "read_bytes_sync", content_path)
 
         log_with_context(
             logger,
@@ -400,10 +394,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         for record in deleted_records:
             content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
             try:
-                if hasattr(backend, "delete_async"):
-                    await backend.delete_async(content_path)
-                else:
-                    backend.delete_sync(content_path)
+                await _call_storage_backend(backend, "delete_async", "delete_sync", content_path)
             except Exception:
                 log_with_context(
                     logger,
@@ -488,3 +479,13 @@ class SQLSpecArtifactService(BaseArtifactService):
         if record is None:
             return None
         return _record_to_artifact_version(record)
+
+
+async def _call_storage_backend(
+    backend: Any, async_method_name: str, sync_method_name: str, *args: Any, **kwargs: Any
+) -> Any:
+    """Call the available async or sync storage-backend capability."""
+    async_method = getattr(backend, async_method_name, None)
+    if async_method is not None:
+        return await async_method(*args, **kwargs)
+    return getattr(backend, sync_method_name)(*args, **kwargs)

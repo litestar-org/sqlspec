@@ -76,9 +76,7 @@ def _adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfi
         "user_state_table": str(adk_config.get("user_state_table") or "adk_user_state"),
         "metadata_table": str(adk_config.get("metadata_table") or "adk_internal_metadata"),
     }
-    owner_id = adk_config.get("owner_id_column")
-    if owner_id is not None:
-        result["owner_id_column"] = cast("str", owner_id)
+    _apply_owner_id(result, adk_config)
     return result
 
 
@@ -94,9 +92,7 @@ def _adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreConfig:
         "use_fts": bool(adk_config.get("memory_use_fts", False)),
         "max_results": int(max_results) if isinstance(max_results, int) else 20,
     }
-    owner_id = adk_config.get("owner_id_column")
-    if owner_id is not None:
-        result["owner_id_column"] = cast("str", owner_id)
+    _apply_owner_id(result, adk_config)
     return result
 
 
@@ -105,6 +101,13 @@ def _adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStoreCon
 
     adk_config = _adk_config_from_extension(config)
     return {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
+
+
+def _apply_owner_id(result: "_ADKSessionStoreConfig | _ADKMemoryStoreConfig", adk_config: dict[str, Any]) -> None:
+    """Copy the configured owner column into normalized store settings."""
+    owner_id = adk_config.get("owner_id_column")
+    if owner_id is not None:
+        result["owner_id_column"] = cast("str", owner_id)
 
 
 def _adk_store_path(config: Any, store_suffix: str) -> str:

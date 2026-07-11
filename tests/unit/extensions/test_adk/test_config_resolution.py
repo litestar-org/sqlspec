@@ -1,6 +1,6 @@
 """Tests for ADK flat-config resolution."""
 
-from typing import Any
+from typing import Any, cast
 
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk._config_utils import (
@@ -8,6 +8,8 @@ from sqlspec.extensions.adk._config_utils import (
     _adk_memory_migration_enabled,
     _adk_memory_store_config,
     _adk_session_store_config,
+    _ADKSessionStoreConfig,
+    _apply_owner_id,
 )
 
 
@@ -16,6 +18,17 @@ class _Config:
 
     def __init__(self, adk_config: dict[str, Any]) -> None:
         self.extension_config = {"adk": adk_config}
+
+
+def test_apply_owner_id_adds_only_configured_values() -> None:
+    configured = cast("_ADKSessionStoreConfig", {})
+    unconfigured = cast("_ADKSessionStoreConfig", {})
+
+    _apply_owner_id(configured, {"owner_id_column": "tenant_id UUID"})
+    _apply_owner_id(unconfigured, {})
+
+    assert dict(configured) == {"owner_id_column": "tenant_id UUID"}
+    assert not unconfigured
 
 
 def test_adk_config_uses_flat_keys() -> None:
