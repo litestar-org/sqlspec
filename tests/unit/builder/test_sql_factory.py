@@ -4,6 +4,7 @@
 import importlib.util
 import math
 from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 from sqlglot import exp, parse_one
@@ -37,6 +38,19 @@ from sqlspec.builder._join import create_join_builder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
+
+
+class _SQLExpressionObject:
+    def __init__(self, sql_text: str, expression: exp.Expr, parameters: dict[str, object]) -> None:
+        self.expression = expression
+        self.parameters = parameters
+        self.sql = sql_text
+
+
+class _ParametersExpressionObject:
+    def __init__(self, _sql_text: str, expression: exp.Expr, parameters: dict[str, object]) -> None:
+        self.expression = expression
+        self.parameters = parameters
 
 
 def test_sql_factory_instance() -> None:
@@ -995,6 +1009,41 @@ def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.
         sql.raw("SELECT 1 FROM posts WHERE posts.user_id = :user_id", user_id=1)
     ).where(sql.raw("id = :id", id=1))
     assert calls == 2
+
+
+@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
+def test_sql_object_protocol_shapes_merge_where_parameters(
+    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
+) -> None:
+    condition = object_type("users.id = :user_id", exp.condition("users.id = :user_id"), {"user_id": 41})
+    statement = sql.select("*").from_("users").where(cast("Any", condition)).build()
+    assert ":user_id" in statement.sql
+    assert statement.parameters["user_id"] == 41
+
+
+@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
+def test_sql_object_protocol_shapes_merge_subquery_parameters(
+    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
+) -> None:
+    sql_text = "SELECT 1 FROM posts WHERE posts.user_id = :user_id"
+    subquery = object_type(sql_text, parse_one(sql_text), {"user_id": 42})
+    statement = sql.select("*").from_("users").where_exists(subquery).build()
+    assert ":user_id" in statement.sql
+    assert statement.parameters["user_id"] == 42
+
+
+@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
+def test_sql_object_protocol_shapes_merge_join_parameters(
+    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
+) -> None:
+    condition = object_type(
+        "users.id = posts.user_id AND posts.status = :status",
+        exp.condition("users.id = posts.user_id AND posts.status = :status"),
+        {"status": "published"},
+    )
+    statement = sql.select("*").from_("users").join("posts", cast("Any", condition)).build()
+    assert ":status" in statement.sql
+    assert statement.parameters["status"] == "published"
 
 
 def test_sql_raw_without_parameters_still_works() -> None:

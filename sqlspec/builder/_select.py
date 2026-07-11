@@ -31,6 +31,7 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.core import SQL, ParameterStyle, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
+    has_expression_and_parameters,
     has_expression_and_sql,
     has_parameter_builder,
     has_sqlglot_expression,
@@ -649,7 +650,7 @@ class WhereClauseMixin:
                 builder.add_parameter(parameters)
             return subquery_expr
 
-        if has_expression_and_sql(subquery):
+        if has_expression_and_sql(subquery) or has_expression_and_parameters(subquery):
 
             def parse_subquery(sql_text: str) -> exp.Expr:
                 parsed_from_sql: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
@@ -779,7 +780,7 @@ class WhereClauseMixin:
             if isinstance(raw_expr, exp.Expr):
                 return builder._parameterize_expression(_normalize_condition_expression(raw_expr))
             return parse_condition_expression(str(condition))
-        if has_expression_and_sql(condition):
+        if has_expression_and_sql(condition) or has_expression_and_parameters(condition):
             return _normalize_condition_expression(
                 extract_sql_object_expression(condition, builder=self, parse_sql=parse_condition_expression)
             )

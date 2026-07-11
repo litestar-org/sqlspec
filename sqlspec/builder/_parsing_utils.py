@@ -328,13 +328,19 @@ def extract_sql_object_expression(
     Raises:
         ValueError: If the value doesn't appear to be a SQL object
     """
-    if not has_expression_and_sql(value):
-        msg = f"Value does not have both expression and sql attributes: {type(value)}"
+    has_sql = has_expression_and_sql(value)
+    has_parameters = has_expression_and_parameters(value)
+    if not has_sql and not has_parameters:
+        msg = f"Value does not expose an expression with SQL or parameters: {type(value)}"
         raise ValueError(msg)
 
     if value.expression is not None and isinstance(value.expression, exp.Expr):
         _merge_sql_parameters(value, builder)
         return value.expression
+
+    if not has_sql:
+        msg = f"Value has no SQL text fallback: {type(value)}"
+        raise ValueError(msg)
 
     _merge_sql_parameters(value, builder)
     sql_text = getattr(value, "raw_sql", None)
