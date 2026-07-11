@@ -32,6 +32,8 @@ from sqlspec.builder._expression_wrappers import (
     StringExpression,
 )
 from sqlspec.builder._join import create_join_builder
+from sqlspec.builder import _select as select_module
+from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 
@@ -980,6 +982,21 @@ def test_multiple_sql_raw_objects_parameter_merging() -> None:
     assert ":default_name" in stmt.sql
     assert ":status" in stmt.sql
     assert ":min_date" in stmt.sql
+
+
+def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def extract(value: object, builder: object | None = None) -> exp.Expr:
+        nonlocal calls
+        calls += 1
+        return extract_sql_object_expression(value, builder)
+
+    monkeypatch.setattr(select_module, "extract_sql_object_expression", extract)
+    sql.select("*").from_("users").where_exists(
+        sql.raw("SELECT 1 FROM posts WHERE posts.user_id = :user_id", user_id=1)
+    ).where(sql.raw("id = :id", id=1))
+    assert calls == 2
 
 
 def test_sql_raw_without_parameters_still_works() -> None:

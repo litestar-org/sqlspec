@@ -21,6 +21,7 @@ from sqlspec.builder._parsing_utils import (
     _coerce_column,
     extract_column_name,
     extract_expression,
+    extract_sql_object_expression,
     parse_column_expression,
     parse_condition_expression,
     parse_order_expression,
@@ -648,16 +649,7 @@ class WhereClauseMixin:
             return subquery_expr
 
         if has_expression_and_sql(subquery):
-            self._merge_parameters(subquery)
-            expression_attr = subquery.expression
-            if isinstance(expression_attr, exp.Expr):
-                return expression_attr
-            sql_text = subquery.sql
-            parsed_from_sql: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
-            if parsed_from_sql is None:
-                msg = f"Could not parse subquery SQL: {sql_text}"
-                raise SQLBuilderError(msg)
-            return parsed_from_sql
+            return extract_sql_object_expression(subquery, builder=self)
 
         if isinstance(subquery, exp.Expr):
             return subquery
@@ -779,15 +771,7 @@ class WhereClauseMixin:
                 return builder._parameterize_expression(_normalize_condition_expression(raw_expr))
             return parse_condition_expression(str(condition))
         if has_expression_and_sql(condition):
-            expression_attr = condition.expression
-            if isinstance(expression_attr, exp.Expr):
-                self._merge_parameters(condition)
-                return _normalize_condition_expression(expression_attr)
-            sql_text = getattr(condition, "raw_sql", None)
-            if sql_text is None:
-                sql_text = condition.sql
-            self._merge_parameters(condition)
-            return parse_condition_expression(sql_text)
+            return _normalize_condition_expression(extract_sql_object_expression(condition, builder=self))
 
         msg = f"Unsupported condition type: {type(condition).__name__}"
         raise SQLBuilderError(msg)
