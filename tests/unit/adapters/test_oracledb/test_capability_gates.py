@@ -2,7 +2,7 @@
 
 import oracledb
 
-from sqlspec.adapters.oracledb import _typing as oracle_typing
+from sqlspec.adapters.oracledb import _vector_handlers
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_SUPPORTS_SPARSE_VECTORS,
     connection_is_thin,
@@ -49,4 +49,4 @@ def test_supports_df_batches_checks_fetch_df_batches_method() -> None:
 
 def test_sparse_vector_type_alias_matches_oracledb_export() -> None:
     assert ORACLEDB_SUPPORTS_SPARSE_VECTORS is True
-    assert oracle_typing.SPARSE_VECTOR_TYPE is oracledb.SparseVector
+    assert _vector_handlers.SPARSE_VECTOR_TYPE is oracledb.SparseVector

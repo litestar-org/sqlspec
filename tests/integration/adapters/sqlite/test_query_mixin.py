@@ -6,7 +6,7 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import SQL
-from sqlspec.exceptions import NotFoundError
+from sqlspec.exceptions import MultipleResultsFoundError, NotFoundError
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -47,7 +47,7 @@ def test_select_one_or_none_no_rows(sqlite_driver: SqliteDriver) -> None:
 
 def test_select_one_or_none_multiple_rows(sqlite_driver: SqliteDriver) -> None:
     """Test select_one_or_none raises when multiple rows found."""
-    with pytest.raises(ValueError, match="Multiple results found"):
+    with pytest.raises(MultipleResultsFoundError, match="Multiple results found"):
         sqlite_driver.select_one_or_none("SELECT * FROM users WHERE age < 35")
 
 

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+import sqlspec.utils.fixtures as fixture_module
 from sqlspec.utils.fixtures import (
     _async_compress,
     _async_read_compressed,
@@ -25,12 +26,24 @@ from sqlspec.utils.fixtures import (
     _find_fixture_file,
     _read_compressed_file,
     _serialize_data,
-    open_fixture,
     open_fixture_async,
-    write_fixture,
+    open_fixture_sync,
     write_fixture_async,
+    write_fixture_sync,
 )
 from sqlspec.utils.sync_tools import _AsyncWrapper
+
+
+def test_fixture_helpers_use_explicit_sync_and_async_names() -> None:
+    """The clean-break API names both execution modes explicitly."""
+    assert fixture_module.__all__ == (
+        "open_fixture_async",
+        "open_fixture_sync",
+        "write_fixture_async",
+        "write_fixture_sync",
+    )
+    assert not hasattr(fixture_module, "open_fixture")
+    assert not hasattr(fixture_module, "write_fixture")
 
 
 def test_find_fixture_file_json(tmp_path: Path) -> None:
@@ -242,7 +255,7 @@ def test_serialize_primitive_none() -> None:
 
 
 def test_open_fixture_valid_file(tmp_path: Path) -> None:
-    """Test open_fixture with valid JSON fixture file."""
+    """Test open_fixture_sync with valid JSON fixture file."""
     fixtures_path = tmp_path
     fixture_file = fixtures_path / "test_fixture.json"
 
@@ -250,12 +263,12 @@ def test_open_fixture_valid_file(tmp_path: Path) -> None:
     with fixture_file.open("w") as f:
         json.dump(test_data, f)
 
-    result = open_fixture(fixtures_path, "test_fixture")
+    result = open_fixture_sync(fixtures_path, "test_fixture")
     assert result == test_data
 
 
 def test_open_fixture_gzipped(tmp_path: Path) -> None:
-    """Test open_fixture with gzipped JSON file."""
+    """Test open_fixture_sync with gzipped JSON file."""
     fixtures_path = tmp_path
     fixture_file = fixtures_path / "test.json.gz"
 
@@ -263,12 +276,12 @@ def test_open_fixture_gzipped(tmp_path: Path) -> None:
     with gzip.open(fixture_file, "wt", encoding="utf-8") as f:
         json.dump(test_data, f)
 
-    result = open_fixture(fixtures_path, "test")
+    result = open_fixture_sync(fixtures_path, "test")
     assert result == test_data
 
 
 def test_open_fixture_zipped(tmp_path: Path) -> None:
-    """Test open_fixture with zipped JSON file."""
+    """Test open_fixture_sync with zipped JSON file."""
     fixtures_path = tmp_path
     fixture_file = fixtures_path / "test.json.zip"
 
@@ -276,20 +289,20 @@ def test_open_fixture_zipped(tmp_path: Path) -> None:
     with zipfile.ZipFile(fixture_file, "w") as zf:
         zf.writestr("test.json", json.dumps(test_data))
 
-    result = open_fixture(fixtures_path, "test")
+    result = open_fixture_sync(fixtures_path, "test")
     assert result == test_data
 
 
 def test_open_fixture_missing_file(tmp_path: Path) -> None:
-    """Test open_fixture with missing fixture file."""
+    """Test open_fixture_sync with missing fixture file."""
     fixtures_path = tmp_path
 
     with pytest.raises(FileNotFoundError, match="Could not find the nonexistent fixture"):
-        open_fixture(fixtures_path, "nonexistent")
+        open_fixture_sync(fixtures_path, "nonexistent")
 
 
 def test_open_fixture_invalid_json(tmp_path: Path) -> None:
-    """Test open_fixture with invalid JSON."""
+    """Test open_fixture_sync with invalid JSON."""
     fixtures_path = tmp_path
     fixture_file = fixtures_path / "invalid.json"
 
@@ -297,7 +310,7 @@ def test_open_fixture_invalid_json(tmp_path: Path) -> None:
         f.write("{ invalid json content")
 
     with pytest.raises(Exception):
-        open_fixture(fixtures_path, "invalid")
+        open_fixture_sync(fixtures_path, "invalid")
 
 
 async def test_open_fixture_async_valid_file(tmp_path: Path) -> None:
@@ -351,14 +364,14 @@ def test_write_fixture_dict(tmp_path: Path) -> None:
     """Test writing a dictionary fixture."""
     test_data: Any = {"name": "test", "value": 42, "active": True}
 
-    write_fixture(str(tmp_path), "test_dict", test_data)
+    write_fixture_sync(str(tmp_path), "test_dict", test_data)
 
     # Verify file was created
     fixture_file = tmp_path / "test_dict.json"
     assert fixture_file.exists()
 
     # Verify content
-    loaded_data = open_fixture(tmp_path, "test_dict")
+    loaded_data = open_fixture_sync(tmp_path, "test_dict")
     assert loaded_data == test_data
 
 
@@ -366,8 +379,8 @@ def test_write_fixture_list(tmp_path: Path) -> None:
     """Test writing a list fixture."""
     test_data: Any = [{"id": 1, "name": "first"}, {"id": 2, "name": "second"}]
 
-    write_fixture(str(tmp_path), "test_list", test_data)
-    loaded_data = open_fixture(tmp_path, "test_list")
+    write_fixture_sync(str(tmp_path), "test_list", test_data)
+    loaded_data = open_fixture_sync(tmp_path, "test_list")
     assert loaded_data == test_data
 
 
@@ -375,14 +388,14 @@ def test_write_fixture_compressed(tmp_path: Path) -> None:
     """Test writing a compressed fixture."""
     test_data: Any = {"compressed": True, "data": list(range(100))}
 
-    write_fixture(str(tmp_path), "test_compressed", test_data, compress=True)
+    write_fixture_sync(str(tmp_path), "test_compressed", test_data, compress=True)
 
     # Verify gzipped file was created
     fixture_file = tmp_path / "test_compressed.json.gz"
     assert fixture_file.exists()
 
     # Verify content can be read
-    loaded_data = open_fixture(tmp_path, "test_compressed")
+    loaded_data = open_fixture_sync(tmp_path, "test_compressed")
     assert loaded_data == test_data
 
 
@@ -391,17 +404,17 @@ def test_write_fixture_storage_backend_error(tmp_path: Path) -> None:
     test_data: Any = {"test": "data"}
 
     with pytest.raises(ValueError, match="Failed to get storage backend"):
-        write_fixture(str(tmp_path), "test", test_data, storage_backend="invalid://backend")
+        write_fixture_sync(str(tmp_path), "test", test_data, storage_backend="invalid://backend")
 
 
 @patch("sqlspec.utils.fixtures.storage_registry")
 def test_write_fixture_with_custom_backend(mock_registry: Mock) -> None:
-    """Test write_fixture with custom storage backend."""
+    """Test write_fixture_sync with custom storage backend."""
     mock_storage = Mock()
     mock_registry.get.return_value = mock_storage
 
     test_data: Any = {"custom": "backend"}
-    write_fixture("/tmp", "test", test_data, storage_backend="s3://bucket", custom_param="value")
+    write_fixture_sync("/tmp", "test", test_data, storage_backend="s3://bucket", custom_param="value")
 
     # Verify storage backend was called correctly
     mock_registry.get.assert_called_once_with("s3://bucket", custom_param="value")
@@ -444,7 +457,7 @@ async def test_write_fixture_async_storage_error(tmp_path: Path) -> None:
 
 @patch("sqlspec.utils.fixtures.storage_registry")
 async def test_write_fixture_async_custom_backend(mock_registry: Mock) -> None:
-    """Test async write_fixture with custom storage backend."""
+    """Test write_fixture_async with a custom storage backend."""
     mock_storage = AsyncMock()
     mock_registry.get.return_value = mock_storage
 
@@ -476,10 +489,10 @@ def test_write_read_roundtrip(tmp_path: Path) -> None:
     }
 
     # Write fixture
-    write_fixture(str(tmp_path), "integration_test", original_data)
+    write_fixture_sync(str(tmp_path), "integration_test", original_data)
 
     # Read fixture back
-    loaded_data = open_fixture(tmp_path, "integration_test")
+    loaded_data = open_fixture_sync(tmp_path, "integration_test")
 
     # Verify data integrity
     assert loaded_data == original_data
@@ -512,10 +525,10 @@ def test_compressed_roundtrip(tmp_path: Path) -> None:
     }
 
     # Write compressed
-    write_fixture(str(tmp_path), "compressed_test", original_data, compress=True)
+    write_fixture_sync(str(tmp_path), "compressed_test", original_data, compress=True)
 
     # Read back
-    loaded_data = open_fixture(tmp_path, "compressed_test")
+    loaded_data = open_fixture_sync(tmp_path, "compressed_test")
 
     # Verify data integrity
     assert loaded_data == original_data

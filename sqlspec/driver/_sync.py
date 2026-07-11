@@ -497,7 +497,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path.
 
-        The statement is already compiled by _prepare_cached_statement, so dispatch_execute
+        The statement is already compiled by _cached_execution, so dispatch_execute
         will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
@@ -852,9 +852,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SchemaT | dict[str, Any] | None":
         """Execute a select statement and return at most one row.
 
-        Returns None if no rows are found. Raises ``ValueError`` if more than one
-        row is returned. Any database or SQL execution errors raised by the driver
-        are propagated unchanged.
+        Returns None if no rows are found. Raises
+        :class:`~sqlspec.exceptions.MultipleResultsFoundError` if more than one row
+        is returned. Any database or SQL execution errors raised by the driver are
+        propagated unchanged.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return result.one_or_none(schema_type=schema_type)

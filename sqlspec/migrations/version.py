@@ -8,7 +8,10 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, final
+from typing import TYPE_CHECKING, final
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from sqlspec.utils.logging import get_logger
 
@@ -315,7 +318,7 @@ def convert_to_sequential_version(timestamp_version: MigrationVersion, sequence_
         msg = "Can only convert timestamp versions to sequential"
         raise ValueError(msg)
 
-    seq_str = str(sequence_number).zfill(4)
+    seq_str = _format_sequential_version(sequence_number)
 
     if timestamp_version.extension:
         return f"ext_{timestamp_version.extension}_{seq_str}"
@@ -323,7 +326,7 @@ def convert_to_sequential_version(timestamp_version: MigrationVersion, sequence_
     return seq_str
 
 
-def generate_conversion_map(migrations: "list[tuple[str, Any]]") -> "dict[str, str]":
+def generate_conversion_map(migrations: "list[tuple[str, Path]]") -> "dict[str, str]":
     """Generate mapping from timestamp versions to sequential versions.
 
     Separates timestamp migrations from sequential, sorts timestamps chronologically,
@@ -370,3 +373,8 @@ def generate_conversion_map(migrations: "list[tuple[str, Any]]") -> "dict[str, s
             next_seq += 1
 
     return conversion_map
+
+
+def _format_sequential_version(value: "int | str") -> str:
+    """Return a migration sequence padded to the canonical four digits."""
+    return str(value).zfill(4)

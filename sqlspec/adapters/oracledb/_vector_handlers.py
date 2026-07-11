@@ -13,12 +13,16 @@ as a follow-up.
 import array
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, SPARSE_VECTOR_TYPE
+import oracledb as _oracledb
+
+from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+
+SPARSE_VECTOR_TYPE: "type[object] | None" = getattr(_oracledb, "SparseVector", None)
 
 __all__ = (
     "DTYPE_TO_ARRAY_CODE",

@@ -4,7 +4,6 @@ import contextlib
 import datetime
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
-from uuid import uuid4
 
 from typing_extensions import LiteralString
 
@@ -42,6 +41,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
+from sqlspec.utils.uuids import uuid4
 
 # Module-level lazy import for psycopg errors (mypyc optimization)
 try:

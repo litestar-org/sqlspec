@@ -50,17 +50,7 @@ class Update(
             table: Target table name
             **kwargs: Additional QueryBuilder arguments
         """
-        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_init_options(kwargs)
-        )
-        super().__init__(
-            dialect=dialect,
-            schema=schema,
-            enable_optimization=enable_optimization,
-            optimize_joins=optimize_joins,
-            optimize_predicates=optimize_predicates,
-            simplify_expressions=simplify_expressions,
-        )
+        self._init_query_builder(kwargs)
         self._initialize_expression()
 
         if table:
@@ -77,7 +67,7 @@ class Update(
         Returns:
             A new sqlglot Update expression with empty clauses.
         """
-        return exp.Update(this=None, expressions=[], joins=[])
+        return exp.Update(this=None, expressions=[])
 
     def join(
         self,
@@ -104,11 +94,13 @@ class Update(
             msg = "Cannot add JOIN clause to non-UPDATE expression."
             raise SQLBuilderError(msg)
 
-        join_expr = build_join_clause(cast("SQLBuilderProtocol", self), table, on, alias, join_type)
+        target_table = self._expression.this
+        if not isinstance(target_table, exp.Table):
+            msg = "Cannot add JOIN clause before the UPDATE target table is set."
+            raise SQLBuilderError(msg)
 
-        if not self._expression.args.get("joins"):
-            self._expression.set("joins", [])
-        self._expression.args["joins"].append(join_expr)
+        join_expr = build_join_clause(cast("SQLBuilderProtocol", self), table, on, alias, join_type)
+        target_table.append("joins", join_expr)
 
         return self
 

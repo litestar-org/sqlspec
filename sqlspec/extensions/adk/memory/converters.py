@@ -4,12 +4,12 @@ Provides utilities for extracting searchable text from ADK Content objects
 and converting between ADK models and database records.
 """
 
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.extensions.adk.memory._types import MemoryRecord
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from google.adk.events.event import Event
@@ -84,7 +84,7 @@ def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_
     now = datetime.now(timezone.utc)
 
     return MemoryRecord(
-        id=str(uuid.uuid4()),
+        id=str(uuid4()),
         session_id=session_id,
         app_name=app_name,
         user_id=user_id,
@@ -144,7 +144,7 @@ def memory_entry_to_record(
             timestamp = now
 
     return MemoryRecord(
-        id=entry.id or str(uuid.uuid4()),
+        id=entry.id or str(uuid4()),
         session_id="",
         app_name=app_name,
         user_id=user_id,

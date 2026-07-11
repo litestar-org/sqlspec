@@ -125,6 +125,12 @@ Integrations
 
       Type aliases, metadata types, feature flags, and driver protocols.
 
+   .. grid-item-card:: Utility Functions
+      :link: utils
+      :link-type: doc
+
+      Type guards, environment parsing, UUIDs, module loading, and sync/async helpers.
+
 .. toctree::
    :hidden:
 
@@ -143,3 +149,4 @@ Integrations
    observability
    extensions/index
    typing
+   utils

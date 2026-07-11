@@ -18,10 +18,25 @@ from sqlspec.adapters.arrow_odbc import (
     odbc_type_to_arrow,
     resolve_dialect_from_dbms_name,
 )
+from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.core import LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
-from sqlspec.exceptions import SQLFileNotFoundError, SQLParsingError, SQLSpecError, TransactionError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    DataError,
+    DeadlockError,
+    ForeignKeyViolationError,
+    NotNullViolationError,
+    OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SQLFileNotFoundError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
@@ -46,9 +61,11 @@ class FakeConnection:
 
     def __init__(self) -> None:
         self.closed = False
+        self.commit_calls = 0
         self.read_calls: list[dict[str, Any]] = []
         self.insert_calls: list[tuple[str, int, pa.Table]] = []
         self.executed: list[tuple[str, Any]] = []
+        self.rollback_calls = 0
 
     def read_arrow_batches(self, **kwargs: Any) -> FakeReader:
         self.read_calls.append(kwargs)
@@ -61,10 +78,10 @@ class FakeConnection:
         self.executed.append((query, parameters))
 
     def commit(self) -> None:
-        return None
+        self.commit_calls += 1
 
     def rollback(self) -> None:
-        return None
+        self.rollback_calls += 1
 
     def close(self) -> None:
         self.closed = True
@@ -106,6 +123,81 @@ class ErrorConnection(FakeConnection):
 
     def from_table_to_db(self, source: pa.Table, target: str, chunk_size: int = 1000) -> None:
         raise FakeOdbcError("insert failed")
+
+
+@pytest.mark.parametrize("method_name", ["commit", "rollback"])
+def test_transaction_control_propagates_non_native_errors(method_name: str) -> None:
+    connection = FakeConnection()
+
+    def raise_runtime_error() -> None:
+        raise RuntimeError("internal bug")
+
+    setattr(connection, method_name, raise_runtime_error)
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(RuntimeError, match="internal bug"):
+        getattr(driver, method_name)()
+
+
+@pytest.mark.parametrize("method_name", ["commit", "rollback"])
+def test_transaction_control_wraps_native_errors(method_name: str) -> None:
+    connection = FakeConnection()
+    native_error = ArrowOdbcError.__new__(ArrowOdbcError)
+    native_error.args = ("native failure",)
+
+    def raise_native_error() -> None:
+        raise native_error
+
+    setattr(connection, method_name, raise_native_error)
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
+        getattr(driver, method_name)()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "statement"), [("commit", "COMMIT TRANSACTION"), ("rollback", "ROLLBACK TRANSACTION")]
+)
+def test_mssql_owned_transaction_uses_tsql_boundary(method_name: str, statement: str) -> None:
+    """Owned MSSQL transactions should bypass native controls that are no-ops under autocommit."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    driver.begin()
+    getattr(driver, method_name)()
+
+    assert connection.executed == [("BEGIN TRANSACTION", None), (statement, None)]
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(("method_name", "active_after_error"), [("commit", True), ("rollback", False)])
+def test_mssql_owned_transaction_tsql_error_preserves_state_semantics(
+    method_name: str, active_after_error: bool
+) -> None:
+    """Failed owned controls should retain commit state but always clear rollback state."""
+    connection = FakeConnection()
+    native_error = ArrowOdbcError.__new__(ArrowOdbcError)
+    native_error.args = ("native failure",)
+
+    def execute(query: str, parameters: Any = None) -> None:
+        connection.executed.append((query, parameters))
+        if query != "BEGIN TRANSACTION":
+            raise native_error
+
+    connection.execute = execute  # type: ignore[method-assign]
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+    driver.begin()
+
+    with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
+        getattr(driver, method_name)()
+
+    assert driver._connection_in_transaction() is active_after_error  # pyright: ignore[reportPrivateUsage]
 
 
 def _empty_table_reader() -> FakeReader:
@@ -572,6 +664,58 @@ def test_arrow_odbc_mssql_syntax_error_maps_to_sql_parsing_error() -> None:
     )
 
     assert isinstance(mapped, SQLParsingError)
+
+
+def test_arrow_odbc_syntax_fallback_without_native_error_number() -> None:
+    """Syntax diagnostics without a native error number retain the fallback mapping."""
+    mapped = create_mapped_exception(FakeOdbcError("Incorrect syntax near '*'."))
+
+    assert isinstance(mapped, SQLParsingError)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_type"),
+    [
+        (
+            "State: 23000, Native error: 2601, Message: [SQL Server]Cannot insert duplicate key row.",
+            UniqueViolationError,
+        ),
+        (
+            "State: 23000, Native error: 2627, Message: [SQL Server]Violation of UNIQUE KEY constraint.",
+            UniqueViolationError,
+        ),
+        (
+            "State: 23000, Native error: 547, Message: [SQL Server]FOREIGN KEY constraint conflict.",
+            ForeignKeyViolationError,
+        ),
+        ("State: 23000, Native error: 515, Message: [SQL Server]Cannot insert NULL.", NotNullViolationError),
+        ("State: 28000, Native error: 18456, Message: [SQL Server]Login failed.", PermissionDeniedError),
+        (
+            "State: 08001, Native error: 4060, Message: [SQL Server]Cannot open database requested by the login.",
+            DatabaseConnectionError,
+        ),
+        ("State: 08001, Native error: 53, Message: [SQL Server]Network path not found.", DatabaseConnectionError),
+        ("State: 40001, Native error: 1205, Message: [SQL Server]Transaction was deadlocked.", DeadlockError),
+        ("State: HYT00, Native error: -2, Message: [SQL Server]Query timeout expired.", QueryTimeoutError),
+        ("State: 22018, Native error: 8114, Message: [SQL Server]Conversion failed.", DataError),
+        ("State: HY000, Native error: 1105, Message: [SQL Server]Could not allocate space.", OperationalError),
+        ("State: 42000, Native error: 102, Message: [SQL Server]Incorrect syntax near '*'.", SQLParsingError),
+    ],
+)
+def test_arrow_odbc_error_number_maps_to_sqlspec_exception(message: str, expected_type: "type[SQLSpecError]") -> None:
+    """SQL Server native error numbers in arrow-odbc diagnostics map to SQLSpec exceptions."""
+    mapped = create_mapped_exception(FakeOdbcError(message))
+
+    assert isinstance(mapped, expected_type)
+
+
+def test_arrow_odbc_non_mssql_native_code_does_not_use_sql_server_mapping() -> None:
+    """Native error numbers from other ODBC vendors do not use the SQL Server table."""
+    mapped = create_mapped_exception(
+        FakeOdbcError("State: HY000, Native error: 1205, Message: [MySQL]Lock wait timeout exceeded.")
+    )
+
+    assert type(mapped) is SQLSpecError
 
 
 def test_arrow_odbc_driver_dialect_set_from_dbms_name() -> None:

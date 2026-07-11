@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.54.3"
+version = "0.55.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -73,7 +73,7 @@ pymysql = ["pymysql"]
 sanic = ["sanic"]
 spanner = ["google-cloud-spanner"]
 starlette = ["starlette"]
-uuid = ["uuid-utils"]
+uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]
@@ -197,6 +197,7 @@ packages = ["sqlspec"]
 # Keep that smoke build from auto-discovering ignored scratch directories.
 packages = []
 
+
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
 enable-by-default = false
@@ -229,7 +230,6 @@ include = [
   "sqlspec/exceptions.py",                         # Exceptions module
   "sqlspec/loader.py",                             # Loader module
   "sqlspec/observability/**/*.py",                 # Observability utilities
-  "sqlspec/observability/_formatting.py",          # OTel console formatter
   "sqlspec/driver/**/*.py",                        # Driver module
   "sqlspec/adapters/**/pool.py",                   # Adapter pool runtimes proven without driver subclasses
   "sqlspec/migrations/**/*.py",                    # Migration runtime, excluding command CLI
@@ -307,7 +307,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.54.3"
+current_version = "0.55.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
@@ -641,7 +641,6 @@ split-on-trailing-comma = false
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004"]
 "docs/examples/**" = ["T201"]
 "sqlspec/adapters/spanner/config.py" = ["PLC2801"]
-"sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]
 "tests/**/*.*" = [

@@ -1133,12 +1133,12 @@ class SQL:
         condition_expr: exp.Expr
         if isinstance(condition, str):
             if not self._statement_config.enable_parsing:
-                condition_expr = exp.Condition(this=condition)
+                condition_expr = exp.Paren(this=exp.Var(this=condition))
             else:
                 try:
                     condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
                 except ParseError:
-                    condition_expr = exp.Condition(this=condition)
+                    condition_expr = exp.Paren(this=exp.Var(this=condition))
         else:
             condition_expr = condition
 

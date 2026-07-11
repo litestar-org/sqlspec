@@ -39,7 +39,7 @@ def test_session_provider_documents_mypyc_blockers() -> None:
 async def test_async_manual_handler_closes_connection() -> None:
     """Test async manual handler closes connection on terminus event."""
     connection_key = "test_connection"
-    handler = manual_handler_maker(connection_key, is_async=True)
+    handler = manual_handler_maker(connection_key)
 
     mock_connection = AsyncMock()
     mock_connection.close = AsyncMock()
@@ -58,7 +58,7 @@ async def test_async_manual_handler_closes_connection() -> None:
 async def test_async_manual_handler_ignores_non_terminus_events() -> None:
     """Test async manual handler ignores non-terminus events."""
     connection_key = "test_connection"
-    handler = manual_handler_maker(connection_key, is_async=True)
+    handler = manual_handler_maker(connection_key)
 
     mock_connection = AsyncMock()
     mock_connection.close = AsyncMock()
@@ -77,7 +77,7 @@ async def test_async_manual_handler_ignores_non_terminus_events() -> None:
 async def test_async_autocommit_handler_commits_on_success() -> None:
     """Test async autocommit handler commits on 2xx status."""
     connection_key = "test_connection"
-    handler = autocommit_handler_maker(connection_key, is_async=True)
+    handler = autocommit_handler_maker(connection_key)
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -99,7 +99,7 @@ async def test_async_autocommit_handler_commits_on_success() -> None:
 async def test_async_autocommit_handler_rolls_back_on_error() -> None:
     """Test async autocommit handler rolls back on 4xx/5xx status."""
     connection_key = "test_connection"
-    handler = autocommit_handler_maker(connection_key, is_async=True)
+    handler = autocommit_handler_maker(connection_key)
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -121,7 +121,7 @@ async def test_async_autocommit_handler_rolls_back_on_error() -> None:
 async def test_async_autocommit_handler_with_redirect_commit() -> None:
     """Test async autocommit handler commits on 3xx when enabled."""
     connection_key = "test_connection"
-    handler = autocommit_handler_maker(connection_key, is_async=True, commit_on_redirect=True)
+    handler = autocommit_handler_maker(connection_key, commit_on_redirect=True)
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -141,7 +141,7 @@ async def test_async_autocommit_handler_with_redirect_commit() -> None:
 async def test_async_autocommit_handler_extra_commit_statuses() -> None:
     """Test async autocommit handler uses extra commit statuses."""
     connection_key = "test_connection"
-    handler = autocommit_handler_maker(connection_key, is_async=True, extra_commit_statuses={418})
+    handler = autocommit_handler_maker(connection_key, extra_commit_statuses={418})
 
     mock_connection = AsyncMock()
     mock_connection.commit = AsyncMock()
@@ -161,7 +161,7 @@ async def test_async_autocommit_handler_extra_commit_statuses() -> None:
 async def test_async_autocommit_handler_raises_on_conflicting_statuses() -> None:
     """Test async autocommit handler raises error when status sets overlap."""
     with pytest.raises(ImproperConfigurationError) as exc_info:
-        autocommit_handler_maker("test", is_async=True, extra_commit_statuses={418}, extra_rollback_statuses={418})
+        autocommit_handler_maker("test", extra_commit_statuses={418}, extra_rollback_statuses={418})
 
     assert "must not share" in str(exc_info.value)
 
@@ -297,8 +297,8 @@ async def test_async_session_provider_creates_session() -> None:
         assert session.connection is mock_connection
 
 
-def test_handlers_conditionally_use_ensure_async() -> None:
-    """Test that unified handlers module imports ensure_async_ and uses it conditionally."""
+def test_handlers_use_ensure_async_unconditionally() -> None:
+    """Test that unified handlers normalize sync and async callables via ensure_async_."""
     from pathlib import Path
 
     from sqlspec.extensions.litestar import handlers
@@ -309,6 +309,66 @@ def test_handlers_conditionally_use_ensure_async() -> None:
     content = Path(source).read_text()
 
     assert "from sqlspec.utils.sync_tools import ensure_async_" in content
-    assert "if is_async:" in content, "handlers should check is_async flag"
-    assert "await connection.close()" in content, "async path should use direct await"
-    assert "await ensure_async_(connection.close)()" in content, "sync path should use ensure_async_"
+    assert "is_async" not in content, "handlers should not branch on is_async"
+    assert "await ensure_async_(connection.close)()" in content, "close should go through ensure_async_"
+    assert "await ensure_async_(connection.commit)()" in content, "commit should go through ensure_async_"
+    assert "await ensure_async_(connection.rollback)()" in content, "rollback should go through ensure_async_"
+
+
+async def test_sync_manual_handler_closes_connection() -> None:
+    """Test manual handler closes sync connections through ensure_async_."""
+    connection_key = "test_connection"
+    handler = manual_handler_maker(connection_key)
+
+    mock_connection = MagicMock()
+    mock_connection.close = MagicMock(return_value=None)
+
+    scope = cast("Scope", {})
+    set_sqlspec_scope_state(scope, connection_key, mock_connection)
+
+    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+
+    await handler(message, scope)
+
+    mock_connection.close.assert_called_once()
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+
+
+async def test_sync_autocommit_handler_commits_on_success() -> None:
+    """Test autocommit handler commits sync connections through ensure_async_."""
+    connection_key = "test_connection"
+    handler = autocommit_handler_maker(connection_key)
+
+    mock_connection = MagicMock()
+    mock_connection.commit = MagicMock(return_value=None)
+    mock_connection.rollback = MagicMock(return_value=None)
+    mock_connection.close = MagicMock(return_value=None)
+
+    scope = cast("Scope", {})
+    set_sqlspec_scope_state(scope, connection_key, mock_connection)
+
+    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+
+    await handler(message, scope)
+
+    mock_connection.commit.assert_called_once()
+    mock_connection.rollback.assert_not_called()
+    mock_connection.close.assert_called_once()
+
+
+async def test_sync_lifespan_handler_creates_and_closes_pool() -> None:
+    """Test lifespan handler manages a sync config's pool lifecycle."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    pool_key = "test_pool"
+
+    handler = lifespan_handler_maker(config, pool_key)
+
+    mock_app = MagicMock()
+    mock_app.state = {}
+    mock_app.logger = None
+
+    async with handler(mock_app):
+        assert pool_key in mock_app.state
+        assert mock_app.state[pool_key] is not None
+
+    assert pool_key not in mock_app.state

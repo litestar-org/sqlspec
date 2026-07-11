@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from litestar import Litestar, Request, get
 from litestar.connection import ASGIConnection
+from litestar.di import NamedDependency
 from litestar.handlers import BaseRouteHandler
 from litestar.testing import TestClient
 
@@ -69,7 +70,7 @@ def test_async_request_scope_access_di_session_injection_baseline(
     """Baseline: Verify standard DI injection of session works."""
 
     @get("/test")
-    async def handler(db_session: AsyncDriverAdapterBase) -> dict[str, Any]:
+    async def handler(db_session: NamedDependency[AsyncDriverAdapterBase]) -> dict[str, Any]:
         result = await db_session.execute("SELECT 1 as value")
         data = result.get_first()
         return {"value": data["value"] if data else None}
@@ -175,7 +176,7 @@ def test_sync_request_scope_access_di_session_injection_baseline(
     """Baseline: Verify standard DI injection of session works."""
 
     @get("/test", sync_to_thread=False)
-    def handler(db_session: SyncDriverAdapterBase) -> dict[str, Any]:
+    def handler(db_session: NamedDependency[SyncDriverAdapterBase]) -> dict[str, Any]:
         result = db_session.execute("SELECT 1 as value")
         data = result.get_first()
         return {"value": data["value"] if data else None}

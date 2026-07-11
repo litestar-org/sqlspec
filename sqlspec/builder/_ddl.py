@@ -4,7 +4,7 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -137,7 +137,7 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=pk_constraint)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[pk_constraint])
         return pk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_FOREIGN_KEY:
@@ -148,26 +148,31 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
             else:
                 fk_options.append("DEFERRABLE INITIALLY IMMEDIATE")
 
+        reference_options: list[str] = []
+        if constraint.on_delete:
+            reference_options.append(f"ON DELETE {constraint.on_delete}")
+        if constraint.on_update:
+            reference_options.append(f"ON UPDATE {constraint.on_update}")
+
         fk_constraint = exp.ForeignKey(
             expressions=[exp.to_identifier(col) for col in constraint.columns],
             reference=exp.Reference(
                 this=exp.to_table(constraint.references_table) if constraint.references_table else None,
                 expressions=[exp.to_identifier(col) for col in constraint.references_columns],
-                on_delete=constraint.on_delete,
-                on_update=constraint.on_update,
+                options=reference_options or None,
             ),
             options=fk_options or None,
         )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=fk_constraint)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[fk_constraint])
         return fk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_UNIQUE:
         unique_constraint = exp.UniqueKeyProperty(expressions=[exp.to_identifier(col) for col in constraint.columns])
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=unique_constraint)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[unique_constraint])
         return unique_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
@@ -180,7 +185,7 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
         )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=check_expr)
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[check_expr])
         return check_expr
 
     return None
@@ -238,15 +243,21 @@ class DDLBuilder(QueryBuilder):
 
 
 @trait
-class _DropDDLMixin:
+class _IfExistsDDLMixin:
     __slots__ = ()
 
-    _cascade: bool | None
     _if_exists: bool
 
     def if_exists(self) -> Self:
         cast("Any", self)._if_exists = True
         return self
+
+
+@trait
+class _CascadeRestrictDDLMixin:
+    __slots__ = ()
+
+    _cascade: "bool | None"
 
     def cascade(self) -> Self:
         cast("Any", self)._cascade = True
@@ -254,6 +265,17 @@ class _DropDDLMixin:
 
     def restrict(self) -> Self:
         cast("Any", self)._cascade = False
+        return self
+
+
+@trait
+class _IfNotExistsDDLMixin:
+    __slots__ = ()
+
+    _if_not_exists: bool
+
+    def if_not_exists(self) -> Self:
+        cast("Any", self)._if_not_exists = True
         return self
 
 
@@ -345,7 +367,7 @@ class ConstraintDefinition:
         self.initially_deferred = initially_deferred
 
 
-class CreateTable(DDLBuilder):
+class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE TABLE statements with columns and constraints."""
 
     __slots__ = (
@@ -377,11 +399,6 @@ class CreateTable(DDLBuilder):
     def in_schema(self, schema_name: str) -> "Self":
         """Set the schema for the table."""
         self._schema = schema_name
-        return self
-
-    def if_not_exists(self) -> "Self":
-        """Add IF NOT EXISTS clause."""
-        self._if_not_exists = True
         return self
 
     def temporary(self) -> "Self":
@@ -604,8 +621,6 @@ class CreateTable(DDLBuilder):
             if key != "engine":
                 props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.convert(value)))
 
-        properties_node = exp.Properties(expressions=props) if props else None
-
         if self._schema:
             table_identifier = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
         else:
@@ -613,18 +628,14 @@ class CreateTable(DDLBuilder):
 
         schema_expr = exp.Schema(this=table_identifier, expressions=column_defs)
 
-        like_expr = None
+        if self._temporary:
+            props.append(exp.TemporaryProperty())
         if self._like_table:
-            like_expr = exp.to_table(self._like_table)
+            props.append(exp.LikeProperty(this=exp.to_table(self._like_table)))
+        properties_node = exp.Properties(expressions=props) if props else None
 
-        return exp.Create(
-            kind="TABLE",
-            this=schema_expr,
-            exists=self._if_not_exists,
-            temporary=self._temporary,
-            properties=properties_node,
-            like=like_expr,
-        )
+        create_target: exp.Expr = table_identifier if self._like_table and not column_defs else schema_expr
+        return exp.Create(kind="TABLE", this=create_target, exists=self._if_not_exists, properties=properties_node)
 
     def _has_primary_key_constraint(self) -> bool:
         """Check if table already has a primary key constraint."""
@@ -648,10 +659,51 @@ class CreateTable(DDLBuilder):
         return any(c.name == col_name and c.primary_key for c in self._columns)
 
 
-class DropTable(DDLBuilder, _DropDDLMixin):
+class _SingleObjectDropBuilder(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
+    """Template base for DROP builders targeting a single named object.
+
+    Subclasses set ``_drop_kind`` (the SQL object kind) and ``_object_label``
+    (the human-readable noun used in error messages), and may override
+    ``_build_drop_this`` or ``_drop_expression_args`` to customize the
+    generated ``exp.Drop`` expression.
+    """
+
+    __slots__ = ("_cascade", "_if_exists", "_name")
+
+    _drop_kind: "ClassVar[str]" = ""
+    _object_label: "ClassVar[str]" = ""
+
+    def __init__(self, name: str, dialect: "DialectType" = None) -> None:
+        super().__init__(dialect=dialect)
+        self._name = name
+        self._if_exists = False
+        self._cascade: bool | None = None
+
+    def _build_drop_this(self) -> exp.Expr:
+        return exp.to_identifier(self._name)
+
+    def _drop_expression_args(self) -> "dict[str, Any]":
+        return {}
+
+    def _create_base_expression(self) -> exp.Expr:
+        if not self._name:
+            self._raise_builder_error(f"{self._object_label} name must be set for DROP {self._drop_kind}.")
+        return exp.Drop(
+            kind=self._drop_kind,
+            this=self._build_drop_this(),
+            exists=self._if_exists,
+            cascade=self._cascade,
+            **self._drop_expression_args(),
+        )
+
+
+class DropTable(_SingleObjectDropBuilder):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_table_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "TABLE"
+    _object_label: "ClassVar[str]" = "Table"
 
     def __init__(self, table_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP TABLE with table name.
@@ -660,27 +712,23 @@ class DropTable(DDLBuilder, _DropDDLMixin):
             table_name: Name of the table to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._table_name = table_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(table_name, dialect=dialect)
 
     def table(self, name: str) -> Self:
-        self._table_name = name
+        self._name = name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._table_name:
-            self._raise_builder_error("Table name must be set for DROP TABLE.")
-        return exp.Drop(
-            kind="TABLE", this=exp.to_table(self._table_name), exists=self._if_exists, cascade=self._cascade
-        )
+    def _build_drop_this(self) -> exp.Expr:
+        return exp.to_table(self._name)
 
 
-class DropIndex(DDLBuilder, _DropDDLMixin):
+class DropIndex(_SingleObjectDropBuilder):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_index_name", "_table_name")
+    __slots__ = ("_table_name",)
+
+    _drop_kind: "ClassVar[str]" = "INDEX"
+    _object_label: "ClassVar[str]" = "Index"
 
     def __init__(self, index_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP INDEX with index name.
@@ -689,36 +737,28 @@ class DropIndex(DDLBuilder, _DropDDLMixin):
             index_name: Name of the index to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._index_name = index_name
+        super().__init__(index_name, dialect=dialect)
         self._table_name: str | None = None
-        self._if_exists = False
-        self._cascade: bool | None = None
 
     def name(self, index_name: str) -> Self:
-        self._index_name = index_name
+        self._name = index_name
         return self
 
     def on_table(self, table_name: str) -> Self:
         self._table_name = table_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._index_name:
-            self._raise_builder_error("Index name must be set for DROP INDEX.")
-        return exp.Drop(
-            kind="INDEX",
-            this=exp.to_identifier(self._index_name),
-            table=exp.to_table(self._table_name) if self._table_name else None,
-            exists=self._if_exists,
-            cascade=self._cascade,
-        )
+    def _drop_expression_args(self) -> "dict[str, Any]":
+        return {"cluster": exp.OnProperty(this=exp.to_identifier(self._table_name)) if self._table_name else None}
 
 
-class DropView(DDLBuilder, _DropDDLMixin):
+class DropView(_SingleObjectDropBuilder):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_view_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "VIEW"
+    _object_label: "ClassVar[str]" = "View"
 
     def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP VIEW with view name.
@@ -727,27 +767,20 @@ class DropView(DDLBuilder, _DropDDLMixin):
             view_name: Name of the view to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._view_name = view_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(view_name, dialect=dialect)
 
     def name(self, view_name: str) -> Self:
-        self._view_name = view_name
+        self._name = view_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._view_name:
-            self._raise_builder_error("View name must be set for DROP VIEW.")
-        return exp.Drop(
-            kind="VIEW", this=exp.to_identifier(self._view_name), exists=self._if_exists, cascade=self._cascade
-        )
 
-
-class DropSchema(DDLBuilder, _DropDDLMixin):
+class DropSchema(_SingleObjectDropBuilder):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_schema_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "SCHEMA"
+    _object_label: "ClassVar[str]" = "Schema"
 
     def __init__(self, schema_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP SCHEMA with schema name.
@@ -756,27 +789,20 @@ class DropSchema(DDLBuilder, _DropDDLMixin):
             schema_name: Name of the schema to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._schema_name = schema_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(schema_name, dialect=dialect)
 
     def name(self, schema_name: str) -> Self:
-        self._schema_name = schema_name
+        self._name = schema_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._schema_name:
-            self._raise_builder_error("Schema name must be set for DROP SCHEMA.")
-        return exp.Drop(
-            kind="SCHEMA", this=exp.to_identifier(self._schema_name), exists=self._if_exists, cascade=self._cascade
-        )
 
-
-class DropMaterializedView(DDLBuilder, _DropDDLMixin):
+class DropMaterializedView(_SingleObjectDropBuilder):
     """Builder for DROP MATERIALIZED VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    __slots__ = ("_cascade", "_if_exists", "_view_name")
+    __slots__ = ()
+
+    _drop_kind: "ClassVar[str]" = "MATERIALIZED VIEW"
+    _object_label: "ClassVar[str]" = "View"
 
     def __init__(self, view_name: str, dialect: "DialectType" = None) -> None:
         """Initialize DROP MATERIALIZED VIEW with view name.
@@ -785,28 +811,15 @@ class DropMaterializedView(DDLBuilder, _DropDDLMixin):
             view_name: Name of the materialized view to drop
             dialect: SQL dialect to use
         """
-        super().__init__(dialect=dialect)
-        self._view_name = view_name
-        self._if_exists = False
-        self._cascade: bool | None = None
+        super().__init__(view_name, dialect=dialect)
 
     def name(self, view_name: str) -> Self:
         """Set the materialized view name."""
-        self._view_name = view_name
+        self._name = view_name
         return self
 
-    def _create_base_expression(self) -> exp.Expr:
-        if not self._view_name:
-            self._raise_builder_error("View name must be set for DROP MATERIALIZED VIEW.")
-        return exp.Drop(
-            kind="MATERIALIZED VIEW",
-            this=exp.to_identifier(self._view_name),
-            exists=self._if_exists,
-            cascade=self._cascade,
-        )
 
-
-class CreateIndex(DDLBuilder):
+class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...)."""
 
     __slots__ = ("_columns", "_if_not_exists", "_index_name", "_table_name", "_unique", "_using", "_where")
@@ -847,10 +860,6 @@ class CreateIndex(DDLBuilder):
         self._unique = True
         return self
 
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
-        return self
-
     def using(self, method: str) -> Self:
         self._using = method
         return self
@@ -886,17 +895,19 @@ class CreateIndex(DDLBuilder):
                 index_params = exp.IndexParameters()
             index_params.set("using", exp.Var(this=self._using))
 
+        if where_expr:
+            if index_params is None:
+                index_params = exp.IndexParameters()
+            index_params.set("where", exp.Where(this=where_expr))
+
         index_expr = exp.Index(
             this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
         )
 
-        if where_expr:
-            index_expr.set("where", where_expr)
-
         return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
 
 
-class Truncate(DDLBuilder):
+class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
     """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
 
     __slots__ = ("_cascade", "_identity", "_table_name")
@@ -917,14 +928,6 @@ class Truncate(DDLBuilder):
         self._table_name = name
         return self
 
-    def cascade(self) -> Self:
-        self._cascade = True
-        return self
-
-    def restrict(self) -> Self:
-        self._cascade = False
-        return self
-
     def restart_identity(self) -> Self:
         self._identity = "RESTART"
         return self
@@ -937,7 +940,10 @@ class Truncate(DDLBuilder):
         if not self._table_name:
             self._raise_builder_error("Table name must be set for TRUNCATE TABLE.")
         identity_expr = exp.Var(this=self._identity) if self._identity else None
-        return exp.TruncateTable(this=exp.to_table(self._table_name), cascade=self._cascade, identity=identity_expr)
+        option_expr = exp.Var(this="CASCADE") if self._cascade else None
+        return exp.TruncateTable(
+            expressions=[exp.to_table(self._table_name)], option=option_expr, identity=identity_expr
+        )
 
 
 class AlterOperation:
@@ -981,7 +987,7 @@ class AlterOperation:
         self.using_expression = using_expression
 
 
-class CreateSchema(DDLBuilder):
+class CreateSchema(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE SCHEMA [IF NOT EXISTS] schema_name [AUTHORIZATION user_name]."""
 
     __slots__ = ("_authorization", "_if_not_exists", "_schema_name")
@@ -1000,10 +1006,6 @@ class CreateSchema(DDLBuilder):
 
     def name(self, schema_name: str) -> Self:
         self._schema_name = schema_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def authorization(self, user_name: str) -> Self:
@@ -1027,7 +1029,7 @@ class CreateSchema(DDLBuilder):
         )
 
 
-class CreateTableAsSelect(DDLBuilder):
+class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
 
     Methods:
@@ -1048,10 +1050,6 @@ class CreateTableAsSelect(DDLBuilder):
 
     def name(self, table_name: str) -> Self:
         self._table_name = table_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def columns(self, *cols: str) -> Self:
@@ -1076,20 +1074,14 @@ class CreateTableAsSelect(DDLBuilder):
                     if has_with_method(select_expr):
                         select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
 
-        schema_expr = None
+        create_target: exp.Expr = exp.to_table(self._table_name)
         if self._columns:
-            schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
+            create_target = exp.Schema(this=create_target, expressions=[exp.to_identifier(c) for c in self._columns])
 
-        return exp.Create(
-            kind="TABLE",
-            this=exp.to_table(self._table_name),
-            exists=self._if_not_exists,
-            expression=select_expr,
-            schema=schema_expr,
-        )
+        return exp.Create(kind="TABLE", this=create_target, exists=self._if_not_exists, expression=select_expr)
 
 
-class CreateMaterializedView(DDLBuilder):
+class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ..."""
 
     __slots__ = (
@@ -1126,10 +1118,6 @@ class CreateMaterializedView(DDLBuilder):
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def columns(self, *cols: str) -> Self:
@@ -1196,17 +1184,20 @@ class CreateMaterializedView(DDLBuilder):
         props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
         properties_node = exp.Properties(expressions=props) if props else None
 
+        create_target: exp.Expr = exp.to_table(self._view_name)
+        if schema_expr is not None:
+            create_target = exp.Schema(this=create_target, expressions=schema_expr.expressions)
+
         return exp.Create(
             kind="MATERIALIZED_VIEW",
-            this=exp.to_identifier(self._view_name),
+            this=create_target,
             exists=self._if_not_exists,
             expression=select_expr,
-            schema=schema_expr,
             properties=properties_node,
         )
 
 
-class CreateView(DDLBuilder):
+class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ..."""
 
     __slots__ = ("_columns", "_hints", "_if_not_exists", "_select_query", "_view_name")
@@ -1227,10 +1218,6 @@ class CreateView(DDLBuilder):
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
-        return self
-
-    def if_not_exists(self) -> Self:
-        self._if_not_exists = True
         return self
 
     def columns(self, *cols: str) -> Self:
@@ -1262,17 +1249,20 @@ class CreateView(DDLBuilder):
         ]
         properties_node = exp.Properties(expressions=props) if props else None
 
+        create_target: exp.Expr = exp.to_table(self._view_name)
+        if schema_expr is not None:
+            create_target = exp.Schema(this=create_target, expressions=schema_expr.expressions)
+
         return exp.Create(
             kind="VIEW",
-            this=exp.to_identifier(self._view_name),
+            this=create_target,
             exists=self._if_not_exists,
             expression=select_expr,
-            schema=schema_expr,
             properties=properties_node,
         )
 
 
-class AlterTable(DDLBuilder):
+class AlterTable(DDLBuilder, _IfExistsDDLMixin):
     """Builder for ALTER TABLE operations."""
 
     __slots__ = ("_if_exists", "_operations", "_schema", "_table_name")
@@ -1283,11 +1273,6 @@ class AlterTable(DDLBuilder):
         self._operations: list[AlterOperation] = []
         self._schema: str | None = None
         self._if_exists = False
-
-    def if_exists(self) -> "Self":
-        """Add IF EXISTS clause."""
-        self._if_exists = True
-        return self
 
     def add_column(
         self,
@@ -1511,7 +1496,7 @@ class AlterTable(DDLBuilder):
             if not op.constraint_definition:
                 self._raise_builder_error("Constraint definition required for ADD CONSTRAINT")
             constraint_expr = build_constraint_expression(op.constraint_definition)
-            return exp.AddConstraint(this=constraint_expr)
+            return exp.AddConstraint(expressions=[constraint_expr])
 
         if op_type == "DROP CONSTRAINT":
             return exp.Drop(this=exp.to_identifier(op.constraint_name), kind="CONSTRAINT", exists=True)
@@ -1546,7 +1531,7 @@ class AlterTable(DDLBuilder):
             return exp.AlterColumn(this=exp.to_identifier(op.column_name), default=default_expr)
 
         if op_type == "ALTER COLUMN DROP DEFAULT":
-            return exp.AlterColumn(this=exp.to_identifier(op.column_name), kind="DROP DEFAULT")
+            return exp.AlterColumn(this=exp.to_identifier(op.column_name), drop=True)
 
         self._raise_builder_error(f"Unknown operation type: {op.operation_type}")
         raise AssertionError

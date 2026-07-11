@@ -77,37 +77,25 @@ class SQLSpecPlugin:
         Returns:
             Dictionary of Starlette-specific settings.
         """
-        starlette_config = config.extension_config.get("starlette", {})
-
-        connection_key = starlette_config.get("connection_key", DEFAULT_CONNECTION_KEY)
-        pool_key = starlette_config.get("pool_key", DEFAULT_POOL_KEY)
-        session_key = starlette_config.get("session_key", DEFAULT_SESSION_KEY)
-        commit_mode = starlette_config.get("commit_mode", DEFAULT_COMMIT_MODE)
-
+        framework_config = config.extension_config.get("starlette", {})
+        pool_key = framework_config.get("pool_key", DEFAULT_POOL_KEY)
         if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
             pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
-
-        enable_correlation = starlette_config.get("enable_correlation_middleware", False)
-        correlation_header = starlette_config.get("correlation_header", "x-request-id")
-        correlation_headers = starlette_config.get("correlation_headers")
-        if correlation_headers is not None:
-            correlation_headers = tuple(correlation_headers)
-        auto_trace_headers = starlette_config.get("auto_trace_headers", True)
-
+        correlation_headers = framework_config.get("correlation_headers")
         return {
-            "connection_key": connection_key,
+            "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
             "pool_key": pool_key,
-            "session_key": session_key,
-            "commit_mode": commit_mode,
-            "extra_commit_statuses": starlette_config.get("extra_commit_statuses"),
-            "extra_rollback_statuses": starlette_config.get("extra_rollback_statuses"),
-            "disable_di": starlette_config.get("disable_di", False),
-            "enable_correlation_middleware": enable_correlation,
-            "correlation_header": correlation_header,
-            "correlation_headers": correlation_headers,
-            "auto_trace_headers": auto_trace_headers,
-            "enable_sqlcommenter_middleware": starlette_config.get("enable_sqlcommenter_middleware", True),
-            "sqlcommenter_framework": starlette_config.get("sqlcommenter_framework", "starlette"),
+            "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
+            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
+            "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
+            "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
+            "disable_di": framework_config.get("disable_di", False),
+            "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", False),
+            "correlation_header": framework_config.get("correlation_header", "x-request-id"),
+            "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
+            "auto_trace_headers": framework_config.get("auto_trace_headers", True),
+            "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "starlette"),
         }
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
@@ -180,15 +168,12 @@ class SQLSpecPlugin:
             ImproperConfigurationError: If duplicate keys found.
         """
         all_keys: set[str] = set()
-
         for state in self._config_states:
             keys = {state.connection_key, state.pool_key, state.session_key}
             duplicates = all_keys & keys
-
             if duplicates:
                 msg = f"Duplicate state keys found: {duplicates}"
                 raise ImproperConfigurationError(msg)
-
             all_keys.update(keys)
 
     def _add_middleware(self, app: "Starlette", config_state: SQLSpecConfigState) -> None:
@@ -200,10 +185,8 @@ class SQLSpecPlugin:
         """
         if config_state.commit_mode == "manual":
             app.add_middleware(SQLSpecManualMiddleware, config_state=config_state)
-        elif config_state.commit_mode == "autocommit":
-            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state, include_redirect=False)
-        elif config_state.commit_mode == "autocommit_include_redirect":
-            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state, include_redirect=True)
+        elif config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}:
+            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state)
 
     def _add_correlation_middleware(self, app: "Starlette") -> None:
         """Add correlation middleware if any config enables it.
@@ -341,6 +324,5 @@ class SQLSpecPlugin:
         for state in self._config_states:
             if state.session_key == key:
                 return state
-
         msg = f"No configuration found with session_key: {key}"
         raise ValueError(msg)

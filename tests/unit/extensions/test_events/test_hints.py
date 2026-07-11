@@ -14,18 +14,12 @@ def test_event_runtime_hints_defaults() -> None:
     assert hints.retention_seconds == 86_400
     assert hints.select_for_update is False
     assert hints.skip_locked is False
-    assert hints.json_passthrough is False
 
 
 def test_event_runtime_hints_custom_values() -> None:
     """EventRuntimeHints accepts custom values."""
     hints = EventRuntimeHints(
-        poll_interval=0.5,
-        lease_seconds=60,
-        retention_seconds=3600,
-        select_for_update=True,
-        skip_locked=True,
-        json_passthrough=True,
+        poll_interval=0.5, lease_seconds=60, retention_seconds=3600, select_for_update=True, skip_locked=True
     )
 
     assert hints.poll_interval == 0.5
@@ -33,7 +27,6 @@ def test_event_runtime_hints_custom_values() -> None:
     assert hints.retention_seconds == 3600
     assert hints.select_for_update is True
     assert hints.skip_locked is True
-    assert hints.json_passthrough is True
 
 
 def test_event_runtime_hints_frozen() -> None:

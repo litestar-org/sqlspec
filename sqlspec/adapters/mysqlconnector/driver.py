@@ -314,16 +314,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         in_transaction = getattr(self.connection, "in_transaction", None)
         if in_transaction is not None:
-            try:
-                return bool(in_transaction)
-            except Exception:
-                return False
-        autocommit = getattr(self.connection, "autocommit", None)
-        if autocommit is not None:
-            try:
-                return not bool(autocommit)
-            except Exception:
-                return False
+            return bool(in_transaction)
         return False
 
 
@@ -565,10 +556,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         in_tx = getattr(self.connection, "in_transaction", None)
         if in_tx is not None:
-            try:
-                return bool(in_tx)
-            except Exception:
-                return False
+            return bool(in_tx)
         return False
 
 

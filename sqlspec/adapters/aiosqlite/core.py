@@ -1,10 +1,13 @@
 """AIOSQLite adapter compiled helpers."""
 
 import contextlib
+import sqlite3
 import sys
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, cast
+
+from sqlglot import exp
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -27,12 +30,13 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
-from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+    from sqlspec.core.compiler import OperationType
 
 _T = TypeVar("_T")
 
@@ -52,7 +56,9 @@ __all__ = (
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
+    "normalize_lastrowid",
     "require_python_version",
+    "resolve_lastrowid",
     "resolve_rowcount",
     "run_on_worker_thread",
 )
@@ -74,6 +80,10 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
+SQLITE_TABLE_LIST_MIN_COLUMNS = 5
+SQLITE_TABLE_INFO_MIN_COLUMNS = 2
+SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
 
 
 async def run_on_worker_thread(
@@ -91,10 +101,30 @@ def execute_fetchall_with_description(
     connection: "AiosqliteConnection", sql: str, parameters: Any
 ) -> "tuple[list[Any], Any]":
     """Execute a query and return raw rows plus description on the worker thread."""
+    fetched_data, description, _rowcount, _last_inserted_id = _execute_fetchall_with_metadata(
+        connection, sql, parameters, "SELECT", None, {}
+    )
+    return fetched_data, description
+
+
+def _execute_fetchall_with_metadata(
+    connection: "AiosqliteConnection",
+    sql: str,
+    parameters: Any,
+    operation_type: "OperationType",
+    expression: Any,
+    eligibility_cache: "dict[tuple[str | None, str], bool]",
+) -> "tuple[list[Any], Any, int, int | None]":
+    """Execute a query and return rows plus execution metadata on the worker thread."""
     raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
-    cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
+    cursor = cast("Any", raw_connection.execute(sql, normalize_execute_parameters(parameters)))
     try:
-        return cursor.fetchall(), cursor.description
+        fetched_data = cursor.fetchall()
+        rowcount = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        last_inserted_id = resolve_lastrowid(
+            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache
+        )
+        return fetched_data, cursor.description, rowcount, last_inserted_id
     finally:
         with contextlib.suppress(Exception):
             cursor.close()
@@ -102,15 +132,227 @@ def execute_fetchall_with_description(
 
 def execute_and_resolve_rowcount(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
     """Execute a statement and resolve rowcount on the worker thread."""
+    rowcount, _last_inserted_id = _execute_and_resolve_metadata(connection, sql, parameters, "COMMAND", None, {})
+    return rowcount
+
+
+def _execute_and_resolve_metadata(
+    connection: "AiosqliteConnection",
+    sql: str,
+    parameters: Any,
+    operation_type: "OperationType",
+    expression: Any,
+    eligibility_cache: "dict[tuple[str | None, str], bool]",
+) -> "tuple[int, int | None]":
+    """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
     raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
     cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
     try:
-        if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0:
-            return cursor.rowcount
-        return 0
+        rowcount = (
+            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        )
+        return rowcount, resolve_lastrowid(
+            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache
+        )
     finally:
         with contextlib.suppress(Exception):
             cast("Any", cursor).close()
+
+
+def normalize_lastrowid(cursor: Any, operation_type: "OperationType", rowcount: int) -> "int | None":
+    """Return aiosqlite lastrowid for a successful INSERT.
+
+    Args:
+        cursor: Aiosqlite cursor with optional lastrowid metadata.
+        operation_type: Compiled statement operation type.
+        rowcount: Normalized affected-row count.
+
+    Returns:
+        Integer lastrowid, or None for non-INSERT or unsuccessful operations.
+    """
+    if operation_type != "INSERT" or rowcount <= 0 or not has_lastrowid(cursor):
+        return None
+    lastrowid = cursor.lastrowid
+    return lastrowid if isinstance(lastrowid, int) else None
+
+
+def resolve_lastrowid(
+    connection: Any,
+    cursor: Any,
+    operation_type: "OperationType",
+    rowcount: int,
+    expression: Any,
+    eligibility_cache: "dict[tuple[str | None, str], bool]",
+) -> "int | None":
+    """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
+
+    SQLite leaves lastrowid unchanged after inserts into WITHOUT ROWID tables. A
+    successful INSERT therefore performs one schema metadata lookup per target
+    and caches it until the driver observes DDL; ambiguous targets return None.
+
+    Args:
+        connection: Raw SQLite connection used for schema metadata.
+        cursor: Executed SQLite cursor.
+        operation_type: Compiled statement operation type.
+        rowcount: Normalized affected-row count.
+        expression: Compiled SQLGlot expression.
+        eligibility_cache: Driver-local target eligibility cache.
+
+    Returns:
+        Integer lastrowid when the current target is a rowid table, otherwise None.
+    """
+    if operation_type != "INSERT" or rowcount <= 0:
+        return None
+    target = _resolve_insert_target(expression)
+    if target is None:
+        return None
+    supports_rowid = eligibility_cache.get(target)
+    if supports_rowid is None:
+        supports_rowid = _target_supports_rowid(connection, target)
+        eligibility_cache[target] = supports_rowid
+    if not supports_rowid:
+        return None
+    return normalize_lastrowid(cursor, operation_type, rowcount)
+
+
+def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
+    if not isinstance(expression, exp.Insert):
+        return None
+    target = expression.this
+    if isinstance(target, exp.Schema):
+        target = target.this
+    if not isinstance(target, exp.Table) or target.catalog:
+        return None
+    table_name = target.name
+    if not table_name:
+        return None
+    return target.db or None, table_name
+
+
+def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") -> bool:
+    target_schema, target_table = target
+    try:
+        table_cursor = connection.execute("PRAGMA table_list")
+        try:
+            table_rows = table_cursor.fetchall()
+        finally:
+            with contextlib.suppress(Exception):
+                table_cursor.close()
+    except sqlite3.Error:
+        return _target_supports_rowid_legacy(connection, target)
+
+    candidates = [
+        row
+        for row in table_rows
+        if len(row) >= SQLITE_TABLE_LIST_MIN_COLUMNS
+        and isinstance(row[0], str)
+        and isinstance(row[1], str)
+        and row[1].casefold() == target_table.casefold()
+        and row[2] == "table"
+    ]
+    if target_schema is not None:
+        candidates = [row for row in candidates if row[0].casefold() == target_schema.casefold()]
+        if not candidates:
+            return _target_supports_rowid_legacy(connection, target)
+        return len(candidates) == 1 and candidates[0][4] == 0
+    if not candidates:
+        return _target_supports_rowid_legacy(connection, target)
+
+    schema_order = ["temp", "main"]
+    if not any(row[0].casefold() in {"temp", "main"} for row in candidates):
+        try:
+            database_cursor = connection.execute("PRAGMA database_list")
+            try:
+                schema_order.extend(
+                    row[1]
+                    for row in database_cursor.fetchall()
+                    if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS and isinstance(row[1], str)
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    database_cursor.close()
+        except sqlite3.Error:
+            return False
+
+    for schema_name in schema_order:
+        for row in candidates:
+            if row[0].casefold() == schema_name.casefold():
+                return bool(row[4] == 0)
+    return False
+
+
+def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, str]") -> bool:
+    target_schema, target_table = target
+    schema_order = [target_schema] if target_schema is not None else ["temp", "main"]
+    if target_schema is None:
+        try:
+            database_cursor = connection.execute("PRAGMA database_list")
+            try:
+                schema_order.extend(
+                    row[1]
+                    for row in database_cursor.fetchall()
+                    if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS
+                    and isinstance(row[1], str)
+                    and row[1] not in {"main", "temp"}
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    database_cursor.close()
+        except sqlite3.Error:
+            return False
+
+    for schema_name in schema_order:
+        if schema_name is None:
+            continue
+        quoted_schema = quote_identifier(schema_name)
+        schema_cursor = None
+        schema_row = None
+        try:
+            schema_cursor = connection.execute(
+                f"SELECT type FROM {quoted_schema}.sqlite_master WHERE name = ? COLLATE NOCASE", (target_table,)
+            )
+            schema_row = schema_cursor.fetchone()
+        except sqlite3.Error:
+            pass
+        finally:
+            if schema_cursor is not None:
+                with contextlib.suppress(Exception):
+                    schema_cursor.close()
+        if schema_row is None:
+            continue
+        if not schema_row or schema_row[0] != "table":
+            return False
+        qualified_target = f"{quoted_schema}.{quote_identifier(target_table)}"
+        table_info_cursor = None
+        try:
+            table_info_cursor = connection.execute(
+                f"PRAGMA {quoted_schema}.table_info({quote_identifier(target_table)})"
+            )
+            column_names = {
+                row[1].casefold()
+                for row in table_info_cursor.fetchall()
+                if len(row) >= SQLITE_TABLE_INFO_MIN_COLUMNS and isinstance(row[1], str)
+            }
+        except sqlite3.Error:
+            return False
+        finally:
+            if table_info_cursor is not None:
+                with contextlib.suppress(Exception):
+                    table_info_cursor.close()
+        hidden_alias = next((alias for alias in SQLITE_ROWID_ALIASES if alias not in column_names), None)
+        if hidden_alias is None:
+            return False
+        probe_cursor = None
+        try:
+            probe_cursor = connection.execute(f"SELECT {hidden_alias} FROM {qualified_target} LIMIT 0")
+        except sqlite3.Error:
+            return False
+        finally:
+            if probe_cursor is not None:
+                with contextlib.suppress(Exception):
+                    probe_cursor.close()
+        return True
+    return False
 
 
 def format_identifier(identifier: str) -> str:
@@ -250,6 +492,8 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Dictionary with connection parameters.
     """
     excluded_keys = {
+        "enable_foreign_keys",
+        "enable_optimizations",
         "pool_size",
         "min_size",
         "connect_timeout",

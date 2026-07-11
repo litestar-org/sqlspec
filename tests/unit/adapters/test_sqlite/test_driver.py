@@ -1,10 +1,34 @@
 import inspect
+import sqlite3
 from typing import Any, cast
 
 import pytest
 
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.core import SQL
+
+
+def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
+    from sqlspec.adapters.sqlite.core import _target_supports_rowid
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE rowid_target (id INTEGER PRIMARY KEY)")
+    connection.execute("CREATE TABLE without_rowid_target (id TEXT PRIMARY KEY) WITHOUT ROWID")
+    connection.execute("CREATE TABLE shadowed_without_rowid (rowid TEXT PRIMARY KEY) WITHOUT ROWID")
+
+    class LegacyConnection:
+        def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+            if sql == "PRAGMA table_list":
+                raise sqlite3.OperationalError
+            return connection.execute(sql, cast("Any", parameters))
+
+    legacy_connection = LegacyConnection()
+    try:
+        assert _target_supports_rowid(legacy_connection, (None, "rowid_target"))
+        assert not _target_supports_rowid(legacy_connection, (None, "without_rowid_target"))
+        assert not _target_supports_rowid(legacy_connection, (None, "shadowed_without_rowid"))
+    finally:
+        connection.close()
 
 
 def test_driver_cache_execute_cache_hit_has_no_unreachable_returns_rows_guard() -> None:

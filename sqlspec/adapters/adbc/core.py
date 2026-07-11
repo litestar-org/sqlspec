@@ -28,6 +28,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     PermissionDeniedError,
     QueryTimeoutError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -541,7 +542,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if sqlstate == "40P01":
             return _create_adbc_error(error, DeadlockError, "deadlock detected")
         if sqlstate == "40001":
-            return _create_adbc_error(error, DeadlockError, "serialization failure")
+            return _create_adbc_error(error, SerializationConflictError, "serialization failure")
 
         # Query timeout/cancellation
         if sqlstate == "57014":

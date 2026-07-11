@@ -28,6 +28,15 @@ def test_validate_squash_range_validate_squash_range_valid_range() -> None:
     assert result[2][0] == "0003"
 
 
+def test_validate_squash_range_retypes_nonnumeric_bounds() -> None:
+    """Nonnumeric range bounds should use the migration exception contract."""
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.validation import validate_squash_range
+
+    with pytest.raises(SquashValidationError, match="must be numeric"):
+        validate_squash_range([("0001", Path("0001.sql"))], "bad", "0001")
+
+
 def test_validate_squash_range_validate_squash_range_gap_detected() -> None:
     """Test validate_squash_range raises error when gap detected."""
     from sqlspec.exceptions import SquashValidationError

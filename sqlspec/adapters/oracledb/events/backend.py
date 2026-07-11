@@ -25,11 +25,9 @@ __all__ = (
 _ORACLEDB_AVAILABLE = False
 
 try:  # pragma: no cover
-    from sqlspec.adapters.oracledb._typing import AQMSG_INVISIBLE as _AQMSG_INVISIBLE
-    from sqlspec.adapters.oracledb._typing import AQMSG_PAYLOAD_TYPE_JSON as _AQMSG_PAYLOAD_TYPE_JSON
-    from sqlspec.adapters.oracledb._typing import AQMSG_VISIBLE as _AQMSG_VISIBLE
+    import oracledb as _oracledb
+
     from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
-    from sqlspec.adapters.oracledb._typing import AQDequeueOptions as _AQDequeueOptions
 except ImportError:  # pragma: no cover
     _AQDequeueOptions = None
     _AQMSG_INVISIBLE = None
@@ -38,6 +36,10 @@ except ImportError:  # pragma: no cover
     _DB_TYPE_JSON = None
 else:  # pragma: no cover
     _ORACLEDB_AVAILABLE = True
+    _AQDequeueOptions = getattr(_oracledb, "AQDequeueOptions", None)
+    _AQMSG_INVISIBLE = getattr(_oracledb, "AQMSG_INVISIBLE", None)
+    _AQMSG_PAYLOAD_TYPE_JSON = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
+    _AQMSG_VISIBLE = getattr(_oracledb, "AQMSG_VISIBLE", None)
 
 AQDequeueOptions: Any = _AQDequeueOptions
 AQMSG_INVISIBLE: "int | None" = _AQMSG_INVISIBLE

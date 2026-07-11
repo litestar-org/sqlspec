@@ -5,7 +5,6 @@ from functools import partial
 from pathlib import Path
 from time import perf_counter, time
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
-from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
@@ -17,6 +16,7 @@ from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator

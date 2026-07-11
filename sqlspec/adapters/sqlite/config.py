@@ -1,7 +1,6 @@
 """SQLite database configuration with thread-local connections."""
 
 import re
-import uuid
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
@@ -21,6 +20,7 @@ from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -55,6 +55,7 @@ class SqliteConnectionParams(TypedDict):
     pool_recycle_seconds: NotRequired[int]
     health_check_interval: NotRequired[float]
     enable_optimizations: NotRequired[bool]
+    enable_foreign_keys: NotRequired[bool]
     extra: NotRequired[dict[str, Any]]
 
 
@@ -276,7 +277,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
         if "database" not in config_dict or config_dict["database"] == ":memory:":
-            config_dict["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
+            config_dict["database"] = f"file:memory_{uuid4().hex}?mode=memory&cache=private"
             config_dict["uri"] = True
         elif "database" in config_dict:
             database_path = str(config_dict["database"])
@@ -326,6 +327,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         enable_optimizations = self.connection_config.get("enable_optimizations")
         if enable_optimizations is not None:
             pool_kwargs["enable_optimizations"] = enable_optimizations
+
+        enable_foreign_keys = self.connection_config.get("enable_foreign_keys")
+        if enable_foreign_keys is not None:
+            pool_kwargs["enable_foreign_keys"] = enable_foreign_keys
 
         pool = SqliteConnectionPool(
             connection_parameters=config_dict,

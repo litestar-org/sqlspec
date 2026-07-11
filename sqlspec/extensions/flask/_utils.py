@@ -52,18 +52,14 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
 
     cache_key = f"sqlspec_session_cache_{config_state.session_key}"
 
-    cached_session = get_context_value(g, cache_key, None)
-    if cached_session is not None:
-        return cached_session
-
-    connection = get_context_value(g, config_state.connection_key)
-
+    existing_session = get_context_value(g, cache_key, None)
+    if existing_session is not None:
+        return existing_session
     session = config_state.config.driver_type(
-        connection=connection,
+        connection=get_context_value(g, config_state.connection_key),
         statement_config=config_state.config.statement_config,
         driver_features=config_state.config.driver_features,
     )
-
     set_context_value(g, cache_key, session)
     return session
 

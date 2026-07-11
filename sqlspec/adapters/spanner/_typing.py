@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
     from sqlspec.core import StatementConfig
 
-    SpannerConnection = Snapshot | SnapshotCheckout | _SpannerTransaction
+    SpannerConnection: TypeAlias = Snapshot | SnapshotCheckout | _SpannerTransaction
     SpannerGoogleAPICallError: TypeAlias = _SpannerGoogleAPICallError
     SpannerTransaction: TypeAlias = _SpannerTransaction
 

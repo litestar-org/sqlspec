@@ -17,6 +17,127 @@ from tests.conftest import requires_interpreted
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
+@pytest.mark.parametrize("rowid", [-7, 0])
+def test_sqlite_insert_preserves_integer_lastrowid(sqlite_session: SqliteDriver, rowid: int) -> None:
+    sqlite_session.execute_script("CREATE TABLE sync_lastrowid_values (id INTEGER PRIMARY KEY, value TEXT)")
+
+    result = sqlite_session.execute("INSERT INTO sync_lastrowid_values (id, value) VALUES (?, ?)", (rowid, "value"))
+
+    assert result.last_inserted_id == rowid
+
+
+def test_sqlite_update_and_delete_ignore_sticky_lastrowid(sqlite_session: SqliteDriver) -> None:
+    sqlite_session.execute_script("CREATE TABLE sync_lastrowid_sticky (id INTEGER PRIMARY KEY, value TEXT)")
+    inserted = sqlite_session.execute("INSERT INTO sync_lastrowid_sticky (value) VALUES (?)", ("before",))
+
+    updated = sqlite_session.execute("UPDATE sync_lastrowid_sticky SET value = ? WHERE id = ?", ("after", 1))
+    deleted = sqlite_session.execute("DELETE FROM sync_lastrowid_sticky WHERE id = ?", (1,))
+
+    assert isinstance(inserted.last_inserted_id, int)
+    assert updated.last_inserted_id is None
+    assert deleted.last_inserted_id is None
+
+
+def test_sqlite_repeated_insert_cache_hit_preserves_lastrowid(
+    sqlite_session: SqliteDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sqlite_session.execute_script(
+        "CREATE TABLE sync_lastrowid_cached (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)"
+    )
+    statement = "INSERT INTO sync_lastrowid_cached (value) VALUES (?)"
+    first = sqlite_session.execute(statement, ("first",))
+
+    def fail_dispatch(*_: object) -> object:
+        pytest.fail("repeated INSERT should use the cached fast path")
+
+    monkeypatch.setattr(SqliteDriver, "dispatch_execute", fail_dispatch)
+    second = sqlite_session.execute(statement, ("second",))
+
+    assert isinstance(first.last_inserted_id, int)
+    assert isinstance(second.last_inserted_id, int)
+    assert second.last_inserted_id != first.last_inserted_id
+
+
+def test_sqlite_insert_returning_preserves_rows_and_cached_lastrowid(
+    sqlite_session: SqliteDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sqlite_session.execute_script(
+        "CREATE TABLE sync_lastrowid_returning (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)"
+    )
+    statement = "INSERT INTO sync_lastrowid_returning (value) VALUES (?) RETURNING id, value"
+    first = sqlite_session.execute(statement, ("first",))
+
+    def fail_dispatch(*_: object) -> object:
+        pytest.fail("repeated INSERT RETURNING should use the cached fast path")
+
+    monkeypatch.setattr(SqliteDriver, "dispatch_execute", fail_dispatch)
+    second = sqlite_session.execute(statement, ("second",))
+
+    assert first.get_data() == [{"id": 1, "value": "first"}]
+    assert first.last_inserted_id == 1
+    assert second.get_data() == [{"id": 2, "value": "second"}]
+    assert second.last_inserted_id == 2
+
+
+def test_sqlite_without_rowid_insert_never_reuses_stale_lastrowid(
+    sqlite_session: SqliteDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sqlite_session.execute_script("""
+        CREATE TABLE sync_rowid_source (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT);
+        CREATE TABLE sync_without_rowid (id TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
+    """)
+    prior = sqlite_session.execute("INSERT INTO sync_rowid_source (value) VALUES (?)", ("prior",))
+    statement = "INSERT INTO sync_without_rowid (id, value) VALUES (?, ?)"
+    first = sqlite_session.execute(statement, ("first", "value"))
+
+    def fail_dispatch(*_: object) -> object:
+        pytest.fail("repeated WITHOUT ROWID INSERT should use the cached fast path")
+
+    monkeypatch.setattr(SqliteDriver, "dispatch_execute", fail_dispatch)
+    second = sqlite_session.execute(statement, ("second", "value"))
+
+    assert isinstance(prior.last_inserted_id, int)
+    assert first.last_inserted_id is None
+    assert second.last_inserted_id is None
+
+
+def test_sqlite_repeated_cached_insert_reuses_rowid_eligibility_lookup(
+    sqlite_session: SqliteDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlspec.adapters.sqlite import core as sqlite_core
+
+    sqlite_session.execute_script("CREATE TABLE sync_rowid_lookup (id INTEGER PRIMARY KEY, value TEXT)")
+    lookup_count = 0
+    original_lookup = sqlite_core._target_supports_rowid
+
+    def counted_lookup(connection: object, target: tuple[str | None, str]) -> bool:
+        nonlocal lookup_count
+        lookup_count += 1
+        return original_lookup(connection, target)
+
+    monkeypatch.setattr(sqlite_core, "_target_supports_rowid", counted_lookup)
+    statement = "INSERT INTO sync_rowid_lookup (value) VALUES (?)"
+    first = sqlite_session.execute(statement, ("first",))
+    second = sqlite_session.execute(statement, ("second",))
+
+    assert isinstance(first.last_inserted_id, int)
+    assert isinstance(second.last_inserted_id, int)
+    assert lookup_count == 1
+
+
+def test_sqlite_schema_change_invalidates_rowid_eligibility_cache(sqlite_session: SqliteDriver) -> None:
+    sqlite_session.execute("CREATE TABLE sync_rowid_replaced (id TEXT PRIMARY KEY, value TEXT)")
+    statement = "INSERT INTO sync_rowid_replaced (id, value) VALUES (?, ?)"
+    first = sqlite_session.execute(statement, ("first", "value"))
+
+    sqlite_session.execute("DROP TABLE sync_rowid_replaced")
+    sqlite_session.execute("CREATE TABLE sync_rowid_replaced (id TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID")
+    second = sqlite_session.execute(statement, ("second", "value"))
+
+    assert isinstance(first.last_inserted_id, int)
+    assert second.last_inserted_id is None
+
+
 def test_sqlite_data_types(sqlite_session: SqliteDriver) -> None:
     """Test SQLite data type handling."""
 

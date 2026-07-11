@@ -5,7 +5,6 @@ Provides abstract base classes and core functionality for SQL query builders.
 
 import hashlib
 import re
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NoReturn, cast
@@ -37,6 +36,7 @@ from sqlspec.core.filters import StatementFilter
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
+from sqlspec.utils.uuids import uuid4
 
 __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
@@ -177,6 +177,21 @@ class QueryBuilder(ABC):
 
         return (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions)
 
+    def _init_query_builder(self, kwargs: "dict[str, Any]") -> None:
+        """Consume shared builder options from kwargs and initialize QueryBuilder state."""
+        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
+            self._parse_init_options(kwargs)
+        )
+        QueryBuilder.__init__(
+            self,
+            dialect=dialect,
+            schema=schema,
+            enable_optimization=enable_optimization,
+            optimize_joins=optimize_joins,
+            optimize_predicates=optimize_predicates,
+            simplify_expressions=simplify_expressions,
+        )
+
     def _initialize_expression(self) -> None:
         """Initialize the base expression. Called after __init__."""
         self._expression = self._create_base_expression()
@@ -300,11 +315,11 @@ class QueryBuilder(ABC):
         final_expression: exp.Expr = base_expression
         if has_with_method(final_expression):
             for alias, cte_node in self._with_ctes.items():
-                final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
+                final_expression = cast("Any", final_expression).with_(alias, as_=cte_node.args["this"], copy=False)
             return cast("exp.Expr", final_expression)
 
-        if isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
-            return exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
+        if "with_" in type(final_expression).arg_types:
+            final_expression.set("with_", exp.With(expressions=list(self._with_ctes.values())))
 
         return final_expression
 
@@ -484,7 +499,7 @@ class QueryBuilder(ABC):
         while candidate in self._parameters:
             next_index += 1
             if next_index > MAX_PARAMETER_COLLISION_ATTEMPTS:
-                return f"{base_name}_{uuid.uuid4().hex[:8]}"
+                return f"{base_name}_{uuid4().hex[:8]}"
             candidate = f"{base_name}_{next_index}"
 
         self._parameter_name_counters[base_name] = next_index
@@ -983,17 +998,7 @@ class ExpressionBuilder(QueryBuilder):
     __slots__ = ()
 
     def __init__(self, expression: exp.Expr, **kwargs: Any) -> None:
-        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_init_options(kwargs)
-        )
-        super().__init__(
-            dialect=dialect,
-            schema=schema,
-            enable_optimization=enable_optimization,
-            optimize_joins=optimize_joins,
-            optimize_predicates=optimize_predicates,
-            simplify_expressions=simplify_expressions,
-        )
+        self._init_query_builder(kwargs)
         if not is_expression(expression):
             self._raise_invalid_expression_type(expression)
         self._expression = expression

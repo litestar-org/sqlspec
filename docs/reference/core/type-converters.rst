@@ -10,6 +10,10 @@ drivers to convert between Python types and database-native representations.
 Base Classes
 ============
 
+Subclass :class:`BaseInputConverter` to add adapter-specific input conversion.
+Implementations receive the driver dialect and register conversions for database
+types that are not covered by the built-in converter functions below.
+
 .. autoclass:: BaseInputConverter
    :members:
    :show-inheritance:

@@ -198,10 +198,6 @@ class SQLFileLoader:
 
         self._runtime = runtime
 
-    def _metric(self, name: str, amount: float = 1.0) -> None:
-        if self._runtime is not None:
-            self._runtime.increment_metric(name, amount)
-
     def _raise_file_not_found(self, path: str) -> None:
         """Raise SQLFileNotFoundError for nonexistent file.
 
@@ -260,7 +256,7 @@ class SQLFileLoader:
         except Exception as e:
             raise SQLFileParseError(str(path), str(path), e) from e
 
-    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFileCacheEntry) -> bool:
+    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFile) -> bool:
         """Check if file has changed since caching.
 
         Args:
@@ -275,7 +271,38 @@ class SQLFileLoader:
         except Exception:
             return False
         else:
-            return current_checksum == cached_file.sql_file.checksum
+            return current_checksum == cached_file.checksum
+
+    def _reload_changed_files(self) -> "list[str]":
+        """Reload tracked SQL files whose content checksum changed.
+
+        Returns:
+            Paths of files that were reloaded.
+        """
+        changed_paths: list[str] = []
+        for path, sql_file in list(self._files.items()):
+            if self._is_file_unchanged(path, sql_file):
+                if self._runtime is not None:
+                    self._runtime.increment_metric("loader.reload.skipped")
+                continue
+
+            query_names = [name for name, source in self._query_to_file.items() if source == path]
+            namespaces = {
+                name[: -(len(statement.name) + 1)]
+                for name in query_names
+                if (statement := self._queries.get(name)) is not None and name.endswith(f".{statement.name}")
+            }
+            namespace = next(iter(namespaces)) if len(namespaces) == 1 else None
+            for name in query_names:
+                self._queries.pop(name, None)
+                self._query_to_file.pop(name, None)
+                self._compiled_statements.pop(name, None)
+            self._files.pop(path, None)
+            self._load_single_file(path, namespace)
+            changed_paths.append(path)
+            if self._runtime is not None:
+                self._runtime.increment_metric("loader.reload.changed")
+        return changed_paths
 
     def _content_matches_cache(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
         """Check if already-read file content matches cached checksum."""
@@ -342,7 +369,7 @@ class SQLFileLoader:
 
     @staticmethod
     def _parse_directive_block(
-        statement_section: str, file_path: str, strict: bool
+        statement_section: str, file_path: str, strict: bool, base_line: int = 0
     ) -> "tuple[str | None, tuple[ParameterDeclaration, ...], str]":
         """Scan a statement's leading comment block for ``dialect``/``param`` directives.
 
@@ -350,6 +377,7 @@ class SQLFileLoader:
             statement_section: The statement body including any leading directive lines.
             file_path: File path for error reporting.
             strict: When True, a malformed ``-- param:`` line raises instead of warning.
+            base_line: 0-based line offset of ``statement_section`` within the file.
 
         Returns:
             The resolved dialect, the declared parameters, and the SQL body with the
@@ -380,7 +408,10 @@ class SQLFileLoader:
             if PARAM_PREFIX_PATTERN.match(stripped):
                 if strict:
                     raise SQLFileParseError(
-                        file_path, file_path, ValueError(f"Malformed -- param: directive: {stripped}")
+                        file_path,
+                        file_path,
+                        ValueError(f"Malformed -- param: directive: {stripped}"),
+                        line=base_line + idx + 1,
                     )
                 log_with_context(
                     logger, logging.WARNING, "sql.parse.param", file_path=file_path, line=stripped, status="malformed"
@@ -389,7 +420,11 @@ class SQLFileLoader:
 
     @staticmethod
     def _check_declared_parameters(
-        clean_sql: str, declared: "tuple[ParameterDeclaration, ...]", statement_name: str, file_path: str
+        clean_sql: str,
+        declared: "tuple[ParameterDeclaration, ...]",
+        statement_name: str,
+        file_path: str,
+        start_line: "int | None" = None,
     ) -> None:
         """Validate declared parameters against the query's actual placeholders.
 
@@ -402,12 +437,14 @@ class SQLFileLoader:
             declared: Declared parameters for the query.
             statement_name: Raw query name for error messages.
             file_path: File path for error reporting.
+            start_line: Optional 0-based line of the statement within the file.
 
         Raises:
             SQLFileParseError: On name drift (named) or count mismatch (positional).
         """
         if not declared:
             return
+        error_line = start_line + 1 if start_line is not None else None
         infos = ParameterValidator().extract_parameters(clean_sql)
         named = {info.name for info in infos if info.name and not info.name.isdigit()}
         if named:
@@ -420,6 +457,7 @@ class SQLFileLoader:
                             f"Declared parameter '{decl.name}' for query '{statement_name}' is not present in the "
                             f"SQL placeholders {sorted(named)}"
                         ),
+                        line=error_line,
                     )
         elif len(declared) != len(infos):
             raise SQLFileParseError(
@@ -429,6 +467,7 @@ class SQLFileLoader:
                     f"Query '{statement_name}' declares {len(declared)} parameter(s) but the SQL has "
                     f"{len(infos)} positional placeholder(s)"
                 ),
+                line=error_line,
             )
 
     @staticmethod
@@ -467,12 +506,16 @@ class SQLFileLoader:
             start_pos = match.end()
             end_pos = name_matches[i + 1].start() if i + 1 < len(name_matches) else len(content)
 
-            statement_section = content[start_pos:end_pos].strip()
+            section_raw = content[start_pos:end_pos]
+            statement_section = section_raw.strip()
             if not raw_statement_name or not statement_section:
                 continue
 
+            section_lead = len(section_raw) - len(section_raw.lstrip())
+            section_start_line = content[:start_pos].count("\n") + section_raw[:section_lead].count("\n")
+
             dialect, declared_params, statement_sql = SQLFileLoader._parse_directive_block(
-                statement_section, file_path, strict_parameter_annotations
+                statement_section, file_path, strict_parameter_annotations, base_line=section_start_line
             )
 
             clean_sql = SQLFileLoader._strip_leading_comments(statement_sql)
@@ -480,10 +523,15 @@ class SQLFileLoader:
                 normalized_name = _normalize_query_name(raw_statement_name)
                 if normalized_name in statements:
                     raise SQLFileParseError(
-                        file_path, file_path, ValueError(f"Duplicate statement name: {raw_statement_name}")
+                        file_path,
+                        file_path,
+                        ValueError(f"Duplicate statement name: {raw_statement_name}"),
+                        line=statement_start_line + 1,
                     )
 
-                SQLFileLoader._check_declared_parameters(clean_sql, declared_params, raw_statement_name, file_path)
+                SQLFileLoader._check_declared_parameters(
+                    clean_sql, declared_params, raw_statement_name, file_path, start_line=statement_start_line
+                )
 
                 statements[normalized_name] = NamedStatement(
                     name=normalized_name,
@@ -617,6 +665,7 @@ class SQLFileLoader:
                                 path_str,
                                 path_str,
                                 ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                                line=statement.start_line + 1,
                             )
                     self._queries[namespaced_name] = statement
                     self._query_to_file[namespaced_name] = path_str
@@ -677,6 +726,7 @@ class SQLFileLoader:
                         path_str,
                         path_str,
                         ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                        line=statement.start_line + 1,
                     )
             self._queries[namespaced_name] = statement
             self._query_to_file[namespaced_name] = path_str

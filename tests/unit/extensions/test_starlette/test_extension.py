@@ -13,6 +13,7 @@ from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette import SQLSpecPlugin
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
@@ -20,6 +21,7 @@ from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware,
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.extensions.starlette._state import CommitMode
 
 pytest.importorskip("starlette")
 
@@ -129,13 +131,13 @@ class _Config:
         return self.manager
 
 
-def _make_state(config: _Config) -> SQLSpecConfigState:
+def _make_state(config: _Config, commit_mode: "CommitMode" = "manual") -> SQLSpecConfigState:
     return SQLSpecConfigState(
         config=cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         connection_key="db_connection",
         pool_key="db_pool",
         session_key="db_session",
-        commit_mode="manual",
+        commit_mode=commit_mode,
         extra_commit_statuses=None,
         extra_rollback_statuses=None,
         disable_di=False,
@@ -189,7 +191,7 @@ async def test_middleware_manual_middleware_connection_cm_pool_uses_pool_context
 async def test_middleware_autocommit_middleware_connection_cm_no_pool_commits_and_closes() -> None:
     connection = _Connection()
     config = _Config(pooled=False, connection=connection)
-    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config))
+    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config, "autocommit"))
     request = _make_request()
 
     async def call_next(request_: Any) -> Response:
@@ -208,7 +210,7 @@ async def test_middleware_autocommit_middleware_connection_cm_pool_rolls_back_on
     connection = _Connection()
     manager = _ConnectionManager(connection)
     config = _Config(pooled=True, connection=connection, manager=manager)
-    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config))
+    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config, "autocommit"))
     request = _make_request(object())
 
     async def call_next(_request: Any) -> Response:
@@ -221,3 +223,19 @@ async def test_middleware_autocommit_middleware_connection_cm_pool_rolls_back_on
     assert connection.closed is False
     assert manager.exited is True
     assert not hasattr(request.state, "db_connection")
+
+
+def test_duplicate_state_keys_raise_improper_configuration_error() -> None:
+    """Duplicate state keys should raise ImproperConfigurationError with the Starlette message."""
+    plugin = SQLSpecPlugin(SQLSpec())
+    config = _Config(pooled=False, connection=_Connection())
+    plugin._config_states = [_make_state(config), _make_state(config)]
+    with pytest.raises(ImproperConfigurationError, match="Duplicate state keys found"):
+        plugin._ensure_unique_keys()
+
+
+def test_config_state_by_key_unknown_key_raises_value_error() -> None:
+    """Unknown session keys should raise ValueError with the Starlette message."""
+    plugin = SQLSpecPlugin(SQLSpec())
+    with pytest.raises(ValueError, match="No configuration found with session_key: missing"):
+        plugin._config_state_by_key("missing")

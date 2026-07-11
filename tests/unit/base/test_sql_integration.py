@@ -158,6 +158,29 @@ def test_reload_sql_files_can_reload_current_files(tmp_path: Path) -> None:
     assert "SELECT 2" in sql_spec.get_sql("test_query").raw_sql
 
 
+def test_reload_sql_files_only_reparses_changed_files(tmp_path: Path) -> None:
+    """Incremental reload skips files whose checksum is unchanged."""
+    first_file = tmp_path / "first.sql"
+    second_file = tmp_path / "second.sql"
+    first_file.write_text("-- name: first_query\nSELECT 1;")
+    second_file.write_text("-- name: second_query\nSELECT 2;")
+    sql_spec = SQLSpec()
+    sql_spec.load_sql_files(first_file, second_file)
+    loader = sql_spec._ensure_loader()
+    runtime = Mock()
+    loader.set_observability_runtime(runtime)
+
+    second_file.write_text("-- name: second_query\nSELECT 3;")
+    with patch.object(SQLFileLoader, "_load_single_file", wraps=loader._load_single_file) as load_file:
+        sql_spec.reload_sql_files(reload=True)
+
+    load_file.assert_called_once_with(str(second_file), None)
+    runtime.increment_metric.assert_any_call("loader.reload.skipped")
+    runtime.increment_metric.assert_any_call("loader.reload.changed")
+    assert "SELECT 1" in sql_spec.get_sql("first_query").raw_sql
+    assert "SELECT 3" in sql_spec.get_sql("second_query").raw_sql
+
+
 def test_get_sql_files_empty() -> None:
     """Test getting file list when none are loaded."""
     sql_spec = SQLSpec()

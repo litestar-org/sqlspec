@@ -200,6 +200,30 @@ def test_sync_update_version_record_idempotent_when_already_updated() -> None:
     assert driver.execute.call_count == 2
 
 
+def test_sync_update_version_record_reuses_known_applied_versions() -> None:
+    """A fix batch should not re-query all applied rows for every version."""
+    tracker = SyncMigrationTracker()
+    driver = Mock()
+    driver.execute.return_value.rows_affected = 0
+
+    tracker.update_version_record(driver, "20251011120000", "0001", applied_versions={"20251011120000", "0001"})
+
+    driver.execute.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_async_update_version_record_reuses_known_applied_versions() -> None:
+    """Async fix batches should keep query count constant too."""
+    tracker = AsyncMigrationTracker()
+    driver = MagicMock()
+    driver.execute = AsyncMock()
+    driver.execute.return_value.rows_affected = 0
+
+    await tracker.update_version_record(driver, "20251011120000", "0001", applied_versions={"20251011120000", "0001"})
+
+    driver.execute.assert_awaited_once()
+
+
 def test_sync_update_version_record_raises_when_neither_version_exists() -> None:
     """Test sync update raises ValueError when neither old nor new version exists."""
     tracker = SyncMigrationTracker()
@@ -284,7 +308,7 @@ def test_sync_schema_migration_rolls_back_on_failure() -> None:
     def raise_on_add(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("boom")
 
-    tracker._add_column = Mock(side_effect=raise_on_add)  # type: ignore[method-assign]
+    driver.execute = Mock(side_effect=raise_on_add)
 
     tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
 
@@ -362,7 +386,7 @@ async def test_async_schema_migration_rolls_back_on_failure() -> None:
     async def raise_on_add(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("boom")
 
-    tracker._add_column = AsyncMock(side_effect=raise_on_add)  # type: ignore[method-assign]
+    driver.execute = AsyncMock(side_effect=raise_on_add)
 
     await tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
 

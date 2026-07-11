@@ -124,8 +124,7 @@ class SQLSpec:
         Returns:
             A database connection or an awaitable yielding a connection.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         return config.create_connection()
 
@@ -151,8 +150,7 @@ class SQLSpec:
         Returns:
             A driver adapter instance or an awaitable yielding one.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         connection_obj = self.get_connection(config)
 
@@ -199,8 +197,7 @@ class SQLSpec:
         Returns:
             A sync or async context manager yielding a connection.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         connection_context = config.provide_connection(*args, **kwargs)
         runtime = config.get_observability_runtime()
@@ -244,8 +241,7 @@ class SQLSpec:
         Returns:
             A sync or async context manager yielding a driver adapter instance.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         session_context = config.provide_session(*args, **kwargs)
         runtime = config.get_observability_runtime()
@@ -278,8 +274,7 @@ class SQLSpec:
         Returns:
             The connection pool, an awaitable yielding the pool, or None if not supported.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         if config.supports_connection_pooling:
             return cast("type[PoolT] | Awaitable[type[PoolT]]", config.create_pool())
@@ -307,8 +302,7 @@ class SQLSpec:
         Returns:
             None, or an awaitable if closing an async pool.
         """
-        if id(config) not in self._configs:
-            self.add_config(config)
+        self._ensure_registered(config)
 
         if config.supports_connection_pooling:
             return config.close_pool()
@@ -594,13 +588,12 @@ class SQLSpec:
         """
         if self._loader is None:
             return
-        files = self._loader.list_files() if reload else []
+        if reload:
+            changed_files = self._loader._reload_changed_files()
+            logger.debug("Reloaded %d changed SQL files", len(changed_files))
+            return
         self._loader.clear_cache()
-        if reload and files:
-            self._loader.load_sql(*files)
-            logger.debug("Reloaded SQL files")
-        else:
-            logger.debug("Cleared SQL cache for reload")
+        logger.debug("Cleared SQL cache for reload")
 
     def get_sql_files(self) -> "list[str]":
         """Get list of loaded SQL files.
@@ -611,6 +604,14 @@ class SQLSpec:
         if self._loader is None:
             return []
         return self._loader.list_files()
+
+    def _ensure_registered(
+        self,
+        config: "NoPoolSyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any]",
+    ) -> None:
+        """Register the configuration when it is not already tracked."""
+        if id(config) not in self._configs:
+            self.add_config(config)
 
     def _ensure_loader(self) -> SQLFileLoader:
         if self._loader is None:

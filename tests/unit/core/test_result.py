@@ -14,6 +14,7 @@ import sqlspec.core.result as result_package
 import sqlspec.core.result._base as result_base
 from sqlspec.core import SQL, ArrowResult, OperationType, SQLResult, StackResult, create_sql_result
 from sqlspec.core.result import build_arrow_result_from_reader
+from sqlspec.exceptions import MultipleResultsFoundError
 from sqlspec.typing import PYARROW_INSTALLED
 
 if TYPE_CHECKING:
@@ -424,6 +425,15 @@ def test_sql_result_one_or_none_with_schema_type() -> None:
     empty_result = SQLResult(statement=sql_stmt, data=[], rows_affected=0)
     none_user = empty_result.one_or_none(schema_type=User)
     assert none_user is None
+
+
+def test_sql_result_one_or_none_raises_domain_error_for_multiple_rows() -> None:
+    """Multiple rows use SQLSpec's public domain exception."""
+    sql_stmt = SQL("SELECT * FROM users")
+    result = SQLResult(statement=sql_stmt, data=[{"id": 1}, {"id": 2}], rows_affected=2)
+
+    with pytest.raises(MultipleResultsFoundError, match=r"Multiple results found \(2\)"):
+        result.one_or_none()
 
 
 def test_sql_result_get_first_with_schema_type() -> None:

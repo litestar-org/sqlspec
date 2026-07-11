@@ -8,13 +8,31 @@ from tests.integration.adapters.contracts._cases import (
     sync_driver_params_with,
 )
 from tests.integration.adapters.contracts.behaviors import (
+    assert_async_execute_many_empty_contract,
     assert_async_execute_many_input_contract,
     assert_async_execute_many_mutation_contract,
     assert_async_execute_many_specifics_contract,
+    assert_sync_execute_many_empty_contract,
     assert_sync_execute_many_input_contract,
     assert_sync_execute_many_mutation_contract,
     assert_sync_execute_many_specifics_contract,
 )
+
+
+@pytest.mark.parametrize("sync_capability_driver_case", sync_driver_params_with("supports_execute_many"), indirect=True)
+def test_sync_execute_many_empty_contract(sync_capability_driver_case: DriverCaseContext) -> None:
+    """Sync drivers treat an empty batch as a no-op with a zero row count."""
+    assert_sync_execute_many_empty_contract(sync_capability_driver_case.driver, sync_capability_driver_case.case)
+
+
+@pytest.mark.parametrize(
+    "async_capability_driver_case", async_driver_params_with("supports_execute_many"), indirect=True
+)
+async def test_async_execute_many_empty_contract(async_capability_driver_case: DriverCaseContext) -> None:
+    """Async drivers treat an empty batch as a no-op with a zero row count."""
+    await assert_async_execute_many_empty_contract(
+        async_capability_driver_case.driver, async_capability_driver_case.case
+    )
 
 
 @pytest.mark.parametrize("sync_capability_driver_case", sync_driver_params_with("supports_execute_many"), indirect=True)

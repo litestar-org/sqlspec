@@ -186,7 +186,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.dialect = statement_config.dialect
-        self._dialect_name = resolve_dialect_name(self.dialect)
+        self._dialect_name = dialect or resolve_dialect_name(self.dialect)
         self._is_postgres = is_postgres_dialect(self._dialect_name)
         self._json_serializer = cast("Callable[[Any], str]", self.driver_features.get("json_serializer", to_json))
         self._data_dictionary: AdbcDataDictionary | None = None
@@ -296,11 +296,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Execution result with statement counts
         """
-        prepared_parameters: Any | None = None
-        if statement.is_script:
-            sql = statement.raw_sql
-        else:
-            sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
@@ -355,7 +351,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Commit database transaction."""
         try:
             self.connection.commit()
-        except Exception as e:
+        except AdbcNativeError as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
         self._transaction_active = False
@@ -364,7 +360,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Rollback database transaction."""
         try:
             self.connection.rollback()
-        except Exception as e:
+        except AdbcNativeError as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
         finally:

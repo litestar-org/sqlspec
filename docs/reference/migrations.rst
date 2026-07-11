@@ -124,6 +124,4 @@ Utilities
 
 .. autofunction:: sqlspec.migrations.create_migration_file
 
-.. autofunction:: sqlspec.migrations.drop_all
-
 .. autofunction:: sqlspec.migrations.get_author

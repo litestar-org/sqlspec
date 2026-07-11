@@ -97,11 +97,14 @@ async def test_aiomysql_config_provide_session(mysql_service: MySQLService) -> N
     }
     config = AiomysqlConfig(connection_config=connection_config)
 
-    async with config.provide_session() as session:
-        assert isinstance(session, AiomysqlDriver)
+    try:
+        async with config.provide_session() as session:
+            assert isinstance(session, AiomysqlDriver)
 
-        assert session.statement_config is not None
-        assert session.statement_config.parameter_config is not None
+            assert session.statement_config is not None
+            assert session.statement_config.parameter_config is not None
+    finally:
+        await config.close_pool()
 
 
 def test_aiomysql_config_driver_type() -> None:

@@ -139,21 +139,23 @@ def _train_query_cache() -> None:
 
 
 def _train_hashable_keys() -> None:
-    """Exercise make_cache_key_hashable — recursive nested structure hashing."""
-    from sqlspec.driver._common import make_cache_key_hashable
+    """Exercise _compile_cache_key — cache-key generation for compiled statements."""
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.core.statement import SQL
 
-    simple_dict = {"name": "test", "value": 42, "active": True}
-    nested_dict = {"user": {"name": "test", "roles": ["admin", "user"]}, "count": 5}
-    list_of_dicts = [{"id": i, "val": f"v{i}"} for i in range(10)]
-    mixed = {"a": [1, {"b": [2, 3]}, (4, 5)], "c": None, "d": b"bytes"}
-
-    for _ in range(20000):
-        make_cache_key_hashable(simple_dict)
-        make_cache_key_hashable(nested_dict)
-        make_cache_key_hashable(list_of_dicts)
-        make_cache_key_hashable(mixed)
-        make_cache_key_hashable(("a", 1, None, True))
-        make_cache_key_hashable(42)
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with spec.provide_session(config) as session:
+        statements = (
+            SQL("SELECT * FROM t WHERE id = ?", (1,), statement_config=session.statement_config),
+            SQL("SELECT * FROM t WHERE name = :name", {"name": "test"}, statement_config=session.statement_config),
+            SQL("SELECT * FROM t WHERE id IN (?, ?, ?)", (1, 2, 3), statement_config=session.statement_config),
+            SQL("SELECT * FROM t", statement_config=session.statement_config),
+        )
+        for _ in range(20000):
+            for stmt in statements:
+                session._compile_cache_key(stmt, session.statement_config, False)
 
 
 def _train_serialization() -> None:
@@ -215,7 +217,7 @@ def _train_sqlite_sync() -> None:
 
     try:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp_name)
+        config = SqliteConfig(connection_config={"database": tmp_name})
         with spec.provide_session(config) as session:
             session.execute(create_sql)
 
@@ -234,7 +236,7 @@ def _train_sqlite_sync() -> None:
         tmp_name = tmp.name
 
     try:
-        config2 = SqliteConfig(database=tmp_name)
+        config2 = SqliteConfig(connection_config={"database": tmp_name})
         with spec.provide_session(config2) as session:
             session.execute(create_sql)
             for i in range(500):
@@ -289,7 +291,7 @@ def _train_aiosqlite_async() -> None:
 
         try:
             spec = SQLSpec()
-            config = AiosqliteConfig(database=tmp_name)
+            config = AiosqliteConfig(connection_config={"database": tmp_name})
             async with spec.provide_session(config) as session:
                 await session.execute(create_sql)
                 data = [(i, f"value_{i}") for i in range(1000)]

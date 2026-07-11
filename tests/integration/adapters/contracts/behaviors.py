@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import json
 import math
+import sqlite3
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -16,7 +17,14 @@ from sqlspec import SQL, SQLResult, StackExecutionError, StatementConfig, Statem
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
 from sqlspec.data_dictionary import VersionInfo
-from sqlspec.exceptions import ImproperConfigurationError, OperationalError, SQLParsingError, SQLSpecError
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    OperationalError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+)
 from sqlspec.utils.serializers import from_json, to_json
 from tests.integration.adapters.contracts._assertions import assert_result_data, assert_sql_result
 from tests.integration.adapters.contracts._cases import DriverCase
@@ -121,6 +129,12 @@ class SyncContractDriver(Protocol):
 
     def rollback(self) -> None: ...
 
+    def create_savepoint(self, name: str) -> None: ...
+
+    def release_savepoint(self, name: str) -> None: ...
+
+    def rollback_to_savepoint(self, name: str) -> None: ...
+
     def execute(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
     def execute_many(self, statement: object, parameters: object, /, **kwargs: Any) -> SQLResult: ...
@@ -160,6 +174,12 @@ class AsyncContractDriver(Protocol):
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
+
+    async def create_savepoint(self, name: str) -> None: ...
+
+    async def release_savepoint(self, name: str) -> None: ...
+
+    async def rollback_to_savepoint(self, name: str) -> None: ...
 
     async def execute(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
@@ -662,6 +682,231 @@ def _assert_bigquery_pages(driver: object, case: DriverCase) -> None:
 register_sync_extra_assertion("streaming_native:bigquery", _STREAMING_SCOPE, _assert_bigquery_pages)
 
 
+class _StreamErrorProbe(Exception):
+    """Sentinel raised to force a mid-stream chunk fetch failure without a live database error."""
+
+
+class _SyncTransactionRecorder:
+    """Delegating transaction wrapper recording whether commit or rollback fired during stream close."""
+
+    def __init__(self, inner: Any, log: "list[str]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_log", log)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def commit(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("commit")
+        return object.__getattribute__(self, "_inner").commit(*args, **kwargs)
+
+    def rollback(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback")
+        return object.__getattribute__(self, "_inner").rollback(*args, **kwargs)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback" if exc_type is not None else "commit")
+        return object.__getattribute__(self, "_inner").__exit__(exc_type, exc, tb)
+
+
+class _AsyncTransactionRecorder:
+    """Delegating async transaction wrapper recording whether commit or rollback fired during stream close."""
+
+    def __init__(self, inner: Any, log: "list[str]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_log", log)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    async def commit(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("commit")
+        return await object.__getattribute__(self, "_inner").commit(*args, **kwargs)
+
+    async def rollback(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback")
+        return await object.__getattribute__(self, "_inner").rollback(*args, **kwargs)
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        object.__getattribute__(self, "_log").append("rollback" if exc_type is not None else "commit")
+        return await object.__getattribute__(self, "_inner").__aexit__(exc_type, exc, tb)
+
+
+class _SyncStreamFetchFailSource:
+    """Delegating sync stream source that forces the next chunk fetch to fail and delegates close to the origin."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def start(self) -> None:
+        self._inner.start()
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        raise _StreamErrorProbe("forced mid-stream fetch failure")
+
+    def close(self, error: bool = False) -> None:
+        self._inner.close(error=error)
+
+
+class _AsyncStreamFetchFailSource:
+    """Delegating async stream source that forces the next chunk fetch to fail and delegates close to the origin."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    async def start(self) -> None:
+        await self._inner.start()
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        raise _StreamErrorProbe("forced mid-stream fetch failure")
+
+    async def close(self, error: bool = False) -> None:
+        await self._inner.close(error=error)
+
+
+def _assert_sync_stream_error_close_rollback(driver: object, case: DriverCase) -> None:
+    """Assert a mid-stream fetch failure rolls back a stream-owned transaction instead of committing."""
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    stream = sync_driver.select_stream(table.select_ordered_sql, chunk_size=1)
+    iterator = iter(stream)
+    next(iterator)
+    real_source = stream._source  # pyright: ignore[reportPrivateUsage]
+    assert real_source._transaction is not None  # pyright: ignore[reportPrivateUsage]
+    log: list[str] = []
+    real_source._transaction = _SyncTransactionRecorder(real_source._transaction, log)  # pyright: ignore[reportPrivateUsage]
+    stream._source = _SyncStreamFetchFailSource(real_source)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(_StreamErrorProbe):
+        next(iterator)
+    assert log
+    assert log[0] == "rollback"
+    assert "commit" not in log
+    with contextlib.suppress(Exception):
+        sync_driver.rollback()
+    assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == case.streaming_row_count
+
+
+async def _assert_async_stream_error_close_rollback(driver: object, case: DriverCase) -> None:
+    """Assert a mid-stream fetch failure rolls back a stream-owned transaction instead of committing."""
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    stream = async_driver.select_stream(table.select_ordered_sql, chunk_size=1)
+    iterator = aiter(stream)
+    await anext(iterator)
+    real_source = stream._source  # pyright: ignore[reportPrivateUsage]
+    assert real_source._transaction is not None  # pyright: ignore[reportPrivateUsage]
+    log: list[str] = []
+    real_source._transaction = _AsyncTransactionRecorder(real_source._transaction, log)  # pyright: ignore[reportPrivateUsage]
+    stream._source = _AsyncStreamFetchFailSource(real_source)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(_StreamErrorProbe):
+        await anext(iterator)
+    assert log
+    assert log[0] == "rollback"
+    assert "commit" not in log
+    with contextlib.suppress(Exception):
+        await async_driver.rollback()
+    assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == case.streaming_row_count
+
+
+register_sync_extra_assertion("stream_error_close:pg", _STREAMING_SCOPE, _assert_sync_stream_error_close_rollback)
+register_async_extra_assertion("stream_error_close:pg", _STREAMING_SCOPE, _assert_async_stream_error_close_rollback)
+
+
+class _CursorCloseRecordingCursor:
+    """Delegating cursor recording every close call to detect start-failure cursor leaks."""
+
+    def __init__(self, inner: Any, closes: "list[int]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_closes", closes)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def close(self, *args: Any, **kwargs: Any) -> Any:
+        object.__getattribute__(self, "_closes").append(1)
+        return object.__getattribute__(self, "_inner").close(*args, **kwargs)
+
+
+async def _await_recording_cursor(awaitable: Any, closes: "list[int]") -> "_CursorCloseRecordingCursor":
+    """Await a coroutine-returning cursor factory and wrap the resolved cursor in a close recorder."""
+    real_cursor = await awaitable
+    return _CursorCloseRecordingCursor(real_cursor, closes)
+
+
+class _CursorCloseRecordingConnection:
+    """Delegating connection issuing close-recording cursors for stream start-failure probes."""
+
+    def __init__(self, inner: Any, closes: "list[int]") -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_closes", closes)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def cursor(self, *args: Any, **kwargs: Any) -> Any:
+        closes = object.__getattribute__(self, "_closes")
+        result = object.__getattribute__(self, "_inner").cursor(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return _await_recording_cursor(result, closes)
+        return _CursorCloseRecordingCursor(result, closes)
+
+
+def _assert_sync_stream_start_failure_cursor_cleanup(driver: object, case: DriverCase) -> None:
+    """Assert a stream start failure closes the opened cursor exactly once instead of leaking it."""
+    sync_driver = cast("SyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    original_connection = driver_any.connection
+    closes: list[int] = []
+    driver_any.connection = _CursorCloseRecordingConnection(original_connection, closes)
+    try:
+        bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+        with pytest.raises(Exception):
+            next(iter(bad_stream))
+        assert closes == [1]
+    finally:
+        driver_any.connection = original_connection
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+
+
+async def _assert_async_stream_start_failure_cursor_cleanup(driver: object, case: DriverCase) -> None:
+    """Assert a stream start failure closes the opened cursor exactly once instead of leaking it."""
+    async_driver = cast("AsyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    original_connection = driver_any.connection
+    closes: list[int] = []
+    driver_any.connection = _CursorCloseRecordingConnection(original_connection, closes)
+    try:
+        bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
+        with pytest.raises(Exception):
+            await anext(aiter(bad_stream))
+        assert closes == [1]
+    finally:
+        driver_any.connection = original_connection
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+
+
+register_sync_extra_assertion(
+    "stream_cursor_cleanup:start_failure", _STREAMING_SCOPE, _assert_sync_stream_start_failure_cursor_cleanup
+)
+register_async_extra_assertion(
+    "stream_cursor_cleanup:start_failure", _STREAMING_SCOPE, _assert_async_stream_start_failure_cursor_cleanup
+)
+
+
 _FOR_UPDATE_LOCK_ROW = ("lock-row", 100, None)
 
 
@@ -816,6 +1061,7 @@ async def assert_async_complex_query_contract(driver: object, case: DriverCase) 
 
 
 STATEMENT_STACK_SCOPE = "statement_stack"
+STATEMENT_STACK_PARITY_PROOF_KEY = "statement_stack:native_fallback_parity"
 
 
 def assert_sync_statement_stack_contract(driver: object, case: DriverCase) -> None:
@@ -876,6 +1122,172 @@ async def assert_async_statement_stack_contract(driver: object, case: DriverCase
     finally:
         await async_driver.execute(table.delete_sql)
         await async_driver.commit()
+
+
+def _statement_stack_parity_input(table: ContractTable) -> StatementStack:
+    return (
+        StatementStack()
+        .push_execute(table.insert_qmark_sql, ("parity-first", 10, None))
+        .push_execute(table.insert_qmark_sql, (None, 20, None))
+        .push_execute(table.insert_qmark_sql, ("parity-third", 30, None))
+    )
+
+
+def _sync_statement_stack_observation(
+    driver: SyncContractDriver, case: DriverCase, *, fallback: bool, continue_on_error: bool
+) -> "tuple[tuple[str, ...], type[Exception], int]":
+    table = case.table
+    driver.execute(table.delete_sql)
+    driver.commit()
+    stack_error: StackExecutionError | None = None
+    try:
+        stack = _statement_stack_parity_input(table)
+        if continue_on_error:
+            if fallback:
+                results = SyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=True)
+            else:
+                driver_any = cast("Any", driver)
+                prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                assert prepared_operations is not None
+                results = driver_any._execute_stack_pipeline(stack, prepared_operations)
+            assert len(results) == 3
+            assert results[0].error is None
+            assert results[2].error is None
+            result_error = results[1].error
+            assert isinstance(result_error, StackExecutionError)
+            stack_error = result_error
+        else:
+            try:
+                if fallback:
+                    SyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=False)
+                else:
+                    driver_any = cast("Any", driver)
+                    prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                    assert prepared_operations is not None
+                    driver_any._execute_stack_pipeline(stack, prepared_operations)
+            except StackExecutionError as exc:
+                stack_error = exc
+            else:
+                msg = "fail-fast statement stack did not raise StackExecutionError"
+                raise AssertionError(msg)
+
+        driver.rollback()
+        durable_rows = driver.execute(table.select_ordered_sql).get_data()
+        assert stack_error is not None
+        return tuple(row["name"] for row in durable_rows), type(stack_error), stack_error.operation_index
+    finally:
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute(table.delete_sql)
+        driver.commit()
+
+
+async def _async_statement_stack_observation(
+    driver: AsyncContractDriver, case: DriverCase, *, fallback: bool, continue_on_error: bool
+) -> "tuple[tuple[str, ...], type[Exception], int]":
+    table = case.table
+    await driver.execute(table.delete_sql)
+    await driver.commit()
+    stack_error: StackExecutionError | None = None
+    try:
+        stack = _statement_stack_parity_input(table)
+        if continue_on_error:
+            if fallback:
+                results = await AsyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=True)
+            elif case.adapter == "psycopg":
+                driver_any = cast("Any", driver)
+                prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                assert prepared_operations is not None
+                results = await driver_any._execute_stack_pipeline(stack, prepared_operations)
+            else:
+                results = await cast("Any", driver)._execute_stack_native(stack, continue_on_error=True)
+            assert len(results) == 3
+            assert results[0].error is None
+            assert results[2].error is None
+            result_error = results[1].error
+            assert isinstance(result_error, StackExecutionError)
+            stack_error = result_error
+        else:
+            try:
+                if fallback:
+                    await AsyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=False)
+                elif case.adapter == "psycopg":
+                    driver_any = cast("Any", driver)
+                    prepared_operations = driver_any._prepare_pipeline_operations(stack)
+                    assert prepared_operations is not None
+                    await driver_any._execute_stack_pipeline(stack, prepared_operations)
+                else:
+                    await cast("Any", driver)._execute_stack_native(stack, continue_on_error=False)
+            except StackExecutionError as exc:
+                stack_error = exc
+            else:
+                msg = "fail-fast statement stack did not raise StackExecutionError"
+                raise AssertionError(msg)
+
+        await driver.rollback()
+        durable_rows = (await driver.execute(table.select_ordered_sql)).get_data()
+        assert stack_error is not None
+        return tuple(row["name"] for row in durable_rows), type(stack_error), stack_error.operation_index
+    finally:
+        with contextlib.suppress(Exception):
+            await driver.rollback()
+        await driver.execute(table.delete_sql)
+        await driver.commit()
+
+
+def assert_sync_statement_stack_parity_contract(driver: object, case: DriverCase) -> None:
+    """Assert psycopg native fail-fast stacks match the base fallback contract."""
+    if case.adapter != "psycopg":
+        pytest.skip(f"{case.adapter} has no active sync native stack parity case")
+    from sqlspec.adapters.psycopg.core import pipeline_supported
+
+    if not pipeline_supported():
+        pytest.skip("psycopg pipeline unavailable")
+    sync_driver = cast("SyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    if driver_any.stack_native_disabled:
+        pytest.skip("native statement stacks disabled")
+
+    fallback = _sync_statement_stack_observation(sync_driver, case, fallback=True, continue_on_error=False)
+    native = _sync_statement_stack_observation(sync_driver, case, fallback=False, continue_on_error=False)
+    assert native == fallback
+    assert native == ((), StackExecutionError, 1)
+
+
+async def assert_async_statement_stack_parity_contract(driver: object, case: DriverCase) -> None:
+    """Assert async native stacks match valid base fallback error and durability semantics."""
+    if case.adapter not in {"asyncpg", "psycopg", "oracledb"}:
+        pytest.skip(f"{case.adapter} has no active async native stack parity case")
+    if case.adapter == "psycopg":
+        from sqlspec.adapters.psycopg.core import pipeline_supported
+
+        if not pipeline_supported():
+            pytest.skip("psycopg pipeline unavailable")
+    async_driver = cast("AsyncContractDriver", driver)
+    driver_any = cast("Any", driver)
+    if driver_any.stack_native_disabled:
+        pytest.skip("native statement stacks disabled")
+    if case.adapter == "oracledb" and not await driver_any._pipeline_native_supported():
+        pytest.skip("Oracle native pipeline unavailable")
+
+    continue_on_error = case.adapter != "psycopg"
+    fallback = await _async_statement_stack_observation(
+        async_driver, case, fallback=True, continue_on_error=continue_on_error
+    )
+    native = await _async_statement_stack_observation(
+        async_driver, case, fallback=False, continue_on_error=continue_on_error
+    )
+    assert native == fallback
+    expected_durable_names = () if case.adapter == "psycopg" else ("parity-first", "parity-third")
+    assert native == (expected_durable_names, StackExecutionError, 1)
+
+
+register_sync_extra_assertion(
+    STATEMENT_STACK_PARITY_PROOF_KEY, STATEMENT_STACK_SCOPE, assert_sync_statement_stack_parity_contract
+)
+register_async_extra_assertion(
+    STATEMENT_STACK_PARITY_PROOF_KEY, STATEMENT_STACK_SCOPE, assert_async_statement_stack_parity_contract
+)
 
 
 async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> None:
@@ -946,6 +1358,196 @@ async def _oracle_native_statement_stack(driver: object, case: DriverCase) -> No
 register_async_extra_assertion("statement_stack:oracle_native", STATEMENT_STACK_SCOPE, _oracle_native_statement_stack)
 
 
+def assert_sync_transaction_semantics_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync transaction rollback, commit, and caller-owned stack boundaries."""
+    if not case.supports_transactions:
+        pytest.skip(f"{case.adapter} has no verified transaction support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    try:
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, ("transaction-rollback", 10, None))
+        sync_driver.rollback()
+        assert sync_driver.select_value(table.select_count_sql) == 0
+        sync_driver.commit()
+
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, ("transaction-commit", 20, None))
+        sync_driver.commit()
+        assert sync_driver.select_value(table.select_count_sql) == 1
+        sync_driver.commit()
+
+        sync_driver.execute(table.delete_sql)
+        sync_driver.commit()
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, ("transaction-outer-direct", 30, None))
+        stack = StatementStack().push_execute(table.insert_qmark_sql, ("transaction-outer-stack", 40, None))
+        stack_results = sync_driver.execute_stack(stack)
+        assert len(stack_results) == 1
+        assert stack_results[0].error is None
+        sync_driver.rollback()
+        assert sync_driver.select_value(table.select_count_sql) == 0
+        sync_driver.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        sync_driver.execute(table.delete_sql)
+        sync_driver.commit()
+
+
+async def assert_async_transaction_semantics_contract(driver: object, case: DriverCase) -> None:
+    """Assert async transaction rollback, commit, and caller-owned stack boundaries."""
+    if not case.supports_transactions:
+        pytest.skip(f"{case.adapter} has no verified transaction support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    try:
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, ("transaction-rollback", 10, None))
+        await async_driver.rollback()
+        assert await async_driver.select_value(table.select_count_sql) == 0
+        await async_driver.commit()
+
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, ("transaction-commit", 20, None))
+        await async_driver.commit()
+        assert await async_driver.select_value(table.select_count_sql) == 1
+        await async_driver.commit()
+
+        await async_driver.execute(table.delete_sql)
+        await async_driver.commit()
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, ("transaction-outer-direct", 30, None))
+        stack = StatementStack().push_execute(table.insert_qmark_sql, ("transaction-outer-stack", 40, None))
+        stack_results = await async_driver.execute_stack(stack)
+        assert len(stack_results) == 1
+        assert stack_results[0].error is None
+        await async_driver.rollback()
+        assert await async_driver.select_value(table.select_count_sql) == 0
+        await async_driver.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        await async_driver.execute(table.delete_sql)
+        await async_driver.commit()
+
+
+_UNSAFE_SAVEPOINT_NAME = "sp1; SELECT 1"
+_SAVEPOINT_ROWS = (("savepoint-a", 10, None), ("savepoint-b", 20, None), ("savepoint-c", 30, None))
+
+
+def assert_sync_savepoint_unsafe_name_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync savepoint operations reject unsafe SQL identifiers before execution."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    sync_driver = cast("SyncContractDriver", driver)
+
+    with pytest.raises(TransactionError):
+        sync_driver.create_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        sync_driver.rollback_to_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        sync_driver.release_savepoint(_UNSAFE_SAVEPOINT_NAME)
+
+
+async def assert_async_savepoint_unsafe_name_contract(driver: object, case: DriverCase) -> None:
+    """Assert async savepoint operations reject unsafe SQL identifiers before execution."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    async_driver = cast("AsyncContractDriver", driver)
+
+    with pytest.raises(TransactionError):
+        await async_driver.create_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        await async_driver.rollback_to_savepoint(_UNSAFE_SAVEPOINT_NAME)
+    with pytest.raises(TransactionError):
+        await async_driver.release_savepoint(_UNSAFE_SAVEPOINT_NAME)
+
+
+def assert_sync_savepoint_round_trip_contract(driver: object, case: DriverCase) -> None:
+    """Assert sync savepoints retain A/C while rolling back post-savepoint row B."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    row_a, row_b, row_c = _SAVEPOINT_ROWS
+
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+    try:
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, row_a)
+        sync_driver.create_savepoint("sp1")
+        sync_driver.execute(table.insert_qmark_sql, row_b)
+        sync_driver.rollback_to_savepoint("sp1")
+
+        assert sync_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_a[0],)) is not None
+        assert sync_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_b[0],)) is None
+
+        sync_driver.execute(table.insert_qmark_sql, row_c)
+        sync_driver.release_savepoint("sp1")
+        sync_driver.commit()
+
+        assert_result_data(
+            sync_driver.execute(table.select_ordered_sql),
+            (
+                {"name": row_a[0], "value": row_a[1], "note": row_a[2]},
+                {"name": row_c[0], "value": row_c[1], "note": row_c[2]},
+            ),
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            sync_driver.rollback()
+        with contextlib.suppress(Exception):
+            sync_driver.execute(table.delete_sql)
+            sync_driver.commit()
+
+
+async def assert_async_savepoint_round_trip_contract(driver: object, case: DriverCase) -> None:
+    """Assert async savepoints retain A/C while rolling back post-savepoint row B."""
+    if not case.supports_savepoints:
+        pytest.skip(f"{case.adapter} has no verified savepoint support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    row_a, row_b, row_c = _SAVEPOINT_ROWS
+
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+    try:
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, row_a)
+        await async_driver.create_savepoint("sp1")
+        await async_driver.execute(table.insert_qmark_sql, row_b)
+        await async_driver.rollback_to_savepoint("sp1")
+
+        assert await async_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_a[0],)) is not None
+        assert await async_driver.select_one_or_none(table.select_by_name_qmark_sql, (row_b[0],)) is None
+
+        await async_driver.execute(table.insert_qmark_sql, row_c)
+        await async_driver.release_savepoint("sp1")
+        await async_driver.commit()
+
+        assert_result_data(
+            await async_driver.execute(table.select_ordered_sql),
+            (
+                {"name": row_a[0], "value": row_a[1], "note": row_a[2]},
+                {"name": row_c[0], "value": row_c[1], "note": row_c[2]},
+            ),
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await async_driver.rollback()
+        with contextlib.suppress(Exception):
+            await async_driver.execute(table.delete_sql)
+            await async_driver.commit()
+
+
 def assert_sync_execute_many_contract(driver: object, case: DriverCase) -> None:
     """Assert sync execute-many behavior for a driver case."""
     if not case.supports_execute_many:
@@ -988,6 +1590,32 @@ async def assert_async_execute_many_contract(driver: object, case: DriverCase) -
             {"name": "gamma", "value": 30, "note": None},
         ),
     )
+
+
+def assert_sync_execute_many_empty_contract(driver: object, case: DriverCase) -> None:
+    """Assert an empty sync execute-many batch is a no-op with a zero row count."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+
+    result = sync_driver.execute_many(table.insert_qmark_sql, [])
+
+    assert result.rows_affected == 0
+    assert sync_driver.select_value(table.select_count_sql) == 0
+
+
+async def assert_async_execute_many_empty_contract(driver: object, case: DriverCase) -> None:
+    """Assert an empty async execute-many batch is a no-op with a zero row count."""
+    if not case.supports_execute_many:
+        pytest.skip(f"{case.adapter} has no verified execute_many support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+
+    result = await async_driver.execute_many(table.insert_qmark_sql, [])
+
+    assert result.rows_affected == 0
+    assert await async_driver.select_value(table.select_count_sql) == 0
 
 
 def assert_sync_execute_many_mutation_contract(driver: object, case: DriverCase) -> None:
@@ -1093,7 +1721,7 @@ def _postgres_execute_many_specifics(driver: object, case: DriverCase) -> None:
     insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
     try:
         empty = sync_driver.execute_many(insert, [])
-        assert empty.rows_affected in (-1, 0)
+        assert empty.rows_affected == 0
         assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
 
         sync_driver.execute_many(
@@ -1181,7 +1809,7 @@ async def _postgres_execute_many_specifics_async(driver: object, case: DriverCas
     insert = f"INSERT INTO {batch} (name, value, category) VALUES (?, ?, ?)"
     try:
         empty = await async_driver.execute_many(insert, [])
-        assert empty.rows_affected in (-1, 0)
+        assert empty.rows_affected == 0
         assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {batch}") == 0
 
         await async_driver.execute_many(
@@ -4132,6 +4760,77 @@ AsyncConfigFactory = Callable[..., AsyncLifecycleConfig]
 ConnectionHook = Callable[[object], None]
 
 
+def _native_sqlite_foreign_keys_default() -> int:
+    connection = sqlite3.connect(":memory:")
+    try:
+        row = connection.execute("PRAGMA foreign_keys").fetchone()
+        assert row is not None
+        return cast("int", row[0])
+    finally:
+        connection.close()
+
+
+_SQLITE_PRAGMA_NAMES = ("foreign_keys", "busy_timeout", "cache_size", "journal_mode", "synchronous", "temp_store")
+
+
+def _normalized_sqlite_pragma_value(name: str, value: object) -> object:
+    return str(value).lower() if name == "journal_mode" else value
+
+
+def _assert_sqlite_pragma_profiles(
+    file_profile: "Mapping[str, object]", memory_profile: "Mapping[str, object]"
+) -> None:
+    native_foreign_keys = _native_sqlite_foreign_keys_default()
+    assert {name: file_profile[name] for name in ("foreign_keys", "busy_timeout", "journal_mode", "synchronous")} == {
+        "foreign_keys": native_foreign_keys,
+        "busy_timeout": 5000,
+        "journal_mode": "wal",
+        "synchronous": 1,
+    }
+    assert memory_profile == {
+        "foreign_keys": native_foreign_keys,
+        "busy_timeout": 5000,
+        "cache_size": -16000,
+        "journal_mode": "memory",
+        "synchronous": 0,
+        "temp_store": 2,
+    }
+
+
+def assert_sync_connect_time_settings_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
+    """Assert a fresh SQLite file and memory connection receive the converged PRAGMA profiles."""
+    assert case.id == "sqlite-sync"
+    profiles: list[dict[str, object]] = []
+    for connection_overrides in (None, {"database": ":memory:"}):
+        config = make_config(connection_overrides=connection_overrides)
+        try:
+            with config.provide_session() as driver:
+                profiles.append({
+                    name: _normalized_sqlite_pragma_value(name, driver.select_value(f"PRAGMA {name}"))
+                    for name in _SQLITE_PRAGMA_NAMES
+                })
+        finally:
+            config.close_pool()
+    _assert_sqlite_pragma_profiles(*profiles)
+
+
+async def assert_async_connect_time_settings_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
+    """Assert fresh aiosqlite file and memory connections receive the converged PRAGMA profiles."""
+    assert case.id == "aiosqlite-async"
+    profiles: list[dict[str, object]] = []
+    for connection_overrides in (None, {"database": ":memory:"}):
+        config = make_config(connection_overrides=connection_overrides)
+        try:
+            async with config.provide_session() as driver:
+                profiles.append({
+                    name: _normalized_sqlite_pragma_value(name, await driver.select_value(f"PRAGMA {name}"))
+                    for name in _SQLITE_PRAGMA_NAMES
+                })
+        finally:
+            await config.close_pool()
+    _assert_sqlite_pragma_profiles(*profiles)
+
+
 def _pool_contract_table(case: DriverCase) -> str:
     return f"pool_contract_{case.adapter}_{case.mode}"
 
@@ -5026,6 +5725,31 @@ def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
             sync_driver.execute("SELECT * FROM missing_contract_table")
 
 
+def assert_sync_script_parameter_embedding_contract(driver: object, case: DriverCase) -> None:
+    """Assert a flat script payload embeds distinct values across statements."""
+    if not case.supports_execute_script:
+        pytest.skip(f"{case.adapter} has no verified execute_script support")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    sync_driver.execute(table.delete_sql)
+    sync_driver.commit()
+
+    result = sync_driver.execute_script(
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"UPDATE {table.name} SET value = ? WHERE name = ?",
+        ("embed-one", 10, "embed-two", 20, 99, "embed-two"),
+    )
+    sync_driver.commit()
+
+    assert_sql_result(result)
+    assert result.operation_type == "SCRIPT"
+    assert_result_data(
+        sync_driver.execute(f"SELECT name, value FROM {table.name} ORDER BY value"),
+        ({"name": "embed-one", "value": 10}, {"name": "embed-two", "value": 99}),
+    )
+
+
 async def assert_async_script_error_contract(driver: object, case: DriverCase) -> None:
     """Assert async drivers execute scripts and normalize generic SQL errors."""
     async_driver = cast("AsyncContractDriver", driver)
@@ -5048,6 +5772,31 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
             await async_driver.execute(f"SELCT * FROM {table}")
         with pytest.raises(SQLSpecError):
             await async_driver.execute("SELECT * FROM missing_contract_table")
+
+
+async def assert_async_script_parameter_embedding_contract(driver: object, case: DriverCase) -> None:
+    """Assert async script execution embeds a flat payload with distinct values."""
+    if not case.supports_execute_script:
+        pytest.skip(f"{case.adapter} has no verified execute_script support")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await async_driver.execute(table.delete_sql)
+    await async_driver.commit()
+
+    result = await async_driver.execute_script(
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"INSERT INTO {table.name} (name, value) VALUES (?, ?); "
+        f"UPDATE {table.name} SET value = ? WHERE name = ?",
+        ("embed-one", 10, "embed-two", 20, 99, "embed-two"),
+    )
+    await async_driver.commit()
+
+    assert_sql_result(result)
+    assert result.operation_type == "SCRIPT"
+    assert_result_data(
+        await async_driver.execute(f"SELECT name, value FROM {table.name} ORDER BY value"),
+        ({"name": "embed-one", "value": 10}, {"name": "embed-two", "value": 99}),
+    )
 
 
 def _explain_skip_reason(case: DriverCase) -> str:

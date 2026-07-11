@@ -30,8 +30,9 @@ def psycopg_sync_store_config(postgres_service: "PostgresService") -> Generator[
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
+            "min_size": 1,
+            "max_size": 4,
         },
-        pool_config={"min_size": 1},
         extension_config={"litestar": {"session_table": "test_psycopg_sync_sessions"}},
     )
     try:

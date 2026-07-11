@@ -1,6 +1,7 @@
 """Unit tests for MERGE builder functionality."""
 
 import pytest
+from sqlglot import exp
 
 import sqlspec.builder._merge as merge_module
 from sqlspec import sql
@@ -881,3 +882,27 @@ def test_merge_factory_rejects_non_merge_sql() -> None:
 
     with pytest.raises(SQLBuilderError):
         sql.merge(bad_sql)
+
+
+def test_merge_corrupted_expression_state_raises_builder_error() -> None:
+    """A merge builder whose expression state cannot be initialized raises SQLBuilderError."""
+
+    class _BrokenMerge(Merge):
+        def get_expression(self) -> "exp.Expr | None":
+            return None
+
+    with pytest.raises(SQLBuilderError, match="MERGE"):
+        _BrokenMerge().into("target")
+
+    with pytest.raises(SQLBuilderError, match="MERGE"):
+        _BrokenMerge().when_matched_then_delete()
+
+
+def test_merge_defaults_disable_optimization_unlike_other_builders() -> None:
+    """Merge defaults enable_optimization=False while the other DML builders default to True."""
+    assert sql.merge().enable_optimization is False
+    assert sql.select("*").enable_optimization is True
+    assert sql.insert("t").enable_optimization is True
+    assert sql.update("t").enable_optimization is True
+    assert sql.delete().enable_optimization is True
+    assert Merge(enable_optimization=True).enable_optimization is True

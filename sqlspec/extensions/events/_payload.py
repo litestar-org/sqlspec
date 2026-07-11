@@ -9,9 +9,25 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
-__all__ = ("decode_notify_payload", "encode_notify_payload", "parse_event_timestamp")
+__all__ = (
+    "coerce_dict",
+    "coerce_optional_dict",
+    "decode_notify_payload",
+    "encode_notify_payload",
+    "parse_event_timestamp",
+)
 
 MAX_NOTIFY_BYTES = 8000
+
+
+def coerce_dict(value: Any) -> "dict[str, Any]":
+    """Coerce a value to a dict, wrapping non-dict values as {'value': ...}."""
+    return value if isinstance(value, dict) else {"value": value}
+
+
+def coerce_optional_dict(value: Any) -> "dict[str, Any] | None":
+    """Coerce a value to a dict or None, wrapping non-dict values as {'value': ...}."""
+    return value if value is None or isinstance(value, dict) else {"value": value}
 
 
 def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
@@ -45,8 +61,8 @@ def decode_notify_payload(channel: str, payload: str) -> "EventMessage":
     return EventMessage(
         event_id=data.get("event_id", uuid4().hex),
         channel=channel,
-        payload=payload_val if isinstance(payload_val, dict) else {"value": payload_val},
-        metadata=metadata_val if metadata_val is None or isinstance(metadata_val, dict) else {"value": metadata_val},
+        payload=coerce_dict(payload_val),
+        metadata=coerce_optional_dict(metadata_val),
         attempts=0,
         available_at=timestamp,
         lease_expires_at=None,

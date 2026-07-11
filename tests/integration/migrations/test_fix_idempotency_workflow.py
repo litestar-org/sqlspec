@@ -2,6 +2,7 @@
 
 from collections.abc import Generator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -57,7 +58,9 @@ DROP TABLE users;
     migration = runner.load_migration(migration_files[0][1], version=migration_files[0][0])
 
     runner.execute_upgrade(sqlite_session, migration)
-    tracker.record_migration(sqlite_session, migration["version"], migration["description"], 100, migration["checksum"])
+    tracker.record_migration(
+        sqlite_session, cast("str", migration["version"]), migration["description"], 100, migration["checksum"]
+    )
 
     fixer = MigrationFixer(migrations_dir)
     conversion_map = generate_conversion_map(migration_files)
@@ -120,7 +123,7 @@ DROP TABLE products;
         migration = runner.load_migration(file_path, version=version)
         runner.execute_upgrade(sqlite_session, migration)
         tracker.record_migration(
-            sqlite_session, migration["version"], migration["description"], 100, migration["checksum"]
+            sqlite_session, cast("str", migration["version"]), migration["description"], 100, migration["checksum"]
         )
 
     fixer = MigrationFixer(migrations_dir)
@@ -167,7 +170,9 @@ DROP TABLE users;
     migration = runner.load_migration(migration_files[0][1], version=migration_files[0][0])
 
     runner.execute_upgrade(sqlite_session, migration)
-    tracker.record_migration(sqlite_session, migration["version"], migration["description"], 100, migration["checksum"])
+    tracker.record_migration(
+        sqlite_session, cast("str", migration["version"]), migration["description"], 100, migration["checksum"]
+    )
 
     fixer = MigrationFixer(migrations_dir)
     conversion_map = generate_conversion_map(migration_files)
@@ -213,7 +218,9 @@ DROP TABLE users;
     migration = runner.load_migration(migration_files[0][1], version=migration_files[0][0])
 
     runner.execute_upgrade(sqlite_session, migration)
-    tracker.record_migration(sqlite_session, migration["version"], migration["description"], 100, migration["checksum"])
+    tracker.record_migration(
+        sqlite_session, cast("str", migration["version"]), migration["description"], 100, migration["checksum"]
+    )
 
     MigrationFixer(migrations_dir)
     conversion_map = generate_conversion_map(migration_files)
@@ -264,7 +271,7 @@ DROP TABLE products;
         migration = runner.load_migration(file_path, version=version)
         runner.execute_upgrade(sqlite_session, migration)
         tracker.record_migration(
-            sqlite_session, migration["version"], migration["description"], 100, migration["checksum"]
+            sqlite_session, cast("str", migration["version"]), migration["description"], 100, migration["checksum"]
         )
 
     fixer = MigrationFixer(migrations_dir)
@@ -328,7 +335,7 @@ DROP TABLE users;
         migration = runner.load_migration(file_path, version=version)
         runner.execute_upgrade(sqlite_session, migration)
         tracker.record_migration(
-            sqlite_session, migration["version"], migration["description"], 100, migration["checksum"]
+            sqlite_session, cast("str", migration["version"]), migration["description"], 100, migration["checksum"]
         )
 
     fixer = MigrationFixer(migrations_dir)

@@ -11,7 +11,7 @@ from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
 from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.exceptions import MultipleResultsFoundError, NotFoundError, SQLSpecError
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import Empty
 
@@ -392,7 +392,7 @@ def test_sync_driver_select_one_no_results(sqlite_sync_driver: SqliteDriver) -> 
 
 def test_sync_driver_select_one_or_none(sqlite_sync_driver: SqliteDriver) -> None:
     """Test select_one_or_none method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Multiple results found"):
+    with pytest.raises(MultipleResultsFoundError, match="Multiple results found"):
         sqlite_sync_driver.select_one_or_none("SELECT * FROM users")
 
 

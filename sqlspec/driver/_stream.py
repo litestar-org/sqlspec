@@ -21,6 +21,8 @@ from sqlspec.utils.schema import to_schema
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from sqlspec.core import SQL
+
 __all__ = (
     "AsyncRowSource",
     "AsyncRowStream",
@@ -299,7 +301,7 @@ class _LazyEagerAsyncRowSource:
 
     __slots__ = ("_chunk_size", "_driver", "_position", "_rows", "_statement")
 
-    def __init__(self, driver: Any, statement: Any, chunk_size: int) -> None:
+    def __init__(self, driver: Any, statement: "SQL", chunk_size: int) -> None:
         self._driver = driver
         self._statement = statement
         self._chunk_size = chunk_size

@@ -227,16 +227,22 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def commit(self) -> None:
         try:
-            self.connection.commit()
-        except Exception as exc:
+            if self._dialect == "mssql" and self._transaction_active:
+                self.connection.execute("COMMIT TRANSACTION")
+            else:
+                self.connection.commit()
+        except ArrowOdbcError as exc:
             msg = f"Failed to commit transaction: {exc}"
             raise SQLSpecError(msg) from exc
         self._transaction_active = False
 
     def rollback(self) -> None:
         try:
-            self.connection.rollback()
-        except Exception as exc:
+            if self._dialect == "mssql" and self._transaction_active:
+                self.connection.execute("ROLLBACK TRANSACTION")
+            else:
+                self.connection.rollback()
+        except ArrowOdbcError as exc:
             msg = f"Failed to rollback transaction: {exc}"
             raise SQLSpecError(msg) from exc
         finally:

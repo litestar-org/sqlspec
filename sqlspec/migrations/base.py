@@ -1,13 +1,15 @@
 """Base classes for SQLSpec migrations."""
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from rich.console import Console
+from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
+from sqlspec.builder import AlterTable, CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
@@ -22,12 +24,49 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("BaseMigrationCommands", "BaseMigrationTracker")
+__all__ = ("AppliedMigrationRecord", "BaseMigrationCommands", "BaseMigrationTracker", "LoadedMigrationMetadata")
 
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.migrations.base")
+
+
+class LoadedMigrationMetadata(TypedDict):
+    """Metadata for a migration loaded from a file.
+
+    Keyed on ``version`` (file-derived). The ``has_upgrade``, ``has_downgrade``,
+    and ``loader`` keys are added by ``load_migration`` after the base metadata
+    is built by ``_load_metadata``.
+    """
+
+    version: "str | None"
+    description: str
+    file_path: "Path"
+    checksum: str
+    content: str
+    transactional: "bool | None"
+    has_upgrade: NotRequired[bool]
+    has_downgrade: NotRequired[bool]
+    loader: NotRequired[Any]
+
+
+class AppliedMigrationRecord(TypedDict):
+    """Row from the migration tracking table.
+
+    Keyed on ``version_num`` (database column), unlike file-loaded metadata
+    which keys on ``version``.
+    """
+
+    version_num: str
+    version_type: str
+    execution_sequence: int
+    description: str
+    applied_at: Any
+    execution_time_ms: int
+    checksum: str
+    applied_by: "str | None"
+    replaces: "str | None"
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -83,10 +122,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     def _should_echo(self) -> bool:
         """Return True when console output should be emitted."""
         return bool(self._output_policy.get("echo", True)) and not bool(self._output_policy.get("use_logger", False))
-
-    def _use_logger(self) -> bool:
-        """Return True when logger output is preferred."""
-        return bool(self._output_policy.get("use_logger", False))
 
     def _tracking_table_ddl(self) -> CreateTable:
         """Get SQL builder for creating the tracking table.
@@ -337,7 +372,9 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         ...
 
     @abstractmethod
-    def get_applied_migrations(self, driver: DriverT) -> "list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]":
+    def get_applied_migrations(
+        self, driver: DriverT
+    ) -> "list[AppliedMigrationRecord] | Awaitable[list[AppliedMigrationRecord]]":
         """Get all applied migrations in order."""
         ...
 
@@ -353,6 +390,59 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """Remove a migration record."""
         ...
 
+    def _build_add_column_statement(self, column_name: str) -> "AlterTable | None":
+        """Return an ALTER TABLE builder that adds ``column_name``.
+
+        Args:
+            column_name: Name of the tracking-table column to add (lowercase).
+
+        Returns:
+            SQL builder for the ALTER TABLE, or None when the column is unknown.
+        """
+        target_create = self._tracking_table_ddl()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+        if not column_def:
+            return None
+        return sql.alter_table(self.version_table).add_column(
+            name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
+        )
+
+    def _add_column_statements(self, missing_columns: "set[str]") -> "list[tuple[str, AlterTable]]":
+        """Build all missing-column statements from one target-DDL snapshot."""
+        target_columns = {column.name.lower(): column for column in self._tracking_table_ddl().columns}
+        statements: list[tuple[str, AlterTable]] = []
+        for column_name in sorted(missing_columns):
+            column = target_columns.get(column_name)
+            if column is not None:
+                statements.append((
+                    column_name,
+                    sql.alter_table(self.version_table).add_column(
+                        name=column.name, dtype=column.dtype, default=column.default, not_null=column.not_null
+                    ),
+                ))
+        return statements
+
+    def _derive_version_type(self, version: str) -> str:
+        """Return the version-format type ('sequential' or 'timestamp') for a version."""
+        return parse_version(version).type.value
+
+    def _applied_by(self) -> str:
+        """Return the user recorded as having applied a migration."""
+        return os.environ.get("USER", "unknown")
+
+    def _extract_next_sequence(self, result: Any) -> int:
+        """Return the next execution sequence from a sequence-query result."""
+        return result.get_data()[0]["next_seq"] if result.data else 1
+
+    def _extract_applied_versions(self, result: Any) -> "set[str]":
+        """Return the set of applied version numbers from a query result."""
+        return {row["version_num"] for row in result.get_data()} if result.data else set()
+
+    def _is_autocommit_error(self, exc: Exception) -> bool:
+        """Return True when an exception indicates an autocommit-managed transaction."""
+        exc_str = str(exc).lower()
+        return "autocommit" in exc_str or "cannot commit" in exc_str
+
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
@@ -367,7 +457,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             config: The SQLSpec configuration.
         """
         self.config = config
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
 
         self.version_table = migration_config.get("version_table_name", "ddl_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
@@ -586,7 +676,9 @@ out-of-order migrations gracefully.
                         pending.append((version, file_path))
         return pending
 
-    def _collect_revert_migrations(self, applied: "list[dict[str, Any]]", revision: str) -> "list[dict[str, Any]]":
+    def _collect_revert_migrations(
+        self, applied: "list[AppliedMigrationRecord]", revision: str
+    ) -> "list[AppliedMigrationRecord]":
         """Collect migrations to revert based on target revision."""
         if revision == "-1":
             return [applied[-1]]
@@ -615,21 +707,21 @@ out-of-order migrations gracefully.
         """
         if method_value:
             return True
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
         return bool(migration_config.get("use_logger", False))
 
     def _resolve_echo(self, method_value: "bool | None") -> bool:
         """Resolve effective echo setting."""
         if method_value is not None:
             return bool(method_value)
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
         return bool(migration_config.get("echo", True))
 
     def _resolve_summary_only(self, method_value: "bool | None") -> bool:
         """Resolve effective summary_only setting."""
         if method_value is not None:
             return bool(method_value)
-        migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+        migration_config = self._get_migration_config()
         return bool(migration_config.get("summary_only", False))
 
     def _resolve_output_policy(

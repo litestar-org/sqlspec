@@ -1,7 +1,6 @@
 """Aiosqlite database configuration."""
 
 import re
-import uuid
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
@@ -27,6 +26,7 @@ from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFa
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -75,6 +75,8 @@ class AiosqlitePoolParams(AiosqliteConnectionParams):
     idle_timeout: NotRequired[float]
     operation_timeout: NotRequired[float]
     health_check_interval: NotRequired[float]
+    enable_optimizations: NotRequired[bool]
+    enable_foreign_keys: NotRequired[bool]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -336,7 +338,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
 
         if "database" not in config_dict or config_dict["database"] == ":memory:":
-            config_dict["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            config_dict["database"] = f"file:memory_{uuid4().hex}?mode=memory&cache=shared"
             config_dict["uri"] = True
         elif "database" in config_dict:
             database_path = str(config_dict["database"])
@@ -388,6 +390,13 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         health_check_interval = self.connection_config.get("health_check_interval")
         if health_check_interval is None:
             health_check_interval = 30.0
+        pool_kwargs: dict[str, Any] = {}
+        enable_optimizations = self.connection_config.get("enable_optimizations")
+        if enable_optimizations is not None:
+            pool_kwargs["enable_optimizations"] = enable_optimizations
+        enable_foreign_keys = self.connection_config.get("enable_foreign_keys")
+        if enable_foreign_keys is not None:
+            pool_kwargs["enable_foreign_keys"] = enable_foreign_keys
 
         pool = AiosqliteConnectionPool(
             connection_parameters=build_connection_config(self.connection_config),
@@ -399,6 +408,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             health_check_interval=health_check_interval,
             on_connection_create=self._user_connection_hook,
             runtime_setup=self._runtime_setup,
+            **pool_kwargs,
         )
 
         if self.driver_features.get("enable_custom_adapters", False):

@@ -47,17 +47,7 @@ class Insert(
             table: Target table name
             **kwargs: Additional QueryBuilder arguments
         """
-        (dialect, schema, enable_optimization, optimize_joins, optimize_predicates, simplify_expressions) = (
-            self._parse_init_options(kwargs)
-        )
-        super().__init__(
-            dialect=dialect,
-            schema=schema,
-            enable_optimization=enable_optimization,
-            optimize_joins=optimize_joins,
-            optimize_predicates=optimize_predicates,
-            simplify_expressions=simplify_expressions,
-        )
+        self._init_query_builder(kwargs)
 
         self._columns: list[str] = []
         self._values_added_count: int = 0

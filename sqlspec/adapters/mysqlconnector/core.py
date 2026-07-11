@@ -6,7 +6,7 @@
 
 import contextlib
 from collections.abc import Callable, Sized
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -26,11 +26,10 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.protocols import HasSqlStateProtocol, HasTypeCodeProtocol
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount
+from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -412,7 +411,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         value = error.args[0]
         if isinstance(value, int):
             error_code = value
-    sqlstate = error.sqlstate if isinstance(error, HasSqlStateProtocol) else None
+    sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
     if error_code in _MYSQL_MIGRATION_ERROR_CODES:
@@ -492,7 +491,7 @@ def resolve_row_plan(
         if isinstance(column, (tuple, list)):
             type_code = column[1] if len(column) > 1 else None
         else:
-            type_code = column.type_code if isinstance(column, HasTypeCodeProtocol) else None
+            type_code = column.type_code if has_type_code(column) else None
         if type_code in json_type_codes:
             append_json(index)
     return column_names, json_indexes or None
@@ -610,7 +609,7 @@ def collect_rows(
     deserializer: "Callable[[Any], Any]",
     *,
     logger: Any | None = None,
-) -> "tuple[list[Any], list[str], str]":
+) -> "tuple[list[Any], list[str], Literal['dict', 'tuple', 'record']]":
     """Collect mysql-connector rows with JSON decoding, preserving raw format."""
     column_names, json_indexes = row_plan
     if not column_names:

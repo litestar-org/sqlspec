@@ -14,6 +14,11 @@ Unreleased
 
 **Breaking changes:**
 
+* SQLite and aiosqlite connections now follow the stdlib ``sqlite3`` default by
+  leaving ``PRAGMA foreign_keys`` disabled unless
+  ``connection_config={"enable_foreign_keys": True}`` is passed. Both adapters
+  now share a 5000 ms busy timeout and aligned optimization PRAGMAs when the
+  default ``enable_optimizations=True`` setting is active.
 * Began replacing the old narrow data-dictionary interface with a consistent
   metadata contract based on ``MetadataCapabilityProfile``,
   ``MetadataCapability``, ``MetadataResult``, ``ObjectIdentity``, and

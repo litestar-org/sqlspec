@@ -12,13 +12,13 @@ Tests migration execution including:
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
 
 from sqlspec.driver import ExecutionResult
-from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.base import AppliedMigrationRecord, BaseMigrationTracker, LoadedMigrationMetadata
 from sqlspec.migrations.runner import SyncMigrationRunner
 
 
@@ -35,7 +35,7 @@ class MockMigrationTracker(BaseMigrationTracker):
 
     def __init__(self, version_table_name: str = "test_migrations") -> None:
         super().__init__(version_table_name)
-        self._applied_migrations: dict[str, dict[str, Any]] = {}
+        self._applied_migrations: dict[str, AppliedMigrationRecord] = {}
 
     def ensure_tracking_table(self, driver: Any) -> None:
         """Mock ensure tracking table."""
@@ -47,7 +47,7 @@ class MockMigrationTracker(BaseMigrationTracker):
             return None
         return max(self._applied_migrations.keys())
 
-    def get_applied_migrations(self, driver: Any) -> list[dict[str, Any]]:
+    def get_applied_migrations(self, driver: Any) -> list[AppliedMigrationRecord]:
         """Mock get applied migrations."""
         return list(self._applied_migrations.values())
 
@@ -55,12 +55,15 @@ class MockMigrationTracker(BaseMigrationTracker):
         self, driver: Any, version: str, description: str, execution_time_ms: int, checksum: str
     ) -> None:
         """Mock record migration."""
-        self._applied_migrations[version] = {
-            "version_num": version,
-            "description": description,
-            "execution_time_ms": execution_time_ms,
-            "checksum": checksum,
-        }
+        self._applied_migrations[version] = cast(
+            "AppliedMigrationRecord",
+            {
+                "version_num": version,
+                "description": description,
+                "execution_time_ms": execution_time_ms,
+                "checksum": checksum,
+            },
+        )
 
     def remove_migration(self, driver: Any, version: str) -> None:
         """Mock remove migration."""
@@ -79,14 +82,14 @@ class MockMigrationRunner(SyncMigrationRunner):
         """Mock get migration files."""
         return super().get_migration_files()
 
-    def load_migration(self, file_path: Path, version: str | None = None) -> dict[str, Any]:
+    def load_migration(self, file_path: Path, version: str | None = None) -> LoadedMigrationMetadata:
         """Mock load migration."""
         return super().load_migration(file_path, version)
 
     def execute_upgrade(
         self,
         driver: Any,
-        migration: dict[str, Any],
+        migration: LoadedMigrationMetadata,
         *,
         use_transaction: bool | None = None,
         on_success: Callable[[int], None] | None = None,
@@ -102,7 +105,7 @@ class MockMigrationRunner(SyncMigrationRunner):
     def execute_downgrade(
         self,
         driver: Any,
-        migration: dict[str, Any],
+        migration: LoadedMigrationMetadata,
         *,
         use_transaction: bool | None = None,
         on_success: Callable[[int], None] | None = None,

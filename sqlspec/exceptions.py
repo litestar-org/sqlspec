@@ -16,7 +16,6 @@ __all__ = (
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
     "IntegrityError",
-    "InvalidVersionFormatError",
     "MigrationError",
     "MissingDependencyError",
     "MultipleResultsFoundError",
@@ -35,7 +34,6 @@ __all__ = (
     "SQLSpecError",
     "SQLStatementNotFoundError",
     "SerializationConflictError",
-    "SerializationError",
     "SquashValidationError",
     "StackExecutionError",
     "StorageCapabilityError",
@@ -133,10 +131,6 @@ class ImproperConfigurationError(SQLSpecError):
 
 class DialectNotSupportedError(SQLBuilderError):
     """Raised when a SQL dialect does not support a specific feature."""
-
-
-class SerializationError(SQLSpecError):
-    """Encoding or decoding of an object failed."""
 
 
 class RepositoryError(SQLSpecError):
@@ -345,31 +339,27 @@ class SQLStatementNotFoundError(SQLFileNotFoundError):
 class SQLFileParseError(SQLSpecError):
     """Raised when a SQL file cannot be parsed."""
 
-    def __init__(self, name: str, path: str, original_error: "Exception") -> None:
+    def __init__(self, name: str, path: str, original_error: "Exception", line: "int | None" = None) -> None:
         """Initialize the error.
 
         Args:
             name: Name of the SQL file.
             path: Path to the SQL file.
             original_error: The underlying parsing error.
+            line: Optional 1-based line number where the error was detected.
         """
         message = f"Failed to parse SQL file '{name}' at {path}: {original_error}"
+        if line is not None:
+            message = f"{message} (line {line})"
         super().__init__(message)
         self.name = name
         self.path = path
         self.original_error = original_error
+        self.line = line
 
 
 class MigrationError(SQLSpecError):
     """Base exception for migration-related errors."""
-
-
-class InvalidVersionFormatError(MigrationError):
-    """Raised when a migration version format is invalid.
-
-    Invalid formats include versions that don't match sequential (0001)
-    or timestamp (YYYYMMDDHHmmss) patterns, or timestamps with invalid dates.
-    """
 
 
 class OutOfOrderMigrationError(MigrationError):

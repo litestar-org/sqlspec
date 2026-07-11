@@ -32,7 +32,6 @@ from sqlspec.utils.type_guards import (
 
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
-    "DataT",
     "ValueT",
     "_convert_numpy_recursive",
     "_convert_numpy_to_list",

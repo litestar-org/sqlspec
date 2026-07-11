@@ -2,13 +2,14 @@
 
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
-from uuid import UUID, uuid4
 
 import duckdb
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
+    _DuckDBStreamSource,
+    _restore_uuid_columns,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -26,11 +27,12 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.core.result import DMLResult
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -213,6 +215,13 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return self.create_execution_result(
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native DuckDB row stream backed by Arrow record batches."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(_DuckDBStreamSource(self._open_stream_reader, sql, prepared_parameters, chunk_size))
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT
@@ -544,19 +553,21 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return self._transaction_active
 
-
-def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] | None") -> None:
-    """Restore DuckDB UUID columns after Arrow materialization."""
-    if not rows or not description:
-        return
-    uuid_columns = [column[0] for column in description if len(column) > 1 and str(column[1]).upper() == "UUID"]
-    if not uuid_columns:
-        return
-    for row in rows:
-        for column in uuid_columns:
-            value = row.get(column)
-            if isinstance(value, str):
-                row[column] = UUID(value)
+    def _open_stream_reader(self, sql: str, parameters: Any, chunk_size: int) -> "tuple[Any, list[Any] | None]":
+        """Open a native Arrow reader through DuckDB's exception boundary."""
+        ensure_pyarrow()
+        handler = self.handle_database_exceptions()
+        description: list[Any] | None = None
+        reader: Any | None = None
+        with handler:
+            result = self.connection.execute(sql, normalize_execute_parameters(parameters))
+            description = result.description
+            reader = result.to_arrow_reader(chunk_size)
+        self._check_pending_exception(handler)
+        if reader is None:
+            msg = "DuckDB did not return an Arrow record batch reader."
+            raise SQLSpecError(msg)
+        return reader, description
 
 
 def _resolve_duckdb_inserted_rows(result: object) -> int:

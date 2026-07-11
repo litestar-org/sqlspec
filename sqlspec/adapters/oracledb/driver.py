@@ -1,7 +1,9 @@
 """Oracle Driver"""
 
 import logging
-from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast, overload
+
+from oracledb import create_pipeline as create_oracle_pipeline
 
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -15,7 +17,6 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.adapters.oracledb._typing import Error as OracleError
-from sqlspec.adapters.oracledb._typing import create_pipeline as create_oracle_pipeline
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     OracleAsyncStreamSource,
@@ -72,7 +73,6 @@ from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.adapters.oracledb._typing import OraclePipelineDriver
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.stack import StackOperation
@@ -92,6 +92,24 @@ __all__ = (
 
 
 logger = get_logger(__name__)
+
+
+class OraclePipelineDriver(Protocol):
+    """Protocol for Oracle pipeline driver methods used in stack execution."""
+
+    statement_config: "StatementConfig"
+    driver_features: "dict[str, Any]"
+
+    def prepare_statement(
+        self,
+        statement: "str | Statement | QueryBuilder",
+        parameters: "tuple[Any, ...] | dict[str, Any] | None",
+        *,
+        statement_config: "StatementConfig | None" = None,
+        kwargs: "dict[str, Any] | None" = None,
+    ) -> "SQL": ...
+
+    def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
 def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:

@@ -18,8 +18,8 @@ from weakref import WeakKeyDictionary
 
 from sqlspec.core import SQL
 from sqlspec.extensions.events import normalize_event_channel_name
-from sqlspec.protocols import NotificationProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.type_guards import is_notification
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -54,7 +54,7 @@ class _PsqlpyHubCallback:
         payload: str | None = None
         if len(args) == 1:
             message = args[0]
-            if isinstance(message, NotificationProtocol):
+            if is_notification(message):
                 notified_channel = message.channel
                 payload = message.payload
         elif len(args) >= _PSQLPY_CALLBACK_MIN_ARGS:

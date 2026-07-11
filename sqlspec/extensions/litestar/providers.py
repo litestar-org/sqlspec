@@ -386,7 +386,7 @@ def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[Fi
     if null_fields := config.get("null_fields"):
         null_fields = {null_fields} if isinstance(null_fields, str) else set(null_fields)
         for field_name in null_fields:
-            annotation = NamedDependency[SkipValidation[NullFilter]] | None
+            annotation = NamedDependency[SkipValidation[NullFilter]]
             parameters[f"{field_name}_null_filter"] = inspect.Parameter(
                 name=f"{field_name}_null_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
             )
@@ -395,7 +395,7 @@ def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[Fi
     if not_null_fields := config.get("not_null_fields"):
         not_null_fields = {not_null_fields} if isinstance(not_null_fields, str) else set(not_null_fields)
         for field_name in not_null_fields:
-            annotation = NamedDependency[SkipValidation[NotNullFilter]] | None
+            annotation = NamedDependency[SkipValidation[NotNullFilter]]
             parameters[f"{field_name}_not_null_filter"] = inspect.Parameter(
                 name=f"{field_name}_not_null_filter",
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -406,7 +406,7 @@ def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[Fi
     if boolean_fields := config.get("boolean_fields"):
         boolean_fields = {boolean_fields} if isinstance(boolean_fields, str) else set(boolean_fields)
         for field_name in boolean_fields:
-            annotation = NamedDependency[SkipValidation[BooleanFilter]] | None
+            annotation = NamedDependency[SkipValidation[BooleanFilter]]
             parameters[f"{field_name}_boolean_filter"] = inspect.Parameter(
                 name=f"{field_name}_boolean_filter", kind=inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
             )
@@ -416,7 +416,7 @@ def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[Fi
         choice_fields = {choice_fields} if isinstance(choice_fields, ChoiceField) else choice_fields
         for choice_def in choice_fields:
             resolved_choice = ChoiceField(name=choice_def, choices=[]) if isinstance(choice_def, str) else choice_def
-            annotation = NamedDependency[SkipValidation[ChoicesFilter[Any]]] | None
+            annotation = NamedDependency[SkipValidation[ChoicesFilter[Any]]]
             parameters[f"{resolved_choice.name}_choices_filter"] = inspect.Parameter(
                 name=f"{resolved_choice.name}_choices_filter",
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,

@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
+from adbc_driver_manager import AdbcStatusCode, DatabaseError
+
 from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc.core import (
@@ -15,6 +17,26 @@ from sqlspec.adapters.adbc.core import (
     resolve_column_names,
     resolve_many_rowcount,
 )
+from sqlspec.exceptions import DeadlockError, SerializationConflictError
+
+
+def test_create_mapped_exception_maps_40001_to_serialization_conflict() -> None:
+    """SQLSTATE 40001 maps to a serialization conflict instead of a deadlock."""
+    error = DatabaseError("serialization failure", status_code=AdbcStatusCode.UNKNOWN, sqlstate="40001")
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert isinstance(mapped, SerializationConflictError)
+    assert not isinstance(mapped, DeadlockError)
+
+
+def test_create_mapped_exception_still_maps_40p01_to_deadlock() -> None:
+    """SQLSTATE 40P01 remains classified as a deadlock."""
+    error = DatabaseError("deadlock detected", status_code=AdbcStatusCode.UNKNOWN, sqlstate="40P01")
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert isinstance(mapped, DeadlockError)
 
 
 def test_prepare_postgres_parameters_fast_path_without_casts() -> None:

@@ -185,15 +185,12 @@ class SQLSpecPlugin:
             ImproperConfigurationError: If duplicate keys found.
         """
         all_keys: set[str] = set()
-
         for state in self._config_states:
             keys = {state.connection_key, state.session_key}
             duplicates = all_keys & keys
-
             if duplicates:
                 msg = f"Duplicate state keys found: {duplicates}. Use unique session_key values."
                 raise ImproperConfigurationError(msg)
-
             all_keys.update(keys)
 
     def _register_shutdown_hook(self) -> None:
@@ -398,7 +395,6 @@ class SQLSpecPlugin:
         for state in self._config_states:
             if state.session_key == key:
                 return state
-
         msg = f"No configuration found for key: {key}"
         raise ImproperConfigurationError(msg)
 

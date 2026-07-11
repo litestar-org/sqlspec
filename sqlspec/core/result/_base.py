@@ -11,12 +11,13 @@ Classes:
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.statement import SQL
+from sqlspec.exceptions import MultipleResultsFoundError
 from sqlspec.storage import (
     AsyncStoragePipeline,
     StorageDestination,
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 __all__ = ("ArrowResult", "DMLResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
 
 T = TypeVar("T")
+RowFormat = Literal["dict", "tuple", "record"]
 _EMPTY_RESULT_STATEMENT: Final = SQL("-- empty stack result --")
 _EMPTY_RESULT_DATA: Final[tuple[Any, ...]] = ()
 _DEFAULT_DML_METADATA: Final[dict[str, Any]] = {}
@@ -190,6 +192,8 @@ class SQLResult(StatementResult):
         "total_statements",
     )
 
+    _row_format: RowFormat
+
     def __init__(
         self,
         statement: "SQL",
@@ -210,7 +214,7 @@ class SQLResult(StatementResult):
         errors: "list[str] | None" = None,
         total_statements: int = 0,
         successful_statements: int = 0,
-        row_format: str = "dict",
+        row_format: RowFormat = "dict",
     ) -> None:
         """Initialize SQL result.
 
@@ -638,7 +642,7 @@ class SQLResult(StatementResult):
             The single row (optionally transformed to schema_type) or None if no results
 
         Raises:
-            ValueError: If more than one result
+            MultipleResultsFoundError: If more than one result.
         """
         rows = self._get_rows()
         if not rows:
@@ -647,7 +651,7 @@ class SQLResult(StatementResult):
         data_len = len(rows)
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), at most one row expected"
-            raise ValueError(msg)
+            raise MultipleResultsFoundError(msg)
 
         row = rows[0]
         if schema_type:
@@ -957,13 +961,15 @@ class DMLResult(SQLResult):
 
     __slots__ = ()
 
-    def __init__(self, op_type: "OperationType", rows_affected: int = 0) -> None:
+    def __init__(
+        self, op_type: "OperationType", rows_affected: int = 0, last_inserted_id: int | str | None = None
+    ) -> None:
         # Fast-path initialization for DML results: assign slot values directly
         # instead of routing through SQLResult.__init__.
         self.statement = _EMPTY_RESULT_STATEMENT
         self.data = _EMPTY_RESULT_DATA
         self.rows_affected = rows_affected
-        self.last_inserted_id = None
+        self.last_inserted_id = last_inserted_id
         self.execution_time = None
         self.metadata = _DEFAULT_DML_METADATA
 
@@ -1120,7 +1126,7 @@ def create_sql_result(
     errors: "list[str] | None" = None,
     total_statements: int = 0,
     successful_statements: int = 0,
-    row_format: str = "dict",
+    row_format: RowFormat = "dict",
 ) -> SQLResult:
     """Create SQLResult instance.
 

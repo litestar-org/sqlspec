@@ -4,7 +4,6 @@ import logging
 import re
 import threading
 import time
-import uuid
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -13,6 +12,7 @@ from typing_extensions import final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -92,7 +92,7 @@ class DuckDBConnectionPool:
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._lock = threading.RLock()
-        self._pool_id = str(uuid.uuid4())[:8]
+        self._pool_id = str(uuid4())[:8]
         database = connection_config.get("database", "")
         self._is_memory_db = database.startswith(":memory:") or database == ""
 

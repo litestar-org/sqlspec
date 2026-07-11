@@ -176,22 +176,11 @@ Migration
    :members:
    :show-inheritance:
 
-.. autoclass:: InvalidVersionFormatError
-   :members:
-   :show-inheritance:
-
 .. autoclass:: OutOfOrderMigrationError
    :members:
    :show-inheritance:
 
 .. autoclass:: SquashValidationError
-   :members:
-   :show-inheritance:
-
-Serialization
-=============
-
-.. autoclass:: SerializationError
    :members:
    :show-inheritance:
 
@@ -216,7 +205,6 @@ Inheritance Tree
    +-- SQLBuilderError
    |   +-- DialectNotSupportedError
    +-- SQLConversionError
-   +-- SerializationError
    +-- DatabaseConnectionError
    |   +-- PermissionDeniedError
    |   +-- ConnectionTimeoutError
@@ -243,7 +231,6 @@ Inheritance Tree
    |   +-- SQLStatementNotFoundError
    +-- SQLFileParseError
    +-- MigrationError
-       +-- InvalidVersionFormatError
        +-- OutOfOrderMigrationError
        +-- SquashValidationError
 

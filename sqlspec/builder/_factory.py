@@ -980,10 +980,13 @@ class SQLFactory:
             COUNT expression.
         """
         if isinstance(column, str) and column == "*":
-            expr = exp.Count(this=exp.Star(), distinct=distinct)
+            if distinct:
+                msg = "COUNT(DISTINCT *) is not valid SQL; pass a column to count distinct values."
+                raise SQLBuilderError(msg)
+            expr = exp.Count(this=exp.Star())
         else:
             col_expr = extract_expression(column)
-            expr = exp.Count(this=col_expr, distinct=distinct)
+            expr = exp.Count(this=exp.Distinct(expressions=[col_expr])) if distinct else exp.Count(this=col_expr)
         return AggregateExpression(expr)
 
     def count_distinct(self, column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
@@ -1119,7 +1122,9 @@ class SQLFactory:
             SUM expression.
         """
         col_expr = extract_expression(column)
-        return AggregateExpression(exp.Sum(this=col_expr, distinct=distinct))
+        if distinct:
+            return AggregateExpression(exp.Sum(this=exp.Distinct(expressions=[col_expr])))
+        return AggregateExpression(exp.Sum(this=col_expr))
 
     @staticmethod
     def avg(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
@@ -1221,7 +1226,7 @@ class SQLFactory:
         """
         if isinstance(values, list):
             literals = [SQLFactory.to_literal(v).expression for v in values]
-            return FunctionExpression(exp.Any(this=exp.Array(expressions=literals)))
+            return FunctionExpression(exp.Any(this=exp.Paren(this=exp.Array(expressions=literals))))
         if isinstance(values, str):
             parsed: exp.Expr = exp.maybe_parse(values)
             return FunctionExpression(exp.Any(this=parsed))
@@ -1305,7 +1310,7 @@ class SQLFactory:
         col_expr = exp.column(column) if isinstance(column, str) else column
         if decimals == 0:
             return MathExpression(exp.Round(this=col_expr))
-        return MathExpression(exp.Round(this=col_expr, expression=exp.Literal.number(decimals)))
+        return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(decimals)))
 
     @staticmethod
     def to_literal(value: Any) -> FunctionExpression:

@@ -4,6 +4,7 @@ import tempfile
 
 import pytest
 from litestar import Litestar, Request, get
+from litestar.di import NamedDependency
 from litestar.testing import TestClient
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -55,7 +56,7 @@ def test_litestar_default_di_enabled() -> None:
         plugin = SQLSpecPlugin(sqlspec=sql)
 
         @get("/test")
-        async def test_route(db: AsyncDriverAdapterBase) -> dict:
+        async def test_route(db: NamedDependency[AsyncDriverAdapterBase]) -> dict:
             result = await db.execute("SELECT 1 as value")
             data = result.get_first()
             assert data is not None

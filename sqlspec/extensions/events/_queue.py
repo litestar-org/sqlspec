@@ -12,7 +12,7 @@ from sqlspec.core import SQL, StatementConfig
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
-from sqlspec.extensions.events._payload import parse_event_timestamp
+from sqlspec.extensions.events._payload import coerce_dict, coerce_optional_dict, parse_event_timestamp
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
@@ -233,10 +233,8 @@ class _BaseTableEventQueue:
             metadata_obj = from_json(metadata_raw)
         else:
             metadata_obj = None
-        payload_value = payload_obj if isinstance(payload_obj, dict) else {"value": payload_obj}
-        metadata_value = (
-            metadata_obj if isinstance(metadata_obj, dict) or metadata_obj is None else {"value": metadata_obj}
-        )
+        payload_value = coerce_dict(payload_obj)
+        metadata_value = coerce_optional_dict(metadata_obj)
         available_at = parse_event_timestamp(row.get("available_at"))
         created_at = parse_event_timestamp(row.get("created_at"))
         lease_value = lease_expires_at or row.get("lease_expires_at")
@@ -321,17 +319,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
-            claimed = self._execute(
-                self._claim_statement,
-                {
-                    "claimed_status": _LEASED_STATUS,
-                    "lease_expires_at": leased_until,
-                    "event_id": row["event_id"],
-                    "pending_status": _PENDING_STATUS,
-                    "leased_status": _LEASED_STATUS,
-                    "lease_reentry_cutoff": now,
-                },
-            )
+            claimed = self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
             if not claimed:
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
@@ -345,17 +333,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             return None
         now = self._utcnow()
         leased_until = now + timedelta(seconds=self._lease_seconds)
-        claimed = self._execute(
-            self._claim_statement,
-            {
-                "claimed_status": _LEASED_STATUS,
-                "lease_expires_at": leased_until,
-                "event_id": row["event_id"],
-                "pending_status": _PENDING_STATUS,
-                "leased_status": _LEASED_STATUS,
-                "lease_reentry_cutoff": now,
-            },
-        )
+        claimed = self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
@@ -552,17 +530,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)
-            claimed = await self._execute(
-                self._claim_statement,
-                {
-                    "claimed_status": _LEASED_STATUS,
-                    "lease_expires_at": leased_until,
-                    "event_id": row["event_id"],
-                    "pending_status": _PENDING_STATUS,
-                    "leased_status": _LEASED_STATUS,
-                    "lease_reentry_cutoff": now,
-                },
-            )
+            claimed = await self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
             if not claimed:
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
@@ -576,17 +544,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             return None
         now = self._utcnow()
         leased_until = now + timedelta(seconds=self._lease_seconds)
-        claimed = await self._execute(
-            self._claim_statement,
-            {
-                "claimed_status": _LEASED_STATUS,
-                "lease_expires_at": leased_until,
-                "event_id": row["event_id"],
-                "pending_status": _PENDING_STATUS,
-                "leased_status": _LEASED_STATUS,
-                "lease_reentry_cutoff": now,
-            },
-        )
+        claimed = await self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:

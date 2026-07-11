@@ -112,9 +112,10 @@ def test_select_hints_statement_hint_build_is_repeatable() -> None:
 def test_select_hints_statement_hint_preserves_cte_rendering() -> None:
     cte = sql.select("id").from_("users")
     query = sql.select("*").from_("active_users").with_cte("active_users", cte).with_hint("MAX_EXECUTION_TIME(1000)")
+    query.enable_optimization = False
     rendered = query.build().sql.upper()
-    assert "WITH" in rendered
-    assert "ACTIVE_USERS" in rendered
+    assert rendered.startswith("WITH")
+    assert '"ACTIVE_USERS" AS (' in rendered
     assert "MAX_EXECUTION_TIME" in rendered
 
 

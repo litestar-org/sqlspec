@@ -14,6 +14,12 @@ from sqlspec.utils.correlation import CorrelationContext
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
+def _create_sanic_app(name: str) -> Sanic:
+    app = Sanic(name)
+    app.config.USE_UVLOOP = False
+    return app
+
+
 def test_sanic_basic_query() -> None:
     """Sanic extension should execute a basic async SQLite query."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
@@ -24,7 +30,7 @@ def test_sanic_basic_query() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicBasic")
+        app = _create_sanic_app("SQLSpecSanicBasic")
 
         @app.get("/")
         async def handler(request: Request):
@@ -50,7 +56,7 @@ def test_sanic_autocommit_commits_success_and_rolls_back_error_status() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicAutocommit")
+        app = _create_sanic_app("SQLSpecSanicAutocommit")
 
         @app.post("/setup")
         async def setup(request: Request):
@@ -94,7 +100,7 @@ def test_sanic_autocommit_rolls_back_on_exception_response() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicExceptionRollback")
+        app = _create_sanic_app("SQLSpecSanicExceptionRollback")
 
         @app.post("/setup")
         async def setup(request: Request):
@@ -139,7 +145,7 @@ def test_sanic_sync_sqlite_autocommit_commit_and_rollback() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicSyncSqlite")
+        app = _create_sanic_app("SQLSpecSanicSyncSqlite")
 
         @app.post("/setup")
         async def setup(request: Request):
@@ -207,7 +213,7 @@ def test_sanic_multi_database_sessions() -> None:
         sqlspec.add_config(users_config)
         sqlspec.add_config(products_config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicMultiDatabase")
+        app = _create_sanic_app("SQLSpecSanicMultiDatabase")
 
         @app.post("/setup")
         async def setup(request: Request):
@@ -247,7 +253,7 @@ def test_sanic_session_caching() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicSessionCaching")
+        app = _create_sanic_app("SQLSpecSanicSessionCaching")
 
         @app.get("/")
         async def handler(request: Request):
@@ -273,7 +279,7 @@ def test_sanic_disable_di_preserves_pool_lifecycle() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = Sanic("SQLSpecSanicDisableDI")
+        app = _create_sanic_app("SQLSpecSanicDisableDI")
 
         @app.get("/")
         async def handler(request: Request):
@@ -302,7 +308,7 @@ def test_sanic_correlation_header_round_trip() -> None:
     )
     sqlspec.add_config(config)
     plugin = SQLSpecPlugin(sqlspec)
-    app = Sanic("SQLSpecSanicCorrelation")
+    app = _create_sanic_app("SQLSpecSanicCorrelation")
     seen_context: list[str | None] = []
 
     @app.get("/")

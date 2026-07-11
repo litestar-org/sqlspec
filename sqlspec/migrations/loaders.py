@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.version import _format_sequential_version
+from sqlspec.utils.sync_tools import await_
 
 __all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQLFileLoader", "get_migration_loader")
 
@@ -179,7 +182,7 @@ class SQLFileLoader(BaseMigrationLoader):
 
         parts = name_without_ext.split("_", 1)
         if parts and parts[0].isdigit():
-            return parts[0] if len(parts[0]) > timestamp_min_length else parts[0].zfill(4)
+            return parts[0] if len(parts[0]) > timestamp_min_length else _format_sequential_version(parts[0])
 
         return ""
 
@@ -224,6 +227,8 @@ class PythonFileLoader(BaseMigrationLoader):
                 msg = f"No upgrade function found in {path}. Expected 'up()' or 'migrate_up()'"
                 raise MigrationLoadError(msg)
 
+            if isinstance(self.context, MigrationContext):
+                self.context.validate_async_usage(upgrade_func)
             sig = inspect.signature(upgrade_func)
             accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
 
@@ -255,6 +260,8 @@ class PythonFileLoader(BaseMigrationLoader):
             if downgrade_func is None:
                 return []
 
+            if isinstance(self.context, MigrationContext):
+                self.context.validate_async_usage(downgrade_func)
             sig = inspect.signature(downgrade_func)
             accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
 
@@ -441,3 +448,12 @@ def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., An
     if callable(attr):
         return cast("Callable[..., Any]", attr)
     return None
+
+
+def _load_migration_sql(loader: BaseMigrationLoader, path: Path, direction: str) -> list[str]:
+    """Bridge the async loader contract for synchronous migration consumers."""
+    method = loader.get_up_sql if direction == "up" else loader.get_down_sql
+    if inspect.iscoroutinefunction(method):
+        return await_(method, raise_sync_error=False)(path)
+    sync_method = cast("Callable[[Path], list[str]]", method)
+    return sync_method(path)

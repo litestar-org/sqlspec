@@ -2,7 +2,7 @@ import logging
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
 
 from litestar.di import Provide
 from litestar.exceptions import NotFoundException
@@ -57,6 +57,13 @@ if TYPE_CHECKING:
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.loader import SQLFileLoader
+
+    AnyDatabaseConfig: TypeAlias = (
+        SyncDatabaseConfig[Any, Any, Any]
+        | NoPoolSyncConfig[Any, Any]
+        | AsyncDatabaseConfig[Any, Any, Any]
+        | NoPoolAsyncConfig[Any, Any]
+    )
 
 __all__ = (
     "CORRELATION_STATE_KEY",
@@ -160,12 +167,12 @@ class PluginConfigState:
     enable_sqlcommenter_middleware: bool
     correlation_headers: tuple[str, ...] = field(init=False)
     disable_di: bool
-    connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]]" = field(init=False)
-    pool_provider: "Callable[[State, Scope], Any]" = field(init=False)
-    session_provider: "Callable[..., AsyncGenerator[Any, None]]" = field(init=False)
-    before_send_handler: "BeforeMessageSendHookHandler" = field(init=False)
-    lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(init=False)
-    annotation: "type[DatabaseConfigProtocol[Any, Any, Any]]" = field(init=False)
+    connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
+    pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
+    session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
+    before_send_handler: "BeforeMessageSendHookHandler | None" = field(default=None, init=False)
+    lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]] | None" = field(default=None, init=False)
+    annotation: "type[DatabaseConfigProtocol[Any, Any, Any]] | None" = field(default=None, init=False)
 
 
 class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
@@ -194,10 +201,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         self._plugin_configs: list[PluginConfigState] = []
         for cfg in self._sqlspec.configs.values():
-            config_union = cast(
-                "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
-                cfg,
-            )
+            config_union = cast("AnyDatabaseConfig", cfg)
             settings = self._extract_extension_settings(config_union)
             state = self._config_state(config_union, settings)
             self._plugin_configs.append(state)
@@ -224,10 +228,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             correlation_headers=len(self._correlation_headers),
         )
 
-    def _extract_extension_settings(
-        self,
-        config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
-    ) -> "dict[str, Any]":
+    def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
         """Extract Litestar settings from config.extension_config."""
         litestar_config = config.extension_config.get("litestar", {})
 
@@ -259,11 +260,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
         }
 
-    def _config_state(
-        self,
-        config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
-        settings: "dict[str, Any]",
-    ) -> PluginConfigState:
+    def _config_state(self, config: "AnyDatabaseConfig", settings: "dict[str, Any]") -> PluginConfigState:
         """Create plugin state with handlers for the given configuration."""
         state = PluginConfigState(
             config=config,
@@ -290,7 +287,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         pool_key = state.pool_key
         commit_mode = state.commit_mode
         config = state.config
-        is_async = config.is_async
 
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
@@ -298,29 +294,21 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state.lifespan_handler = lifespan_handler_maker(config, pool_key)
 
         if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key, is_async)
+            state.before_send_handler = manual_handler_maker(connection_key)
         else:
             commit_on_redirect = commit_mode == "autocommit_include_redirect"
             state.before_send_handler = autocommit_handler_maker(
-                connection_key, is_async, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
+                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
             )
 
     @property
-    def config(
-        self,
-    ) -> "list[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]":
+    def config(self) -> "list[AnyDatabaseConfig]":
         """Return the plugin configurations.
 
         Returns:
             List of database configurations.
         """
-        return [
-            cast(
-                "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
-                state.config,
-            )
-            for state in self._plugin_configs
-        ]
+        return [cast("AnyDatabaseConfig", state.config) for state in self._plugin_configs]
 
     def on_cli_init(self, cli: "Group") -> None:
         """Configure CLI commands for SQLSpec database operations.
@@ -360,6 +348,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             signature_namespace.update(state.config.get_signature_namespace())
 
             if not state.disable_di:
+                if (
+                    state.connection_provider is None
+                    or state.pool_provider is None
+                    or state.session_provider is None
+                    or state.before_send_handler is None
+                    or state.lifespan_handler is None
+                ):
+                    self._raise_di_handlers_not_initialized(state.session_key)
                 app_config.before_send.append(state.before_send_handler)
                 app_config.lifespan.append(state.lifespan_handler)
                 app_config.dependencies.update({
@@ -417,26 +413,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         )
         return app_config
 
-    def get_annotations(
-        self,
-    ) -> "list[type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]]":
+    def get_annotations(self) -> "list[type[AnyDatabaseConfig]]":
         """Return the list of annotations.
 
         Returns:
             List of annotations.
         """
-        return [
-            cast(
-                "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
-                state.annotation,
-            )
-            for state in self._plugin_configs
-        ]
+        annotations: list[type[AnyDatabaseConfig]] = []
+        for state in self._plugin_configs:
+            if state.annotation is None:
+                self._raise_plugin_not_registered()
+            annotations.append(cast("type[AnyDatabaseConfig]", state.annotation))
+        return annotations
 
-    def get_annotation(
-        self,
-        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
-    ) -> "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]":
+    def get_annotation(self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig]") -> "type[AnyDatabaseConfig]":
         """Return the annotation for the given configuration.
 
         Args:
@@ -449,10 +439,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             The annotation for the configuration.
         """
         state = self._get_plugin_state(key)
-        return cast(
-            "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
-            state.annotation,
-        )
+        if state.annotation is None:
+            self._raise_plugin_not_registered()
+        return cast("type[AnyDatabaseConfig]", state.annotation)
 
     @overload
     def get_config(
@@ -465,9 +454,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
 
     @overload
-    def get_config(
-        self, name: str
-    ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
+    def get_config(self, name: str) -> "AnyDatabaseConfig": ...
 
     def get_config(
         self, name: "type[DatabaseConfigProtocol[Any, Any, Any]] | str | Any"
@@ -556,10 +543,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase": ...
 
     def provide_request_session(
-        self,
-        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
-        state: "State",
-        scope: "Scope",
+        self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig]", state: "State", scope: "Scope"
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Provide a database session for the specified configuration key from request scope.
 
@@ -691,10 +675,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     def provide_request_connection(self, key: str, state: "State", scope: "Scope") -> Any: ...
 
     def provide_request_connection(
-        self,
-        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
-        state: "State",
-        scope: "Scope",
+        self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig]", state: "State", scope: "Scope"
     ) -> Any:
         """Provide a database connection for the specified configuration key from request scope.
 
@@ -812,6 +793,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     return state
 
         for state in self._plugin_configs:
+            if state.annotation is None:
+                self._raise_plugin_not_registered()
             if key in {state.config, state.annotation}:
                 return state
 
@@ -842,6 +825,22 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         msg = f"No database connection found in scope for key '{connection_key}'. "
         msg += "Ensure the connection dependency is properly configured and available."
         raise ImproperConfigurationError(detail=msg)
+
+    def _raise_plugin_not_registered(self) -> NoReturn:
+        """Raise error when plugin state is accessed before app registration."""
+        msg = (
+            "SQLSpec plugin has not been registered with a Litestar application. "
+            "Register the plugin via Litestar(plugins=[...]) so on_app_init runs before accessing annotations."
+        )
+        raise ImproperConfigurationError(msg)
+
+    def _raise_di_handlers_not_initialized(self, session_key: str) -> NoReturn:
+        """Raise error when DI handlers are missing for a DI-enabled configuration."""
+        msg = (
+            f"Dependency injection handlers were not initialized for configuration '{session_key}'. "
+            "Handlers are created during plugin construction for configurations with dependency injection enabled."
+        )
+        raise ImproperConfigurationError(msg)
 
     def _raise_config_not_found(self, key: Any) -> NoReturn:
         """Raise error when configuration is not found."""

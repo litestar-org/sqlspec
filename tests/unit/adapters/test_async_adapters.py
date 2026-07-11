@@ -12,7 +12,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import ExecutionResult
 from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.exceptions import MultipleResultsFoundError, NotFoundError, SQLSpecError
 from sqlspec.observability import ObservabilityRuntime
 from sqlspec.typing import Empty
 
@@ -362,7 +362,7 @@ async def test_async_driver_select_one_no_results(aiosqlite_async_driver: Aiosql
 
 async def test_async_driver_select_one_or_none(aiosqlite_async_driver: AiosqliteDriver) -> None:
     """Test async select_one_or_none method - expects error when multiple rows returned."""
-    with pytest.raises(ValueError, match="Multiple results found"):
+    with pytest.raises(MultipleResultsFoundError, match="Multiple results found"):
         await aiosqlite_async_driver.select_one_or_none("SELECT * FROM users")
 
 

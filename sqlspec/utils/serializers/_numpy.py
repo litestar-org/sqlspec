@@ -4,7 +4,7 @@ from typing import Any, Final
 
 from sqlspec.typing import NUMPY_INSTALLED
 
-__all__ = ("numpy_array_dec_hook", "numpy_array_enc_hook", "numpy_array_predicate")
+__all__ = ("numpy_array_dec_hook", "numpy_array_enc_hook")
 
 
 _NUMPY_DECODER_SENTINEL: Final[object] = object()

@@ -115,13 +115,10 @@ def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any
     existing_session = get_context_value(request.ctx, session_instance_key, None)
     if existing_session is not None:
         return existing_session
-
-    connection = get_connection_from_request(request, config_state)
     session = config_state.config.driver_type(
-        connection=connection,
+        connection=get_connection_from_request(request, config_state),
         statement_config=config_state.config.statement_config,
         driver_features=config_state.config.driver_features,
     )
-
     set_context_value(request.ctx, session_instance_key, session)
     return session

@@ -7,7 +7,7 @@ import time
 from contextlib import suppress
 from inspect import isawaitable
 from threading import Thread
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import aiosqlite
 
@@ -33,6 +33,10 @@ __all__ = (
 logger = get_logger(POOL_LOGGER_NAME)
 
 _ADAPTER_NAME = "aiosqlite"
+SQLITE_BUSY_TIMEOUT: Final = 5000
+SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS: Final = False
+SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
+SQLITE_MEMORY_CACHE_SIZE: Final = -16000
 
 
 def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":
@@ -257,6 +261,8 @@ class AiosqliteConnectionPool:
         "_connect_timeout",
         "_connection_parameters",
         "_connection_registry",
+        "_enable_foreign_keys",
+        "_enable_optimizations",
         "_health_check_interval",
         "_idle_timeout",
         "_lock_instance",
@@ -267,8 +273,6 @@ class AiosqliteConnectionPool:
         "_pool_size",
         "_queue_instance",
         "_runtime_setup",
-        "_wal_initialized",
-        "_wal_initialized_event",
         "_warmed",
     )
 
@@ -281,6 +285,8 @@ class AiosqliteConnectionPool:
         idle_timeout: float = 24 * 60 * 60,
         operation_timeout: float = 10.0,
         health_check_interval: float = 30.0,
+        enable_optimizations: bool = SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS,
+        enable_foreign_keys: bool = SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS,
         on_connection_create: "Callable[[AiosqliteConnection], Awaitable[None]] | None" = None,
         runtime_setup: "dict[str, Any] | None" = None,
     ) -> None:
@@ -294,6 +300,8 @@ class AiosqliteConnectionPool:
             idle_timeout: Maximum time a connection can remain idle
             operation_timeout: Maximum time for connection operations
             health_check_interval: Seconds of idle time before running health check
+            enable_optimizations: Whether to apply performance PRAGMAs
+            enable_foreign_keys: Whether to enable foreign-key enforcement
             on_connection_create: Async callback executed when connection is created
             runtime_setup: Runtime feature setup to apply to new connections
         """
@@ -304,18 +312,18 @@ class AiosqliteConnectionPool:
         self._idle_timeout = idle_timeout
         self._operation_timeout = operation_timeout
         self._health_check_interval = health_check_interval
+        self._enable_optimizations = enable_optimizations
+        self._enable_foreign_keys = enable_foreign_keys
         self._on_connection_create = on_connection_create
         self._runtime_setup = runtime_setup
 
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
-        self._wal_initialized = False
         self._warmed = False
         self._pool_id = uuid4().hex[:8]  # Short ID for logging
 
         self._queue_instance: asyncio.Queue[AiosqlitePoolConnection] | None = None
         self._lock_instance: asyncio.Lock | None = None
         self._closed_event_instance: asyncio.Event | None = None
-        self._wal_initialized_event: asyncio.Event | None = None
 
     @property
     def _queue(self) -> "asyncio.Queue[AiosqlitePoolConnection]":
@@ -337,13 +345,6 @@ class AiosqliteConnectionPool:
         if self._closed_event_instance is None:
             self._closed_event_instance = asyncio.Event()
         return self._closed_event_instance
-
-    @property
-    def _wal_ready_event(self) -> asyncio.Event:
-        """Lazy initialization of WAL-ready event for Python 3.9 compatibility."""
-        if self._wal_initialized_event is None:
-            self._wal_initialized_event = asyncio.Event()
-        return self._wal_initialized_event
 
     @property
     def is_closed(self) -> bool:
@@ -464,60 +465,69 @@ class AiosqliteConnectionPool:
         self._set_connect_proxy_daemon(connect_proxy)
         connection = await connect_proxy
 
-        database_path = str(self._connection_parameters.get("database", ""))
-        is_shared_cache = "cache=shared" in database_path
-        is_memory_db = ":memory:" in database_path or "mode=memory" in database_path
+        pragma_lines: list[str] = []
 
         try:
-            pragma_lines: list[str] = []
-            if is_memory_db:
-                pragma_lines.extend([
-                    "PRAGMA journal_mode = MEMORY;",
-                    "PRAGMA synchronous = OFF;",
-                    "PRAGMA temp_store = MEMORY;",
-                    "PRAGMA cache_size = -16000;",
-                ])
-            else:
-                pragma_lines.extend(["PRAGMA journal_mode = WAL;", "PRAGMA synchronous = NORMAL;"])
+            database_path = str(self._connection_parameters.get("database", ""))
+            is_shared_cache = "cache=shared" in database_path
+            is_memory_db = ":memory:" in database_path or "mode=memory" in database_path
+            try:
+                if self._enable_optimizations:
+                    if is_memory_db:
+                        pragma_lines.extend([
+                            "PRAGMA journal_mode = MEMORY",
+                            "PRAGMA synchronous = OFF",
+                            "PRAGMA temp_store = MEMORY",
+                            f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}",
+                        ])
+                    else:
+                        pragma_lines.extend(["PRAGMA journal_mode = WAL", "PRAGMA synchronous = NORMAL"])
 
-            pragma_lines.extend(["PRAGMA foreign_keys = ON;", "PRAGMA busy_timeout = 30000;"])
+                    pragma_lines.append(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
 
-            if is_shared_cache and is_memory_db:
-                pragma_lines.append("PRAGMA read_uncommitted = ON;")
+                if self._enable_foreign_keys:
+                    pragma_lines.append("PRAGMA foreign_keys = ON")
 
-            await connection.executescript("\n".join(pragma_lines))
+                if is_shared_cache and is_memory_db:
+                    pragma_lines.append("PRAGMA read_uncommitted = ON")
 
-            await connection.commit()
+                if pragma_lines:
+                    await connection.executescript(";\n".join(pragma_lines) + ";")
+                    await connection.commit()
 
-            if is_shared_cache:
-                self._wal_initialized = True
-                self._wal_ready_event.set()
+            except Exception:
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "pool.connection.configure.error",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    database=self._database_name,
+                )
+                for pragma_statement in pragma_lines:
+                    if pragma_statement == "PRAGMA foreign_keys = ON":
+                        continue
+                    with suppress(Exception):
+                        await connection.execute(pragma_statement)
+                if self._enable_foreign_keys:
+                    await connection.execute("PRAGMA foreign_keys = ON")
+                await connection.commit()
 
-        except Exception:
-            log_with_context(
-                logger,
-                logging.WARNING,
-                "pool.connection.configure.error",
-                adapter=_ADAPTER_NAME,
-                pool_id=self._pool_id,
-                database=self._database_name,
-            )
-            await connection.execute("PRAGMA foreign_keys = ON")
-            await connection.execute("PRAGMA busy_timeout = 30000")
-            await connection.commit()
+            if self._runtime_setup is not None:
+                await _apply_runtime_setup(connection, self._runtime_setup)
 
-        # Call user-provided callback after internal setup
-        if self._runtime_setup is not None:
-            await _apply_runtime_setup(connection, self._runtime_setup)
+            if self._on_connection_create is not None:
+                await self._on_connection_create(connection)
 
-        if self._on_connection_create is not None:
-            await self._on_connection_create(connection)
+            pool_connection = AiosqlitePoolConnection(connection)
+            pool_connection.mark_as_idle()
 
-        pool_connection = AiosqlitePoolConnection(connection)
-        pool_connection.mark_as_idle()
-
-        async with self._lock:
-            self._connection_registry[pool_connection.id] = pool_connection
+            async with self._lock:
+                self._connection_registry[pool_connection.id] = pool_connection
+        except BaseException:
+            with suppress(BaseException):
+                await connection.close()
+            raise
 
         return pool_connection
 

@@ -8,6 +8,7 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -24,10 +25,12 @@ from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
     DatabaseConnectionError,
+    DataError,
     DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SerializationConflictError,
@@ -628,6 +631,13 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     if "syntax error" in error_msg or "parse" in error_msg:
         return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
+
+    if isinstance(error, PsqlpyDataError):
+        return _create_postgres_error(error, DataError, "data error")
+    if isinstance(error, PsqlpyOperationalError):
+        return _create_postgres_error(error, OperationalError, "operational error")
+    if isinstance(error, PsqlpyIntegrityError):
+        return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
 
     return _create_postgres_error(error, SQLSpecError, "database error")
 

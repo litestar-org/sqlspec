@@ -356,7 +356,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
-    config = SqliteConfig(database=str(db_path))
+    config = SqliteConfig(connection_config={"database": str(db_path)})
 
     # We need to get a driver instance to test QC methods.
     # Use the session context to get the driver, but keep it alive.
@@ -372,28 +372,16 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     session.execute("INSERT INTO test (value) VALUES (?)", ("cache_prime",))
     session.execute("INSERT INTO test (value) VALUES (?)", ("cache_prime2",))
 
-    # Now benchmark the direct prepare path
-    def bench_cache_prepare_hit() -> None:
-        session._prepare_cached_statement("INSERT INTO test (value) VALUES (?)", ("bench_val",))
+    # Now benchmark the cache-miss lookup path
+    def bench_cache_execution_miss() -> None:
+        session._cached_execution("INSERT INTO unique_table (col) VALUES (?)", ("val",))
 
     benchmarks.append(
         SubsystemBenchmark(
-            name="QC _prepare_cached_statement() - cache hit",
-            bench_fn=bench_cache_prepare_hit,
+            name="QC _cached_execution() - cache miss",
+            bench_fn=bench_cache_execution_miss,
             iterations=iterations,
-            description="Direct prepare with cache hit",
-        )
-    )
-
-    def bench_cache_prepare_miss() -> None:
-        session._prepare_cached_statement("INSERT INTO unique_table (col) VALUES (?)", ("val",))
-
-    benchmarks.append(
-        SubsystemBenchmark(
-            name="QC _prepare_cached_statement() - cache miss",
-            bench_fn=bench_cache_prepare_miss,
-            iterations=iterations,
-            description="Direct prepare with cache miss",
+            description="Cache lookup with cache miss (early return, no execution)",
         )
     )
 

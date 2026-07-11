@@ -15,6 +15,8 @@ from sqlspec.utils.arrow_helpers import coerce_arrow_table as _coerce_arrow_tabl
 from sqlspec.utils.arrow_helpers import records_to_arrow_table as _records_to_arrow_table_impl
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from sqlspec.core.result import ArrowResult
     from sqlspec.storage import StorageDestination
     from sqlspec.typing import ArrowTable
@@ -106,7 +108,9 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
     return cast("StorageTelemetry", telemetry)
 
 
-def records_to_arrow_table(records: "Any", columns: "list[str] | None") -> "ArrowTable":
+def records_to_arrow_table(
+    records: "Iterable[Mapping[str, Any]] | Iterable[Iterable[Any]]", columns: "list[str] | None"
+) -> "ArrowTable":
     """Normalize mapping or positional records into a PyArrow table for ingest."""
     return _records_to_arrow_table_impl(records, columns)
 

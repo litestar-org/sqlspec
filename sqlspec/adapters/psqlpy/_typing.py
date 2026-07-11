@@ -21,28 +21,44 @@ if TYPE_CHECKING:
     from psqlpy import Connection as _PsqlpyConnection
     from psqlpy import Listener as _PsqlpyListener
     from psqlpy.exceptions import DatabaseError as _PsqlpyDatabaseError
+    from psqlpy.exceptions import DataError as _PsqlpyDataError
     from psqlpy.exceptions import Error as _PsqlpyError
+    from psqlpy.exceptions import IntegrityError as _PsqlpyIntegrityError
+    from psqlpy.exceptions import NotSupportedError as _PsqlpyNotSupportedError
+    from psqlpy.exceptions import OperationalError as _PsqlpyOperationalError
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
     from sqlspec.core import StatementConfig
 
     PsqlpyConnection: TypeAlias = _PsqlpyConnection
+    PsqlpyDataError: TypeAlias = _PsqlpyDataError
     PsqlpyDatabaseError: TypeAlias = _PsqlpyDatabaseError
     PsqlpyError: TypeAlias = _PsqlpyError
+    PsqlpyIntegrityError: TypeAlias = _PsqlpyIntegrityError
     PsqlpyListener: TypeAlias = _PsqlpyListener
+    PsqlpyNotSupportedError: TypeAlias = _PsqlpyNotSupportedError
+    PsqlpyOperationalError: TypeAlias = _PsqlpyOperationalError
 
 if not TYPE_CHECKING:
     PsqlpyConnection = import_optional_attr("psqlpy", "Connection") or Any
+    PsqlpyDataError = import_optional_attr("psqlpy.exceptions", "DataError") or _PsqlpyUnavailableError
     PsqlpyDatabaseError = import_optional_attr("psqlpy.exceptions", "DatabaseError") or _PsqlpyUnavailableError
     PsqlpyError = import_optional_attr("psqlpy.exceptions", "Error") or _PsqlpyUnavailableError
+    PsqlpyIntegrityError = import_optional_attr("psqlpy.exceptions", "IntegrityError") or _PsqlpyUnavailableError
     PsqlpyListener = import_optional_attr("psqlpy", "Listener") or Any
+    PsqlpyNotSupportedError = import_optional_attr("psqlpy.exceptions", "NotSupportedError") or _PsqlpyUnavailableError
+    PsqlpyOperationalError = import_optional_attr("psqlpy.exceptions", "OperationalError") or _PsqlpyUnavailableError
 
 __all__ = (
     "PsqlpyConnection",
     "PsqlpyCursor",
+    "PsqlpyDataError",
     "PsqlpyDatabaseError",
     "PsqlpyError",
+    "PsqlpyIntegrityError",
     "PsqlpyListener",
+    "PsqlpyNotSupportedError",
+    "PsqlpyOperationalError",
     "PsqlpySessionContext",
 )
 
@@ -74,14 +90,6 @@ class PsqlpyCursor:
             exc_tb: Exception traceback
         """
         self._in_use = False
-
-    def is_in_use(self) -> bool:
-        """Check if cursor is currently in use.
-
-        Returns:
-            True if cursor is in use, False otherwise
-        """
-        return self._in_use
 
 
 class PsqlpySessionContext:

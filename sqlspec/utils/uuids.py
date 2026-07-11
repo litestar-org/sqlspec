@@ -46,7 +46,7 @@ __all__ = (
 )
 
 
-_uuid_utils_mod: Any | None = import_optional("uuid_utils")
+_uuid_utils_mod: Any | None = import_optional("uuid_utils.compat")
 _fastnanoid_mod: Any | None = import_optional("fastnanoid")
 
 
@@ -67,9 +67,7 @@ def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid3(namespace_value, name)
-    # The uuid-utils module is loaded dynamically, so Mypy treats it as Any.
-    # We cast the return value to UUID to satisfy the return type annotation.
-    return cast("UUID", module.uuid3(_convert_namespace(namespace_value, module), name))
+    return cast("UUID", module.uuid3(namespace_value, name))
 
 
 def uuid4() -> "UUID":
@@ -104,7 +102,7 @@ def uuid5(name: str, namespace: "UUID | None" = None) -> "UUID":
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid5(namespace_value, name)
-    return cast("UUID", module.uuid5(_convert_namespace(namespace_value, module), name))
+    return cast("UUID", module.uuid5(namespace_value, name))
 
 
 def uuid6() -> "UUID":
@@ -191,16 +189,6 @@ def nanoid() -> str:
         )
         return _nanoid_impl()
     return cast("str", module.generate())
-
-
-def _convert_namespace(namespace: "Any", module: "Any | None") -> "Any":
-    """Convert namespace to uuid-utils UUID when available."""
-    if module is None:
-        return namespace
-    uuid_cls = module.UUID
-    if isinstance(namespace, uuid_cls):
-        return namespace
-    return uuid_cls(str(namespace))
 
 
 def _nanoid_impl() -> str:

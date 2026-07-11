@@ -14,11 +14,63 @@ from sqlspec.adapters.aiosqlite.core import (
     build_statement_config,
     default_statement_config,
     driver_profile,
+    execute_and_resolve_rowcount,
+    execute_fetchall_with_description,
+    run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.core.result import DMLResult
+from sqlspec.exceptions import SQLSpecError
+
+
+def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
+    from sqlspec.adapters.aiosqlite.core import _target_supports_rowid
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE rowid_target (id INTEGER PRIMARY KEY)")
+    connection.execute("CREATE TABLE without_rowid_target (id TEXT PRIMARY KEY) WITHOUT ROWID")
+    connection.execute("CREATE TABLE shadowed_without_rowid (rowid TEXT PRIMARY KEY) WITHOUT ROWID")
+
+    class LegacyConnection:
+        def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+            if sql == "PRAGMA table_list":
+                raise sqlite3.OperationalError
+            return connection.execute(sql, cast("Any", parameters))
+
+    legacy_connection = LegacyConnection()
+    try:
+        assert _target_supports_rowid(legacy_connection, (None, "rowid_target"))
+        assert not _target_supports_rowid(legacy_connection, (None, "without_rowid_target"))
+        assert not _target_supports_rowid(legacy_connection, (None, "shadowed_without_rowid"))
+    finally:
+        connection.close()
+
+
+async def test_execute_fetchall_with_description_preserves_exported_contract() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        result = await run_on_worker_thread(
+            connection, execute_fetchall_with_description, connection, "SELECT 1 AS value", ()
+        )
+        rows, description = result
+        assert rows == [(1,)]
+        assert description[0][0] == "value"
+    finally:
+        await connection.close()
+
+
+async def test_execute_and_resolve_rowcount_preserves_exported_contract() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        await connection.execute("CREATE TABLE helper_contract (id INTEGER PRIMARY KEY)")
+        result = await run_on_worker_thread(
+            connection, execute_and_resolve_rowcount, connection, "INSERT INTO helper_contract (id) VALUES (?)", (1,)
+        )
+        assert result == 1
+    finally:
+        await connection.close()
 
 
 async def test_cursor_lifecycle_cursor_closed_after_normal_exit() -> None:
@@ -111,6 +163,51 @@ class _WorkerConnection:
         return self.cursor
 
 
+class _BeginConnection:
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.in_transaction = False
+        self.execute_calls = 0
+
+    async def execute(self, sql: str) -> None:
+        assert sql == "BEGIN IMMEDIATE"
+        self.execute_calls += 1
+        if self.execute_calls <= self.failures:
+            raise aiosqlite.Error("database is locked")
+
+
+async def test_begin_retries_native_error_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _BeginConnection(failures=2)
+    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.random.uniform", lambda *_args: 0.0)
+
+    await driver.begin()
+
+    assert connection.execute_calls == 3
+
+
+async def test_begin_raises_original_error_after_retry_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _BeginConnection(failures=4)
+    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.random.uniform", lambda *_args: 0.0)
+
+    with pytest.raises(SQLSpecError, match="Failed to begin transaction after retries") as exc_info:
+        await driver.begin()
+
+    assert connection.execute_calls == 4
+    assert isinstance(exc_info.value.__cause__, aiosqlite.Error)
+
+
 async def test_dispatch_execute_detects_record_row_format(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _run_on_worker_thread(
         _connection: object, function: Callable[..., object], *args: object, **kwargs: object
@@ -130,6 +227,28 @@ async def test_dispatch_execute_detects_record_row_format(monkeypatch: pytest.Mo
     selected_data = result.selected_data
     assert selected_data is not None
     assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
+
+
+async def test_dispatch_execute_clears_rowid_cache_after_queued_ddl(monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = AiosqliteDriver(connection=cast("Any", _WorkerConnection()), statement_config=default_statement_config)
+
+    async def _run_on_worker_thread(
+        _connection: object, _function: Callable[..., object], *_args: object, **_kwargs: object
+    ) -> tuple[int, None]:
+        assert driver._rowid_target_cache == {}
+        driver._rowid_target_cache[(None, "stale_target")] = True
+        return 0, None
+
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.run_on_worker_thread", _run_on_worker_thread)
+    monkeypatch.setattr(
+        AiosqliteDriver, "_compiled_sql", lambda *_args, **_kwargs: ("CREATE TABLE queued_ddl (id)", [])
+    )
+
+    await driver.dispatch_execute(
+        cast("Any", object()), SQL("CREATE TABLE queued_ddl (id)", statement_config=default_statement_config)
+    )
+
+    assert driver._rowid_target_cache == {}
 
 
 async def test_execute_many_uses_thin_qmark_path() -> None:
@@ -189,7 +308,7 @@ class _FakeConnectProxy:
         return _resolve().__await__()
 
 
-async def test_pool_acquire_acquire_does_not_sleep_when_wal_not_initialized(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pool_acquire_does_not_sleep_on_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlspec.adapters.aiosqlite import pool as pool_module
 
     proxy = _FakeConnectProxy(_FakeConnection())
@@ -197,7 +316,6 @@ async def test_pool_acquire_acquire_does_not_sleep_when_wal_not_initialized(monk
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: proxy)
     pool_conn = await pool._create_connection()
     pool._queue.put_nowait(pool_conn)
-    pool._wal_initialized = False
     start = time.monotonic()
     connection = await pool.acquire()
     elapsed = time.monotonic() - start
@@ -218,7 +336,6 @@ async def test_pool_acquire_acquire_multiple_concurrent_no_sleep_serialization(m
     for _ in range(pool_size):
         pool_conn = await pool._create_connection()
         pool._queue.put_nowait(pool_conn)
-    pool._wal_initialized = False
 
     async def _acquire_and_release() -> float:
         t0 = time.monotonic()
@@ -231,35 +348,6 @@ async def test_pool_acquire_acquire_multiple_concurrent_no_sleep_serialization(m
     times = await asyncio.gather(*[_acquire_and_release() for _ in range(pool_size)])
     total = time.monotonic() - start
     assert total < pool_size * 0.005, f"total={total:.4f}s per-call={times}"
-
-
-async def test_pool_acquire_wal_ready_event_set_after_shared_cache_create_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
-    pool = AiosqliteConnectionPool({"database": "file:wal_event_test?mode=memory&cache=shared", "uri": True})
-    monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FakeConnectProxy(_FakeConnection()))
-    assert not pool._wal_ready_event.is_set()
-    pool_conn = await pool._create_connection()
-    try:
-        assert pool._wal_initialized is True
-        assert pool._wal_ready_event.is_set()
-    finally:
-        await pool._retire_connection(pool_conn, reason="test_cleanup")
-
-
-async def test_pool_acquire_wal_ready_event_not_set_for_non_shared_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
-    pool = AiosqliteConnectionPool({"database": ":memory:"})
-    monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FakeConnectProxy(_FakeConnection()))
-    pool_conn = await pool._create_connection()
-    try:
-        assert pool._wal_initialized is False
-        assert not pool._wal_ready_event.is_set()
-    finally:
-        await pool._retire_connection(pool_conn, reason="test_cleanup")
 
 
 def test_profile_build_profile_includes_named_colon_in_supported_styles() -> None:

@@ -1943,3 +1943,28 @@ def test_native_layout_wave3_explain_slots_drop_dead_statement_reference() -> No
     built = explain.build()
     assert "EXPLAIN" in built.raw_sql
     assert "SELECT 1" in built.raw_sql
+
+
+def test_join_builder_unknown_join_type_falls_back_to_inner_join() -> None:
+    """JoinBuilder.on() with an unrecognized join type builds a plain inner join."""
+    join_expr = create_join_builder("semi")("orders", alias="o").on("orders.user_id = users.id")
+
+    assert isinstance(join_expr, exp.Join)
+    assert join_expr.args.get("side") is None
+    assert join_expr.args.get("kind") is None
+    assert join_expr.args.get("on") is not None
+
+
+def test_join_builder_known_join_types_match_join_for_type() -> None:
+    """JoinBuilder.on() renders each supported join type with its canonical side/kind."""
+    expected = {
+        "inner join": (None, None),
+        "left join": ("LEFT", None),
+        "right join": ("RIGHT", None),
+        "full join": ("FULL", "OUTER"),
+        "cross join": (None, "CROSS"),
+    }
+    for join_type, (side, kind) in expected.items():
+        join_expr = create_join_builder(join_type)("orders").on("orders.user_id = users.id")
+        assert join_expr.args.get("side") == side, join_type
+        assert join_expr.args.get("kind") == kind, join_type

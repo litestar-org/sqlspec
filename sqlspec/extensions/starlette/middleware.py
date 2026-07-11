@@ -6,9 +6,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.starlette._utils import get_state_value, pop_state_value, set_state_value
-from sqlspec.protocols import HasNameProtocol
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
+from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -19,10 +19,6 @@ if TYPE_CHECKING:
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 __all__ = ("CorrelationMiddleware", "SQLCommenterMiddleware", "SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
-
-HTTP_200_OK = 200
-HTTP_300_MULTIPLE_CHOICES = 300
-HTTP_400_BAD_REQUEST = 400
 
 
 class SQLSpecManualMiddleware(BaseHTTPMiddleware):
@@ -85,17 +81,15 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
     Acquires connection, commits on success status codes, rollbacks on error status codes.
     """
 
-    def __init__(self, app: Any, config_state: "SQLSpecConfigState", include_redirect: bool = False) -> None:
+    def __init__(self, app: Any, config_state: "SQLSpecConfigState") -> None:
         """Initialize middleware.
 
         Args:
             app: Starlette application instance.
             config_state: Configuration state for this database.
-            include_redirect: If True, commit on 3xx status codes as well.
         """
         super().__init__(app)
         self.config_state = config_state
-        self.include_redirect = include_redirect
 
     async def dispatch(self, request: "Request", call_next: Any) -> Any:
         """Process request with autocommit transaction mode.
@@ -153,17 +147,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         Returns:
             True if should commit, False if should rollback.
         """
-        extra_commit = self.config_state.extra_commit_statuses or set()
-        extra_rollback = self.config_state.extra_rollback_statuses or set()
-
-        if status_code in extra_commit:
-            return True
-        if status_code in extra_rollback:
-            return False
-
-        if HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES:
-            return True
-        return bool(self.include_redirect and HTTP_300_MULTIPLE_CHOICES <= status_code < HTTP_400_BAD_REQUEST)
+        return self.config_state.should_commit(status_code)
 
 
 class CorrelationMiddleware(BaseHTTPMiddleware):
@@ -261,7 +245,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
         """
         attrs: dict[str, str] = {"route": request.url.path, "framework": self._framework}
         endpoint = request.scope.get("endpoint")
-        if isinstance(endpoint, HasNameProtocol):
+        if has_name(endpoint):
             attrs["action"] = endpoint.__name__
 
         previous = SQLCommenterContext.get()

@@ -13,10 +13,10 @@ from sqlspec.extensions.sanic._utils import (
     pop_context_value,
     set_context_value,
 )
-from sqlspec.protocols import HasNameProtocol
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
+from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
     from sanic import Sanic
@@ -29,9 +29,6 @@ DEFAULT_COMMIT_MODE = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
-HTTP_200_OK = 200
-HTTP_300_MULTIPLE_CHOICES = 300
-HTTP_400_BAD_REQUEST = 400
 
 
 class SQLSpecPlugin:
@@ -92,34 +89,25 @@ class SQLSpecPlugin:
         Returns:
             Dictionary of Sanic-specific settings.
         """
-        sanic_config = config.extension_config.get("sanic", {})
-
-        connection_key = sanic_config.get("connection_key", DEFAULT_CONNECTION_KEY)
-        pool_key = sanic_config.get("pool_key", DEFAULT_POOL_KEY)
-        session_key = sanic_config.get("session_key", DEFAULT_SESSION_KEY)
-        commit_mode = sanic_config.get("commit_mode", DEFAULT_COMMIT_MODE)
-
+        framework_config = config.extension_config.get("sanic", {})
+        pool_key = framework_config.get("pool_key", DEFAULT_POOL_KEY)
         if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
             pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
-
-        correlation_headers = sanic_config.get("correlation_headers")
-        if correlation_headers is not None:
-            correlation_headers = tuple(correlation_headers)
-
+        correlation_headers = framework_config.get("correlation_headers")
         return {
-            "connection_key": connection_key,
+            "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
             "pool_key": pool_key,
-            "session_key": session_key,
-            "commit_mode": commit_mode,
-            "extra_commit_statuses": sanic_config.get("extra_commit_statuses"),
-            "extra_rollback_statuses": sanic_config.get("extra_rollback_statuses"),
-            "disable_di": sanic_config.get("disable_di", False),
-            "enable_correlation_middleware": sanic_config.get("enable_correlation_middleware", False),
-            "correlation_header": sanic_config.get("correlation_header", "x-request-id"),
-            "correlation_headers": correlation_headers,
-            "auto_trace_headers": sanic_config.get("auto_trace_headers", True),
-            "enable_sqlcommenter_middleware": sanic_config.get("enable_sqlcommenter_middleware", True),
-            "sqlcommenter_framework": sanic_config.get("sqlcommenter_framework", "sanic"),
+            "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
+            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
+            "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
+            "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
+            "disable_di": framework_config.get("disable_di", False),
+            "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", False),
+            "correlation_header": framework_config.get("correlation_header", "x-request-id"),
+            "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
+            "auto_trace_headers": framework_config.get("auto_trace_headers", True),
+            "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "sanic"),
         }
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SanicConfigState:
@@ -372,12 +360,12 @@ class SQLSpecPlugin:
         endpoint = getattr(request, "endpoint", None)
         if isinstance(endpoint, str) and endpoint:
             return endpoint.rsplit(".", 1)[-1]
-        if isinstance(endpoint, HasNameProtocol):
+        if has_name(endpoint):
             return endpoint.__name__
 
         route = getattr(request, "route", None)
         handler = getattr(route, "handler", None)
-        if isinstance(handler, HasNameProtocol):
+        if has_name(handler):
             return handler.__name__
 
         name = getattr(request, "name", None)
@@ -458,20 +446,7 @@ class SQLSpecPlugin:
         Returns:
             ``True`` when the transaction should commit.
         """
-        extra_commit = config_state.extra_commit_statuses or set()
-        extra_rollback = config_state.extra_rollback_statuses or set()
-
-        if status_code in extra_commit:
-            return True
-        if status_code in extra_rollback:
-            return False
-
-        if HTTP_200_OK <= status_code < HTTP_300_MULTIPLE_CHOICES:
-            return True
-        return bool(
-            config_state.commit_mode == "autocommit_include_redirect"
-            and HTTP_300_MULTIPLE_CHOICES <= status_code < HTTP_400_BAD_REQUEST
-        )
+        return config_state.should_commit(status_code)
 
     def _response_status_code(self, response: Any) -> int:
         """Return a Sanic response status code.
@@ -572,15 +547,12 @@ class SQLSpecPlugin:
             ImproperConfigurationError: If duplicate keys are found.
         """
         all_keys: set[str] = set()
-
         for state in self._config_states:
             keys = {state.connection_key, state.pool_key, state.session_key}
             duplicates = all_keys & keys
-
             if duplicates:
                 msg = f"Duplicate context keys found: {duplicates}"
                 raise ImproperConfigurationError(msg)
-
             all_keys.update(keys)
 
     def get_session(self, request: Any, key: "str | None" = None) -> Any:
@@ -624,6 +596,5 @@ class SQLSpecPlugin:
         for state in self._config_states:
             if state.session_key == key:
                 return state
-
         msg = f"No configuration found with session_key: {key}"
         raise ValueError(msg)

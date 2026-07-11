@@ -68,24 +68,24 @@ def fix_adapters_rst() -> None:
     # Fix Psycopg config
     content = re.sub(
         r"PsycopgConfig\([^)]*is_async=True[^)]*\)",
-        'PsycopgAsyncConfig(pool_config={"conninfo": "postgresql://user:pass@localhost/db"})',
+        'PsycopgAsyncConfig(connection_config={"conninfo": "postgresql://user:pass@localhost/db"})',
         content,
     )
     content = re.sub(
         r"PsycopgConfig\([^)]*is_async=False[^)]*\)",
-        'PsycopgSyncConfig(pool_config={"conninfo": "postgresql://user:pass@localhost/db"})',
+        'PsycopgSyncConfig(connection_config={"conninfo": "postgresql://user:pass@localhost/db"})',
         content,
     )
 
     # Fix Oracle config
     content = re.sub(
         r"OracleDBConfig\([^)]*is_async=True[^)]*\)",
-        'OracleAsyncConfig(pool_config={"user": "system", "password": "oracle", "dsn": "localhost:1521/xe"})',
+        'OracleAsyncConfig(connection_config={"user": "system", "password": "oracle", "dsn": "localhost:1521/xe"})',
         content,
     )
     content = re.sub(
         r"OracleDBConfig\([^)]*is_async=False[^)]*\)",
-        'OracleSyncConfig(pool_config={"user": "system", "password": "oracle", "dsn": "localhost:1521/xe"})',
+        'OracleSyncConfig(connection_config={"user": "system", "password": "oracle", "dsn": "localhost:1521/xe"})',
         content,
     )
 

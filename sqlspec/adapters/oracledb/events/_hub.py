@@ -30,9 +30,8 @@ _AQ_AVAILABLE = False
 OracleDatabaseError: Any
 
 try:  # pragma: no cover
-    from sqlspec.adapters.oracledb._typing import AQMSG_INVISIBLE as _AQMSG_INVISIBLE
-    from sqlspec.adapters.oracledb._typing import AQMSG_PAYLOAD_TYPE_JSON as _AQMSG_PAYLOAD_TYPE_JSON
-    from sqlspec.adapters.oracledb._typing import AQMSG_VISIBLE as _AQMSG_VISIBLE
+    import oracledb as _oracledb
+
     from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
     from sqlspec.adapters.oracledb._typing import DatabaseError as _OracleDatabaseErrorImported
 except ImportError:  # pragma: no cover
@@ -44,6 +43,9 @@ except ImportError:  # pragma: no cover
 else:  # pragma: no cover
     _AQ_AVAILABLE = True
     OracleDatabaseError = _OracleDatabaseErrorImported
+    _AQMSG_INVISIBLE = getattr(_oracledb, "AQMSG_INVISIBLE", None)
+    _AQMSG_PAYLOAD_TYPE_JSON = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
+    _AQMSG_VISIBLE = getattr(_oracledb, "AQMSG_VISIBLE", None)
 
 AQMSG_INVISIBLE: "int | None" = _AQMSG_INVISIBLE
 AQMSG_PAYLOAD_TYPE_JSON: Any = _AQMSG_PAYLOAD_TYPE_JSON

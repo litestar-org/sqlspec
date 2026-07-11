@@ -18,10 +18,10 @@ from sqlspec.utils.serializers import (
     get_collection_serializer,
     numpy_array_dec_hook,
     numpy_array_enc_hook,
-    numpy_array_predicate,
     schema_dump,
     to_json,
 )
+from sqlspec.utils.serializers._numpy import numpy_array_predicate
 from sqlspec.utils.serializers._schema import reset_serializer_cache
 
 
@@ -408,7 +408,6 @@ def test_module_all_exports() -> None:
         "get_serializer_metrics",
         "numpy_array_dec_hook",
         "numpy_array_enc_hook",
-        "numpy_array_predicate",
         "reset_serializer_cache",
         "schema_dump",
         "serialize_collection",

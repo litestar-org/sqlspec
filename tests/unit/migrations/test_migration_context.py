@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from sqlspec.adapters.psycopg.config import PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.loaders import PythonFileLoader
 
 
 def test_migration_context_from_sqlite_config() -> None:
@@ -149,6 +151,23 @@ async def test_validate_async_usage_with_sync_function(aiosqlite_async_driver) -
     context.driver = aiosqlite_async_driver
 
     context.validate_async_usage(sync_migration)
+    assert context.get_execution_metadata("mixed_execution") is True
+
+
+async def test_python_loader_validates_sync_function_with_async_driver(tmp_path: Path) -> None:
+    """Python loaders should activate mixed-execution metadata from the bound driver."""
+    migration_file = tmp_path / "0001_sync.py"
+    migration_file.write_text("def up(context):\n    return ['SELECT 1']\n")
+
+    class AsyncDriver:
+        async def execute_script(self, _statement: str) -> None:
+            return None
+
+    context = MigrationContext(driver=AsyncDriver())  # type: ignore[arg-type]
+    loader = PythonFileLoader(tmp_path, context=context)
+
+    assert context.get_execution_metadata("mixed_execution") is None
+    assert await loader.get_up_sql(migration_file) == ["SELECT 1"]
     assert context.get_execution_metadata("mixed_execution") is True
 
 

@@ -102,7 +102,7 @@ def test_declarations_survive_driver_prepare_with_filter() -> None:
     from sqlspec.adapters.sqlite import SqliteConfig
     from sqlspec.core.filters import LimitOffsetFilter
 
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     with config.provide_session() as session:
         base = SQL("select :a")
         base._declared_parameters = _SENTINEL

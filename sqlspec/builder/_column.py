@@ -54,35 +54,27 @@ class ColumnExpression:
         return self._expression
 
 
-class Column:
-    """Represents a database column with Python operator support."""
+class _ScalarExpressionMixin:
+    """Shared operator and helper methods for scalar column-like expressions.
 
-    __slots__ = ("_expression", "name", "table")
+    Hosts the comparison, membership, casting, and ordering helpers that are
+    identical between :class:`Column` and :class:`FunctionColumn`. Concrete
+    subclasses own the ``_expression`` slot along with their own ``__init__``,
+    equality, hashing, and ``like`` semantics.
+    """
 
-    def __init__(self, name: str, table: str | None = None) -> None:
-        self.name = name
-        self.table = table
+    __slots__ = ("_expression",)
 
-        if table:
-            self._expression = exp.Column(this=exp.Identifier(this=name), table=exp.Identifier(this=table))
-        else:
-            self._expression = exp.Column(this=exp.Identifier(this=name))
+    _expression: "exp.Expr"
 
     def _convert_value(self, value: Any) -> exp.Expr:
         """Convert a Python value to a SQLGlot expression."""
         return _convert_value(value)
 
-    def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        """Equal to (==)."""
-        if other is None:
-            return ColumnExpression(exp.Is(this=self._expression, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
-
-    def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        """Not equal to (!=)."""
-        if other is None:
-            return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
+    @property
+    def sqlglot_expression(self) -> "exp.Expr":
+        """Get the underlying SQLGlot expression."""
+        return self._expression
 
     def __gt__(self, other: Any) -> ColumnExpression:
         """Greater than (>)."""
@@ -100,20 +92,6 @@ class Column:
         """Less than or equal (<=)."""
         return ColumnExpression(exp.LTE(this=self._expression, expression=self._convert_value(other)))
 
-    def __invert__(self) -> ColumnExpression:
-        """Apply NOT operator (~)."""
-        return ColumnExpression(exp.Not(this=self._expression))
-
-    def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
-        """SQL LIKE pattern matching."""
-        if escape:
-            like_expr = exp.Like(
-                this=self._expression, expression=self._convert_value(pattern), escape=self._convert_value(escape)
-            )
-        else:
-            like_expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
-        return ColumnExpression(like_expr)
-
     def ilike(self, pattern: str) -> ColumnExpression:
         """Case-insensitive LIKE."""
         return ColumnExpression(exp.ILike(this=self._expression, expression=self._convert_value(pattern)))
@@ -122,10 +100,6 @@ class Column:
         """SQL IN clause."""
         converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.In(this=self._expression, expressions=converted_values))
-
-    def not_in(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL NOT IN clause."""
-        return ~self.in_(values)
 
     def between(self, start: Any, end: Any) -> ColumnExpression:
         """SQL BETWEEN clause."""
@@ -141,6 +115,86 @@ class Column:
         """SQL IS NOT NULL."""
         return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
 
+    def any_(self, values: Iterable[Any]) -> ColumnExpression:
+        """SQL = ANY(...) clause."""
+        converted_values = [self._convert_value(v) for v in values]
+        return ColumnExpression(
+            exp.EQ(
+                this=self._expression, expression=exp.Any(this=exp.Paren(this=exp.Array(expressions=converted_values)))
+            )
+        )
+
+    def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
+        """SQL <> ANY(...) clause."""
+        converted_values = [self._convert_value(v) for v in values]
+        return ColumnExpression(
+            exp.NEQ(
+                this=self._expression, expression=exp.Any(this=exp.Paren(this=exp.Array(expressions=converted_values)))
+            )
+        )
+
+    def cast(self, data_type: str) -> "FunctionColumn":
+        """SQL CAST() function."""
+        return FunctionColumn(exp.Cast(this=self._expression, to=exp.DataType.build(data_type)))
+
+    def alias(self, alias_name: str) -> exp.Expr:
+        """Create an aliased column expression."""
+        return exp.Alias(this=self._expression, alias=alias_name)
+
+    def asc(self) -> exp.Ordered:
+        """Create an ASC ordering expression."""
+        return exp.Ordered(this=self._expression, desc=False)
+
+    def desc(self) -> exp.Ordered:
+        """Create a DESC ordering expression."""
+        return exp.Ordered(this=self._expression, desc=True)
+
+    def as_(self, alias: str) -> exp.Alias:
+        """Create an aliased expression."""
+        return cast("exp.Alias", exp.alias_(self._expression, alias))
+
+
+class Column(_ScalarExpressionMixin):
+    """Represents a database column with Python operator support."""
+
+    __slots__ = ("name", "table")
+
+    def __init__(self, name: str, table: str | None = None) -> None:
+        self.name = name
+        self.table = table
+
+        if table:
+            self._expression = exp.Column(this=exp.Identifier(this=name), table=exp.Identifier(this=table))
+        else:
+            self._expression = exp.Column(this=exp.Identifier(this=name))
+
+    def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
+        """Equal to (==)."""
+        if other is None:
+            return ColumnExpression(exp.Is(this=self._expression, expression=exp.Null()))
+        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
+
+    def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
+        """Not equal to (!=)."""
+        if other is None:
+            return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
+        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
+
+    def __invert__(self) -> ColumnExpression:
+        """Apply NOT operator (~)."""
+        return ColumnExpression(exp.Not(this=self._expression))
+
+    def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
+        """SQL LIKE pattern matching."""
+        like_expr: exp.Expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
+        if escape:
+            like_expr = exp.Escape(this=like_expr, expression=self._convert_value(escape))
+        return ColumnExpression(like_expr)
+
+    def not_in(self, values: Iterable[Any]) -> ColumnExpression:
+        """SQL NOT IN clause."""
+        return ~self.in_(values)
+
     def not_like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
         """SQL NOT LIKE pattern matching."""
         return ~self.like(pattern, escape)
@@ -148,16 +202,6 @@ class Column:
     def not_ilike(self, pattern: str) -> ColumnExpression:
         """Case-insensitive NOT LIKE."""
         return ~self.ilike(pattern)
-
-    def any_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL = ANY(...) clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.EQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
-
-    def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL <> ANY(...) clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
     def lower(self) -> "FunctionColumn":
         """SQL LOWER() function."""
@@ -183,7 +227,7 @@ class Column:
         """SQL ROUND() function."""
         if decimals == 0:
             return FunctionColumn(exp.Round(this=self._expression))
-        return FunctionColumn(exp.Round(this=self._expression, expression=exp.convert(decimals)))
+        return FunctionColumn(exp.Round(this=self._expression, decimals=exp.convert(decimals)))
 
     def floor(self) -> "FunctionColumn":
         """SQL FLOOR() function."""
@@ -195,19 +239,16 @@ class Column:
 
     def substring(self, start: int, length: int | None = None) -> "FunctionColumn":
         """SQL SUBSTRING() function."""
-        args = [self._convert_value(start)]
-        if length is not None:
-            args.append(self._convert_value(length))
-        return FunctionColumn(exp.Substring(this=self._expression, expressions=args))
+        if length is None:
+            return FunctionColumn(exp.Substring(this=self._expression, start=self._convert_value(start)))
+        return FunctionColumn(
+            exp.Substring(this=self._expression, start=self._convert_value(start), length=self._convert_value(length))
+        )
 
     def coalesce(self, *values: Any) -> "FunctionColumn":
         """SQL COALESCE() function."""
         expressions = [self._expression] + [self._convert_value(v) for v in values]
         return FunctionColumn(exp.Coalesce(expressions=expressions))
-
-    def cast(self, data_type: str) -> "FunctionColumn":
-        """SQL CAST() function."""
-        return FunctionColumn(exp.Cast(this=self._expression, to=exp.DataType.build(data_type)))
 
     def count(self) -> "FunctionColumn":
         """SQL COUNT() function."""
@@ -301,22 +342,6 @@ class Column:
         similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))  # pyright: ignore[reportPrivateUsage]
         return FunctionColumn(similarity_expr)
 
-    def alias(self, alias_name: str) -> exp.Expr:
-        """Create an aliased column expression."""
-        return exp.Alias(this=self._expression, alias=alias_name)
-
-    def asc(self) -> exp.Ordered:
-        """Create an ASC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=False)
-
-    def desc(self) -> exp.Ordered:
-        """Create a DESC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=True)
-
-    def as_(self, alias: str) -> exp.Alias:
-        """Create an aliased expression."""
-        return cast("exp.Alias", exp.alias_(self._expression, alias))
-
     def __repr__(self) -> str:
         if self.table:
             return f"Column<{self.table}.{self.name}>"
@@ -326,32 +351,14 @@ class Column:
         """Hash based on table and column name."""
         return hash((self.table, self.name))
 
-    @property
-    def sqlglot_expression(self) -> exp.Expr:
-        """Get the underlying SQLGlot expression (public API).
 
-        Returns:
-            The SQLGlot expression for this column
-        """
-        return self._expression
-
-
-class FunctionColumn:
+class FunctionColumn(_ScalarExpressionMixin):
     """Represents the result of a SQL function call on a column."""
 
-    __slots__ = ("_expression",)
+    __slots__ = ()
 
     def __init__(self, expression: "exp.Expr") -> None:
         self._expression = expression
-
-    def _convert_value(self, value: Any) -> exp.Expr:
-        """Convert a Python value to a SQLGlot expression."""
-        return _convert_value(value)
-
-    @property
-    def sqlglot_expression(self) -> "exp.Expr":
-        """Return underlying SQLGlot expression."""
-        return self._expression
 
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
@@ -359,33 +366,8 @@ class FunctionColumn:
     def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
 
-    def __gt__(self, other: Any) -> ColumnExpression:
-        """Greater than (>)."""
-        return ColumnExpression(exp.GT(this=self._expression, expression=self._convert_value(other)))
-
-    def __ge__(self, other: Any) -> ColumnExpression:
-        """Greater than or equal (>=)."""
-        return ColumnExpression(exp.GTE(this=self._expression, expression=self._convert_value(other)))
-
-    def __lt__(self, other: Any) -> ColumnExpression:
-        """Less than (<)."""
-        return ColumnExpression(exp.LT(this=self._expression, expression=self._convert_value(other)))
-
-    def __le__(self, other: Any) -> ColumnExpression:
-        """Less than or equal (<=)."""
-        return ColumnExpression(exp.LTE(this=self._expression, expression=self._convert_value(other)))
-
     def like(self, pattern: str) -> ColumnExpression:
         return ColumnExpression(exp.Like(this=self._expression, expression=self._convert_value(pattern)))
-
-    def ilike(self, pattern: str) -> ColumnExpression:
-        """Case-insensitive LIKE."""
-        return ColumnExpression(exp.ILike(this=self._expression, expression=self._convert_value(pattern)))
-
-    def in_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL IN clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.In(this=self._expression, expressions=converted_values))
 
     def not_in_(self, values: Iterable[Any]) -> ColumnExpression:
         """SQL NOT IN clause."""
@@ -398,50 +380,6 @@ class FunctionColumn:
     def not_ilike(self, pattern: str) -> ColumnExpression:
         """Case-insensitive NOT LIKE."""
         return ~self.ilike(pattern)
-
-    def between(self, start: Any, end: Any) -> ColumnExpression:
-        """SQL BETWEEN clause."""
-        return ColumnExpression(
-            exp.Between(this=self._expression, low=self._convert_value(start), high=self._convert_value(end))
-        )
-
-    def is_null(self) -> ColumnExpression:
-        """SQL IS NULL."""
-        return ColumnExpression(exp.Is(this=self._expression, expression=exp.Null()))
-
-    def is_not_null(self) -> ColumnExpression:
-        """SQL IS NOT NULL."""
-        return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
-
-    def any_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL = ANY(...) clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.EQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
-
-    def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL <> ANY(...) clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
-
-    def alias(self, alias_name: str) -> "exp.Expr":
-        """Create an aliased function expression."""
-        return exp.Alias(this=self._expression, alias=alias_name)
-
-    def as_(self, alias: str) -> "exp.Alias":
-        """Create an aliased expression using sqlglot helper."""
-        return cast("exp.Alias", exp.alias_(self._expression, alias))
-
-    def cast(self, data_type: str) -> "FunctionColumn":
-        """SQL CAST() function."""
-        return FunctionColumn(exp.Cast(this=self._expression, to=exp.DataType.build(data_type)))
-
-    def asc(self) -> "exp.Ordered":
-        """Create an ASC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=False)
-
-    def desc(self) -> "exp.Ordered":
-        """Create a DESC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=True)
 
     def __hash__(self) -> int:
         """Hash based on the expression identity."""

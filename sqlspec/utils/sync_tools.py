@@ -106,7 +106,6 @@ class CapacityLimiter:
         self.release()
 
 
-_default_limiter = CapacityLimiter(1000)
 _default_async_executor: concurrent.futures.ThreadPoolExecutor | None = None
 _default_async_executor_pid: int | None = None
 _managed_async_executor: concurrent.futures.ThreadPoolExecutor | None = None
@@ -390,7 +389,8 @@ class _AsyncWrapper(Generic[ParamSpecT, ReturnT]):
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
         call = functools.partial(ctx.run, self._function, *args, **kwargs)
-        return await loop.run_in_executor(executor, call)
+        # Equivalent to run_in_executor(), without Python 3.14's deprecated debug-loop coroutine probe.
+        return await asyncio.wrap_future(executor.submit(call), loop=loop)
 
 
 class _EnsureAsyncWrapper(Generic[ParamSpecT, ReturnT]):

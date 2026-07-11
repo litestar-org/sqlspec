@@ -4,7 +4,6 @@ This module provides utilities for tracking correlation IDs across
 database operations, enabling distributed tracing and debugging.
 """
 
-import uuid
 from collections.abc import Generator, MutableMapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -12,6 +11,8 @@ from logging import Logger, LoggerAdapter
 from typing import Any, ClassVar
 
 from mypy_extensions import mypyc_attr
+
+from sqlspec.utils.uuids import uuid4
 
 __all__ = ("CorrelationContext", "correlation_context", "get_correlation_adapter")
 
@@ -52,7 +53,7 @@ class CorrelationContext:
         Returns:
             A new UUID-based correlation ID
         """
-        return str(uuid.uuid4())
+        return str(uuid4())
 
     @classmethod
     @contextmanager

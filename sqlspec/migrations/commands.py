@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlspec.config import AsyncConfigT, SyncConfigT
+    from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
 
 __all__ = ("AsyncMigrationCommands", "SyncMigrationCommands", "create_migration_commands")
 
@@ -37,103 +38,6 @@ logger = get_logger("sqlspec.migrations.commands")
 console = Console()
 P = ParamSpec("P")
 R = TypeVar("R")
-
-
-def _output_info(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an info message to logger or console."""
-    if use_logger:
-        if summary_only:
-            return
-        logger.info(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_warning(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output a warning message to logger or console."""
-    if use_logger:
-        logger.warning(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_error(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an error message to logger or console."""
-    if use_logger:
-        logger.error(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_exception(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an exception message to logger or console."""
-    if use_logger:
-        logger.exception(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _log_command_summary(
-    *,
-    use_logger: bool,
-    summary_only: bool,
-    command: str,
-    status: str,
-    revision: str,
-    dry_run: bool,
-    pending_count: int,
-    applied_count: int | None,
-    reverted_count: int | None,
-    duration_ms: int,
-    db_system: str | None,
-    bind_key: str | None,
-    config_name: str,
-    error: Exception | None = None,
-    allow_missing: bool | None = None,
-    auto_sync: bool | None = None,
-) -> None:
-    """Emit a single summary log entry for migration commands."""
-    if not use_logger or not summary_only:
-        return
-    level = logging.ERROR if status == "failed" else logging.INFO
-    extra_fields: dict[str, Any] = {
-        "command": command,
-        "status": status,
-        "revision": revision,
-        "dry_run": dry_run,
-        "pending_count": pending_count,
-        "duration_ms": duration_ms,
-        "db_system": db_system,
-        "bind_key": bind_key,
-        "config_name": config_name,
-    }
-    if applied_count is not None:
-        extra_fields["applied_count"] = applied_count
-    if reverted_count is not None:
-        extra_fields["reverted_count"] = reverted_count
-    if allow_missing is not None:
-        extra_fields["allow_missing"] = allow_missing
-    if auto_sync is not None:
-        extra_fields["auto_sync"] = auto_sync
-    if error is not None:
-        extra_fields["error_type"] = type(error).__name__
-    log_with_context(logger, level, "migration.command.summary", **extra_fields)
 
 
 MetadataBuilder = Callable[[dict[str, Any]], tuple[str | None, dict[str, Any]]]
@@ -243,13 +147,8 @@ def _with_command_span(
     return decorator
 
 
-def _upgrade_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
-    revision = cast("str | None", args.get("revision"))
-    metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
-    return revision, metadata
-
-
-def _downgrade_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+def _command_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """Build span metadata (revision, dry_run) shared by upgrade and downgrade commands."""
     revision = cast("str | None", args.get("revision"))
     metadata = {"dry_run": str(args.get("dry_run", False)).lower()}
     return revision, metadata
@@ -311,7 +210,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
 
-            current = self.tracker.get_current_version(driver)
+            applied: list[AppliedMigrationRecord] = []
+            if verbose:
+                applied = self.tracker.get_applied_migrations(driver)
+                current = applied[-1]["version_num"] if applied else None
+            else:
+                current = self.tracker.get_current_version(driver)
             if not current:
                 log_with_context(
                     logger,
@@ -328,10 +232,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             console.print(f"[green]Current version:[/] {current}")
 
-            applied: list[dict[str, Any]] = []
             if verbose:
-                applied = self.tracker.get_applied_migrations(driver)
-
                 table = Table(title="Applied Migrations")
                 table.add_column("Version", style="cyan")
                 table.add_column("Description")
@@ -406,37 +307,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    # Keep in sync with AsyncMigrationCommands._report_no_pending_migrations.
-    def _report_no_pending_migrations(
-        self, use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool
-    ) -> None:
-        """Report that there are no pending migrations.
-
-        Args:
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-            has_migrations: Whether any migrations exist at all.
-        """
-        if not has_migrations:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "No migrations found. Create your first migration with 'sqlspec create-migration'.",
-                rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
-            )
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Already at latest version",
-                rich_message="[green]Already at latest version[/]",
-            )
-
     def _apply_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Apply a single migration and record it.
 
@@ -453,7 +331,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         try:
 
-            def record_version(exec_time: int, migration: "dict[str, Any]" = migration) -> None:
+            def record_version(exec_time: int, migration: "LoadedMigrationMetadata" = migration) -> None:
                 self.tracker.record_migration(
                     driver, migration["version"], migration["description"], exec_time, migration["checksum"]
                 )
@@ -486,7 +364,13 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             return execution_time
 
     def _revert_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Revert a single migration.
 
@@ -556,7 +440,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         all_migrations = self.runner.get_migration_files()
 
         try:
-            applied_migrations = self.tracker.get_applied_migrations(driver)
+            applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
         except Exception as exc:
             log_with_context(
                 logger,
@@ -583,7 +467,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     if file_path:
                         migration = self.runner.load_migration(file_path, new_version)
                         if migration["checksum"] == applied_checksum:
-                            self.tracker.update_version_record(driver, old_version, new_version)
+                            self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=set(applied_map)
+                            )
                             if use_logger:
                                 if not summary_only:
                                     logger.info("Reconciled version: %s -> %s", old_version, new_version)
@@ -622,7 +508,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
         return updated_count
 
-    @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
+    @_with_command_span("upgrade", metadata_fn=_command_metadata)
     def upgrade(
         self,
         revision: str = "head",
@@ -673,6 +559,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
 
@@ -682,7 +569,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
 
-                applied_migrations = self.tracker.get_applied_migrations(driver)
+                applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                 applied_versions = [m["version_num"] for m in applied_migrations]
                 applied_set = set(applied_versions)
 
@@ -697,7 +584,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
                 if not pending:
-                    self._report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
+                    _report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
                     return
 
                 migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
@@ -771,7 +658,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         elif applied_count:
             self._record_command_metric("applied", float(applied_count))
 
-    @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
+    @_with_command_span("downgrade", metadata_fn=_command_metadata)
     def downgrade(
         self,
         revision: str = "-1",
@@ -813,9 +700,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
-                applied = self.tracker.get_applied_migrations(driver)
+                applied: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
                 if not applied:
@@ -1115,13 +1003,15 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if update_database:
                 with self.config.provide_session() as driver:
                     self.tracker.ensure_tracking_table(driver)
-                    applied_migrations = self.tracker.get_applied_migrations(driver)
+                    applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
 
                     updated_count = 0
                     for old_version, new_version in conversion_map.items():
                         if old_version in applied_versions:
-                            self.tracker.update_version_record(driver, old_version, new_version)
+                            self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=applied_versions
+                            )
                             updated_count += 1
 
                     if updated_count > 0:
@@ -1197,7 +1087,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
-            current = await self.tracker.get_current_version(driver)
+            applied: list[AppliedMigrationRecord] = []
+            if verbose:
+                applied = await self.tracker.get_applied_migrations(driver)
+                current = applied[-1]["version_num"] if applied else None
+            else:
+                current = await self.tracker.get_current_version(driver)
             if not current:
                 log_with_context(
                     logger,
@@ -1213,9 +1108,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return None
 
             console.print(f"[green]Current version:[/] {current}")
-            applied: list[dict[str, Any]] = []
             if verbose:
-                applied = await self.tracker.get_applied_migrations(driver)
                 table = Table(title="Applied Migrations")
                 table.add_column("Version", style="cyan")
                 table.add_column("Description")
@@ -1290,37 +1183,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 file_checksums[result[0]] = result[1]
         return file_checksums
 
-    # Keep in sync with SyncMigrationCommands._report_no_pending_migrations.
-    def _report_no_pending_migrations(
-        self, use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool
-    ) -> None:
-        """Report that there are no pending migrations.
-
-        Args:
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-            has_migrations: Whether any migrations exist at all.
-        """
-        if not has_migrations:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "No migrations found. Create your first migration with 'sqlspec create-migration'.",
-                rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
-            )
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Already at latest version",
-                rich_message="[green]Already at latest version[/]",
-            )
-
     async def _apply_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Apply a single migration and record it.
 
@@ -1337,7 +1207,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         try:
 
-            async def record_version(exec_time: int, migration: "dict[str, Any]" = migration) -> None:
+            async def record_version(exec_time: int, migration: "LoadedMigrationMetadata" = migration) -> None:
                 await self.tracker.record_migration(
                     driver, migration["version"], migration["description"], exec_time, migration["checksum"]
                 )
@@ -1370,7 +1240,13 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return execution_time
 
     async def _revert_single_migration(
-        self, driver: Any, migration: "dict[str, Any]", version: str, use_logger: bool, echo: bool, summary_only: bool
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
     ) -> int | None:
         """Revert a single migration.
 
@@ -1440,7 +1316,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         all_migrations = await self.runner.get_migration_files()
 
         try:
-            applied_migrations = await self.tracker.get_applied_migrations(driver)
+            applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
         except Exception as exc:
             log_with_context(
                 logger,
@@ -1467,7 +1343,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     if file_path:
                         migration = await self.runner.load_migration(file_path, new_version)
                         if migration["checksum"] == applied_checksum:
-                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            await self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=set(applied_map)
+                            )
                             if use_logger:
                                 if not summary_only:
                                     logger.info("Reconciled version: %s -> %s", old_version, new_version)
@@ -1506,7 +1384,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         return updated_count
 
-    @_with_command_span("upgrade", metadata_fn=_upgrade_metadata)
+    @_with_command_span("upgrade", metadata_fn=_command_metadata)
     async def upgrade(
         self,
         revision: str = "head",
@@ -1557,6 +1435,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             async with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
@@ -1566,7 +1445,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
 
-                applied_migrations = await self.tracker.get_applied_migrations(driver)
+                applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                 applied_versions = [m["version_num"] for m in applied_migrations]
                 applied_set = set(applied_versions)
 
@@ -1581,7 +1460,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
                 if not pending:
-                    self._report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
+                    _report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
                     return
 
                 migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
@@ -1657,7 +1536,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         elif applied_count:
             self._record_command_metric("applied", float(applied_count))
 
-    @_with_command_span("downgrade", metadata_fn=_downgrade_metadata)
+    @_with_command_span("downgrade", metadata_fn=_command_metadata)
     async def downgrade(
         self,
         revision: str = "-1",
@@ -1699,10 +1578,11 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             async with self.config.provide_session() as driver:
                 db_system = resolve_db_system(type(driver).__name__)
+                self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
-                applied = await self.tracker.get_applied_migrations(driver)
+                applied: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.downgrade.available", float(len(applied)))
                 if not applied:
@@ -2029,13 +1909,15 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             if update_database:
                 async with self.config.provide_session() as driver:
                     await self.tracker.ensure_tracking_table(driver)
-                    applied_migrations = await self.tracker.get_applied_migrations(driver)
+                    applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
 
                     updated_count = 0
                     for old_version, new_version in conversion_map.items():
                         if old_version in applied_versions:
-                            await self.tracker.update_version_record(driver, old_version, new_version)
+                            await self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=applied_versions
+                            )
                             updated_count += 1
 
                     if updated_count > 0:
@@ -2069,3 +1951,127 @@ def create_migration_commands(
     if config.is_async:
         return cast("AsyncMigrationCommands[AsyncConfigT]", AsyncMigrationCommands(cast("AsyncConfigT", config)))
     return cast("SyncMigrationCommands[SyncConfigT]", SyncMigrationCommands(cast("SyncConfigT", config)))
+
+
+def _output_info(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output an info message to logger or console."""
+    if use_logger:
+        if summary_only:
+            return
+        logger.info(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _output_warning(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output a warning message to logger or console."""
+    if use_logger:
+        logger.warning(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _output_error(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output an error message to logger or console."""
+    if use_logger:
+        logger.error(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _output_exception(
+    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+) -> None:
+    """Output an exception message to logger or console."""
+    if use_logger:
+        logger.exception(message, *args)
+    else:
+        if not echo:
+            return
+        console.print(rich_message or message % args if args else message)
+
+
+def _log_command_summary(
+    *,
+    use_logger: bool,
+    summary_only: bool,
+    command: str,
+    status: str,
+    revision: str,
+    dry_run: bool,
+    pending_count: int,
+    applied_count: int | None,
+    reverted_count: int | None,
+    duration_ms: int,
+    db_system: str | None,
+    bind_key: str | None,
+    config_name: str,
+    error: Exception | None = None,
+    allow_missing: bool | None = None,
+    auto_sync: bool | None = None,
+) -> None:
+    """Emit a single summary log entry for migration commands."""
+    if not use_logger or not summary_only:
+        return
+    level = logging.ERROR if status == "failed" else logging.INFO
+    extra_fields: dict[str, Any] = {
+        "command": command,
+        "status": status,
+        "revision": revision,
+        "dry_run": dry_run,
+        "pending_count": pending_count,
+        "duration_ms": duration_ms,
+        "db_system": db_system,
+        "bind_key": bind_key,
+        "config_name": config_name,
+    }
+    if applied_count is not None:
+        extra_fields["applied_count"] = applied_count
+    if reverted_count is not None:
+        extra_fields["reverted_count"] = reverted_count
+    if allow_missing is not None:
+        extra_fields["allow_missing"] = allow_missing
+    if auto_sync is not None:
+        extra_fields["auto_sync"] = auto_sync
+    if error is not None:
+        extra_fields["error_type"] = type(error).__name__
+    log_with_context(logger, level, "migration.command.summary", **extra_fields)
+
+
+def _report_no_pending_migrations(use_logger: bool, echo: bool, summary_only: bool, has_migrations: bool) -> None:
+    """Report that there are no pending migrations.
+
+    Args:
+        use_logger: Whether to output to logger instead of console.
+        echo: Whether to echo output to the console.
+        summary_only: Whether summary-only logging is enabled.
+        has_migrations: Whether any migrations exist at all.
+    """
+    if not has_migrations:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "No migrations found. Create your first migration with 'sqlspec create-migration'.",
+            rich_message="[yellow]No migrations found. Create your first migration with 'sqlspec create-migration'.[/]",
+        )
+    else:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Already at latest version",
+            rich_message="[green]Already at latest version[/]",
+        )

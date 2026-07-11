@@ -554,4 +554,4 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return queue defaults for Spanner JSON handling."""
 
-        return EventRuntimeHints(json_passthrough=True)
+        return EventRuntimeHints()

@@ -12,7 +12,7 @@ Tests for MigrationRunner core functionality including:
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
@@ -20,6 +20,7 @@ import pytest
 from sqlspec.core import SQL
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations import runner as runner_module
+from sqlspec.migrations.base import LoadedMigrationMetadata
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import SQLFileLoader as MigrationSQLFileLoader
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
@@ -32,14 +33,6 @@ class _RunnerConfig:
         self.migration_config = migration_config
 
 
-class _SyncMigrationLoader:
-    def get_up_sql(self, _file_path: Path) -> list[str]:
-        return ["CREATE TABLE example (id INTEGER)"]
-
-    def get_down_sql(self, _file_path: Path) -> list[str]:
-        return ["DROP TABLE example"]
-
-
 class _AsyncMigrationLoader:
     async def get_up_sql(self, _file_path: Path) -> list[str]:
         return ["CREATE TABLE example (id INTEGER)"]
@@ -48,8 +41,11 @@ class _AsyncMigrationLoader:
         return ["DROP TABLE example"]
 
 
-def _migration(file_path: Path, loader: Any) -> dict[str, Any]:
-    return {"version": "0001", "file_path": file_path, "loader": loader, "has_upgrade": True, "has_downgrade": True}
+def _migration(file_path: Path, loader: Any) -> LoadedMigrationMetadata:
+    return cast(
+        "LoadedMigrationMetadata",
+        {"version": "0001", "file_path": file_path, "loader": loader, "has_upgrade": True, "has_downgrade": True},
+    )
 
 
 def _sync_runner(tmp_path: Path, migration_config: dict[str, Any]) -> SyncMigrationRunner:
@@ -79,7 +75,7 @@ def create_test_migration_runner(migrations_path: Path = Path("/test")) -> SyncM
         def execute_upgrade(
             self,
             driver: Any,
-            migration: dict[str, Any],
+            migration: LoadedMigrationMetadata,
             *,
             use_transaction: bool | None = None,
             on_success: Callable[[int], None] | None = None,
@@ -90,7 +86,7 @@ def create_test_migration_runner(migrations_path: Path = Path("/test")) -> SyncM
         def execute_downgrade(
             self,
             driver: Any,
-            migration: dict[str, Any],
+            migration: LoadedMigrationMetadata,
             *,
             use_transaction: bool | None = None,
             on_success: Callable[[int], None] | None = None,
@@ -102,6 +98,32 @@ def create_test_migration_runner(migrations_path: Path = Path("/test")) -> SyncM
             pass
 
     return StubMigrationRunner(migrations_path)
+
+
+def test_error_span_uses_one_duration_value(tmp_path: Path) -> None:
+    """Span and log metadata should share one elapsed-time measurement."""
+    runtime = Mock()
+    runner = SyncMigrationRunner(tmp_path, runtime=runtime)
+    driver = Mock()
+    migration = {"version": "0001"}
+
+    with (
+        patch("sqlspec.migrations.runner.time.perf_counter", side_effect=[10.0, 11.0]),
+        patch.object(runner, "_log_migration_event") as log_event,
+    ):
+        runner._finish_migration_span_error(  # pyright: ignore[reportPrivateUsage]
+            Mock(),
+            driver,
+            cast("LoadedMigrationMetadata", migration),
+            "upgrade",
+            "migration.apply",
+            9.0,
+            RuntimeError("boom"),
+        )
+
+    span_duration = runtime.end_migration_span.call_args.kwargs["duration_ms"]
+    log_duration = log_event.call_args.kwargs["duration_ms"]
+    assert span_duration == log_duration
 
 
 def create_migration_runner_with_sync_files(migrations_path: Path) -> SyncMigrationRunner:
@@ -121,7 +143,7 @@ def create_migration_runner_with_sync_files(migrations_path: Path) -> SyncMigrat
         def execute_upgrade(
             self,
             driver: Any,
-            migration: dict[str, Any],
+            migration: LoadedMigrationMetadata,
             *,
             use_transaction: bool | None = None,
             on_success: Callable[[int], None] | None = None,
@@ -132,7 +154,7 @@ def create_migration_runner_with_sync_files(migrations_path: Path) -> SyncMigrat
         def execute_downgrade(
             self,
             driver: Any,
-            migration: dict[str, Any],
+            migration: LoadedMigrationMetadata,
             *,
             use_transaction: bool | None = None,
             on_success: Callable[[int], None] | None = None,
@@ -162,7 +184,7 @@ def create_migration_runner_with_metadata(migrations_path: Path) -> SyncMigratio
         def execute_upgrade(
             self,
             driver: Any,
-            migration: dict[str, Any],
+            migration: LoadedMigrationMetadata,
             *,
             use_transaction: bool | None = None,
             on_success: Callable[[int], None] | None = None,
@@ -173,7 +195,7 @@ def create_migration_runner_with_metadata(migrations_path: Path) -> SyncMigratio
         def execute_downgrade(
             self,
             driver: Any,
-            migration: dict[str, Any],
+            migration: LoadedMigrationMetadata,
             *,
             use_transaction: bool | None = None,
             on_success: Callable[[int], None] | None = None,
@@ -206,7 +228,7 @@ def test_sync_execute_upgrade_sets_migration_schema_after_begin(tmp_path: Path) 
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+    runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
 
     assert driver.mock_calls[:4] == [
         call.begin(),
@@ -223,7 +245,7 @@ def test_sync_execute_upgrade_skips_migration_schema_when_unset(tmp_path: Path) 
     runner = _sync_runner(tmp_path, {})
     driver = Mock()
 
-    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+    runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
 
     driver.set_migration_session_schema.assert_not_called()
 
@@ -235,7 +257,7 @@ def test_sync_execute_downgrade_sets_migration_schema_after_begin(tmp_path: Path
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_downgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=True)
+    runner.execute_downgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=True)
 
     assert driver.mock_calls[:4] == [
         call.begin(),
@@ -252,7 +274,7 @@ def test_sync_execute_upgrade_sets_and_resets_non_transactional_schema(tmp_path:
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_upgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=False)
+    runner.execute_upgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=False)
 
     assert driver.mock_calls[:3] == [
         call.set_migration_non_transactional_schema("app_schema"),
@@ -270,7 +292,7 @@ def test_sync_execute_downgrade_sets_and_resets_non_transactional_schema(tmp_pat
     runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
     driver = Mock()
 
-    runner.execute_downgrade(driver, _migration(migration_file, _SyncMigrationLoader()), use_transaction=False)
+    runner.execute_downgrade(driver, _migration(migration_file, _AsyncMigrationLoader()), use_transaction=False)
 
     assert driver.mock_calls[:3] == [
         call.set_migration_non_transactional_schema("app_schema"),
@@ -532,14 +554,14 @@ def test_load_migration_metadata_prefers_python_docstring(tmp_path: Path) -> Non
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
         mock_loader.get_up_sql = Mock(return_value=["SELECT 1"])
         mock_loader.get_down_sql = Mock(return_value=None)
         mock_get_loader.return_value = mock_loader
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 
@@ -673,7 +695,7 @@ def down():
 
     with (
         patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader,
-        patch("sqlspec.migrations.runner.await_") as mock_await,
+        patch("sqlspec.migrations.runner._load_migration_sql") as mock_loader_sql,
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
@@ -681,7 +703,7 @@ def down():
         mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
-        mock_await.return_value = Mock(return_value=True)
+        mock_loader_sql.return_value = True
 
         metadata = runner.load_migration(migration_file)
 
@@ -700,10 +722,10 @@ def test_migration_sql_upgrade_success() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert result is not None
     assert isinstance(result, list)
@@ -719,10 +741,10 @@ def test_migration_sql_downgrade_success() -> None:
         "has_upgrade": True,
         "has_downgrade": True,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_down_sql=Mock(return_value=["DROP TABLE test;"])),
+        "loader": Mock(get_down_sql=AsyncMock(return_value=["DROP TABLE test;"])),
     }
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "down")
 
     assert result is not None
     assert isinstance(result, list)
@@ -743,7 +765,7 @@ def test_migration_sql_no_downgrade_warning() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
@@ -762,7 +784,7 @@ def test_migration_sql_no_upgrade_error() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._migration_sql(migration, "up")
+        runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert "Migration 0001 has no upgrade query" in str(exc_info.value)
 
@@ -782,7 +804,7 @@ def test_migration_sql_loader_exception_upgrade() -> None:
     }
 
     with pytest.raises(ValueError) as exc_info:
-        runner._migration_sql(migration, "up")
+        runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert "Failed to load upgrade for migration 0001" in str(exc_info.value)
 
@@ -803,7 +825,7 @@ def test_migration_sql_loader_exception_downgrade() -> None:
 
     runner._log_migration_event = Mock()  # type: ignore[method-assign]
 
-    result = runner._migration_sql(migration, "down")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "down")
 
     assert result is None
     runner._log_migration_event.assert_called_once()  # type: ignore[attr-defined]
@@ -818,10 +840,10 @@ def test_migration_sql_empty_statements() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=[])),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=[])),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert result is None
 
@@ -835,10 +857,10 @@ def test_migration_sql_none_statements() -> None:
         "has_upgrade": True,
         "has_downgrade": False,
         "file_path": Path("/test/0001_test.sql"),
-        "loader": Mock(get_up_sql=Mock(return_value=None)),
+        "loader": Mock(get_up_sql=AsyncMock(return_value=None)),
     }
 
-    result = runner._migration_sql(migration, "up")
+    result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
     assert result is None
 

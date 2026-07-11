@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional_attr
+from sqlspec.utils.serializers._numpy import numpy_array_enc_hook
 from sqlspec.utils.type_guards import dataclass_to_dict, is_attrs_instance, is_dataclass_instance, is_msgspec_struct
 
 __all__ = (
@@ -67,7 +68,7 @@ def _dump_pydantic_model(value: Any) -> Any:
     return value.dict()
 
 
-def _dump_msgspec_struct(value: Any) -> "dict[str, Any]":
+def _dump_msgspec_struct_fields(value: Any) -> "dict[str, Any]":
     return {field_name: value.__getattribute__(field_name) for field_name in value.__struct_fields__}
 
 
@@ -136,8 +137,8 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
             if NUMPY_INSTALLED:
                 ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
                 generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
-                optional_encoders[ndarray] = lambda value: value.tolist()
-                optional_encoders[generic] = lambda value: value.item()
+                optional_encoders[ndarray] = numpy_array_enc_hook
+                optional_encoders[generic] = numpy_array_enc_hook
             if PYDANTIC_INSTALLED:
                 base_model = cast("type[Any]", import_optional_attr("pydantic", "BaseModel"))
                 optional_encoders[base_model] = _dump_pydantic_model
@@ -265,8 +266,8 @@ def _structural_encoder(value: Any) -> Any:
         _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_attrs_instance
         return _dump_attrs_instance(value)
     if is_msgspec_struct(value):
-        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_msgspec_struct
-        return _dump_msgspec_struct(value)
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_msgspec_struct_fields
+        return _dump_msgspec_struct_fields(value)
     _STRUCTURAL_ENCODER_CACHE[value_type] = None
     return None
 

@@ -290,12 +290,6 @@ except ImportError:
     msgspec_fields = msgspec_fields_stub  # type: ignore[assignment]
 
 
-try:
-    import orjson  # noqa: F401
-except ImportError:
-    orjson = None  # type: ignore[assignment]
-
-
 # Always define stub type for DTOData
 @runtime_checkable
 class DTODataStub(Protocol[T]):
