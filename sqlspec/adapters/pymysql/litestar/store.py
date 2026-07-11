@@ -1,7 +1,7 @@
 """PyMySQL session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -18,13 +18,31 @@ logger = get_logger("sqlspec.adapters.pymysql.litestar.store")
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
+def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``table_options`` config value for DDL interpolation.
+
+    Args:
+        litestar_config: The ``extension_config["litestar"]`` mapping.
+
+    Returns:
+        A leading-space-prefixed options string, or an empty string when unset.
+    """
+    value = litestar_config.get("table_options")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return f" {value}" if value else ""
+
+
 class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
     """MySQL/MariaDB session store using PyMySQL sync driver."""
 
-    __slots__ = ()
+    __slots__ = ("_table_options",)
 
     def __init__(self, config: "PyMysqlConfig") -> None:
         super().__init__(config)
+        litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._table_options: str = _mysql_table_options(litestar_config)
 
     def _table_ddl(self) -> str:
         return f"""
@@ -35,7 +53,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             INDEX idx_{self._table_name}_expires_at (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
         """
 
     def _drop_table_sql(self) -> "list[str]":

@@ -1,7 +1,7 @@
 """aiomysql session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import pymysql.err
 
@@ -20,6 +20,22 @@ logger = get_logger("sqlspec.adapters.aiomysql.litestar.store")
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
+def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``table_options`` config value for DDL interpolation.
+
+    Args:
+        litestar_config: The ``extension_config["litestar"]`` mapping.
+
+    Returns:
+        A leading-space-prefixed options string, or an empty string when unset.
+    """
+    value = litestar_config.get("table_options")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return f" {value}" if value else ""
+
+
 class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
     """MySQL/MariaDB session store using aiomysql driver.
 
@@ -35,7 +51,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         config: AiomysqlConfig instance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_table_options",)
 
     def __init__(self, config: "AiomysqlConfig") -> None:
         """Initialize aiomysql session store.
@@ -44,6 +60,8 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             config: AiomysqlConfig instance.
         """
         super().__init__(config)
+        litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._table_options: str = _mysql_table_options(litestar_config)
 
     def _table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL with optimized schema.
@@ -59,7 +77,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             INDEX idx_{self._table_name}_expires_at (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
         """
 
     def _drop_table_sql(self) -> "list[str]":
