@@ -1280,35 +1280,271 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
+        """Create both sessions and events tables if they don't exist.
+
+        Notes:
+            Detects Oracle version to determine optimal JSON storage type.
+            Uses version-appropriate table schema.
+        """
+        storage_type = self._detect_json_storage_type()
+        logger.info("Creating ADK tables with storage type: %s", storage_type)
+
+        with self._config.provide_session() as driver:
+            sessions_sql = SQL(self._sessions_table_ddl_for_type(storage_type))
+            driver.execute_script(sessions_sql)
+
+            events_sql = SQL(self._events_table_ddl_for_type(storage_type))
+            driver.execute_script(events_sql)
+            driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
+            driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
+            driver.execute_script(SQL(self._metadata_table_ddl()))
+            driver.execute_script(SQL(self._metadata_seed_sql()))
+            driver.commit()
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        """Create a new session.
+
+        Args:
+            session_id: Unique session identifier.
+            app_name: Application name.
+            user_id: User identifier.
+            state: Initial session state.
+            owner_id: Optional owner ID value for owner_id_column (if configured).
+
+        Returns:
+            Created session record.
+
+        Notes:
+            Uses SYSTIMESTAMP for create_time and update_time.
+            State is serialized using version-appropriate format.
+            owner_id is ignored if owner_id_column not configured.
+        """
+        state_data = self._serialize_state(state)
+
+        if self._owner_id_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time, {self._owner_id_column_name})
+            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP, :owner_id)
+            """
+            params = {
+                "id": session_id,
+                "app_name": app_name,
+                "user_id": user_id,
+                "state": state_data,
+                "owner_id": owner_id,
+            }
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP)
+            """
+            params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            conn.commit()
+
+        result = self.get_session(app_name, user_id, session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        """Get session by ID.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+            renew_for: If positive, touch update_time while reading.
+
+        Returns:
+            Session record or None if not found.
+
+        Notes:
+            Oracle returns datetime objects for TIMESTAMP columns.
+            State is deserialized using version-appropriate format.
+        """
+
+        sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
+        """
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    cursor.execute(
+                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
+                        {"app_name": app_name, "user_id": user_id, "id": session_id},
+                    )
+                    conn.commit()
+
+                cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                row = cursor.fetchone()
+
+                if row is None:
+                    return None
+
+                session_id_val, app_name, user_id, state_data, create_time, update_time = row
+
+                state = self._deserialize_state(state_data)
+
+                return SessionRecord(
+                    id=session_id_val,
+                    app_name=app_name,
+                    user_id=user_id,
+                    state=state,
+                    create_time=create_time,
+                    update_time=update_time,
+                )
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        self._update_session_state(app_name, user_id, session_id, state)
+        """Update session state.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+            state: New state dictionary (replaces existing state).
+
+        Notes:
+            This replaces the entire state dictionary.
+            Updates update_time to current timestamp.
+            State is serialized using version-appropriate format.
+        """
+        state_data = self._serialize_state(state)
+
+        sql = f"""
+        UPDATE {self._session_table}
+        SET state = :state, update_time = SYSTIMESTAMP
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
+            conn.commit()
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
+        """List sessions for an app, optionally filtered by user.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier. If None, lists all sessions for the app.
+
+        Returns:
+            List of session records ordered by update_time DESC.
+
+        Notes:
+            Uses composite index on (app_name, user_id) when user_id is provided.
+            State is deserialized using version-appropriate format.
+        """
+
+        if user_id is None:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = :app_name
+            ORDER BY update_time DESC
+            """
+            params = {"app_name": app_name}
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = :app_name AND user_id = :user_id
+            ORDER BY update_time DESC
+            """
+            params = {"app_name": app_name, "user_id": user_id}
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+
+                results = []
+                for row in rows:
+                    state = self._deserialize_state(row[3])
+
+                    results.append(
+                        SessionRecord(
+                            id=row[0],
+                            app_name=row[1],
+                            user_id=row[2],
+                            state=state,
+                            create_time=row[4],
+                            update_time=row[5],
+                        )
+                    )
+                return results
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return []
+            raise
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        self._delete_session(app_name, user_id, session_id)
+        """Delete session and all associated events (cascade).
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+
+        Notes:
+            Foreign key constraint ensures events are cascade-deleted.
+        """
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+            conn.commit()
 
     def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
-        self._append_event(event_record)
+        """Synchronous implementation of append_event."""
+        sql = f"""
+        INSERT INTO {self._events_table} (
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (
+            :id, :session_id, :invocation_id, :timestamp, :event_data
+        )
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                sql,
+                {
+                    "id": event_record["id"],
+                    "session_id": event_record["session_id"],
+                    "invocation_id": event_record["invocation_id"],
+                    "timestamp": event_record["timestamp"],
+                    "event_data": self._serialize_event_data(event_record["event_data"]),
+                },
+            )
+            conn.commit()
 
     def append_event_and_update_state(
         self,
@@ -1322,8 +1558,90 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
-        return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        """Atomically create an event and update session + scoped state."""
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (
+            :id, :session_id, :invocation_id, :timestamp, :event_data
+        )
+        """
+
+        state_data = self._serialize_state(state)
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = :state, update_time = SYSTIMESTAMP
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
+        """
+
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
+        """
+
+        app_upsert_sql = f"""
+        MERGE INTO {self._app_state_table} target
+        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, state, update_time)
+            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+        """
+
+        user_upsert_sql = f"""
+        MERGE INTO {self._user_state_table} target
+        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, user_id, state, update_time)
+            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+                )
+                cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                row = cursor.fetchone()
+                if row is None:
+                    _raise_session_not_found(session_id)
+                cursor.execute(
+                    insert_sql,
+                    {
+                        "id": event_record["id"],
+                        "session_id": event_record["session_id"],
+                        "invocation_id": event_record["invocation_id"],
+                        "timestamp": event_record["timestamp"],
+                        "event_data": self._serialize_event_data(event_record["event_data"]),
+                    },
+                )
+                if app_state is not None:
+                    cursor.execute(app_upsert_sql, {"app_name": app_name, "state": self._serialize_state(app_state)})
+                if user_state is not None:
+                    cursor.execute(
+                        user_upsert_sql,
+                        {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)},
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
+        return SessionRecord(
+            id=session_id_val,
+            app_name=row_app_name,
+            user_id=row_user_id,
+            state=self._deserialize_state(state_data_row),
+            create_time=create_time,
+            update_time=update_time,
         )
 
     def get_events(
@@ -1335,39 +1653,206 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        """List events for a session ordered by timestamp.
+
+        Args:
+            app_name: Application name.
+            user_id: User identifier.
+            session_id: Session identifier.
+            after_timestamp: Only return events after this time.
+            limit: Maximum number of events to return.
+
+        Returns:
+            List of event records ordered by timestamp ASC.
+        """
+
+        if limit == 0:
+            return []
+
+        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "e.session_id = :session_id"]
+        params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+
+        if after_timestamp is not None:
+            where_clauses.append("e.timestamp > :after_timestamp")
+            params["after_timestamp"] = after_timestamp
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = f" FETCH FIRST {limit} ROWS ONLY" if limit is not None else ""
+        sql = f"""
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
+        WHERE {where_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
+        """
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+
+                return [
+                    EventRecord(
+                        id=row[0],
+                        session_id=row[1],
+                        invocation_id=_oracle_text_value(row[2]),
+                        timestamp=row[3],
+                        event_data=self._deserialize_json_field(row[4]) or {},
+                        app_name=row[5],
+                        user_id=row[6],
+                    )
+                    for row in rows
+                ]
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return []
+            raise
 
     def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
-        return self._delete_expired_events(before)
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"before": before})
+                conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
 
     def delete_idle_sessions(self, updated_before: "datetime") -> int:
         """Delete sessions whose update_time predates the given threshold."""
-        return self._delete_idle_sessions(updated_before)
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"updated_before": updated_before})
+                conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        return self._get_app_state(app_name)
+        """Synchronous implementation of get_app_state."""
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"app_name": app_name})
+                row = cursor.fetchone()
+                return self._deserialize_state(row[0]) if row is not None else None
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return self._get_user_state(app_name, user_id)
+        """Synchronous implementation of get_user_state."""
+        sql = f"""
+        SELECT state
+        FROM {self._user_state_table}
+        WHERE app_name = :app_name AND user_id = :user_id
+        """
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
+                row = cursor.fetchone()
+                return self._deserialize_state(row[0]) if row is not None else None
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        self._upsert_app_state(app_name, state)
+        """Synchronous implementation of upsert_app_state."""
+        sql = f"""
+        MERGE INTO {self._app_state_table} target
+        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, state, update_time)
+            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"app_name": app_name, "state": self._serialize_state(state)})
+            conn.commit()
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        self._upsert_user_state(app_name, user_id, state)
+        """Synchronous implementation of upsert_user_state."""
+        sql = f"""
+        MERGE INTO {self._user_state_table} target
+        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
+        WHEN MATCHED THEN
+            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (app_name, user_id, state, update_time)
+            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(state)})
+            conn.commit()
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        return self._get_metadata(key)
+        """Synchronous implementation of get_metadata."""
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = :key"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, {"key": key})
+                row = cursor.fetchone()
+                return str(row[0]) if row is not None else None
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        self._set_metadata(key, value)
+        """Synchronous implementation of set_metadata."""
+        sql = f"""
+        MERGE INTO {self._metadata_table} target
+        USING (SELECT :key AS key, :value AS value FROM DUAL) source
+        ON (target.key = source.key)
+        WHEN MATCHED THEN
+            UPDATE SET target.value = source.value
+        WHEN NOT MATCHED THEN
+            INSERT (key, value)
+            VALUES (source.key, source.value)
+        """
+
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"key": key, "value": value})
+            conn.commit()
 
     def _sessions_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
@@ -1814,565 +2299,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             """,
         ]
 
-    def _create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist.
-
-        Notes:
-            Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
-        """
-        storage_type = self._detect_json_storage_type()
-        logger.info("Creating ADK tables with storage type: %s", storage_type)
-
-        with self._config.provide_session() as driver:
-            sessions_sql = SQL(self._sessions_table_ddl_for_type(storage_type))
-            driver.execute_script(sessions_sql)
-
-            events_sql = SQL(self._events_table_ddl_for_type(storage_type))
-            driver.execute_script(events_sql)
-            driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
-            driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
-            driver.execute_script(SQL(self._metadata_table_ddl()))
-            driver.execute_script(SQL(self._metadata_seed_sql()))
-            driver.commit()
-
-    def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            app_name: Application name.
-            user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner_id_column (if configured).
-
-        Returns:
-            Created session record.
-
-        Notes:
-            Uses SYSTIMESTAMP for create_time and update_time.
-            State is serialized using version-appropriate format.
-            owner_id is ignored if owner_id_column not configured.
-        """
-        state_data = self._serialize_state(state)
-
-        if self._owner_id_column_name:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time, {self._owner_id_column_name})
-            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP, :owner_id)
-            """
-            params = {
-                "id": session_id,
-                "app_name": app_name,
-                "user_id": user_id,
-                "state": state_data,
-                "owner_id": owner_id,
-            }
-        else:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (:id, :app_name, :user_id, :state, SYSTIMESTAMP, SYSTIMESTAMP)
-            """
-            params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, params)
-            conn.commit()
-
-        result = self._get_session(app_name, user_id, session_id)
-        if result is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return result
-
-    def _get_session(
-        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        """Get session by ID.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier.
-            session_id: Session identifier.
-            renew_for: If positive, touch update_time while reading.
-
-        Returns:
-            Session record or None if not found.
-
-        Notes:
-            Oracle returns datetime objects for TIMESTAMP columns.
-            State is deserialized using version-appropriate format.
-        """
-
-        sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
-        """
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-                    cursor.execute(
-                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
-                        {"app_name": app_name, "user_id": user_id, "id": session_id},
-                    )
-                    conn.commit()
-
-                cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-                row = cursor.fetchone()
-
-                if row is None:
-                    return None
-
-                session_id_val, app_name, user_id, state_data, create_time, update_time = row
-
-                state = self._deserialize_state(state_data)
-
-                return SessionRecord(
-                    id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
-                    state=state,
-                    create_time=create_time,
-                    update_time=update_time,
-                )
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return None
-            raise
-
-    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier.
-            session_id: Session identifier.
-            state: New state dictionary (replaces existing state).
-
-        Notes:
-            This replaces the entire state dictionary.
-            Updates update_time to current timestamp.
-            State is serialized using version-appropriate format.
-        """
-        state_data = self._serialize_state(state)
-
-        sql = f"""
-        UPDATE {self._session_table}
-        SET state = :state, update_time = SYSTIMESTAMP
-        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
-            conn.commit()
-
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        """List sessions for an app, optionally filtered by user.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier. If None, lists all sessions for the app.
-
-        Returns:
-            List of session records ordered by update_time DESC.
-
-        Notes:
-            Uses composite index on (app_name, user_id) when user_id is provided.
-            State is deserialized using version-appropriate format.
-        """
-
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = :app_name
-            ORDER BY update_time DESC
-            """
-            params = {"app_name": app_name}
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = :app_name AND user_id = :user_id
-            ORDER BY update_time DESC
-            """
-            params = {"app_name": app_name, "user_id": user_id}
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, params)
-                rows = cursor.fetchall()
-
-                results = []
-                for row in rows:
-                    state = self._deserialize_state(row[3])
-
-                    results.append(
-                        SessionRecord(
-                            id=row[0],
-                            app_name=row[1],
-                            user_id=row[2],
-                            state=state,
-                            create_time=row[4],
-                            update_time=row[5],
-                        )
-                    )
-                return results
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return []
-            raise
-
-    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier.
-            session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
-        """
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-            conn.commit()
-
-    def _append_event(self, event_record: EventRecord) -> None:
-        """Synchronous implementation of append_event."""
-        sql = f"""
-        INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
-        )
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                sql,
-                {
-                    "id": event_record["id"],
-                    "session_id": event_record["session_id"],
-                    "invocation_id": event_record["invocation_id"],
-                    "timestamp": event_record["timestamp"],
-                    "event_data": self._serialize_event_data(event_record["event_data"]),
-                },
-            )
-            conn.commit()
-
-    def _append_event_and_update_state(
-        self,
-        event_record: EventRecord,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
-        """Atomically create an event and update session + scoped state."""
-        insert_sql = f"""
-        INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
-        )
-        """
-
-        state_data = self._serialize_state(state)
-        update_sql = f"""
-        UPDATE {self._session_table}
-        SET state = :state, update_time = SYSTIMESTAMP
-        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
-        """
-
-        select_sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
-        """
-
-        app_upsert_sql = f"""
-        MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
-        ON (target.app_name = source.app_name)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, state, update_time)
-            VALUES (source.app_name, source.state, SYSTIMESTAMP)
-        """
-
-        user_upsert_sql = f"""
-        MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
-        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
-                )
-                cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-                row = cursor.fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                cursor.execute(
-                    insert_sql,
-                    {
-                        "id": event_record["id"],
-                        "session_id": event_record["session_id"],
-                        "invocation_id": event_record["invocation_id"],
-                        "timestamp": event_record["timestamp"],
-                        "event_data": self._serialize_event_data(event_record["event_data"]),
-                    },
-                )
-                if app_state is not None:
-                    cursor.execute(app_upsert_sql, {"app_name": app_name, "state": self._serialize_state(app_state)})
-                if user_state is not None:
-                    cursor.execute(
-                        user_upsert_sql,
-                        {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)},
-                    )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-
-        session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
-        return SessionRecord(
-            id=session_id_val,
-            app_name=row_app_name,
-            user_id=row_user_id,
-            state=self._deserialize_state(state_data_row),
-            create_time=create_time,
-            update_time=update_time,
-        )
-
-    def _get_events(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[EventRecord]":
-        """List events for a session ordered by timestamp.
-
-        Args:
-            app_name: Application name.
-            user_id: User identifier.
-            session_id: Session identifier.
-            after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
-
-        Returns:
-            List of event records ordered by timestamp ASC.
-        """
-
-        if limit == 0:
-            return []
-
-        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "e.session_id = :session_id"]
-        params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
-
-        if after_timestamp is not None:
-            where_clauses.append("e.timestamp > :after_timestamp")
-            params["after_timestamp"] = after_timestamp
-
-        where_clause = " AND ".join(where_clauses)
-        limit_clause = f" FETCH FIRST {limit} ROWS ONLY" if limit is not None else ""
-        sql = f"""
-        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
-        FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
-        WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
-        """
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, params)
-                rows = cursor.fetchall()
-
-                return [
-                    EventRecord(
-                        id=row[0],
-                        session_id=row[1],
-                        invocation_id=_oracle_text_value(row[2]),
-                        timestamp=row[3],
-                        event_data=self._deserialize_json_field(row[4]) or {},
-                        app_name=row[5],
-                        user_id=row[6],
-                    )
-                    for row in rows
-                ]
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return []
-            raise
-
-    def _delete_expired_events(self, before: "datetime") -> int:
-        sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, {"before": before})
-                conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return 0
-            raise
-
-    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
-        sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, {"updated_before": updated_before})
-                conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return 0
-            raise
-
-    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        """Synchronous implementation of get_app_state."""
-        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, {"app_name": app_name})
-                row = cursor.fetchone()
-                return self._deserialize_state(row[0]) if row is not None else None
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return None
-            raise
-
-    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        """Synchronous implementation of get_user_state."""
-        sql = f"""
-        SELECT state
-        FROM {self._user_state_table}
-        WHERE app_name = :app_name AND user_id = :user_id
-        """
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
-                row = cursor.fetchone()
-                return self._deserialize_state(row[0]) if row is not None else None
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return None
-            raise
-
-    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        """Synchronous implementation of upsert_app_state."""
-        sql = f"""
-        MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
-        ON (target.app_name = source.app_name)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, state, update_time)
-            VALUES (source.app_name, source.state, SYSTIMESTAMP)
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"app_name": app_name, "state": self._serialize_state(state)})
-            conn.commit()
-
-    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        """Synchronous implementation of upsert_user_state."""
-        sql = f"""
-        MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
-        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(state)})
-            conn.commit()
-
-    def _get_metadata(self, key: str) -> "str | None":
-        """Synchronous implementation of get_metadata."""
-        sql = f"SELECT value FROM {self._metadata_table} WHERE key = :key"
-
-        try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, {"key": key})
-                row = cursor.fetchone()
-                return str(row[0]) if row is not None else None
-        except OracleDatabaseError as e:
-            error_obj = e.args[0] if e.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return None
-            raise
-
-    def _set_metadata(self, key: str, value: str) -> None:
-        """Synchronous implementation of set_metadata."""
-        sql = f"""
-        MERGE INTO {self._metadata_table} target
-        USING (SELECT :key AS key, :value AS value FROM DUAL) source
-        ON (target.key = source.key)
-        WHEN MATCHED THEN
-            UPDATE SET target.value = source.value
-        WHEN NOT MATCHED THEN
-            INSERT (key, value)
-            VALUES (source.key, source.value)
-        """
-
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"key": key, "value": value})
-            conn.commit()
-
 
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     """Oracle ADK memory store using async oracledb driver."""
@@ -2733,25 +2659,100 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
+        if not self._enabled:
+            return
+
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
-        return self._insert_memory_entries(entries, owner_id)
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
+        owner_param = ", :owner_id" if self._owner_id_column_name else ""
+        sql = f"""
+        INSERT INTO {self._memory_table} (
+            id, session_id, app_name, user_id, event_id, author{owner_column},
+            timestamp, content_json, content_text, metadata_json, inserted_at
+        ) VALUES (
+            :id, :session_id, :app_name, :user_id, :event_id, :author{owner_param},
+            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
+        )
+        """
+
+        inserted_count = 0
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            for entry in entries:
+                content_json = self._serialize_json_field(entry["content_json"])
+                metadata_json = self._serialize_json_field(entry["metadata_json"])
+                params = {
+                    "id": entry["id"],
+                    "session_id": entry["session_id"],
+                    "app_name": entry["app_name"],
+                    "user_id": entry["user_id"],
+                    "event_id": entry["event_id"],
+                    "author": entry["author"],
+                    "timestamp": entry["timestamp"],
+                    "content_json": content_json,
+                    "content_text": entry["content_text"],
+                    "metadata_json": metadata_json,
+                    "inserted_at": entry["inserted_at"],
+                }
+                if self._owner_id_column_name:
+                    params["owner_id"] = str(owner_id) if owner_id is not None else None
+                if self._execute_insert_entry(cursor, sql, params):
+                    inserted_count += 1
+            conn.commit()
+
+        return inserted_count
 
     def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        effective_limit = limit if limit is not None else self._max_results
+
+        try:
+            if self._use_fts:
+                return self._search_entries_fts(query, app_name, user_id, effective_limit)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit)
+        except OracleDatabaseError as exc:
+            error_obj = exc.args[0] if exc.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return []
+            raise
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
+        sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"session_id": session_id})
+            conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
+        sql = f"""
+        DELETE FROM {self._memory_table}
+        WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, {"days": days})
+            conn.commit()
+            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def _detect_json_storage_type(self) -> "JSONStorageType":
         if self._json_storage_type is not None:
@@ -2913,13 +2914,6 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             """,
         ]
 
-    def _create_tables(self) -> None:
-        if not self._enabled:
-            return
-
-        with self._config.provide_session() as driver:
-            driver.execute_script(self._memory_table_ddl())
-
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
         try:
@@ -2930,72 +2924,6 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 return False
             raise
         return True
-
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        if not entries:
-            return 0
-
-        owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
-        owner_param = ", :owner_id" if self._owner_id_column_name else ""
-        sql = f"""
-        INSERT INTO {self._memory_table} (
-            id, session_id, app_name, user_id, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
-        ) VALUES (
-            :id, :session_id, :app_name, :user_id, :event_id, :author{owner_param},
-            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
-        )
-        """
-
-        inserted_count = 0
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            for entry in entries:
-                content_json = self._serialize_json_field(entry["content_json"])
-                metadata_json = self._serialize_json_field(entry["metadata_json"])
-                params = {
-                    "id": entry["id"],
-                    "session_id": entry["session_id"],
-                    "app_name": entry["app_name"],
-                    "user_id": entry["user_id"],
-                    "event_id": entry["event_id"],
-                    "author": entry["author"],
-                    "timestamp": entry["timestamp"],
-                    "content_json": content_json,
-                    "content_text": entry["content_text"],
-                    "metadata_json": metadata_json,
-                    "inserted_at": entry["inserted_at"],
-                }
-                if self._owner_id_column_name:
-                    params["owner_id"] = str(owner_id) if owner_id is not None else None
-                if self._execute_insert_entry(cursor, sql, params):
-                    inserted_count += 1
-            conn.commit()
-
-        return inserted_count
-
-    def _search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        effective_limit = limit if limit is not None else self._max_results
-
-        try:
-            if self._use_fts:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit)
-            return self._search_entries_simple(query, app_name, user_id, effective_limit)
-        except OracleDatabaseError as exc:
-            error_obj = exc.args[0] if exc.args else None
-            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
-                return []
-            raise
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = f"""
@@ -3042,25 +2970,6 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             cursor.execute(sql, params)
             rows = cursor.fetchall()
         return self._rows_to_records(rows)
-
-    def _delete_entries_by_session(self, session_id: str) -> int:
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"session_id": session_id})
-            conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-
-    def _delete_entries_older_than(self, days: int) -> int:
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
-        """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, {"days": days})
-            conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
         records: list[MemoryRecord] = []

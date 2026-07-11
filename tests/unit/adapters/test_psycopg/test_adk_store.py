@@ -164,7 +164,7 @@ def test_sync_append_event_inserts_without_session_update() -> None:
         "event_data": {"id": "event-1"},
     }
 
-    store._append_event(event_record)  # type: ignore[arg-type]
+    store.append_event(event_record)  # type: ignore[arg-type]
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
@@ -190,7 +190,7 @@ def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
     ]
     store, cursor, _ = _build_store(rows)
 
-    result = store._get_events("app", "user", "session-1", after_timestamp=base_time, limit=1)
+    result = store.get_events("app", "user", "session-1", after_timestamp=base_time, limit=1)
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
@@ -202,7 +202,7 @@ def test_sync_get_events_limit_zero_returns_empty_without_query() -> None:
     """get_events(limit=0) must return no events without querying."""
     store, cursor, _ = _build_store()
 
-    result = store._get_events("app", "user", "session-1", limit=0)
+    result = store.get_events("app", "user", "session-1", limit=0)
 
     assert result == []
     assert cursor.execute_calls == []
@@ -232,7 +232,7 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
         "event_data": {"id": "event-1"},
     }
 
-    result = store._append_event_and_update_state(
+    result = store.append_event_and_update_state(
         event_record,  # type: ignore[arg-type]
         "app",
         "user",

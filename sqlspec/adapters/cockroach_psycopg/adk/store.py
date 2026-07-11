@@ -558,35 +558,142 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._sessions_table_ddl())
+            driver.execute_script(self._events_table_ddl())
+            driver.execute_script(self._app_states_table_ddl())
+            driver.execute_script(self._user_states_table_ddl())
+            driver.execute_script(self._metadata_table_ddl())
+            driver.execute_script(self._metadata_seed_sql())
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        state_json = Jsonb(state)
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """
+            params = (session_id, app_name, user_id, owner_id, state_json)
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """
+            params = (session_id, app_name, user_id, state_json)
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.encode(), params)
+            conn.commit()
+
+        result = self.get_session(app_name, user_id, session_id)
+        if result is None:
+            msg = "Session creation failed"
+            raise RuntimeError(msg)
+        return result
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            sql = f"""
+            UPDATE {self._session_table}
+            SET update_time = CURRENT_TIMESTAMP
+            WHERE app_name = %s AND user_id = %s AND id = %s
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = %s AND user_id = %s AND id = %s
+            """
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), (app_name, user_id, session_id))
+                row = cur.fetchone()
+
+            if row is None:
+                return None
+
+            return SessionRecord(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=row["state"],
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
+        except errors.UndefinedTable:
+            return None
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        self._update_session_state(app_name, user_id, session_id, state)
+        sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE app_name = %s AND user_id = %s AND id = %s
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+            conn.commit()
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
+        if user_id is None:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = %s
+            ORDER BY update_time DESC
+            """
+            params: tuple[str, ...] = (app_name,)
+        else:
+            sql = f"""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {self._session_table}
+            WHERE app_name = %s AND user_id = %s
+            ORDER BY update_time DESC
+            """
+            params = (app_name, user_id)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), params)
+                rows = cur.fetchall()
+
+            return [
+                SessionRecord(
+                    id=row["id"],
+                    app_name=row["app_name"],
+                    user_id=row["user_id"],
+                    state=row["state"],
+                    create_time=row["create_time"],
+                    update_time=row["update_time"],
+                )
+                for row in rows
+            ]
+        except errors.UndefinedTable:
+            return []
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        self._delete_session(app_name, user_id, session_id)
+        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.encode(), (app_name, user_id, session_id))
+            conn.commit()
 
     def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
-        self._append_event(event_record)
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
 
     def append_event_and_update_state(
         self,
@@ -600,8 +707,60 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
-        return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        insert_sql = f"""
+        INSERT INTO {self._events_table} (
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s)
+        """
+        update_sql = f"""
+        UPDATE {self._session_table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE app_name = %s AND user_id = %s AND id = %s
+        RETURNING id, app_name, user_id, state, create_time, update_time
+        """
+        app_upsert_sql = f"""
+        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        """
+        user_upsert_sql = f"""
+        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        """
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            try:
+                cur.execute(
+                    insert_sql.encode(),
+                    (
+                        event_record["id"],
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["timestamp"],
+                        jsonb_value,
+                    ),
+                )
+                cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+                row = cur.fetchone()
+                if row is None:
+                    _raise_missing_session(session_id)
+                if app_state is not None:
+                    cur.execute(app_upsert_sql.encode(), (app_name, Jsonb(app_state)))
+                if user_state is not None:
+                    cur.execute(user_upsert_sql.encode(), (app_name, user_id, Jsonb(user_state)))
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
+
+        return SessionRecord(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
         )
 
     def get_events(
@@ -613,39 +772,141 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        if limit == 0:
+            return []
+
+        where_clauses = ["s.app_name = %s", "s.user_id = %s", "e.session_id = %s"]
+        params: list[Any] = [app_name, user_id, session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append("e.timestamp > %s")
+            params.append(after_timestamp)
+
+        where_clause = " AND ".join(where_clauses)
+        limit_clause = " LIMIT %s" if limit is not None else ""
+        if limit is not None:
+            params.append(limit)
+
+        sql = f"""
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id
+        WHERE {where_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
+        """
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), tuple(params))
+                rows = cur.fetchall()
+
+            return [
+                EventRecord(
+                    id=row["id"],
+                    session_id=row["session_id"],
+                    invocation_id=row["invocation_id"],
+                    timestamp=row["timestamp"],
+                    event_data=row["event_data"],
+                    app_name=row["app_name"],
+                    user_id=row["user_id"],
+                )
+                for row in rows
+            ]
+        except errors.UndefinedTable:
+            return []
 
     def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
-        return self._delete_expired_events(before)
+        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), (before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
 
     def delete_idle_sessions(self, updated_before: "datetime") -> int:
         """Delete sessions whose update_time predates the given threshold."""
-        return self._delete_idle_sessions(updated_before)
+        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), (updated_before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        return self._get_app_state(app_name)
+        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), (app_name,))
+                row = cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return self._get_user_state(app_name, user_id)
+        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), (app_name, user_id))
+                row = cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        self._upsert_app_state(app_name, state)
+        sql = f"""
+        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.encode(), (app_name, Jsonb(state)))
+            conn.commit()
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        self._upsert_user_state(app_name, user_id, state)
+        sql = f"""
+        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
+            conn.commit()
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        return self._get_metadata(key)
+        sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), (key,))
+                row = cur.fetchone()
+                return row["value"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        self._set_metadata(key, value)
+        sql = f"""
+        UPSERT INTO {self._metadata_table} (key, value)
+        VALUES (%s, %s)
+        """
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.encode(), (key, value))
+            conn.commit()
 
     def _sessions_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -762,134 +1023,6 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
 
-    def _create_tables(self) -> None:
-        with self._config.provide_session() as driver:
-            driver.execute_script(self._sessions_table_ddl())
-            driver.execute_script(self._events_table_ddl())
-            driver.execute_script(self._app_states_table_ddl())
-            driver.execute_script(self._user_states_table_ddl())
-            driver.execute_script(self._metadata_table_ddl())
-            driver.execute_script(self._metadata_seed_sql())
-
-    def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        state_json = Jsonb(state)
-        params: tuple[Any, ...]
-        if self._owner_id_column_name:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            params = (session_id, app_name, user_id, owner_id, state_json)
-        else:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            params = (session_id, app_name, user_id, state_json)
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), params)
-            conn.commit()
-
-        result = self._get_session(app_name, user_id, session_id)
-        if result is None:
-            msg = "Session creation failed"
-            raise RuntimeError(msg)
-        return result
-
-    def _get_session(
-        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-            sql = f"""
-            UPDATE {self._session_table}
-            SET update_time = CURRENT_TIMESTAMP
-            WHERE app_name = %s AND user_id = %s AND id = %s
-            RETURNING id, app_name, user_id, state, create_time, update_time
-            """
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = %s AND user_id = %s AND id = %s
-            """
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (app_name, user_id, session_id))
-                row = cur.fetchone()
-
-            if row is None:
-                return None
-
-            return SessionRecord(
-                id=row["id"],
-                app_name=row["app_name"],
-                user_id=row["user_id"],
-                state=row["state"],
-                create_time=row["create_time"],
-                update_time=row["update_time"],
-            )
-        except errors.UndefinedTable:
-            return None
-
-    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        sql = f"""
-        UPDATE {self._session_table}
-        SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE app_name = %s AND user_id = %s AND id = %s
-        """
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
-            conn.commit()
-
-    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, user_id, session_id))
-            conn.commit()
-
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = %s
-            ORDER BY update_time DESC
-            """
-            params: tuple[str, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = %s AND user_id = %s
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), params)
-                rows = cur.fetchall()
-
-            return [
-                SessionRecord(
-                    id=row["id"],
-                    app_name=row["app_name"],
-                    user_id=row["user_id"],
-                    state=row["state"],
-                    create_time=row["create_time"],
-                    update_time=row["update_time"],
-                )
-                for row in rows
-            ]
-        except errors.UndefinedTable:
-            return []
-
     def _insert_event(self, event_record: EventRecord) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
@@ -911,213 +1044,6 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                 ),
             )
             conn.commit()
-
-    def _append_event_and_update_state(
-        self,
-        event_record: EventRecord,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
-        insert_sql = f"""
-        INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
-        """
-        update_sql = f"""
-        UPDATE {self._session_table}
-        SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE app_name = %s AND user_id = %s AND id = %s
-        RETURNING id, app_name, user_id, state, create_time, update_time
-        """
-        app_upsert_sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """
-        user_upsert_sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """
-        event_data_value = event_record["event_data"]
-        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            try:
-                cur.execute(
-                    insert_sql.encode(),
-                    (
-                        event_record["id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        jsonb_value,
-                    ),
-                )
-                cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
-                row = cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
-                if app_state is not None:
-                    cur.execute(app_upsert_sql.encode(), (app_name, Jsonb(app_state)))
-                if user_state is not None:
-                    cur.execute(user_upsert_sql.encode(), (app_name, user_id, Jsonb(user_state)))
-            except Exception:
-                conn.rollback()
-                raise
-            conn.commit()
-
-        return SessionRecord(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
-
-    def _get_events(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[EventRecord]":
-        if limit == 0:
-            return []
-
-        where_clauses = ["s.app_name = %s", "s.user_id = %s", "e.session_id = %s"]
-        params: list[Any] = [app_name, user_id, session_id]
-
-        if after_timestamp is not None:
-            where_clauses.append("e.timestamp > %s")
-            params.append(after_timestamp)
-
-        where_clause = " AND ".join(where_clauses)
-        limit_clause = " LIMIT %s" if limit is not None else ""
-        if limit is not None:
-            params.append(limit)
-
-        sql = f"""
-        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
-        FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
-        WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
-        """
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), tuple(params))
-                rows = cur.fetchall()
-
-            return [
-                EventRecord(
-                    id=row["id"],
-                    session_id=row["session_id"],
-                    invocation_id=row["invocation_id"],
-                    timestamp=row["timestamp"],
-                    event_data=row["event_data"],
-                    app_name=row["app_name"],
-                    user_id=row["user_id"],
-                )
-                for row in rows
-            ]
-        except errors.UndefinedTable:
-            return []
-
-    def _delete_expired_events(self, before: "datetime") -> int:
-        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (before,))
-                conn.commit()
-                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-        except errors.UndefinedTable:
-            return 0
-
-    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
-        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (updated_before,))
-                conn.commit()
-                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-        except errors.UndefinedTable:
-            return 0
-
-    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (app_name,))
-                row = cur.fetchone()
-                return row["state"] if row is not None else None
-        except errors.UndefinedTable:
-            return None
-
-    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (app_name, user_id))
-                row = cur.fetchone()
-                return row["state"] if row is not None else None
-        except errors.UndefinedTable:
-            return None
-
-    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, Jsonb(state)))
-            conn.commit()
-
-    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
-            conn.commit()
-
-    def _get_metadata(self, key: str) -> "str | None":
-        sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (key,))
-                row = cur.fetchone()
-                return row["value"] if row is not None else None
-        except errors.UndefinedTable:
-            return None
-
-    def _set_metadata(self, key: str, value: str) -> None:
-        sql = f"""
-        UPSERT INTO {self._metadata_table} (key, value)
-        VALUES (%s, %s)
-        """
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (key, value))
-            conn.commit()
-
-    def _append_event(self, event_record: EventRecord) -> None:
-        """Synchronous implementation of append_event."""
-        self._insert_event(event_record)
 
 
 class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsycopgAsyncConfig"]):
@@ -1305,25 +1231,124 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
+        if not self._enabled:
+            return
+
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
-        return self._insert_memory_entries(entries, owner_id)
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not entries:
+            return 0
+
+        inserted_count = 0
+        if self._owner_id_column_name:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (
+                id, session_id, app_name, user_id, event_id, author,
+                {owner_id_col}, timestamp, content_json, content_text,
+                metadata_json, inserted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """).format(
+                table=pg_sql.Identifier(self._memory_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
+            )
+        else:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (
+                id, session_id, app_name, user_id, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (event_id) DO NOTHING
+            """).format(table=pg_sql.Identifier(self._memory_table))
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            for entry in entries:
+                if self._owner_id_column_name:
+                    cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
+                else:
+                    cur.execute(query, _build_insert_params(entry))
+                if cur.rowcount and cur.rowcount > 0:
+                    inserted_count += cur.rowcount
+        return inserted_count
 
     def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
         """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        if not query:
+            return []
+
+        effective_limit = limit if limit is not None else self._max_results
+
+        if self._use_fts:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE app_name = %s AND user_id = %s
+              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """
+        else:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE app_name = %s AND user_id = %s AND content_text ILIKE %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """
+
+        search_param = query if self._use_fts else f"%{query}%"
+        params = (app_name, user_id, search_param, effective_limit)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(sql.encode(), params)
+                rows = cur.fetchall()
+                columns = [col[0] for col in cur.description or []]
+        except errors.UndefinedTable:
+            return []
+
+        return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql.encode(), (session_id,))
+            conn.commit()
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
     def delete_entries_older_than(self, days: int) -> int:
         """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        sql = f"""
+        DELETE FROM {self._memory_table}
+        WHERE inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'
+        """
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql.encode())
+            conn.commit()
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
     def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -1372,122 +1397,6 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
-
-    def _create_tables(self) -> None:
-        if not self._enabled:
-            return
-
-        with self._config.provide_session() as driver:
-            driver.execute_script(self._memory_table_ddl())
-
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        if not entries:
-            return 0
-
-        inserted_count = 0
-        if self._owner_id_column_name:
-            query = pg_sql.SQL("""
-            INSERT INTO {table} (
-                id, session_id, app_name, user_id, event_id, author,
-                {owner_id_col}, timestamp, content_json, content_text,
-                metadata_json, inserted_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            ON CONFLICT (event_id) DO NOTHING
-            """).format(
-                table=pg_sql.Identifier(self._memory_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
-            )
-        else:
-            query = pg_sql.SQL("""
-            INSERT INTO {table} (
-                id, session_id, app_name, user_id, event_id, author,
-                timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            ON CONFLICT (event_id) DO NOTHING
-            """).format(table=pg_sql.Identifier(self._memory_table))
-
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            for entry in entries:
-                if self._owner_id_column_name:
-                    cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
-                else:
-                    cur.execute(query, _build_insert_params(entry))
-                if cur.rowcount and cur.rowcount > 0:
-                    inserted_count += cur.rowcount
-        return inserted_count
-
-    def _search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        if not query:
-            return []
-
-        effective_limit = limit if limit is not None else self._max_results
-
-        if self._use_fts:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
-            WHERE app_name = %s AND user_id = %s
-              AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
-            ORDER BY timestamp DESC
-            LIMIT %s
-            """
-        else:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
-            WHERE app_name = %s AND user_id = %s AND content_text ILIKE %s
-            ORDER BY timestamp DESC
-            LIMIT %s
-            """
-
-        search_param = query if self._use_fts else f"%{query}%"
-        params = (app_name, user_id, search_param, effective_limit)
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(sql.encode(), params)
-                rows = cur.fetchall()
-                columns = [col[0] for col in cur.description or []]
-        except errors.UndefinedTable:
-            return []
-
-        return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
-
-    def _delete_entries_by_session(self, session_id: str) -> int:
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), (session_id,))
-            conn.commit()
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-
-    def _delete_entries_older_than(self, days: int) -> int:
-        if not self._enabled:
-            msg = "Memory store is disabled"
-            raise RuntimeError(msg)
-
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'
-        """
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode())
-            conn.commit()
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":

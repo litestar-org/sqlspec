@@ -566,35 +566,144 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._sessions_table_ddl())
+            driver.execute_script(self._events_table_ddl())
+            driver.execute_script(self._app_states_table_ddl())
+            driver.execute_script(self._user_states_table_ddl())
+            driver.execute_script(self._metadata_table_ddl())
+            driver.execute_script(self._metadata_seed_sql())
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> SessionRecord:
         """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        params: tuple[Any, ...]
+        if self._owner_id_column_name:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """).format(
+                table=pg_sql.Identifier(self._session_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
+            )
+            params = (session_id, app_name, user_id, owner_id, Jsonb(state))
+        else:
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params = (session_id, app_name, user_id, Jsonb(state))
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, params)
+
+        result = self.get_session(app_name, user_id, session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "SessionRecord | None":
         """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            query = pg_sql.SQL("""
+            UPDATE {table}
+            SET update_time = CURRENT_TIMESTAMP
+            WHERE app_name = %s AND user_id = %s AND id = %s
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id, session_id)
+        else:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s AND user_id = %s AND id = %s
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id, session_id)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+
+                if row is None:
+                    return None
+
+                return SessionRecord(
+                    id=row["id"],
+                    app_name=row["app_name"],
+                    user_id=row["user_id"],
+                    state=row["state"],
+                    create_time=row["create_time"],
+                    update_time=row["update_time"],
+                )
+        except errors.UndefinedTable:
+            return None
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        self._update_session_state(app_name, user_id, session_id, state)
+        query = pg_sql.SQL("""
+        UPDATE {table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE app_name = %s AND user_id = %s AND id = %s
+        """).format(table=pg_sql.Identifier(self._session_table))
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
         """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
+        if user_id is None:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s
+            ORDER BY update_time DESC
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params: tuple[str, ...] = (app_name,)
+        else:
+            query = pg_sql.SQL("""
+            SELECT id, app_name, user_id, state, create_time, update_time
+            FROM {table}
+            WHERE app_name = %s AND user_id = %s
+            ORDER BY update_time DESC
+            """).format(table=pg_sql.Identifier(self._session_table))
+            params = (app_name, user_id)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, params)
+                rows = cur.fetchall()
+
+                return [
+                    SessionRecord(
+                        id=row["id"],
+                        app_name=row["app_name"],
+                        user_id=row["user_id"],
+                        state=row["state"],
+                        create_time=row["create_time"],
+                        update_time=row["update_time"],
+                    )
+                    for row in rows
+                ]
+        except errors.UndefinedTable:
+            return []
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        self._delete_session(app_name, user_id, session_id)
+        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, (app_name, user_id, session_id))
 
     def append_event(self, event_record: EventRecord) -> None:
         """Append an event to a session."""
-        self._append_event(event_record)
+        """Synchronous implementation of append_event."""
+        self._insert_event(event_record)
 
     def append_event_and_update_state(
         self,
@@ -608,8 +717,70 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> SessionRecord:
         """Atomically append an event and update session + scoped state."""
-        return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
+            id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s)
+        """).format(table=pg_sql.Identifier(self._events_table))
+
+        update_query = pg_sql.SQL("""
+        UPDATE {table}
+        SET state = %s, update_time = CURRENT_TIMESTAMP
+        WHERE app_name = %s AND user_id = %s AND id = %s
+        RETURNING id, app_name, user_id, state, create_time, update_time
+        """).format(table=pg_sql.Identifier(self._session_table))
+
+        app_upsert_query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._app_state_table))
+
+        user_upsert_query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name, user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._user_state_table))
+
+        event_data_value = event_record["event_data"]
+        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            try:
+                cur.execute(
+                    insert_query,
+                    (
+                        event_record["id"],
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["timestamp"],
+                        jsonb_value,
+                    ),
+                )
+                cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                row = cur.fetchone()
+                if row is None:
+                    _raise_missing_session(session_id)
+                if app_state is not None:
+                    cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                if user_state is not None:
+                    cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
+
+        return SessionRecord(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
         )
 
     def get_events(
@@ -621,39 +792,164 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         limit: "int | None" = None,
     ) -> "list[EventRecord]":
         """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        if limit == 0:
+            return []
+
+        where_clauses = [pg_sql.SQL("s.app_name = %s"), pg_sql.SQL("s.user_id = %s"), pg_sql.SQL("e.session_id = %s")]
+        params: list[Any] = [app_name, user_id, session_id]
+
+        if after_timestamp is not None:
+            where_clauses.append(pg_sql.SQL("e.timestamp > %s"))
+            params.append(after_timestamp)
+
+        where_clause = pg_sql.SQL(" AND ").join(where_clauses)
+        if limit is not None:
+            params.append(limit)
+
+        query = pg_sql.SQL(
+            """
+        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        FROM {events_table} e
+        JOIN {session_table} s ON e.session_id = s.id
+        WHERE {where_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
+        """
+        ).format(
+            events_table=pg_sql.Identifier(self._events_table),
+            session_table=pg_sql.Identifier(self._session_table),
+            where_clause=where_clause,
+            limit_clause=pg_sql.SQL(" LIMIT %s" if limit is not None else ""),
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall()
+
+                return [
+                    EventRecord(
+                        id=row["id"],
+                        session_id=row["session_id"],
+                        invocation_id=row["invocation_id"],
+                        timestamp=row["timestamp"],
+                        event_data=row["event_data"],
+                        app_name=row["app_name"],
+                        user_id=row["user_id"],
+                    )
+                    for row in rows
+                ]
+        except errors.UndefinedTable:
+            return []
 
     def delete_expired_events(self, before: "datetime") -> int:
         """Delete events older than the given timestamp."""
-        return self._delete_expired_events(before)
+        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+            table=pg_sql.Identifier(self._events_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, (before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
 
     def delete_idle_sessions(self, updated_before: "datetime") -> int:
         """Delete sessions whose update_time predates the given threshold."""
-        return self._delete_idle_sessions(updated_before)
+        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+            table=pg_sql.Identifier(self._session_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, (updated_before,))
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        return self._get_app_state(app_name)
+        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s").format(
+            table=pg_sql.Identifier(self._app_state_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, (app_name,))
+                row = cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return self._get_user_state(app_name, user_id)
+        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s AND user_id = %s").format(
+            table=pg_sql.Identifier(self._user_state_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, (app_name, user_id))
+                row = cur.fetchone()
+                return row["state"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        self._upsert_app_state(app_name, state)
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, state, update_time)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._app_state_table))
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, (app_name, Jsonb(state)))
+            conn.commit()
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        self._upsert_user_state(app_name, user_id, state)
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (app_name, user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            update_time = CURRENT_TIMESTAMP
+        """).format(table=pg_sql.Identifier(self._user_state_table))
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, (app_name, user_id, Jsonb(state)))
+            conn.commit()
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        return self._get_metadata(key)
+        query = pg_sql.SQL("SELECT value FROM {table} WHERE key = %s").format(
+            table=pg_sql.Identifier(self._metadata_table)
+        )
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, (key,))
+                row = cur.fetchone()
+                return row["value"] if row is not None else None
+        except errors.UndefinedTable:
+            return None
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        self._set_metadata(key, value)
+        query = pg_sql.SQL("""
+        INSERT INTO {table} (key, value)
+        VALUES (%s, %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """).format(table=pg_sql.Identifier(self._metadata_table))
+
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, (key, value))
+            conn.commit()
 
     def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
@@ -755,136 +1051,6 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             f"DROP TABLE IF EXISTS {self._session_table}",
         ]
 
-    def _create_tables(self) -> None:
-        with self._config.provide_session() as driver:
-            driver.execute_script(self._sessions_table_ddl())
-            driver.execute_script(self._events_table_ddl())
-            driver.execute_script(self._app_states_table_ddl())
-            driver.execute_script(self._user_states_table_ddl())
-            driver.execute_script(self._metadata_table_ddl())
-            driver.execute_script(self._metadata_seed_sql())
-
-    def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
-        params: tuple[Any, ...]
-        if self._owner_id_column_name:
-            query = pg_sql.SQL("""
-            INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """).format(
-                table=pg_sql.Identifier(self._session_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
-            )
-            params = (session_id, app_name, user_id, owner_id, Jsonb(state))
-        else:
-            query = pg_sql.SQL("""
-            INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params = (session_id, app_name, user_id, Jsonb(state))
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, params)
-
-        result = self._get_session(app_name, user_id, session_id)
-        if result is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return result
-
-    def _get_session(
-        self, app_name: str, user_id: str, session_id: str, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-            query = pg_sql.SQL("""
-            UPDATE {table}
-            SET update_time = CURRENT_TIMESTAMP
-            WHERE app_name = %s AND user_id = %s AND id = %s
-            RETURNING id, app_name, user_id, state, create_time, update_time
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params = (app_name, user_id, session_id)
-        else:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s AND user_id = %s AND id = %s
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params = (app_name, user_id, session_id)
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, params)
-                row = cur.fetchone()
-
-                if row is None:
-                    return None
-
-                return SessionRecord(
-                    id=row["id"],
-                    app_name=row["app_name"],
-                    user_id=row["user_id"],
-                    state=row["state"],
-                    create_time=row["create_time"],
-                    update_time=row["update_time"],
-                )
-        except errors.UndefinedTable:
-            return None
-
-    def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        query = pg_sql.SQL("""
-        UPDATE {table}
-        SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE app_name = %s AND user_id = %s AND id = %s
-        """).format(table=pg_sql.Identifier(self._session_table))
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
-
-    def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (app_name, user_id, session_id))
-
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
-        if user_id is None:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s
-            ORDER BY update_time DESC
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params: tuple[str, ...] = (app_name,)
-        else:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s AND user_id = %s
-            ORDER BY update_time DESC
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params = (app_name, user_id)
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, params)
-                rows = cur.fetchall()
-
-                return [
-                    SessionRecord(
-                        id=row["id"],
-                        app_name=row["app_name"],
-                        user_id=row["user_id"],
-                        state=row["state"],
-                        create_time=row["create_time"],
-                        update_time=row["update_time"],
-                    )
-                    for row in rows
-                ]
-        except errors.UndefinedTable:
-            return []
-
     def _insert_event(self, event_record: EventRecord) -> None:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
@@ -907,246 +1073,6 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                 ),
             )
             conn.commit()
-
-    def _append_event_and_update_state(
-        self,
-        event_record: EventRecord,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
-        insert_query = pg_sql.SQL("""
-        INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
-        """).format(table=pg_sql.Identifier(self._events_table))
-
-        update_query = pg_sql.SQL("""
-        UPDATE {table}
-        SET state = %s, update_time = CURRENT_TIMESTAMP
-        WHERE app_name = %s AND user_id = %s AND id = %s
-        RETURNING id, app_name, user_id, state, create_time, update_time
-        """).format(table=pg_sql.Identifier(self._session_table))
-
-        app_upsert_query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=pg_sql.Identifier(self._app_state_table))
-
-        user_upsert_query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name, user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=pg_sql.Identifier(self._user_state_table))
-
-        event_data_value = event_record["event_data"]
-        jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            try:
-                cur.execute(
-                    insert_query,
-                    (
-                        event_record["id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        jsonb_value,
-                    ),
-                )
-                cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                row = cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
-                if app_state is not None:
-                    cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                if user_state is not None:
-                    cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-            except Exception:
-                conn.rollback()
-                raise
-            conn.commit()
-
-        return SessionRecord(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
-
-    def _get_events(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[EventRecord]":
-        if limit == 0:
-            return []
-
-        where_clauses = [pg_sql.SQL("s.app_name = %s"), pg_sql.SQL("s.user_id = %s"), pg_sql.SQL("e.session_id = %s")]
-        params: list[Any] = [app_name, user_id, session_id]
-
-        if after_timestamp is not None:
-            where_clauses.append(pg_sql.SQL("e.timestamp > %s"))
-            params.append(after_timestamp)
-
-        where_clause = pg_sql.SQL(" AND ").join(where_clauses)
-        if limit is not None:
-            params.append(limit)
-
-        query = pg_sql.SQL(
-            """
-        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
-        FROM {events_table} e
-        JOIN {session_table} s ON e.session_id = s.id
-        WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
-        """
-        ).format(
-            events_table=pg_sql.Identifier(self._events_table),
-            session_table=pg_sql.Identifier(self._session_table),
-            where_clause=where_clause,
-            limit_clause=pg_sql.SQL(" LIMIT %s" if limit is not None else ""),
-        )
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, tuple(params))
-                rows = cur.fetchall()
-
-                return [
-                    EventRecord(
-                        id=row["id"],
-                        session_id=row["session_id"],
-                        invocation_id=row["invocation_id"],
-                        timestamp=row["timestamp"],
-                        event_data=row["event_data"],
-                        app_name=row["app_name"],
-                        user_id=row["user_id"],
-                    )
-                    for row in rows
-                ]
-        except errors.UndefinedTable:
-            return []
-
-    def _delete_expired_events(self, before: "datetime") -> int:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
-            table=pg_sql.Identifier(self._events_table)
-        )
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (before,))
-                conn.commit()
-                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-        except errors.UndefinedTable:
-            return 0
-
-    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (updated_before,))
-                conn.commit()
-                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-        except errors.UndefinedTable:
-            return 0
-
-    def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s").format(
-            table=pg_sql.Identifier(self._app_state_table)
-        )
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (app_name,))
-                row = cur.fetchone()
-                return row["state"] if row is not None else None
-        except errors.UndefinedTable:
-            return None
-
-    def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s AND user_id = %s").format(
-            table=pg_sql.Identifier(self._user_state_table)
-        )
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (app_name, user_id))
-                row = cur.fetchone()
-                return row["state"] if row is not None else None
-        except errors.UndefinedTable:
-            return None
-
-    def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=pg_sql.Identifier(self._app_state_table))
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (app_name, Jsonb(state)))
-            conn.commit()
-
-    def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name, user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=pg_sql.Identifier(self._user_state_table))
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (app_name, user_id, Jsonb(state)))
-            conn.commit()
-
-    def _get_metadata(self, key: str) -> "str | None":
-        query = pg_sql.SQL("SELECT value FROM {table} WHERE key = %s").format(
-            table=pg_sql.Identifier(self._metadata_table)
-        )
-
-        try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (key,))
-                row = cur.fetchone()
-                return row["value"] if row is not None else None
-        except errors.UndefinedTable:
-            return None
-
-    def _set_metadata(self, key: str, value: str) -> None:
-        query = pg_sql.SQL("""
-        INSERT INTO {table} (key, value)
-        VALUES (%s, %s)
-        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-        """).format(table=pg_sql.Identifier(self._metadata_table))
-
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, (key, value))
-            conn.commit()
-
-    def _append_event(self, event_record: EventRecord) -> None:
-        """Synchronous implementation of append_event."""
-        self._insert_event(event_record)
 
 
 class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
@@ -1346,67 +1272,6 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
-        self._create_tables()
-
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
-        return self._insert_memory_entries(entries, owner_id)
-
-    def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
-
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
-
-    def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
-
-    def _memory_table_ddl(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
-
-    def _drop_memory_table_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements."""
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
-
-    def _create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
         if not self._enabled:
             return
@@ -1414,7 +1279,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
 
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1459,9 +1325,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         return inserted_count
 
-    def _search_entries(
+    def search_entries(
         self, query: str, app_name: str, user_id: str, limit: "int | None" = None
     ) -> "list[MemoryRecord]":
+        """Search memory entries by text query."""
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1478,6 +1345,71 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             return self._search_entries_simple(query, app_name, user_id, effective_limit)
         except errors.UndefinedTable:
             return []
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        """Delete all memory entries for a specific session."""
+        sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
+            table=pg_sql.Identifier(self._memory_table)
+        )
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (session_id,))
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def delete_entries_older_than(self, days: int) -> int:
+        """Delete memory entries older than specified days."""
+        """Delete memory entries older than specified days."""
+        sql = pg_sql.SQL(
+            """
+        DELETE FROM {table}
+        WHERE inserted_at < CURRENT_TIMESTAMP - {interval}::interval
+        """
+        ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
+
+        with self._config.provide_connection() as conn, conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def _memory_table_ddl(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL for memory entries."""
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _drop_memory_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements."""
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
     def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
         sql = pg_sql.SQL(
@@ -1518,29 +1450,6 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
-
-    def _delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        sql = pg_sql.SQL("DELETE FROM {table} WHERE session_id = %s").format(
-            table=pg_sql.Identifier(self._memory_table)
-        )
-
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql, (session_id,))
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-
-    def _delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days."""
-        sql = pg_sql.SQL(
-            """
-        DELETE FROM {table}
-        WHERE inserted_at < CURRENT_TIMESTAMP - {interval}::interval
-        """
-        ).format(table=pg_sql.Identifier(self._memory_table), interval=pg_sql.Literal(f"{days} days"))
-
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql)
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 def _build_insert_params(entry: "MemoryRecord") -> "tuple[object, ...]":
