@@ -2,7 +2,6 @@
 
 from collections.abc import Mapping
 from decimal import Decimal
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import oracledb
@@ -10,9 +9,10 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
 from sqlspec.adapters.oracledb.data_dictionary import (
-    OracledbAsyncDataDictionary,
-    OracledbSyncDataDictionary,
+    JSONStorageType,
     OracleVersionInfo,
+    _storage_type_from_version,
+    storage_type_from_version,
 )
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
@@ -43,9 +43,6 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.oracledb.adk.store")
 
 ORACLE_TABLE_NOT_FOUND_ERROR: Final = 942
-ORACLE_MIN_JSON_NATIVE_VERSION: Final = 21
-ORACLE_MIN_JSON_NATIVE_COMPATIBLE: Final = 20
-ORACLE_MIN_JSON_BLOB_VERSION: Final = 12
 ORACLE_DEFAULT_HASH_PARTITIONS: Final = 16
 ORACLE_MIN_HASH_PARTITIONS: Final = 2
 ORACLE_RANGE_INTERVALS: Final[dict[str, str]] = {
@@ -298,14 +295,6 @@ _ADK_JSON_COLUMN_DDL_TEMPLATE_2 = "{0} BLOB CHECK ({1} IS JSON) NOT NULL"
 _ADK_JSON_COLUMN_DDL_TEMPLATE_3 = "{0} BLOB NOT NULL"
 
 
-class JSONStorageType(str, Enum):
-    """JSON storage type based on Oracle version."""
-
-    JSON_NATIVE = "json"
-    BLOB_JSON = "blob_json"
-    BLOB_PLAIN = "blob_plain"
-
-
 class OracleADKCompressionConfig(TypedDict):
     """Oracle-specific ADK table compression settings."""
 
@@ -385,10 +374,6 @@ def coerce_decimal_values(value: Any) -> Any:
     return _coerce_decimal_values(value)
 
 
-def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
-    return _storage_type_from_version(version_info)
-
-
 class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     """Oracle async ADK store using oracledb async driver.
 
@@ -414,7 +399,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Configuration is read from config.extension_config["adk"]
     """
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle ADK store.
@@ -431,8 +416,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         super().__init__(config)
         _configure_oracle_adk_session_tables(self, config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
 
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
@@ -1043,40 +1026,27 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
+        """Resolve the JSON storage type from the pool-scoped Oracle version.
 
-        Returns:
-            Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
+        - Oracle 21c+ with compatible >= 20: native JSON type
+        - Oracle 12c+: BLOB with IS JSON constraint
+        - Oracle 11g and earlier: plain BLOB
         """
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = await self._get_version_info()
-        self._json_storage_type = _storage_type_from_version(version_info)
-        return self._json_storage_type
+        return _storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using Oracle data dictionary."""
-
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        """Return the pool-scoped Oracle version through the data dictionary."""
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         async with self._config.provide_session() as driver:
-            dictionary = OracledbAsyncDataDictionary()
-            self._oracle_version_info = await dictionary.get_version(driver)
+            version_info = await driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     async def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
         """Serialize state dictionary to appropriate format based on storage type.
@@ -1374,7 +1344,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Configuration is read from config.extension_config["adk"]
     """
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle synchronous ADK store.
@@ -1391,8 +1361,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
         super().__init__(config)
         _configure_oracle_adk_session_tables(self, config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
 
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
@@ -2010,40 +1978,27 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
 
     def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
+        """Resolve the JSON storage type from the pool-scoped Oracle version.
 
-        Returns:
-            Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
+        - Oracle 21c+ with compatible >= 20: native JSON type
+        - Oracle 12c+: BLOB with IS JSON constraint
+        - Oracle 11g and earlier: plain BLOB
         """
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = self._get_version_info()
-        self._json_storage_type = _storage_type_from_version(version_info)
-        return self._json_storage_type
+        return _storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using Oracle data dictionary."""
-
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        """Return the pool-scoped Oracle version through the data dictionary."""
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         with self._config.provide_session() as driver:
-            dictionary = OracledbSyncDataDictionary()
-            self._oracle_version_info = dictionary.get_version(driver)
+            version_info = driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
         """Serialize state dictionary to appropriate format based on storage type.
@@ -2315,12 +2270,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     """Oracle ADK memory store using async oracledb driver."""
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         super().__init__(config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
@@ -2417,25 +2370,20 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     async def _detect_json_storage_type(self) -> "JSONStorageType":
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = await self._get_version_info()
-        self._json_storage_type = storage_type_from_version(version_info)
-        return self._json_storage_type
+        return storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         async with self._config.provide_session() as driver:
-            dictionary = OracledbAsyncDataDictionary()
-            self._oracle_version_info = await dictionary.get_version(driver)
+            version_info = await driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     async def _serialize_json_field(self, value: Any) -> "str | bytes | None":
         if value is None:
@@ -2623,12 +2571,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
     """Oracle ADK memory store using sync oracledb driver."""
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
 
@@ -2730,25 +2676,20 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def _detect_json_storage_type(self) -> "JSONStorageType":
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = self._get_version_info()
-        self._json_storage_type = storage_type_from_version(version_info)
-        return self._json_storage_type
+        return storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         with self._config.provide_session() as driver:
-            dictionary = OracledbSyncDataDictionary()
-            self._oracle_version_info = dictionary.get_version(driver)
+            version_info = driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     def _serialize_json_field(self, value: Any) -> "str | bytes | None":
         if value is None:
@@ -2978,25 +2919,6 @@ def _coerce_decimal_values(value: Any) -> Any:
     if isinstance(value, frozenset):
         return frozenset(_coerce_decimal_values(item) for item in value)
     return value
-
-
-def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
-    """Determine JSON storage type based on Oracle version metadata."""
-
-    if version_info and version_info.supports_native_json():
-        logger.debug("Detected Oracle %s with compatible >= 20, using JSON_NATIVE", version_info)
-        return JSONStorageType.JSON_NATIVE
-
-    if version_info and version_info.supports_json_blob():
-        logger.debug("Detected Oracle %s, using BLOB_JSON (recommended)", version_info)
-        return JSONStorageType.BLOB_JSON
-
-    if version_info:
-        logger.debug("Detected Oracle %s (pre-12c), using BLOB_PLAIN", version_info)
-        return JSONStorageType.BLOB_PLAIN
-
-    logger.warning("Oracle version could not be detected; defaulting to BLOB_JSON storage")
-    return JSONStorageType.BLOB_JSON
 
 
 def _oracle_text_value(value: Any) -> str:

@@ -1,5 +1,6 @@
 """Oracle-specific data dictionary for metadata queries."""
 
+from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -37,6 +38,7 @@ from sqlspec.data_dictionary.dialects.oracle import (
     parse_oracle_compatible_major,
     parse_oracle_version_components,
     resolve_oracle_feature_flag,
+    resolve_oracle_json_storage,
     resolve_oracle_json_type,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
@@ -49,7 +51,14 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.data_dictionary._types import DialectConfig
 
-__all__ = ("OracleVersionInfo", "OracledbAsyncDataDictionary", "OracledbSyncDataDictionary")
+__all__ = (
+    "JSONStorageType",
+    "OracleVersionCache",
+    "OracleVersionInfo",
+    "OracledbAsyncDataDictionary",
+    "OracledbSyncDataDictionary",
+    "storage_type_from_version",
+)
 
 logger = get_logger("sqlspec.adapters.oracledb.data_dictionary")
 
@@ -320,6 +329,61 @@ class OracleVersionInfo(VersionInfo):
         return version_str
 
 
+class JSONStorageType(str, Enum):
+    """Oracle JSON storage rung selected from the server version.
+
+    The full ladder is a support contract: SQLSpec targets the oldest possible
+    Oracle servers with graceful degradation, so every rung is retained.
+
+    * ``JSON_NATIVE`` — native ``JSON`` type / OSON binary (21c+).
+    * ``BLOB_JSON`` — ``BLOB`` validated by an ``IS JSON`` check constraint
+      (12.1.0.2+).
+    * ``BLOB_PLAIN`` — plain ``BLOB``/``CLOB`` fallback for servers older than 12c.
+    """
+
+    JSON_NATIVE = "json"
+    BLOB_JSON = "blob_json"
+    BLOB_PLAIN = "blob_plain"
+
+
+class OracleVersionCache:
+    """Pool-scoped cache for the resolved Oracle server version.
+
+    One instance is created per config and shared with every driver spawned from
+    that config's pool, so the server version is resolved once per pool lifetime
+    rather than once per acquired session. The cache lives and dies with the
+    pool; a server upgrade under a live pool is out of scope and picked up on the
+    next pool restart.
+    """
+
+    __slots__ = ("resolved", "version")
+
+    def __init__(self) -> None:
+        self.resolved: bool = False
+        self.version: OracleVersionInfo | None = None
+
+    def reset(self) -> None:
+        """Clear the cached version so the next resolution re-queries the server."""
+        self.resolved = False
+        self.version = None
+
+
+def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
+    """Determine the JSON storage rung for an Oracle version.
+
+    An undetectable version defaults to ``BLOB_JSON`` — the ``IS JSON`` BLOB rung
+    is valid on every 12c+ server, the overwhelmingly common case.
+    """
+    if version_info is None:
+        return JSONStorageType.BLOB_JSON
+    return JSONStorageType(resolve_oracle_json_storage(version_info.major, version_info.compatible_major))
+
+
+def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
+    """Public alias for :func:`_storage_type_from_version`."""
+    return _storage_type_from_version(version_info)
+
+
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class OracledbSyncDataDictionary(SyncDataDictionaryBase):
     """Oracle-specific sync data dictionary."""
@@ -557,23 +621,33 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             return False
 
     def get_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
-        """Get Oracle database version information."""
+        """Get Oracle database version information through the pool-scoped cache."""
+        holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
         driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
-        if driver_id in self._version_fetch_attempted:
+        if holder is not None:
+            if holder.resolved:
+                return holder.version
+        elif driver_id in self._version_fetch_attempted:
             return cast("OracleVersionInfo | None", self._version_cache.get(driver_id))
-        # Not cached, fetch from database
 
+        version_info = self._fetch_version(driver)
+        if holder is not None:
+            holder.resolved = True
+            holder.version = version_info
+        else:
+            self.cache_version(driver_id, version_info)
+        return version_info
+
+    def _fetch_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
+        """Query the server for its version, compatible level, and autonomous flag."""
         version_row = driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
             self._log_version_unavailable(type(self).dialect, "missing")
-            self.cache_version(driver_id, None)
             return None
 
         version_value = extract_oracle_version_value(version_row)
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(driver_id, None)
             return None
 
         compatible = self._get_compatible_value(driver)
@@ -581,11 +655,9 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(driver_id, version_info)
         return version_info
 
     def get_feature_flag(self, driver: "OracleSyncDriver", feature: str) -> bool:
@@ -923,23 +995,33 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             return False
 
     async def get_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
-        """Get Oracle database version information."""
+        """Get Oracle database version information through the pool-scoped cache."""
+        holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
         driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
-        if driver_id in self._version_fetch_attempted:
+        if holder is not None:
+            if holder.resolved:
+                return holder.version
+        elif driver_id in self._version_fetch_attempted:
             return cast("OracleVersionInfo | None", self._version_cache.get(driver_id))
-        # Not cached, fetch from database
 
+        version_info = await self._fetch_version(driver)
+        if holder is not None:
+            holder.resolved = True
+            holder.version = version_info
+        else:
+            self.cache_version(driver_id, version_info)
+        return version_info
+
+    async def _fetch_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
+        """Query the server for its version, compatible level, and autonomous flag."""
         version_row = await driver.select_one_or_none(self.get_query_text("version"))
         if not version_row:
             self._log_version_unavailable(type(self).dialect, "missing")
-            self.cache_version(driver_id, None)
             return None
 
         version_value = extract_oracle_version_value(version_row)
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(driver_id, None)
             return None
 
         compatible = await self._get_compatible_value(driver)
@@ -947,11 +1029,9 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         version_info = self._build_version_info(version_value, compatible, is_autonomous)
         if version_info is None:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(driver_id, version_info)
         return version_info
 
     async def get_feature_flag(self, driver: "OracleAsyncDriver", feature: str) -> bool:

@@ -42,7 +42,11 @@ from sqlspec.adapters.oracledb.core import (
     supports_df_batches,
     supports_direct_path_load,
 )
-from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
+from sqlspec.adapters.oracledb.data_dictionary import (
+    OracledbAsyncDataDictionary,
+    OracledbSyncDataDictionary,
+    OracleVersionCache,
+)
 from sqlspec.core import (
     SQL,
     StackResult,
@@ -76,7 +80,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.stack import StackOperation
-    from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, SchemaT, StatementParameters
@@ -344,7 +347,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     __slots__ = (
         "_data_dictionary",
-        "_oracle_version",
+        "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
@@ -367,7 +370,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._data_dictionary: OracledbSyncDataDictionary | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
-        self._oracle_version: VersionInfo | None = None
+        self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
@@ -872,13 +875,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    def _detect_oracle_version(self) -> "VersionInfo | None":
-        if self._oracle_version is not None:
-            return self._oracle_version
-        version = self.data_dictionary.get_version(self)
-        self._oracle_version = version
-        return version
-
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
 
@@ -1003,7 +999,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
     __slots__ = (
         "_data_dictionary",
-        "_oracle_version",
+        "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
@@ -1026,7 +1022,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._data_dictionary: OracledbAsyncDataDictionary | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
-        self._oracle_version: VersionInfo | None = None
+        self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
@@ -1547,13 +1543,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    async def _detect_oracle_version(self) -> "VersionInfo | None":
-        if self._oracle_version is not None:
-            return self._oracle_version
-        version = await self.data_dictionary.get_version(self)
-        self._oracle_version = version
-        return version
-
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
 
@@ -1681,7 +1670,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._pipeline_support_reason = "thin_mode_required"
             return False
 
-        version_info = await self._detect_oracle_version()
+        version_info = await self.data_dictionary.get_version(self)
         if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
             self._pipeline_support = True
             self._pipeline_support_reason = None

@@ -19,12 +19,27 @@ from sqlspec.adapters.oracledb.adk import (
     OracleSyncADKStore,
 )
 from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
+from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, OracleVersionInfo
 from sqlspec.config import ADKConfig
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
     config = MagicMock()
     config.extension_config = {"adk": adk_config}
+    return config
+
+
+def _config_for_storage(storage_type: JSONStorageType) -> MagicMock:
+    version = {
+        JSONStorageType.JSON_NATIVE: OracleVersionInfo(21, 3, 0, compatible="21.0.0"),
+        JSONStorageType.BLOB_JSON: OracleVersionInfo(19, 0, 0, compatible="19.0.0"),
+        JSONStorageType.BLOB_PLAIN: OracleVersionInfo(11, 2, 0, compatible="11.2.0"),
+    }[storage_type]
+    config = MagicMock()
+    cache = OracleVersionCache()
+    cache.resolved = True
+    cache.version = version
+    config._oracle_version_cache = cache
     return config
 
 
@@ -116,7 +131,7 @@ def test_oracle_event_data_column_ddl_prefers_blob_over_clob() -> None:
 
 async def test_oracle_async_adk_store_serialize_event_data_uses_blob_for_non_native() -> None:
     store = OracleAsyncADKStore.__new__(OracleAsyncADKStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON  # type: ignore[attr-defined]
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)  # type: ignore[attr-defined]
 
     result = await store._serialize_event_data({"value": 1})  # type: ignore[attr-defined]
 
@@ -126,7 +141,7 @@ async def test_oracle_async_adk_store_serialize_event_data_uses_blob_for_non_nat
 
 def test_oracle_sync_adk_store_serialize_event_data_uses_blob_for_non_native() -> None:
     store = OracleSyncADKStore.__new__(OracleSyncADKStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON  # type: ignore[attr-defined]
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)  # type: ignore[attr-defined]
 
     result = store._serialize_event_data({"value": 1})  # type: ignore[attr-defined]
 
@@ -194,7 +209,7 @@ def test_oracle_adk_sync_memory_table_uses_same_lifecycle_clauses() -> None:
 
 async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields() -> None:
     store = OracleAsyncADKMemoryStore.__new__(OracleAsyncADKMemoryStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     row = (
         "memory-1",
@@ -231,7 +246,7 @@ async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields(
 
 def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> None:
     store = OracleSyncADKMemoryStore.__new__(OracleSyncADKMemoryStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     row = (
         "memory-2",

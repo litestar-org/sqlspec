@@ -13,6 +13,7 @@ from sqlspec.adapters.oracledb.core import (
     normalize_execute_many_parameters_async,
     normalize_execute_many_parameters_sync,
 )
+from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.data_dictionary import VersionInfo
 from sqlspec.driver import StackExecutionObserver
@@ -184,11 +185,19 @@ def _make_async_pipeline_driver(*, thin: bool = True) -> OracleAsyncDriver:
     )
 
 
+def _patch_async_server_version(monkeypatch: pytest.MonkeyPatch, major: int) -> None:
+    """Route the async pipeline gate's data-dictionary version lookup to a stub."""
+
+    async def fake_get_version(_self: OracledbAsyncDataDictionary, _driver: OracleAsyncDriver) -> VersionInfo:
+        return VersionInfo(major, 0, 0)
+
+    monkeypatch.setattr(OracledbAsyncDataDictionary, "get_version", fake_get_version)
+
+
 def test_sync_pipeline_gate_requires_async_thin_26ai(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sync Oracle connections must not claim native pipeline support."""
     driver = _make_sync_pipeline_driver()
     monkeypatch.setattr(OracleSyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
-    monkeypatch.setattr(OracleSyncDriver, "_detect_oracle_version", lambda _self: VersionInfo(26, 0, 0))
 
     assert driver._pipeline_native_supported() is False
     assert driver._pipeline_support_reason == "asyncio_thin_required"
@@ -198,11 +207,8 @@ async def test_async_pipeline_gate_requires_thin_connection(monkeypatch: pytest.
     """Async Oracle pipeline support is Thin-mode only."""
     driver = _make_async_pipeline_driver(thin=False)
 
-    async def detect_oracle_version(_self: OracleAsyncDriver) -> VersionInfo:
-        return VersionInfo(26, 0, 0)
-
     monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
-    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracle_version", detect_oracle_version)
+    _patch_async_server_version(monkeypatch, 26)
 
     assert await driver._pipeline_native_supported() is False
     assert driver._pipeline_support_reason == "thin_mode_required"
@@ -212,11 +218,8 @@ async def test_async_pipeline_gate_requires_26ai(monkeypatch: pytest.MonkeyPatch
     """Async Thin pipelines on pre-26ai databases do not reduce round trips."""
     driver = _make_async_pipeline_driver(thin=True)
 
-    async def detect_oracle_version(_self: OracleAsyncDriver) -> VersionInfo:
-        return VersionInfo(23, 0, 0)
-
     monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
-    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracle_version", detect_oracle_version)
+    _patch_async_server_version(monkeypatch, 23)
 
     assert await driver._pipeline_native_supported() is False
     assert driver._pipeline_support_reason == "database_version"
@@ -226,11 +229,8 @@ async def test_async_pipeline_gate_accepts_thin_26ai(monkeypatch: pytest.MonkeyP
     """Async Thin connections on Oracle 26ai can use native pipeline execution."""
     driver = _make_async_pipeline_driver(thin=True)
 
-    async def detect_oracle_version(_self: OracleAsyncDriver) -> VersionInfo:
-        return VersionInfo(26, 0, 0)
-
     monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
-    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracle_version", detect_oracle_version)
+    _patch_async_server_version(monkeypatch, 26)
 
     assert await driver._pipeline_native_supported() is True
     assert driver._pipeline_support_reason is None

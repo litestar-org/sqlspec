@@ -6,10 +6,11 @@ and Oracle's JSON storage types via connection type handlers.
 Routing matrix (input):
 
 * Oracle 21c+ native ``JSON``: bind via ``DB_TYPE_JSON`` (binary OSON).
-* Oracle 19c-20c with ``BLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_BLOB`` with
- UTF-8 JSON bytes.
-* Oracle 12c-18c with ``CLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_CLOB`` with
- serialized JSON string.
+* Oracle 12c-20c with ``BLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_BLOB`` with
+ textual UTF-8 JSON bytes.
+* Oracle 11g and earlier: bind via ``DB_TYPE_CLOB`` with serialized JSON string.
+* The rung is chosen by ``resolve_oracle_json_storage``, the single JSON-threshold
+ source shared with ``OracleVersionInfo`` and the extension stores.
 * Server major version is read from ``connection._sqlspec_oracle_major`` (set in
  ``OracleSyncConfig._init_connection`` / ``OracleAsyncConfig._init_connection``).
  When unknown, default to 21c+ behavior.
@@ -37,6 +38,11 @@ from typing import TYPE_CHECKING, Any, cast
 from oracledb import DB_TYPE_CHAR, DB_TYPE_NCHAR, DB_TYPE_NVARCHAR, DB_TYPE_VARCHAR
 
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON, DB_TYPE_LONG, DB_TYPE_LONG_RAW
+from sqlspec.data_dictionary.dialects.oracle import (
+    ORACLE_JSON_STORAGE_BLOB_JSON,
+    ORACLE_JSON_STORAGE_NATIVE,
+    resolve_oracle_json_storage,
+)
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -55,11 +61,6 @@ __all__ = (
     "register_json_handlers",
 )
 
-# Server-version thresholds for JSON binding strategy selection.
-# 21c+ supports DB_TYPE_JSON (binary OSON); 19c-20c uses BLOB CHECK (... IS JSON);
-# pre-19c uses CLOB CHECK (... IS JSON).
-_NATIVE_JSON_MIN_MAJOR = 21
-_BLOB_IS_JSON_MIN_MAJOR = 19
 _JSON_STRING_TYPE_CODES = (DB_TYPE_VARCHAR, DB_TYPE_CHAR, DB_TYPE_NVARCHAR, DB_TYPE_NCHAR)
 
 
@@ -122,9 +123,13 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
 
     server_major = cast("int | None", getattr(cursor.connection, "_sqlspec_oracle_major", None))
 
-    if server_major is None or server_major >= _NATIVE_JSON_MIN_MAJOR:
+    if server_major is None:
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
-    if server_major >= _BLOB_IS_JSON_MIN_MAJOR:
+
+    storage = resolve_oracle_json_storage(server_major)
+    if storage == ORACLE_JSON_STORAGE_NATIVE:
+        return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
+    if storage == ORACLE_JSON_STORAGE_BLOB_JSON:
         return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
     return cursor.var(DB_TYPE_CLOB, arraysize=arraysize, inconverter=json_converter_in_clob)
 

@@ -18,63 +18,19 @@ Configuration (optional override):
 """
 
 import logging
-from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.oracledb.data_dictionary import (
-    OracledbAsyncDataDictionary,
-    OracledbSyncDataDictionary,
-    OracleVersionInfo,
-)
+from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, _storage_type_from_version
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
 
 __all__ = ("OracleAsyncEventQueueStore", "OracleSyncEventQueueStore")
 
 logger = get_logger("sqlspec.adapters.oracledb.events.store")
-
-
-class JSONStorageType(Enum):
-    """Oracle JSON storage types based on database version."""
-
-    JSON_NATIVE = "json"
-    BLOB_JSON = "blob_json"
-    BLOB_PLAIN = "blob"
-
-
-def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
-    """Determine JSON storage type based on Oracle version metadata."""
-    if version_info and version_info.supports_native_json():
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "events.queue.storage.detected",
-            storage_type=JSONStorageType.JSON_NATIVE.value,
-            version=str(version_info),
-        )
-        return JSONStorageType.JSON_NATIVE
-
-    if version_info and version_info.supports_json_blob():
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "events.queue.storage.detected",
-            storage_type=JSONStorageType.BLOB_JSON.value,
-            version=str(version_info),
-        )
-        return JSONStorageType.BLOB_JSON
-
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "events.queue.storage.detected",
-        storage_type=JSONStorageType.BLOB_PLAIN.value,
-        version=str(version_info),
-    )
-    return JSONStorageType.BLOB_PLAIN
 
 
 def _init_oracle_settings(extension_settings: "dict[str, Any]") -> "tuple[bool, JSONStorageType | None]":
@@ -93,7 +49,7 @@ def _init_oracle_settings(extension_settings: "dict[str, Any]") -> "tuple[bool, 
         json_storage: JSONStorageType | None = JSONStorageType.JSON_NATIVE
     elif json_storage_override == "blob_json":
         json_storage = JSONStorageType.BLOB_JSON
-    elif json_storage_override == "blob":
+    elif json_storage_override in {"blob", "blob_plain"}:
         json_storage = JSONStorageType.BLOB_PLAIN
     else:
         json_storage = None
@@ -204,17 +160,16 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         config: OracleSyncConfig with extension_config["events"] settings.
     """
 
-    __slots__ = ("_in_memory", "_json_storage", "_oracle_version_info")
+    __slots__ = ("_in_memory", "_json_storage_override")
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle sync event queue store."""
         super().__init__(config)
-        self._in_memory, self._json_storage = _init_oracle_settings(self._extension_settings)
-        self._oracle_version_info: OracleVersionInfo | None = None
+        self._in_memory, self._json_storage_override = _init_oracle_settings(self._extension_settings)
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
-        storage = self._json_storage or JSONStorageType.BLOB_JSON
+        storage = self._json_storage_override or JSONStorageType.BLOB_JSON
         if storage == JSONStorageType.JSON_NATIVE:
             return "JSON", "JSON", "TIMESTAMP"
         return "BLOB", "BLOB", "TIMESTAMP"
@@ -231,10 +186,10 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
     def create_statements(self) -> "list[str]":
         """Return single PL/SQL script for table and index creation.
 
-        Uses cached storage type if available, otherwise defaults to BLOB_JSON.
-        For auto-detection, use create_table() instead.
+        Uses the configured storage override when set, otherwise defaults to
+        BLOB_JSON. For auto-detection, use create_table() instead.
         """
-        storage_type = self._json_storage or JSONStorageType.BLOB_JSON
+        storage_type = self._json_storage_override or JSONStorageType.BLOB_JSON
         return [_oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())]
 
     def drop_statements(self) -> "list[str]":
@@ -242,27 +197,21 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         return _oracle_drop_sql(self.table_name, self._index_name())
 
     def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
-
-        Returns cached storage type if already detected, otherwise queries the database.
-        """
-        if self._json_storage is not None:
-            return self._json_storage
-
-        version_info = self._get_version_info()
-        self._json_storage = _storage_type_from_version(version_info)
-        return self._json_storage
+        """Resolve the JSON storage type from the configured override or server version."""
+        if self._json_storage_override is not None:
+            return self._json_storage_override
+        return _storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using data dictionary."""
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        """Return the pool-scoped Oracle version through the data dictionary."""
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         with self._config.provide_session() as driver:
-            dictionary = OracledbSyncDataDictionary()
-            self._oracle_version_info = dictionary.get_version(driver)
+            version_info = driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             log_with_context(
                 logger,
                 logging.WARNING,
@@ -271,7 +220,7 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
                 reason="version_detection_failed",
             )
 
-        return self._oracle_version_info
+        return version_info
 
     def create_table(self) -> None:
         """Create the event queue table with auto-detected storage type."""
@@ -303,17 +252,16 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         config: OracleAsyncConfig with extension_config["events"] settings.
     """
 
-    __slots__ = ("_in_memory", "_json_storage", "_oracle_version_info")
+    __slots__ = ("_in_memory", "_json_storage_override")
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle async event queue store."""
         super().__init__(config)
-        self._in_memory, self._json_storage = _init_oracle_settings(self._extension_settings)
-        self._oracle_version_info: OracleVersionInfo | None = None
+        self._in_memory, self._json_storage_override = _init_oracle_settings(self._extension_settings)
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
-        storage = self._json_storage or JSONStorageType.BLOB_JSON
+        storage = self._json_storage_override or JSONStorageType.BLOB_JSON
         if storage == JSONStorageType.JSON_NATIVE:
             return "JSON", "JSON", "TIMESTAMP"
         return "BLOB", "BLOB", "TIMESTAMP"
@@ -330,10 +278,10 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
     def create_statements(self) -> "list[str]":
         """Return single PL/SQL script for table and index creation.
 
-        Uses cached storage type if available, otherwise defaults to BLOB_JSON.
-        For auto-detection, use create_table() instead.
+        Uses the configured storage override when set, otherwise defaults to
+        BLOB_JSON. For auto-detection, use create_table() instead.
         """
-        storage_type = self._json_storage or JSONStorageType.BLOB_JSON
+        storage_type = self._json_storage_override or JSONStorageType.BLOB_JSON
         return [_oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())]
 
     def drop_statements(self) -> "list[str]":
@@ -341,27 +289,21 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         return _oracle_drop_sql(self.table_name, self._index_name())
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
-
-        Returns cached storage type if already detected, otherwise queries the database.
-        """
-        if self._json_storage is not None:
-            return self._json_storage
-
-        version_info = await self._get_version_info()
-        self._json_storage = _storage_type_from_version(version_info)
-        return self._json_storage
+        """Resolve the JSON storage type from the configured override or server version."""
+        if self._json_storage_override is not None:
+            return self._json_storage_override
+        return _storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using data dictionary."""
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        """Return the pool-scoped Oracle version through the data dictionary."""
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         async with self._config.provide_session() as driver:
-            dictionary = OracledbAsyncDataDictionary()
-            self._oracle_version_info = await dictionary.get_version(driver)
+            version_info = await driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             log_with_context(
                 logger,
                 logging.WARNING,
@@ -370,7 +312,7 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
                 reason="version_detection_failed",
             )
 
-        return self._oracle_version_info
+        return version_info
 
     async def create_table(self) -> None:
         """Create the event queue table with auto-detected storage type."""

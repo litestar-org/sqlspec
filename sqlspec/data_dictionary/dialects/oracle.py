@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import TableMetadata, VersionInfo
 
 __all__ = (
+    "ORACLE_JSON_STORAGE_BLOB_JSON",
+    "ORACLE_JSON_STORAGE_BLOB_PLAIN",
+    "ORACLE_JSON_STORAGE_NATIVE",
     "extract_oracle_version_value",
     "list_oracle_available_features",
     "merge_oracle_table_lists",
@@ -17,6 +20,7 @@ __all__ = (
     "parse_oracle_compatible_major",
     "parse_oracle_version_components",
     "resolve_oracle_feature_flag",
+    "resolve_oracle_json_storage",
     "resolve_oracle_json_type",
 )
 
@@ -27,6 +31,10 @@ ORACLE_MIN_JSON_NATIVE_VERSION: Final[int] = 21
 ORACLE_MIN_JSON_NATIVE_COMPATIBLE: Final[int] = 20
 ORACLE_MIN_JSON_BLOB_VERSION: Final[int] = 12
 ORACLE_MIN_OSON_VERSION: Final[int] = 19
+
+ORACLE_JSON_STORAGE_NATIVE: Final[str] = "json"
+ORACLE_JSON_STORAGE_BLOB_JSON: Final[str] = "blob_json"
+ORACLE_JSON_STORAGE_BLOB_PLAIN: Final[str] = "blob_plain"
 
 ORACLE_DYNAMIC_FEATURES: Final[tuple[str, ...]] = (
     "is_autonomous",
@@ -100,6 +108,33 @@ def oracle_supports_oson_blob(major: int, is_autonomous: bool) -> bool:
 def oracle_supports_json_blob(major: int) -> bool:
     """Return whether an Oracle version supports BLOB with JSON validation."""
     return major >= ORACLE_MIN_JSON_BLOB_VERSION
+
+
+def resolve_oracle_json_storage(major: int, compatible_major: "int | None" = None) -> str:
+    """Return the JSON storage rung for an Oracle major version.
+
+    Delegates to the same predicates that back ``OracleVersionInfo`` so the
+    connection-setup type handlers and the extension stores share one ladder.
+
+    Rungs and their trigger versions:
+
+    * ``ORACLE_JSON_STORAGE_NATIVE`` — native ``JSON`` type / OSON binary, 21c+
+      (``oracle_supports_native_json``; also requires ``COMPATIBLE`` >= 20).
+    * ``ORACLE_JSON_STORAGE_BLOB_JSON`` — ``BLOB`` validated by an ``IS JSON``
+      check constraint holding textual UTF-8 JSON, 12.1.0.2+
+      (``oracle_supports_json_blob``).
+    * ``ORACLE_JSON_STORAGE_BLOB_PLAIN`` — plain ``BLOB``/``CLOB`` fallback for
+      servers older than 12c.
+
+    When ``compatible_major`` is unknown the server major is assumed to track the
+    release, matching the connection handlers that only carry the major.
+    """
+    effective_compatible = compatible_major if compatible_major is not None else major
+    if oracle_supports_native_json(major, effective_compatible):
+        return ORACLE_JSON_STORAGE_NATIVE
+    if oracle_supports_json_blob(major):
+        return ORACLE_JSON_STORAGE_BLOB_JSON
+    return ORACLE_JSON_STORAGE_BLOB_PLAIN
 
 
 def extract_oracle_version_value(row: object) -> "str | None":
