@@ -13,6 +13,8 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import EventRecord, SessionRecord
 
@@ -30,33 +32,11 @@ ADK_RESET_TABLE_PROFILES: Final = (
 )
 
 
-class BaseAsyncADKStore(ABC, Generic[ConfigT]):
-    """Base class for async SQLSpec-backed ADK session stores.
+class _ADKStoreCommon(Generic[ConfigT]):
+    """Shared non-async ADK store state and helpers."""
 
-    Implements storage operations for Google ADK sessions and events using
-    SQLSpec database adapters with async/await.
-
-    This abstract base class provides common functionality for all database-specific
-    store implementations including:
-    - Connection management via SQLSpec configs
-    - Table name validation
-    - Session and event CRUD operations
-
-    Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
-
-    Args:
-        config: SQLSpec database configuration with extension_config["adk"] settings.
-
-    Notes:
-        Configuration is read from config.extension_config["adk"]:
-        - session_table: Sessions table name (default: "adk_session")
-        - events_table: Events table name (default: "adk_event")
-        - app_state_table: App-scoped state table name (default: "adk_app_state")
-        - user_state_table: User-scoped state table name (default: "adk_user_state")
-        - metadata_table: Internal metadata table name (default: "adk_internal_metadata")
-        - owner_id_column: Optional owner FK column DDL (default: None)
-    """
+    if TYPE_CHECKING:
+        _drop_tables_sql: "Callable[[], list[str]]"
 
     __slots__ = (
         "_app_state_table",
@@ -100,6 +80,162 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         ensure_table_name(self._app_state_table)
         ensure_table_name(self._user_state_table)
         ensure_table_name(self._metadata_table)
+
+    @property
+    def config(self) -> ConfigT:
+        """Return the database configuration."""
+        return self._config
+
+    @property
+    def session_table(self) -> str:
+        """Return the sessions table name."""
+        return self._session_table
+
+    @property
+    def events_table(self) -> str:
+        """Return the events table name."""
+        return self._events_table
+
+    @property
+    def app_state_table(self) -> str:
+        """Return the app-scoped state table name."""
+        return self._app_state_table
+
+    @property
+    def user_state_table(self) -> str:
+        """Return the user-scoped state table name."""
+        return self._user_state_table
+
+    @property
+    def metadata_table(self) -> str:
+        """Return the ADK metadata table name."""
+        return self._metadata_table
+
+    @property
+    def owner_id_column_ddl(self) -> "str | None":
+        """Return the full owner ID column DDL (or None if not configured)."""
+        return self._owner_id_column_ddl
+
+    @property
+    def owner_id_column_name(self) -> "str | None":
+        """Return the owner ID column name only (or None if not configured)."""
+        return self._owner_id_column_name
+
+    def _reset_drop_tables_sql(self) -> "list[str]":
+        """Return all table drops needed before recreating the clean-break schema."""
+        statements = list(self._drop_tables_sql())
+        for table_profile in ADK_RESET_TABLE_PROFILES:
+            statements.extend(self._drop_sql_for_table_profile(table_profile))
+        return unique_statements(statements)
+
+    def _store_config_from_extension(self) -> "dict[str, Any]":
+        """Extract ADK store configuration from config.extension_config.
+
+        Returns:
+            Dict with ADK table names and optionally owner_id_column.
+        """
+        return dict(_adk_session_store_config(self._config))
+
+    def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
+        """Calculate expiration timestamp from expires_in.
+
+        Args:
+            expires_in: Seconds or timedelta until expiration.
+
+        Returns:
+            UTC datetime of expiration, or None if no expiration.
+        """
+        if expires_in is None:
+            return None
+
+        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
+
+        if expires_in_seconds <= 0:
+            return None
+
+        return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+
+    def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
+        session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
+        current_session_table = self._session_table
+        current_events_table = self._events_table
+        current_app_state_table = self._app_state_table
+        current_user_state_table = self._user_state_table
+        current_table = self._metadata_table
+        self._session_table = session_table
+        self._events_table = events_table
+        self._app_state_table = app_state_table
+        self._user_state_table = user_state_table
+        self._metadata_table = metadata_table
+        try:
+            return list(self._drop_tables_sql())
+        finally:
+            self._session_table = current_session_table
+            self._events_table = current_events_table
+            self._app_state_table = current_app_state_table
+            self._user_state_table = current_user_state_table
+            self._metadata_table = current_table
+
+    def _log_tables_created(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.ready",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
+
+    def _log_tables_dropped(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.dropped",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
+
+    def _log_tables_recreated(self) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.tables.recreated",
+            db_system=resolve_db_system(type(self).__name__),
+            session_table=self._session_table,
+            events_table=self._events_table,
+        )
+
+
+class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
+    """Base class for async SQLSpec-backed ADK session stores.
+
+    Implements storage operations for Google ADK sessions and events using
+    SQLSpec database adapters with async/await.
+
+    This abstract base class provides common functionality for all database-specific
+    store implementations including:
+    - Connection management via SQLSpec configs
+    - Table name validation
+    - Session and event CRUD operations
+
+    Subclasses must implement dialect-specific SQL queries and will be created
+    in each adapter directory (e.g., sqlspec/adapters/asyncpg/adk/store.py).
+
+    Args:
+        config: SQLSpec database configuration with extension_config["adk"] settings.
+
+    Notes:
+        Configuration is read from config.extension_config["adk"]:
+        - session_table: Sessions table name (default: "adk_session")
+        - events_table: Events table name (default: "adk_event")
+        - app_state_table: App-scoped state table name (default: "adk_app_state")
+        - user_state_table: User-scoped state table name (default: "adk_user_state")
+        - metadata_table: Internal metadata table name (default: "adk_internal_metadata")
+        - owner_id_column: Optional owner FK column DDL (default: None)
+    """
+
+    __slots__ = ()
 
     async def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
@@ -346,46 +482,6 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    @property
-    def config(self) -> ConfigT:
-        """Return the database configuration."""
-        return self._config
-
-    @property
-    def session_table(self) -> str:
-        """Return the sessions table name."""
-        return self._session_table
-
-    @property
-    def events_table(self) -> str:
-        """Return the events table name."""
-        return self._events_table
-
-    @property
-    def app_state_table(self) -> str:
-        """Return the app-scoped state table name."""
-        return self._app_state_table
-
-    @property
-    def user_state_table(self) -> str:
-        """Return the user-scoped state table name."""
-        return self._user_state_table
-
-    @property
-    def metadata_table(self) -> str:
-        """Return the ADK metadata table name."""
-        return self._metadata_table
-
-    @property
-    def owner_id_column_ddl(self) -> "str | None":
-        """Return the full owner ID column DDL (or None if not configured)."""
-        return self._owner_id_column_ddl
-
-    @property
-    def owner_id_column_name(self) -> "str | None":
-        """Return the owner ID column name only (or None if not configured)."""
-        return self._owner_id_column_name
-
     async def ensure_tables(self) -> None:
         """Create tables and emit a standardized log entry."""
 
@@ -403,40 +499,6 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         await self.ensure_tables()
         self._log_tables_recreated()
 
-    def _reset_drop_tables_sql(self) -> "list[str]":
-        """Return all table drops needed before recreating the clean-break schema."""
-        statements = list(self._drop_tables_sql())
-        for table_profile in ADK_RESET_TABLE_PROFILES:
-            statements.extend(self._drop_sql_for_table_profile(table_profile))
-        return unique_statements(statements)
-
-    def _store_config_from_extension(self) -> "dict[str, Any]":
-        """Extract ADK store configuration from config.extension_config.
-
-        Returns:
-            Dict with ADK table names and optionally owner_id_column.
-        """
-        return dict(_adk_session_store_config(self._config))
-
-    def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
-        """Calculate expiration timestamp from expires_in.
-
-        Args:
-            expires_in: Seconds or timedelta until expiration.
-
-        Returns:
-            UTC datetime of expiration, or None if no expiration.
-        """
-        if expires_in is None:
-            return None
-
-        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
-
-        if expires_in_seconds <= 0:
-            return None
-
-        return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
-
     async def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         """Execute lifecycle DDL scripts for async and sync-backed configs."""
         session_context = self._config.provide_session()
@@ -453,15 +515,7 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
                         await result
             return
 
-        def _execute_sync() -> None:
-            with cast("Any", self._config.provide_session()) as driver:
-                for statement in statements:
-                    driver.execute_script(statement)
-                commit = getattr(driver, "commit", None)
-                if callable(commit):
-                    commit()
-
-        await async_(_execute_sync)()
+        await async_(_run_lifecycle_sync)(self._config, statements)
 
     @abstractmethod
     async def _sessions_table_ddl(self) -> str:
@@ -558,59 +612,8 @@ class BaseAsyncADKStore(ABC, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
-        session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
-        current_session_table = self._session_table
-        current_events_table = self._events_table
-        current_app_state_table = self._app_state_table
-        current_user_state_table = self._user_state_table
-        current_table = self._metadata_table
-        self._session_table = session_table
-        self._events_table = events_table
-        self._app_state_table = app_state_table
-        self._user_state_table = user_state_table
-        self._metadata_table = metadata_table
-        try:
-            return list(self._drop_tables_sql())
-        finally:
-            self._session_table = current_session_table
-            self._events_table = current_events_table
-            self._app_state_table = current_app_state_table
-            self._user_state_table = current_user_state_table
-            self._metadata_table = current_table
 
-    def _log_tables_created(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.tables.ready",
-            db_system=resolve_db_system(type(self).__name__),
-            session_table=self._session_table,
-            events_table=self._events_table,
-        )
-
-    def _log_tables_dropped(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.tables.dropped",
-            db_system=resolve_db_system(type(self).__name__),
-            session_table=self._session_table,
-            events_table=self._events_table,
-        )
-
-    def _log_tables_recreated(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.tables.recreated",
-            db_system=resolve_db_system(type(self).__name__),
-            session_table=self._session_table,
-            events_table=self._events_table,
-        )
-
-
-class BaseSyncADKStore(ABC, Generic[ConfigT]):
+class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK session stores.
 
     Sync-backed adapters expose a real synchronous API for direct use in
@@ -621,39 +624,7 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         config: SQLSpec database configuration with extension_config["adk"] settings.
     """
 
-    __slots__ = (
-        "_app_state_table",
-        "_config",
-        "_events_table",
-        "_metadata_table",
-        "_owner_id_column_ddl",
-        "_owner_id_column_name",
-        "_session_table",
-        "_user_state_table",
-    )
-
-    def __init__(self, config: ConfigT) -> None:
-        """Initialize the sync ADK store.
-
-        Args:
-            config: SQLSpec database configuration.
-        """
-        self._config = config
-        store_config = self._store_config_from_extension()
-        self._session_table: str = str(store_config["session_table"])
-        self._events_table: str = str(store_config["events_table"])
-        self._app_state_table: str = str(store_config["app_state_table"])
-        self._user_state_table: str = str(store_config["user_state_table"])
-        self._metadata_table: str = str(store_config["metadata_table"])
-        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
-        self._owner_id_column_name: str | None = (
-            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
-        )
-        ensure_table_name(self._session_table)
-        ensure_table_name(self._events_table)
-        ensure_table_name(self._app_state_table)
-        ensure_table_name(self._user_state_table)
-        ensure_table_name(self._metadata_table)
+    __slots__ = ()
 
     @abstractmethod
     def create_tables(self) -> None:
@@ -761,46 +732,6 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         """Set a value in the ADK internal metadata table."""
         raise NotImplementedError
 
-    @property
-    def config(self) -> ConfigT:
-        """Return the database configuration."""
-        return self._config
-
-    @property
-    def session_table(self) -> str:
-        """Return the sessions table name."""
-        return self._session_table
-
-    @property
-    def events_table(self) -> str:
-        """Return the events table name."""
-        return self._events_table
-
-    @property
-    def app_state_table(self) -> str:
-        """Return the app-scoped state table name."""
-        return self._app_state_table
-
-    @property
-    def user_state_table(self) -> str:
-        """Return the user-scoped state table name."""
-        return self._user_state_table
-
-    @property
-    def metadata_table(self) -> str:
-        """Return the ADK metadata table name."""
-        return self._metadata_table
-
-    @property
-    def owner_id_column_ddl(self) -> "str | None":
-        """Return the full owner ID column DDL (or None if not configured)."""
-        return self._owner_id_column_ddl
-
-    @property
-    def owner_id_column_name(self) -> "str | None":
-        """Return the owner ID column name only (or None if not configured)."""
-        return self._owner_id_column_name
-
     def ensure_tables(self) -> None:
         """Create tables and emit a standardized log entry."""
 
@@ -818,30 +749,9 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         self.ensure_tables()
         self._log_tables_recreated()
 
-    def _store_config_from_extension(self) -> "dict[str, Any]":
-        """Extract ADK store configuration from config.extension_config."""
-        return dict(_adk_session_store_config(self._config))
-
-    def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
-        """Calculate expiration timestamp from expires_in."""
-        if expires_in is None:
-            return None
-
-        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
-
-        if expires_in_seconds <= 0:
-            return None
-
-        return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
-
     def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         """Execute lifecycle DDL scripts using the sync driver session."""
-        with cast("Any", self._config.provide_session()) as driver:
-            for statement in statements:
-                driver.execute_script(statement)
-            commit = getattr(driver, "commit", None)
-            if callable(commit):
-                commit()
+        _run_lifecycle_sync(self._config, statements)
 
     @abstractmethod
     def _sessions_table_ddl(self) -> str:
@@ -893,60 +803,12 @@ class BaseSyncADKStore(ABC, Generic[ConfigT]):
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
 
-    def _reset_drop_tables_sql(self) -> "list[str]":
-        """Return all table drops needed before recreating the clean-break schema."""
-        statements = list(self._drop_tables_sql())
-        for table_profile in ADK_RESET_TABLE_PROFILES:
-            statements.extend(self._drop_sql_for_table_profile(table_profile))
-        return unique_statements(statements)
 
-    def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
-        session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
-        current_session_table = self._session_table
-        current_events_table = self._events_table
-        current_app_state_table = self._app_state_table
-        current_user_state_table = self._user_state_table
-        current_table = self._metadata_table
-        self._session_table = session_table
-        self._events_table = events_table
-        self._app_state_table = app_state_table
-        self._user_state_table = user_state_table
-        self._metadata_table = metadata_table
-        try:
-            return list(self._drop_tables_sql())
-        finally:
-            self._session_table = current_session_table
-            self._events_table = current_events_table
-            self._app_state_table = current_app_state_table
-            self._user_state_table = current_user_state_table
-            self._metadata_table = current_table
-
-    def _log_tables_created(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.tables.ready",
-            db_system=resolve_db_system(type(self).__name__),
-            session_table=self._session_table,
-            events_table=self._events_table,
-        )
-
-    def _log_tables_dropped(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.tables.dropped",
-            db_system=resolve_db_system(type(self).__name__),
-            session_table=self._session_table,
-            events_table=self._events_table,
-        )
-
-    def _log_tables_recreated(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.tables.recreated",
-            db_system=resolve_db_system(type(self).__name__),
-            session_table=self._session_table,
-            events_table=self._events_table,
-        )
+def _run_lifecycle_sync(config: Any, statements: "list[str]") -> None:
+    """Execute lifecycle statements through a synchronous config session."""
+    with cast("Any", config.provide_session()) as driver:
+        for statement in statements:
+            driver.execute_script(statement)
+        commit = getattr(driver, "commit", None)
+        if callable(commit):
+            commit()

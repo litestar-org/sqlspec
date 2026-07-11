@@ -28,18 +28,8 @@ ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 logger = get_logger("sqlspec.extensions.adk.artifact.store")
 
 
-class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
-    """Base class for async SQLSpec-backed ADK artifact metadata stores.
-
-    Manages artifact version metadata in a SQL table. Content bytes are
-    stored externally via ``sqlspec/storage/`` backends and referenced
-    by canonical URI in each metadata row.
-
-    Subclasses must implement dialect-specific SQL queries.
-
-    Args:
-        config: SQLSpec database configuration with extension_config["adk"] settings.
-    """
+class _ADKArtifactStoreCommon(Generic[ConfigT]):
+    """Shared non-async ADK store state and helpers."""
 
     __slots__ = ("_artifact_table", "_config")
 
@@ -63,6 +53,22 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
     def artifact_table(self) -> str:
         """Return the artifact versions table name."""
         return self._artifact_table
+
+
+class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
+    """Base class for async SQLSpec-backed ADK artifact metadata stores.
+
+    Manages artifact version metadata in a SQL table. Content bytes are
+    stored externally via ``sqlspec/storage/`` backends and referenced
+    by canonical URI in each metadata row.
+
+    Subclasses must implement dialect-specific SQL queries.
+
+    Args:
+        config: SQLSpec database configuration with extension_config["adk"] settings.
+    """
+
+    __slots__ = ()
 
     @abstractmethod
     async def insert_artifact(self, record: "ArtifactRecord") -> None:
@@ -179,7 +185,7 @@ class BaseAsyncADKArtifactStore(ABC, Generic[ConfigT]):
         )
 
 
-class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
+class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK artifact metadata stores.
 
     Synchronous counterpart of :class:`BaseAsyncADKArtifactStore`.
@@ -188,28 +194,7 @@ class BaseSyncADKArtifactStore(ABC, Generic[ConfigT]):
         config: SQLSpec database configuration with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_artifact_table", "_config")
-
-    def __init__(self, config: ConfigT) -> None:
-        """Initialize the sync ADK artifact store.
-
-        Args:
-            config: SQLSpec database configuration.
-        """
-        self._config = config
-        store_config = _adk_artifact_store_config(self._config)
-        self._artifact_table: str = store_config["artifact_table"]
-        ensure_table_name(self._artifact_table)
-
-    @property
-    def config(self) -> ConfigT:
-        """Return the database configuration."""
-        return self._config
-
-    @property
-    def artifact_table(self) -> str:
-        """Return the artifact versions table name."""
-        return self._artifact_table
+    __slots__ = ()
 
     @abstractmethod
     def insert_artifact(self, record: "ArtifactRecord") -> None:
