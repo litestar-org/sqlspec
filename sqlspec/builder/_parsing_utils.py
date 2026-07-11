@@ -398,3 +398,11 @@ def _normalize_order_by(order_by: str | list[str] | exp.Expr | None) -> exp.Orde
     if isinstance(order_by, exp.Expr):
         return exp.Order(expressions=[order_by])
     return None
+
+
+def _coerce_column(value: str | exp.Expr) -> exp.Expr:
+    return exp.column(value) if isinstance(value, str) else value
+
+
+def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None") -> "DialectType | None":
+    return dialect or default

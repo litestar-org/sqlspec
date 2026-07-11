@@ -20,6 +20,7 @@ from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
 from sqlspec.builder._locking import register_lock_generator
+from sqlspec.builder._parsing_utils import _resolve_dialect
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor
 from sqlspec.core import (
     SQL,
@@ -647,7 +648,7 @@ class QueryBuilder(ABC):
             err_msg = f"Error generating SQL from expression: {e!s}"
             self._raise_builder_error(err_msg, e)
 
-        return BuiltQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=dialect or self.dialect)
+        return BuiltQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=_resolve_dialect(dialect, self.dialect))
 
     def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
         """Return SQL string with optional parameter substitution.
@@ -988,7 +989,7 @@ class QueryBuilder(ABC):
         identify = self._should_identify(target_dialect)
         sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify)
         return BuiltQuery(
-            sql=sql_string, parameters=parameters.copy() if parameters else {}, dialect=dialect or self.dialect
+            sql=sql_string, parameters=parameters.copy() if parameters else {}, dialect=_resolve_dialect(dialect, self.dialect)
         )
 
 

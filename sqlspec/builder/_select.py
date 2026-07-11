@@ -18,6 +18,7 @@ from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import JoinClauseMixin, _attach_as_of_version
 from sqlspec.builder._parsing_utils import (
     _PARAMETER_VALIDATOR,
+    _coerce_column,
     extract_column_name,
     extract_expression,
     parse_column_expression,
@@ -222,7 +223,7 @@ class WindowFunctionBuilder:
         return self
 
     def partition_by(self, *columns: str | exp.Expr) -> "WindowFunctionBuilder":
-        self._partition_by = [exp.column(column) if isinstance(column, str) else column for column in columns]
+        self._partition_by = [_coerce_column(column) for column in columns]
         return self
 
     def order_by(self, *columns: str | exp.Expr) -> "WindowFunctionBuilder":
@@ -357,24 +358,24 @@ class SelectClauseMixin:
             return cast("Self", builder)
 
         for column in columns:
-            column_expr = exp.column(column) if isinstance(column, str) else column
+            column_expr = _coerce_column(column)
             select_expr = select_expr.group_by(column_expr, copy=False)
         builder.set_expression(select_expr)
         return cast("Self", builder)
 
     def group_by_rollup(self, *columns: str | exp.Expr) -> Self:
-        column_exprs = [exp.column(column) if isinstance(column, str) else column for column in columns]
+        column_exprs = [_coerce_column(column) for column in columns]
         rollup_expr = exp.Rollup(expressions=column_exprs)
         return self.group_by(rollup_expr)
 
     def group_by_cube(self, *columns: str | exp.Expr) -> Self:
-        column_exprs = [exp.column(column) if isinstance(column, str) else column for column in columns]
+        column_exprs = [_coerce_column(column) for column in columns]
         cube_expr = exp.Cube(expressions=column_exprs)
         return self.group_by(cube_expr)
 
     def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
         grouping_sets = [
-            exp.Tuple(expressions=[exp.column(col) if isinstance(col, str) else col for col in column_set])
+            exp.Tuple(expressions=[_coerce_column(col) for col in column_set])
             for column_set in column_sets
         ]
         grouping_expr = exp.GroupingSets(expressions=grouping_sets)
@@ -1053,8 +1054,8 @@ class PivotClauseMixin:
             raise TypeError(msg)
 
         agg_name = aggregate_function if isinstance(aggregate_function, str) else aggregate_function.name
-        agg_column = exp.column(aggregate_column) if isinstance(aggregate_column, str) else aggregate_column
-        pivot_col_expr = exp.column(pivot_column) if isinstance(pivot_column, str) else pivot_column
+        agg_column = _coerce_column(aggregate_column)
+        pivot_col_expr = _coerce_column(pivot_column)
 
         pivot_agg_expr = exp.func(agg_name, agg_column)
 

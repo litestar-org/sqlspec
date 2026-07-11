@@ -44,8 +44,10 @@ from sqlspec.builder._insert import Insert
 from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import (
+    _coerce_column,
     _normalize_order_by,
     _normalize_partition_by,
+    _resolve_dialect,
     extract_expression,
     to_expression,
 )
@@ -283,7 +285,7 @@ class SQLFactory:
         """
 
         try:
-            parsed_expr = sqlglot.parse_one(statement, read=dialect or self.dialect)
+            parsed_expr = sqlglot.parse_one(statement, read=_resolve_dialect(dialect, self.dialect))
         except Exception as e:
             msg = f"Failed to parse SQL: {e}"
             raise SQLBuilderError(msg) from e
@@ -300,7 +302,7 @@ class SQLFactory:
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
-            builder = Select(dialect=dialect or self.dialect)
+            builder = Select(dialect=_resolve_dialect(dialect, self.dialect))
             builder.set_expression(parsed_expr)
             return builder
 
@@ -317,7 +319,7 @@ class SQLFactory:
     def select(
         self, *columns_or_sql: Union[str, exp.Expr, Column, "SQL", "Case"], dialect: DialectType = None
     ) -> "Select":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
             if self._looks_like_sql(sql_candidate):
@@ -337,7 +339,7 @@ class SQLFactory:
         return select_builder
 
     def insert(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Insert":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         builder = Insert(dialect=builder_dialect)
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
@@ -355,7 +357,7 @@ class SQLFactory:
         return builder
 
     def update(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Update":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         builder = Update(dialect=builder_dialect)
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
@@ -372,7 +374,7 @@ class SQLFactory:
         return builder
 
     def delete(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Delete":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Delete(dialect=builder_dialect)
             parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
@@ -388,7 +390,7 @@ class SQLFactory:
         return Delete(table_or_sql, dialect=builder_dialect) if table_or_sql else Delete(dialect=builder_dialect)
 
     def merge(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Merge":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Merge(dialect=builder_dialect)
             parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
@@ -427,7 +429,7 @@ class SQLFactory:
         Returns:
             Explain builder for further configuration
         """
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
 
         fmt = None
         if format is not None:
@@ -463,7 +465,7 @@ class SQLFactory:
         Returns:
             MERGE builder for supported databases, INSERT builder otherwise
         """
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         dialect_str = str(builder_dialect).lower() if builder_dialect else None
 
         merge_supported = {"postgres", "postgresql", "oracle", "bigquery"}
@@ -483,7 +485,7 @@ class SQLFactory:
         Returns:
             CreateTable builder instance
         """
-        return CreateTable(table_name, dialect=dialect or self.dialect)
+        return CreateTable(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_table_as_select(self, dialect: DialectType = None) -> "CreateTableAsSelect":
         """Create a CREATE TABLE AS SELECT builder.
@@ -494,7 +496,7 @@ class SQLFactory:
         Returns:
             CreateTableAsSelect builder instance
         """
-        return CreateTableAsSelect(dialect=dialect or self.dialect)
+        return CreateTableAsSelect(dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_view(self, view_name: str, dialect: DialectType = None) -> "CreateView":
         """Create a CREATE VIEW builder.
@@ -506,7 +508,7 @@ class SQLFactory:
         Returns:
             CreateView builder instance
         """
-        return CreateView(view_name, dialect=dialect or self.dialect)
+        return CreateView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_materialized_view(self, view_name: str, dialect: DialectType = None) -> "CreateMaterializedView":
         """Create a CREATE MATERIALIZED VIEW builder.
@@ -518,7 +520,7 @@ class SQLFactory:
         Returns:
             CreateMaterializedView builder instance
         """
-        return CreateMaterializedView(view_name, dialect=dialect or self.dialect)
+        return CreateMaterializedView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_index(self, index_name: str, dialect: DialectType = None) -> "CreateIndex":
         """Create a CREATE INDEX builder.
@@ -530,7 +532,7 @@ class SQLFactory:
         Returns:
             CreateIndex builder instance
         """
-        return CreateIndex(index_name, dialect=dialect or self.dialect)
+        return CreateIndex(index_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_schema(self, schema_name: str, dialect: DialectType = None) -> "CreateSchema":
         """Create a CREATE SCHEMA builder.
@@ -542,7 +544,7 @@ class SQLFactory:
         Returns:
             CreateSchema builder instance
         """
-        return CreateSchema(schema_name, dialect=dialect or self.dialect)
+        return CreateSchema(schema_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_table(self, table_name: str, dialect: DialectType = None) -> "DropTable":
         """Create a DROP TABLE builder.
@@ -554,7 +556,7 @@ class SQLFactory:
         Returns:
             DropTable builder instance
         """
-        return DropTable(table_name, dialect=dialect or self.dialect)
+        return DropTable(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_view(self, view_name: str, dialect: DialectType = None) -> "DropView":
         """Create a DROP VIEW builder.
@@ -566,7 +568,7 @@ class SQLFactory:
         Returns:
             DropView builder instance
         """
-        return DropView(view_name, dialect=dialect or self.dialect)
+        return DropView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_materialized_view(self, view_name: str, dialect: DialectType = None) -> "DropMaterializedView":
         """Create a DROP MATERIALIZED VIEW builder.
@@ -578,7 +580,7 @@ class SQLFactory:
         Returns:
             DropMaterializedView builder instance
         """
-        return DropMaterializedView(view_name, dialect=dialect or self.dialect)
+        return DropMaterializedView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_index(self, index_name: str, dialect: DialectType = None) -> "DropIndex":
         """Create a DROP INDEX builder.
@@ -590,7 +592,7 @@ class SQLFactory:
         Returns:
             DropIndex builder instance
         """
-        return DropIndex(index_name, dialect=dialect or self.dialect)
+        return DropIndex(index_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_schema(self, schema_name: str, dialect: DialectType = None) -> "DropSchema":
         """Create a DROP SCHEMA builder.
@@ -602,7 +604,7 @@ class SQLFactory:
         Returns:
             DropSchema builder instance
         """
-        return DropSchema(schema_name, dialect=dialect or self.dialect)
+        return DropSchema(schema_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def alter_table(self, table_name: str, dialect: DialectType = None) -> "AlterTable":
         """Create an ALTER TABLE builder.
@@ -614,7 +616,7 @@ class SQLFactory:
         Returns:
             AlterTable builder instance
         """
-        return AlterTable(table_name, dialect=dialect or self.dialect)
+        return AlterTable(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def rename_table(self, old_name: str, dialect: DialectType = None) -> "RenameTable":
         """Create a RENAME TABLE builder.
@@ -626,7 +628,7 @@ class SQLFactory:
         Returns:
             RenameTable builder instance
         """
-        return RenameTable(old_name, dialect=dialect or self.dialect)
+        return RenameTable(old_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def comment_on(self, dialect: DialectType = None) -> "CommentOn":
         """Create a COMMENT ON builder.
@@ -637,7 +639,7 @@ class SQLFactory:
         Returns:
             CommentOn builder instance
         """
-        return CommentOn(dialect=dialect or self.dialect)
+        return CommentOn(dialect=_resolve_dialect(dialect, self.dialect))
 
     def copy_from(
         self,
@@ -650,7 +652,7 @@ class SQLFactory:
     ) -> SQL:
         """Build a COPY ... FROM statement."""
 
-        effective_dialect = dialect or self.dialect
+        effective_dialect = _resolve_dialect(dialect, self.dialect)
         return build_copy_from_statement(table, source, columns=columns, options=options, dialect=effective_dialect)
 
     def copy_to(
@@ -664,7 +666,7 @@ class SQLFactory:
     ) -> SQL:
         """Build a COPY ... TO statement."""
 
-        effective_dialect = dialect or self.dialect
+        effective_dialect = _resolve_dialect(dialect, self.dialect)
         return build_copy_to_statement(table, target, columns=columns, options=options, dialect=effective_dialect)
 
     def copy(
@@ -1182,7 +1184,7 @@ class SQLFactory:
         Returns:
             ROLLUP expression.
         """
-        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+        column_exprs = [_coerce_column(col) for col in columns]
         return FunctionExpression(exp.Rollup(expressions=column_exprs))
 
     @staticmethod
@@ -1195,7 +1197,7 @@ class SQLFactory:
         Returns:
             CUBE expression.
         """
-        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+        column_exprs = [_coerce_column(col) for col in columns]
         return FunctionExpression(exp.Cube(expressions=column_exprs))
 
     @staticmethod
@@ -1261,7 +1263,7 @@ class SQLFactory:
         Returns:
             CONCAT expression.
         """
-        exprs = [exp.column(expr) if isinstance(expr, str) else expr for expr in expressions]
+        exprs = [_coerce_column(expr) for expr in expressions]
         return StringExpression(exp.Concat(expressions=exprs))
 
     @staticmethod
@@ -1408,7 +1410,7 @@ class SQLFactory:
         Returns:
             COALESCE expression.
         """
-        exprs = [exp.column(expr) if isinstance(expr, str) else expr for expr in expressions]
+        exprs = [_coerce_column(expr) for expr in expressions]
         return ConversionExpression(exp.Coalesce(expressions=exprs))
 
     @staticmethod
