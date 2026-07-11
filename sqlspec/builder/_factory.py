@@ -5,7 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, final
+from typing import TYPE_CHECKING, Any, Final, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
@@ -96,6 +96,7 @@ BuilderT = TypeVar("BuilderT", bound=QueryBuilder)
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
+_MERGE_SUPPORTED_DIALECTS: Final[frozenset[str]] = frozenset({"postgres", "postgresql", "oracle", "bigquery"})
 SQL_STARTERS = {
     "SELECT",
     "INSERT",
@@ -282,15 +283,7 @@ class SQLFactory:
             msg = f"Failed to parse SQL: {e}"
             raise SQLBuilderError(msg) from e
         actual_type = type(parsed_expr).__name__.upper()
-        expr_type_map = {
-            "SELECT": "SELECT",
-            "INSERT": "INSERT",
-            "UPDATE": "UPDATE",
-            "DELETE": "DELETE",
-            "MERGE": "MERGE",
-            "WITH": "WITH",
-        }
-        actual_type_str = expr_type_map.get(actual_type, actual_type)
+        actual_type_str = actual_type
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
@@ -460,9 +453,7 @@ class SQLFactory:
         builder_dialect = dialect or self.dialect
         dialect_str = str(builder_dialect).lower() if builder_dialect else None
 
-        merge_supported = {"postgres", "postgresql", "oracle", "bigquery"}
-
-        if dialect_str in merge_supported:
+        if dialect_str in _MERGE_SUPPORTED_DIALECTS:
             return self.merge(table, dialect=builder_dialect)
 
         return self.insert(table, dialect=builder_dialect)
