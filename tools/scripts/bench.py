@@ -666,7 +666,7 @@ def raw_sqlite_read_heavy() -> None:
 def sqlspec_sqlite_initialization() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
 
@@ -674,7 +674,7 @@ def sqlspec_sqlite_initialization() -> None:
 def sqlspec_sqlite_write_heavy() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             # Use execute_many for bulk inserts
@@ -685,7 +685,7 @@ def sqlspec_sqlite_write_heavy() -> None:
 def sqlspec_sqlite_read_heavy() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
@@ -1369,7 +1369,7 @@ def sqlspec_sqlite_iterative_inserts() -> None:
     """Individual inserts in a loop - shows per-call overhead."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             for i in range(ROWS_TO_INSERT):
@@ -1417,7 +1417,7 @@ def sqlspec_sqlite_repeated_queries() -> None:
     """Repeated single-row queries - tests query cache effectiveness."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
@@ -2476,7 +2476,7 @@ def sqlspec_sqlite_dict_key_transform() -> None:
     """SELECT 10K rows with 10 columns, then transform keys to camelCase (sqlspec)."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_WIDE_TABLE)
             data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
@@ -2513,7 +2513,7 @@ def sqlspec_sqlite_schema_mapping() -> None:
     """SELECT 10K rows and map to TypedDict using schema_type= parameter."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_WIDE_TABLE)
             data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
@@ -2567,7 +2567,7 @@ def sqlspec_sqlite_complex_parameters() -> None:
     """INSERT rows with complex parameter types: UUID, datetime, JSON (sqlspec)."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_COMPLEX_TABLE)
             data: Sequence[tuple[str, str, str]] = [_generate_complex_row(i) for i in range(ROWS_TO_INSERT)]
@@ -2598,7 +2598,7 @@ def sqlspec_sqlite_thin_path_stress() -> None:
     stress_count = ROWS_TO_INSERT * 10
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             for i in range(stress_count):
