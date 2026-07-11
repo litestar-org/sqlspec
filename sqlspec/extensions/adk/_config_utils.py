@@ -103,9 +103,7 @@ def _adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStoreCon
     return {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
 
 
-def _apply_owner_id(
-    result: "_ADKSessionStoreConfig | _ADKMemoryStoreConfig", adk_config: dict[str, Any]
-) -> None:
+def _apply_owner_id(result: "_ADKSessionStoreConfig | _ADKMemoryStoreConfig", adk_config: dict[str, Any]) -> None:
     """Copy the configured owner column into normalized store settings."""
     owner_id = adk_config.get("owner_id_column")
     if owner_id is not None:

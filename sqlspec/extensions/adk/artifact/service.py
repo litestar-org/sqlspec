@@ -451,6 +451,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
         return [_record_to_artifact_version(r) for r in records]
+
     async def get_artifact_version(
         self,
         *,
