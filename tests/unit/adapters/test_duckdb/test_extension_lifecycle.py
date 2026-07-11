@@ -159,17 +159,53 @@ def test_load_failure_raises_when_required(monkeypatch: pytest.MonkeyPatch) -> N
         pool._create_connection()
 
 
-def test_install_failure_is_best_effort_by_default(
+def test_install_failure_with_successful_load_records_no_warning(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test E (install): a failing INSTALL is swallowed with a WARNING by default."""
-    _spy_connect(monkeypatch, fail_install=True)
+    """Test E (setup): install fails but a cached load succeeds => no WARNING (issue #636)."""
+    _spy_connect(monkeypatch, fail_install=True, fail_load=False)
+    pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[{"name": "postgres", "install": True}])
+
+    with caplog.at_level(logging.DEBUG):
+        pool._create_connection()
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+
+def test_install_and_load_failure_reports_single_setup_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test E (setup): install-fail + load-fail collapses to one WARNING carrying both errors (issue #636)."""
+    _spy_connect(monkeypatch, fail_install=True, fail_load=True)
     pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[{"name": "postgres", "install": True}])
 
     with caplog.at_level(logging.WARNING):
         pool._create_connection()
 
-    assert any("install" in record.message and record.levelno == logging.WARNING for record in caplog.records)
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].message == "pool.extension.setup.failed"
+    fields = warnings[0].__dict__["extra_fields"]
+    assert fields["install_error"] is not None
+    assert fields["load_error"] is not None
+
+
+def test_install_success_with_load_failure_reports_single_setup_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test E (setup): install-success + load-fail emits one setup WARNING (issue #636)."""
+    _spy_connect(monkeypatch, fail_install=False, fail_load=True)
+    pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[{"name": "postgres", "install": True}])
+
+    with caplog.at_level(logging.WARNING):
+        pool._create_connection()
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].message == "pool.extension.setup.failed"
+    fields = warnings[0].__dict__["extra_fields"]
+    assert fields["install_error"] is None
+    assert fields["load_error"] is not None
 
 
 def test_install_failure_raises_when_required(monkeypatch: pytest.MonkeyPatch) -> None:
