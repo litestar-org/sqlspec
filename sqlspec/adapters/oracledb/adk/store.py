@@ -72,6 +72,232 @@ ORACLE_DEFAULT_METADATA_TABLE: Final = "adk_internal_metadata"
 OracleDatabaseError: Final[type[Exception]] = cast("type[Exception]", oracledb.DatabaseError)
 
 
+_ADK_METADATA_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
+    "                key VARCHAR2(128) PRIMARY KEY,\n"
+    "                value VARCHAR2(512) NOT NULL\n"
+    "            )';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "        "
+)
+
+_ADK_METADATA_SEED_SQL_TEMPLATE = (
+    "\n"
+    "        BEGIN\n"
+    "            INSERT INTO {0} (key, value)\n"
+    "            SELECT 'schema_version', '1'\n"
+    "            FROM DUAL\n"
+    "            WHERE NOT EXISTS (\n"
+    "                SELECT 1 FROM {1} WHERE key = 'schema_version'\n"
+    "            );\n"
+    "        END;\n"
+    "        "
+)
+
+_ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE = ", {0}"
+
+_ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
+    "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
+    "                {1},\n"
+    "                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
+    "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{2}\n"
+    "            ){3}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user\n"
+    "                ON {5}(app_name, user_id)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_update_time\n"
+    "                ON {7}(update_time DESC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "        "
+)
+
+_ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
+    "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                session_id VARCHAR2(128) NOT NULL,\n"
+    "                invocation_id VARCHAR2(256),\n"
+    "                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
+    "                {1},\n"
+    "                CONSTRAINT fk_{2}_session FOREIGN KEY (session_id)\n"
+    "                    REFERENCES {3}(id) ON DELETE CASCADE\n"
+    "            ){4}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{5}_session\n"
+    "                ON {6}(session_id, timestamp ASC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{7}_invocation\n"
+    "                ON {8}(invocation_id)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{9}_timestamp\n"
+    "                ON {10}(timestamp ASC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "        "
+)
+
+_ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
+    "                app_name VARCHAR2(128) PRIMARY KEY,\n"
+    "                {1},\n"
+    "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
+    "            )';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "        "
+)
+
+_ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
+    "                {1},\n"
+    "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
+    "                PRIMARY KEY (app_name, user_id)\n"
+    "            )';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "        "
+)
+
+_ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE = ",\n                {0}"
+
+_ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{0}_fts\n"
+    "                ON {1}(content_text) INDEXTYPE IS CTXSYS.CONTEXT';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "            "
+)
+
+_ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
+    "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                session_id VARCHAR2(128) NOT NULL,\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
+    "                event_id VARCHAR2(128) NOT NULL UNIQUE,\n"
+    "                author VARCHAR2(256){1},\n"
+    "                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,\n"
+    "                {2},\n"
+    "                content_text CLOB NOT NULL,\n"
+    "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
+    "            ){3}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user_time\n"
+    "                ON {5}(app_name, user_id, timestamp DESC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_session\n"
+    "                ON {7}(session_id)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
+    "        END;\n"
+    "        {8}\n"
+    "        "
+)
+
+_ADK_JSON_COLUMN_DDL_TEMPLATE = "{0} JSON NOT NULL"
+
+_ADK_JSON_COLUMN_DDL_TEMPLATE_2 = "{0} BLOB CHECK ({1} IS JSON) NOT NULL"
+
+_ADK_JSON_COLUMN_DDL_TEMPLATE_3 = "{0} BLOB NOT NULL"
+
+
 class JSONStorageType(str, Enum):
     """JSON storage type based on Oracle version."""
 
@@ -810,32 +1036,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     async def _metadata_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._metadata_table} (
-                key VARCHAR2(128) PRIMARY KEY,
-                value VARCHAR2(512) NOT NULL
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
     async def _metadata_seed_sql(self) -> str:
         """Get Oracle SQL to seed the ADK schema-version metadata row."""
-        return f"""
-        BEGIN
-            INSERT INTO {self._metadata_table} (key, value)
-            SELECT 'schema_version', '1'
-            FROM DUAL
-            WHERE NOT EXISTS (
-                SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version'
-            );
-        END;
-        """
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -970,7 +1175,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         else:
             state_column = "state BLOB NOT NULL"
 
-        owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        owner_id_column_sql = (
+            _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
+            if self._owner_id_column_ddl
+            else ""
+        )
         table_clauses = _oracle_table_feature_clauses(
             self._config,
             "session",
@@ -979,43 +1188,16 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             range_partition_key="create_time",
         )
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                {state_column},
-                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
-                ON {self._session_table}(app_name, user_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
-                ON {self._session_table}(update_time DESC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE_2.format(
+            self._session_table,
+            state_column,
+            owner_id_column_sql,
+            table_clauses,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+        )
 
     def _events_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for events with specified storage type.
@@ -1038,94 +1220,31 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             range_partition_key="timestamp",
         )
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                session_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256),
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                {event_data_col},
-                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
-                    REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
-                ON {self._events_table}(session_id, timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_invocation
-                ON {self._events_table}(invocation_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_timestamp
-                ON {self._events_table}(timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(
+            self._events_table,
+            event_data_col,
+            self._events_table,
+            self._session_table,
+            table_clauses,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+        )
 
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._app_state_table} (
-                app_name VARCHAR2(128) PRIMARY KEY,
-                {state_column},
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column)
 
     def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._user_state_table} (
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                {state_column},
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                PRIMARY KEY (app_name, user_id)
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"""
@@ -1884,32 +2003,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def _metadata_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._metadata_table} (
-                key VARCHAR2(128) PRIMARY KEY,
-                value VARCHAR2(512) NOT NULL
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
     def _metadata_seed_sql(self) -> str:
         """Get Oracle SQL to seed the ADK schema-version metadata row."""
-        return f"""
-        BEGIN
-            INSERT INTO {self._metadata_table} (key, value)
-            SELECT 'schema_version', '1'
-            FROM DUAL
-            WHERE NOT EXISTS (
-                SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version'
-            );
-        END;
-        """
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Detect the appropriate JSON storage type based on Oracle version.
@@ -2040,7 +2138,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         else:
             state_column = "state BLOB NOT NULL"
 
-        owner_id_column_sql = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        owner_id_column_sql = (
+            _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
+            if self._owner_id_column_ddl
+            else ""
+        )
         table_clauses = _oracle_table_feature_clauses(
             self._config,
             "session",
@@ -2049,43 +2151,16 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             range_partition_key="create_time",
         )
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                {state_column},
-                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{owner_id_column_sql}
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_app_user
-                ON {self._session_table}(app_name, user_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._session_table}_update_time
-                ON {self._session_table}(update_time DESC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE_2.format(
+            self._session_table,
+            state_column,
+            owner_id_column_sql,
+            table_clauses,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+        )
 
     def _events_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for events with specified storage type.
@@ -2108,94 +2183,31 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             range_partition_key="timestamp",
         )
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                session_id VARCHAR2(128) NOT NULL,
-                invocation_id VARCHAR2(256),
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                {event_data_col},
-                CONSTRAINT fk_{self._events_table}_session FOREIGN KEY (session_id)
-                    REFERENCES {self._session_table}(id) ON DELETE CASCADE
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_session
-                ON {self._events_table}(session_id, timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_invocation
-                ON {self._events_table}(invocation_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._events_table}_timestamp
-                ON {self._events_table}(timestamp ASC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(
+            self._events_table,
+            event_data_col,
+            self._events_table,
+            self._session_table,
+            table_clauses,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+            self._events_table,
+        )
 
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._app_state_table} (
-                app_name VARCHAR2(128) PRIMARY KEY,
-                {state_column},
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column)
 
     def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._user_state_table} (
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                {state_column},
-                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                PRIMARY KEY (app_name, user_id)
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"""
@@ -2464,7 +2476,11 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 metadata_json BLOB
             """
 
-        owner_id_line = f",\n                {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        owner_id_line = (
+            _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
+            if self._owner_id_column_ddl
+            else ""
+        )
         table_clauses = _oracle_table_feature_clauses(
             self._config,
             "memory",
@@ -2475,60 +2491,19 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._memory_table}_fts
-                ON {self._memory_table}(content_text) INDEXTYPE IS CTXSYS.CONTEXT';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-            """
+            fts_index = _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_2.format(self._memory_table, self._memory_table)
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._memory_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                session_id VARCHAR2(128) NOT NULL,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                event_id VARCHAR2(128) NOT NULL UNIQUE,
-                author VARCHAR2(256){owner_id_line},
-                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-                {json_columns},
-                content_text CLOB NOT NULL,
-                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._memory_table}_app_user_time
-                ON {self._memory_table}(app_name, user_id, timestamp DESC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._memory_table}_session
-                ON {self._memory_table}(session_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        {fts_index}
-        """
+        return _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3.format(
+            self._memory_table,
+            owner_id_line,
+            json_columns,
+            table_clauses,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [
@@ -2814,7 +2789,11 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 metadata_json BLOB
             """
 
-        owner_id_line = f",\n                {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        owner_id_line = (
+            _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
+            if self._owner_id_column_ddl
+            else ""
+        )
         table_clauses = _oracle_table_feature_clauses(
             self._config,
             "memory",
@@ -2825,60 +2804,19 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._memory_table}_fts
-                ON {self._memory_table}(content_text) INDEXTYPE IS CTXSYS.CONTEXT';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-            """
+            fts_index = _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_2.format(self._memory_table, self._memory_table)
 
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._memory_table} (
-                id VARCHAR2(128) PRIMARY KEY,
-                session_id VARCHAR2(128) NOT NULL,
-                app_name VARCHAR2(128) NOT NULL,
-                user_id VARCHAR2(128) NOT NULL,
-                event_id VARCHAR2(128) NOT NULL UNIQUE,
-                author VARCHAR2(256){owner_id_line},
-                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-                {json_columns},
-                content_text CLOB NOT NULL,
-                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ){table_clauses}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._memory_table}_app_user_time
-                ON {self._memory_table}(app_name, user_id, timestamp DESC)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._memory_table}_session
-                ON {self._memory_table}(session_id)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        {fts_index}
-        """
+        return _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3.format(
+            self._memory_table,
+            owner_id_line,
+            json_columns,
+            table_clauses,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [
@@ -3093,10 +3031,10 @@ def _event_data_column_ddl(storage_type: JSONStorageType) -> str:
 def _json_column_ddl(column_name: str, storage_type: JSONStorageType) -> str:
     """Return an Oracle JSON column DDL fragment for the configured storage type."""
     if storage_type == JSONStorageType.JSON_NATIVE:
-        return f"{column_name} JSON NOT NULL"
+        return _ADK_JSON_COLUMN_DDL_TEMPLATE.format(column_name)
     if storage_type == JSONStorageType.BLOB_JSON:
-        return f"{column_name} BLOB CHECK ({column_name} IS JSON) NOT NULL"
-    return f"{column_name} BLOB NOT NULL"
+        return _ADK_JSON_COLUMN_DDL_TEMPLATE_2.format(column_name, column_name)
+    return _ADK_JSON_COLUMN_DDL_TEMPLATE_3.format(column_name)
 
 
 def _adk_config(config: Any) -> OracleADKConfig:

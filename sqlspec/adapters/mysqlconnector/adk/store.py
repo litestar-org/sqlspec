@@ -30,6 +30,104 @@ __all__ = (
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
+_ADK_METADATA_SEED_SQL_TEMPLATE = "INSERT IGNORE INTO {0} (`key`, value) VALUES ('schema_version', '1')"
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE = ",\n            {0}"
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = ",\n            FULLTEXT INDEX idx_{0}_fts (content_text)"
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+    "            author VARCHAR(256){1},\n"
+    "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
+    "            content_json JSON NOT NULL,\n"
+    "            content_text TEXT NOT NULL,\n"
+    "            metadata_json JSON,\n"
+    "            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
+    "            INDEX idx_{2}_app_user_time (app_name, user_id, timestamp),\n"
+    "            INDEX idx_{3}_session (session_id){4}{5}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{6}\n"
+    "        "
+)
+
+_ADK_MYSQL_SESSIONS_DDL_TEMPLATE = "\n            {0},"
+
+_ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,{1}\n"
+    "            state JSON NOT NULL,\n"
+    "            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
+    "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n"
+    "            INDEX idx_{2}_app_user (app_name, user_id),\n"
+    "            INDEX idx_{3}_update_time (update_time DESC){4}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{5}\n"
+    "        "
+)
+
+_ADK_MYSQL_EVENTS_DDL_TEMPLATE = (
+    ",\n"
+    "            INDEX idx_{0}_author_gc (session_id, author_gc, timestamp ASC),\n"
+    "            INDEX idx_{1}_node_path_gc (session_id, node_path_gc, timestamp ASC)"
+)
+
+_ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            invocation_id VARCHAR(256) NOT NULL,\n"
+    "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
+    "            event_data JSON NOT NULL{1},\n"
+    "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE,\n"
+    "            INDEX idx_{3}_scope (app_name, user_id, session_id, timestamp ASC{4}),\n"
+    "            INDEX idx_{5}_session (session_id, timestamp ASC{6}){7}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{8}\n"
+    "        "
+)
+
+_ADK_MYSQL_APP_STATE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) PRIMARY KEY,\n"
+    "            state JSON NOT NULL,\n"
+    "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{1}\n"
+    "        "
+)
+
+_ADK_MYSQL_USER_STATE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            state JSON NOT NULL,\n"
+    "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n"
+    "            PRIMARY KEY (app_name, user_id)\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{1}\n"
+    "        "
+)
+
+_ADK_MYSQL_METADATA_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            `key` VARCHAR(128) PRIMARY KEY,\n"
+    "            value VARCHAR(512) NOT NULL\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci\n"
+    "        "
+)
+
+
 class MysqlConnectorADKConfig(ADKConfig):
     """mysql-connector-specific ADK extension settings.
 
@@ -387,7 +485,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         return _mysql_metadata_ddl(self._metadata_table)
 
     async def _metadata_seed_sql(self) -> str:
-        return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -751,7 +849,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         return _mysql_metadata_ddl(self._metadata_table)
 
     def _metadata_seed_sql(self) -> str:
-        return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -932,32 +1030,24 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         fk_constraint = ""
         if self._owner_id_column_ddl:
             col_def, fk_def = _mysql_owner_id_column_parts(self._owner_id_column_ddl)
-            owner_id_line = f",\n            {col_def}"
+            owner_id_line = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(col_def)
             if fk_def:
-                fk_constraint = f",\n            {fk_def}"
+                fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table)
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
-            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
-        """
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
+            self._memory_table,
+            owner_id_line,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+            fk_constraint,
+            table_options,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
@@ -1128,32 +1218,24 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         fk_constraint = ""
         if self._owner_id_column_ddl:
             col_def, fk_def = _mysql_owner_id_column_parts(self._owner_id_column_ddl)
-            owner_id_line = f",\n            {col_def}"
+            owner_id_line = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(col_def)
             if fk_def:
-                fk_constraint = f",\n            {fk_def}"
+                fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table)
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._memory_table}_app_user_time (app_name, user_id, timestamp),
-            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
-        """
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
+            self._memory_table,
+            owner_id_line,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+            fk_constraint,
+            table_options,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
@@ -1361,22 +1443,13 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
     fk_constraint = ""
     if owner_id_column_ddl:
         col_def, fk_def = _mysql_owner_id_column_parts(owner_id_column_ddl)
-        owner_id_line = f"\n            {col_def},"
+        owner_id_line = _ADK_MYSQL_SESSIONS_DDL_TEMPLATE.format(col_def)
         if fk_def:
-            fk_constraint = f",\n            {fk_def}"
+            fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
-    return f"""
-        CREATE TABLE IF NOT EXISTS {session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,{owner_id_line}
-            state JSON NOT NULL,
-            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{session_table}_app_user (app_name, user_id),
-            INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
-        """
+    return _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2.format(
+        session_table, owner_id_line, session_table, session_table, fk_constraint, table_options
+    )
 
 
 def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping[str, Any] | None = None) -> str:
@@ -1387,58 +1460,34 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED,
             node_path_gc VARCHAR(512) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.node_info.path'))) STORED"""
-        generated_indexes = f""",
-            INDEX idx_{events_table}_author_gc (session_id, author_gc, timestamp ASC),
-            INDEX idx_{events_table}_node_path_gc (session_id, node_path_gc, timestamp ASC)"""
+        generated_indexes = _ADK_MYSQL_EVENTS_DDL_TEMPLATE.format(events_table, events_table)
 
     covering_column = ", invocation_id" if adk_config.get("enable_covering_indexes", False) else ""
     table_options = _mysql_table_options(adk_config, "events_table_options")
 
-    return f"""
-        CREATE TABLE IF NOT EXISTS {events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256) NOT NULL,
-            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            event_data JSON NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC{covering_column}),
-            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}){generated_indexes}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
-        """
+    return _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2.format(
+        events_table,
+        generated_columns,
+        session_table,
+        events_table,
+        covering_column,
+        events_table,
+        covering_column,
+        generated_indexes,
+        table_options,
+    )
 
 
 def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
-    return f"""
-        CREATE TABLE IF NOT EXISTS {app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSON NOT NULL,
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
-        """
+    return _ADK_MYSQL_APP_STATE_DDL_TEMPLATE.format(app_state_table, table_options)
 
 
 def _mysql_user_state_ddl(user_state_table: str, table_options: str = "") -> str:
-    return f"""
-        CREATE TABLE IF NOT EXISTS {user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSON NOT NULL,
-            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            PRIMARY KEY (app_name, user_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
-        """
+    return _ADK_MYSQL_USER_STATE_DDL_TEMPLATE.format(user_state_table, table_options)
 
 
 def _mysql_metadata_ddl(metadata_table: str) -> str:
-    return f"""
-        CREATE TABLE IF NOT EXISTS {metadata_table} (
-            `key` VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
+    return _ADK_MYSQL_METADATA_DDL_TEMPLATE.format(metadata_table)
 
 
 def _mysql_upsert_app_state_sql(app_state_table: str) -> str:

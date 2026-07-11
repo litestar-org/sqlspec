@@ -31,6 +31,131 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
 
 
+_ADK_SESSIONS_TABLE_DDL_TEMPLATE = ",\n            {0}"
+
+_ADK_SESSIONS_TABLE_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL{1},\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{2}_app_user\n"
+    "            ON {3}(app_name, user_id);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{4}_update_time\n"
+    "            ON {5}(update_time DESC);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{6}_state\n"
+    "            ON {7} USING GIN (state)\n"
+    "            WHERE state != '{{}}'::jsonb;\n"
+    "        "
+)
+
+_ADK_EVENTS_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            invocation_id VARCHAR(256),\n"
+    "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            event_data JSONB NOT NULL{1},\n"
+    "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
+    "            ON {4}(session_id, timestamp ASC){5};\n"
+    "        {6}\n"
+    "        "
+)
+
+_ADK_APP_STATES_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) PRIMARY KEY,\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "        "
+)
+
+_ADK_USER_STATES_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
+    "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            PRIMARY KEY (app_name, user_id)\n"
+    "        ) WITH (fillfactor = 80);\n"
+    "        "
+)
+
+_ADK_METADATA_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            key VARCHAR(128) PRIMARY KEY,\n"
+    "            value VARCHAR(512) NOT NULL\n"
+    "        );\n"
+    "        "
+)
+
+_ADK_METADATA_SEED_SQL_TEMPLATE = (
+    "\n"
+    "        INSERT INTO {0} (key, value)\n"
+    "        VALUES ('schema_version', '1')\n"
+    "        ON CONFLICT (key) DO NOTHING\n"
+    "        "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE = (
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{0}_fts\n"
+    "            ON {1} USING GIN (to_tsvector('english', content_text));\n"
+    "            "
+)
+
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
+    "\n"
+    "        CREATE TABLE IF NOT EXISTS {0} (\n"
+    "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+    "            author VARCHAR(256){1},\n"
+    "            timestamp TIMESTAMPTZ NOT NULL,\n"
+    "            content_json JSONB NOT NULL,\n"
+    "            content_text TEXT NOT NULL,\n"
+    "            metadata_json JSONB,\n"
+    "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "        );\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{2}_app_user_time\n"
+    "            ON {3}(app_name, user_id, timestamp DESC);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{4}_session\n"
+    "            ON {5}(session_id);\n"
+    "        {6}\n"
+    "        "
+)
+
+_ADK_POSTGRES_EVENT_DDL_OPTIONS_TEMPLATE = (
+    "\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{0}_author_gc\n"
+    "            ON {1}(session_id, author_gc, timestamp ASC);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{2}_node_path_gc\n"
+    "            ON {3}(session_id, node_path_gc, timestamp ASC);\n"
+    "        "
+)
+
+
 class PsycopgADKConfig(ADKConfig):
     """Psycopg-specific ADK extension settings.
 
@@ -458,28 +583,18 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
+        return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
+            self._session_table,
+            owner_id_line,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+        )
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -487,55 +602,27 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             adk_config, self._events_table
         )
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
-        {generated_indexes}
-        """
+        return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
+            self._events_table,
+            generated_columns,
+            self._session_table,
+            self._events_table,
+            self._events_table,
+            covering_columns,
+            generated_indexes,
+        )
 
     async def _app_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-        """
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table)
 
     async def _user_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (app_name, user_id)
-        ) WITH (fillfactor = 80);
-        """
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table)
 
     async def _metadata_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
-            key VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        );
-        """
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
     async def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
-        """
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -954,28 +1041,18 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
     def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL{owner_id_line},
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
-        """
+        return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
+            self._session_table,
+            owner_id_line,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+            self._session_table,
+        )
 
     def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -983,55 +1060,27 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             adk_config, self._events_table
         )
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            invocation_id VARCHAR(256),
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSONB NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
-        {generated_indexes}
-        """
+        return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
+            self._events_table,
+            generated_columns,
+            self._session_table,
+            self._events_table,
+            self._events_table,
+            covering_columns,
+            generated_indexes,
+        )
 
     def _app_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._app_state_table} (
-            app_name VARCHAR(128) PRIMARY KEY,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-        """
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table)
 
     def _user_states_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._user_state_table} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (app_name, user_id)
-        ) WITH (fillfactor = 80);
-        """
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table)
 
     def _metadata_table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._metadata_table} (
-            key VARCHAR(128) PRIMARY KEY,
-            value VARCHAR(512) NOT NULL
-        );
-        """
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
     def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
-        """
+        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -1184,37 +1233,21 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         """Get PostgreSQL CREATE TABLE SQL for memory entries."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
+            self._memory_table,
+            owner_id_line,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
@@ -1375,37 +1408,21 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         """Get PostgreSQL CREATE TABLE SQL for memory entries."""
         owner_id_line = ""
         if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+            owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
+            self._memory_table,
+            owner_id_line,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            self._memory_table,
+            fts_index,
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
@@ -1523,14 +1540,9 @@ def _postgres_event_ddl_options(adk_config: PsycopgADKConfig, events_table: str)
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED,
             node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED"""
-        generated_indexes = f"""
-
-        CREATE INDEX IF NOT EXISTS idx_{events_table}_author_gc
-            ON {events_table}(session_id, author_gc, timestamp ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_{events_table}_node_path_gc
-            ON {events_table}(session_id, node_path_gc, timestamp ASC);
-        """
+        generated_indexes = _ADK_POSTGRES_EVENT_DDL_OPTIONS_TEMPLATE.format(
+            events_table, events_table, events_table, events_table
+        )
 
     covering_columns = ""
     if adk_config.get("enable_covering_indexes", False):
