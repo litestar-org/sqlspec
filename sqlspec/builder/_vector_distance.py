@@ -34,16 +34,8 @@ _MYSQL_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _ORACLE_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _BIGQUERY_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _DUCKDB_OPERATOR_TRANSFORM: _OperatorTransform | None = None
-_POSTGRES_VECTOR_OPERATOR_MAP: Final[dict[str, str]] = {
-    "euclidean": "<->",
-    "cosine": "<=>",
-    "inner_product": "<#>",
-}
-_MYSQL_VECTOR_METRIC_MAP: Final[dict[str, str]] = {
-    "euclidean": "EUCLIDEAN",
-    "cosine": "COSINE",
-    "inner_product": "DOT",
-}
+_POSTGRES_VECTOR_OPERATOR_MAP: Final[dict[str, str]] = {"euclidean": "<->", "cosine": "<=>", "inner_product": "<#>"}
+_MYSQL_VECTOR_METRIC_MAP: Final[dict[str, str]] = {"euclidean": "EUCLIDEAN", "cosine": "COSINE", "inner_product": "DOT"}
 _ORACLE_VECTOR_METRIC_MAP: Final[dict[str, str]] = {
     "euclidean": "EUCLIDEAN",
     "cosine": "COSINE",

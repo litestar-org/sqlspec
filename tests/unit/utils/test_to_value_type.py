@@ -225,6 +225,7 @@ def test_msgspec_conversion_does_not_walk_numpy_for_plain_payload(monkeypatch: p
 
 def test_list_schema_alias_is_cached() -> None:
     """Repeated schema conversion reuses its parameterized list type."""
+
     class User(msgspec.Struct):
         id: int
 

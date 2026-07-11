@@ -513,10 +513,7 @@ class ParameterProcessor:
         return None
 
     def _coerce_parameter_types(
-        self,
-        parameters: "ParameterPayload",
-        config: "ParameterStyleConfig",
-        is_many: bool = False,
+        self, parameters: "ParameterPayload", config: "ParameterStyleConfig", is_many: bool = False
     ) -> "ConvertedParameters":
         result = _coerce_parameters_payload(
             parameters, config.type_coercion_map, config._type_coercion_fallback_items, is_many
