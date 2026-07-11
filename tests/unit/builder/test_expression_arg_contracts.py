@@ -6,6 +6,8 @@ clause vanished from rendered SQL without an error. Assertions render the
 expression and require the full clause text.
 """
 
+from typing import Any, cast
+
 import pytest
 from sqlglot import exp
 
@@ -76,6 +78,9 @@ def test_column_not_any_renders_operand_array() -> None:
 
 
 def test_builder_expressions_satisfy_required_sqlglot_arguments() -> None:
+    ordered_select = cast("Any", sql.select("a").from_("t")).order_by(exp.alias_(exp.column("a"), "asc"))
+    ordered_expression = ordered_select.get_expression()
+    assert ordered_expression is not None
     expressions = [
         sql.coalesce("a", "b").expression,
         sql.nvl("a", "b").expression,
@@ -83,14 +88,7 @@ def test_builder_expressions_satisfy_required_sqlglot_arguments() -> None:
         Column("a").asc(),
         Column("a").desc(),
         next(sql.row_number_.order_by(exp.column("a")).build().find_all(exp.Ordered)),
-        next(
-            sql
-            .select("a")
-            .from_("t")
-            .order_by(exp.alias_(exp.column("a"), "asc"))
-            .get_expression()
-            .find_all(exp.Ordered)
-        ),
+        next(ordered_expression.find_all(exp.Ordered)),
         next(
             build_column_expression(ColumnDefinition("id", "INT", auto_increment=True)).find_all(
                 exp.AutoIncrementColumnConstraint

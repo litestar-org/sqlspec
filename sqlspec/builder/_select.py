@@ -652,7 +652,7 @@ class WhereClauseMixin:
         if has_expression_and_sql(subquery):
 
             def parse_subquery(sql_text: str) -> exp.Expr:
-                parsed_from_sql = exp.maybe_parse(sql_text, dialect=builder.dialect)
+                parsed_from_sql: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
                 if parsed_from_sql is None:
                     msg = f"Could not parse subquery SQL: {sql_text}"
                     raise SQLBuilderError(msg)

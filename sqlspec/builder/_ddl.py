@@ -898,7 +898,9 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             index_params.set("where", exp.Where(this=where_expr))
 
         index_expr = exp.Index(
-            this=exp.to_identifier(self._index_name), table=exp.to_table(self._table_name), params=index_params
+            this=exp.to_identifier(self._index_name),
+            table=exp.to_table(cast("str", self._table_name)),
+            params=index_params,
         )
 
         return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
@@ -1068,7 +1070,7 @@ class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
                     if has_with_method(select_expr):
                         select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
 
-        create_target: exp.Expr = exp.to_table(self._table_name)
+        create_target: exp.Expr = exp.to_table(cast("str", self._table_name))
         if self._columns:
             create_target = exp.Schema(this=create_target, expressions=[exp.to_identifier(c) for c in self._columns])
 
