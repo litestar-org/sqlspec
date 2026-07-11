@@ -1222,7 +1222,8 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
 
 def test_coerce_parameter_types_returns_decimal_scalar(processor: "ParameterProcessor") -> None:
     """Test scalar type coercion results are preserved."""
-    result = processor._coerce_parameter_types(Decimal("3.14"), {Decimal: float})
+    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={Decimal: float})
+    result = processor._coerce_parameter_types(Decimal("3.14"), config)
     assert result == 3.14
     assert isinstance(result, float)
 
@@ -1233,8 +1234,18 @@ def test_coerce_parameter_types_returns_custom_scalar(processor: "ParameterProce
     class CustomValue:
         pass
 
-    result = processor._coerce_parameter_types(CustomValue(), {CustomValue: lambda value: "coerced"})
+    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={CustomValue: lambda value: "coerced"})
+    result = processor._coerce_parameter_types(CustomValue(), config)
     assert result == "coerced"
+
+
+def test_parameter_style_config_caches_type_coercion_fallback_items() -> None:
+    """Construction and replacement keep fallback items synchronized."""
+    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={Decimal: float})
+    replacement = config.replace(type_coercion_map={int: str})
+
+    assert config._type_coercion_fallback_items == tuple(config.type_coercion_map.items())
+    assert replacement._type_coercion_fallback_items == tuple(replacement.type_coercion_map.items())
 
 
 def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterProcessor") -> None:
