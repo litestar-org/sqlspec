@@ -12,7 +12,12 @@ from sqlspec.adapters.mssql_python._typing import (
     MssqlPythonRawCursor,
     MssqlPythonSessionContext,
 )
-from sqlspec.adapters.mssql_python.core import create_mapped_exception, default_statement_config, driver_profile
+from sqlspec.adapters.mssql_python.core import (
+    create_mapped_exception,
+    default_statement_config,
+    driver_profile,
+    materialize_tuple_rows,
+)
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
 from sqlspec.core import (
     build_arrow_result_from_reader,
@@ -162,7 +167,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         _execute_cursor(cursor, sql, prepared_parameters)
 
         if statement.returns_rows():
-            fetched = cursor.fetchall()
+            fetched = materialize_tuple_rows(cursor.fetchall())
             column_names = _resolve_column_names(cursor.description, self._column_name_cache)
             return self.create_execution_result(
                 cursor,
