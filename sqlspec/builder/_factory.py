@@ -5,7 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, final
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
@@ -98,6 +98,7 @@ __all__ = (
 logger = get_logger("sqlspec.builder.factory")
 
 BuilderT = TypeVar("BuilderT", bound=QueryBuilder)
+ColumnLike: TypeAlias = Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"]
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -973,7 +974,7 @@ class SQLFactory:
         return SQL(sql_fragment, parameters)
 
     def count(
-        self, column: Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"] = "*", distinct: bool = False
+        self, column: ColumnLike = "*", distinct: bool = False
     ) -> AggregateExpression:
         """Create a COUNT expression.
 
@@ -994,7 +995,7 @@ class SQLFactory:
             expr = exp.Count(this=exp.Distinct(expressions=[col_expr])) if distinct else exp.Count(this=col_expr)
         return AggregateExpression(expr)
 
-    def count_distinct(self, column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def count_distinct(self, column: ColumnLike) -> AggregateExpression:
         """Create a COUNT(DISTINCT column) expression.
 
         Args:
@@ -1007,7 +1008,7 @@ class SQLFactory:
 
     def count_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"] = "*",
+        column: ColumnLike = "*",
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1042,7 +1043,7 @@ class SQLFactory:
 
     def sum_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1061,7 +1062,7 @@ class SQLFactory:
 
     def avg_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1080,7 +1081,7 @@ class SQLFactory:
 
     def max_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1099,7 +1100,7 @@ class SQLFactory:
 
     def min_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1117,7 +1118,7 @@ class SQLFactory:
         return self._create_window_function("MIN", [col_expr], partition_by, order_by)
 
     @staticmethod
-    def sum(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"], distinct: bool = False) -> AggregateExpression:
+    def sum(column: ColumnLike, distinct: bool = False) -> AggregateExpression:
         """Create a SUM expression.
 
         Args:
@@ -1133,7 +1134,7 @@ class SQLFactory:
         return AggregateExpression(exp.Sum(this=col_expr))
 
     @staticmethod
-    def avg(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def avg(column: ColumnLike) -> AggregateExpression:
         """Create an AVG expression.
 
         Args:
@@ -1146,7 +1147,7 @@ class SQLFactory:
         return AggregateExpression(exp.Avg(this=col_expr))
 
     @staticmethod
-    def max(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def max(column: ColumnLike) -> AggregateExpression:
         """Create a MAX expression.
 
         Args:
@@ -1159,7 +1160,7 @@ class SQLFactory:
         return AggregateExpression(exp.Max(this=col_expr))
 
     @staticmethod
-    def min(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def min(column: ColumnLike) -> AggregateExpression:
         """Create a MIN expression.
 
         Args:
@@ -1264,7 +1265,7 @@ class SQLFactory:
         return StringExpression(exp.Concat(expressions=exprs))
 
     @staticmethod
-    def upper(column: str | exp.Expr) -> StringExpression:
+    def upper(column: ColumnLike) -> StringExpression:
         """Create an UPPER expression.
 
         Args:
@@ -1273,11 +1274,11 @@ class SQLFactory:
         Returns:
             UPPER expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return StringExpression(exp.Upper(this=col_expr))
 
     @staticmethod
-    def lower(column: str | exp.Expr) -> StringExpression:
+    def lower(column: ColumnLike) -> StringExpression:
         """Create a LOWER expression.
 
         Args:
@@ -1286,11 +1287,11 @@ class SQLFactory:
         Returns:
             LOWER expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return StringExpression(exp.Lower(this=col_expr))
 
     @staticmethod
-    def length(column: str | exp.Expr) -> StringExpression:
+    def length(column: ColumnLike) -> StringExpression:
         """Create a LENGTH expression.
 
         Args:
@@ -1299,11 +1300,11 @@ class SQLFactory:
         Returns:
             LENGTH expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return StringExpression(exp.Length(this=col_expr))
 
     @staticmethod
-    def round(column: str | exp.Expr, decimals: int = 0) -> MathExpression:
+    def round(column: ColumnLike, decimals: int = 0) -> MathExpression:
         """Create a ROUND expression.
 
         Args:
@@ -1313,7 +1314,7 @@ class SQLFactory:
         Returns:
             ROUND expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         if decimals == 0:
             return MathExpression(exp.Round(this=col_expr))
         return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(decimals)))
@@ -1341,7 +1342,7 @@ class SQLFactory:
         return FunctionExpression(exp.convert(value))
 
     @staticmethod
-    def decode(column: str | exp.Expr, *args: str | exp.Expr | Any) -> FunctionExpression:
+    def decode(column: ColumnLike, *args: str | exp.Expr | Any) -> FunctionExpression:
         """Create a DECODE expression (Oracle-style conditional logic).
 
         DECODE compares column to each search value and returns the corresponding result.
@@ -1358,7 +1359,7 @@ class SQLFactory:
         Returns:
             CASE expression equivalent to DECODE.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
 
         if len(args) < MIN_DECODE_ARGS:
             msg = "DECODE requires at least one search/result pair"
@@ -1384,7 +1385,7 @@ class SQLFactory:
         return FunctionExpression(exp.Case(ifs=conditions, default=default))
 
     @staticmethod
-    def cast(column: str | exp.Expr, data_type: str) -> ConversionExpression:
+    def cast(column: ColumnLike, data_type: str) -> ConversionExpression:
         """Create a CAST expression for type conversion.
 
         Args:
@@ -1394,7 +1395,7 @@ class SQLFactory:
         Returns:
             CAST expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return ConversionExpression(exp.Cast(this=col_expr, to=exp.DataType.build(data_type)))
 
     @staticmethod
@@ -1411,7 +1412,7 @@ class SQLFactory:
         return ConversionExpression(exp.Coalesce(expressions=exprs))
 
     @staticmethod
-    def nvl(column: str | exp.Expr, substitute_value: str | exp.Expr | Any) -> ConversionExpression:
+    def nvl(column: ColumnLike, substitute_value: str | exp.Expr | Any) -> ConversionExpression:
         """Create an NVL (Oracle-style) expression using COALESCE.
 
         Args:
@@ -1421,13 +1422,13 @@ class SQLFactory:
         Returns:
             COALESCE expression equivalent to NVL.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         sub_expr = to_expression(substitute_value)
         return ConversionExpression(exp.Coalesce(expressions=[col_expr, sub_expr]))
 
     @staticmethod
     def nvl2(
-        column: str | exp.Expr, value_if_not_null: str | exp.Expr | Any, value_if_null: str | exp.Expr | Any
+        column: ColumnLike, value_if_not_null: str | exp.Expr | Any, value_if_null: str | exp.Expr | Any
     ) -> ConversionExpression:
         """Create an NVL2 (Oracle-style) expression using CASE.
 
@@ -1442,7 +1443,7 @@ class SQLFactory:
         Returns:
             CASE expression equivalent to NVL2.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         not_null_expr = to_expression(value_if_not_null)
         null_expr = to_expression(value_if_null)
 
@@ -1542,7 +1543,7 @@ class SQLFactory:
 
     def lag(
         self,
-        column: str | exp.Expr,
+        column: ColumnLike,
         offset: int = 1,
         default: Any = None,
         partition_by: str | list[str] | exp.Expr | None = None,
@@ -1562,7 +1563,7 @@ class SQLFactory:
         Returns:
             LAG window function expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
         if default is not None:
             func_args.append(exp.convert(default))
@@ -1570,7 +1571,7 @@ class SQLFactory:
 
     def lead(
         self,
-        column: str | exp.Expr,
+        column: ColumnLike,
         offset: int = 1,
         default: Any = None,
         partition_by: str | list[str] | exp.Expr | None = None,
@@ -1590,7 +1591,7 @@ class SQLFactory:
         Returns:
             LEAD window function expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
         if default is not None:
             func_args.append(exp.convert(default))

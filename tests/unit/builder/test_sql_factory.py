@@ -55,6 +55,55 @@ def test_decode_renders_trailing_default_else_clause() -> None:
     assert "ELSE 0" in rendered.upper()
 
 
+@pytest.mark.parametrize(
+    "function",
+    [
+        lambda value: sql.upper(value),
+        lambda value: sql.lower(value),
+        lambda value: sql.length(value),
+        lambda value: sql.round(value),
+        lambda value: sql.decode(value, "active", 1),
+        lambda value: sql.cast(value, "TEXT"),
+        lambda value: sql.nvl(value, 0),
+        lambda value: sql.nvl2(value, 1, 0),
+        lambda value: sql.lag(value),
+        lambda value: sql.lead(value),
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        Column("amount"),
+        ExpressionWrapper(exp.column("amount")),
+        sql.case().when("amount > 0", 1).else_(0),
+    ],
+)
+def test_scalar_functions_accept_builder_expressions(function: object, value: object) -> None:
+    result = function(value)  # type: ignore[operator]
+    assert isinstance(result.expression, exp.Expr)  # type: ignore[attr-defined]
+    assert result.expression.sql()  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "function",
+    [
+        lambda value: sql.count_distinct(value),
+        lambda value: sql.sum_over(value),
+        lambda value: sql.avg_over(value),
+        lambda value: sql.max_over(value),
+        lambda value: sql.min_over(value),
+        lambda value: sql.sum(value),
+        lambda value: sql.avg(value),
+        lambda value: sql.max(value),
+        lambda value: sql.min(value),
+    ],
+)
+def test_aggregate_functions_accept_columns(function: object) -> None:
+    result = function(Column("amount"))  # type: ignore[operator]
+    assert isinstance(result.expression, exp.Expr)  # type: ignore[attr-defined]
+    assert result.expression.sql()  # type: ignore[attr-defined]
+
+
 def test_where_eq_uses_placeholder_not_var() -> None:
     """Test that where_eq uses Placeholder instead of var for parameters."""
     query = sql.select("*").from_("users").where_eq("name", "John")
