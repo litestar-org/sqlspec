@@ -18,8 +18,10 @@ from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import JoinClauseMixin, _attach_as_of_version
 from sqlspec.builder._parsing_utils import (
     _PARAMETER_VALIDATOR,
+    _coerce_column,
     extract_column_name,
     extract_expression,
+    extract_sql_object_expression,
     parse_column_expression,
     parse_condition_expression,
     parse_order_expression,
@@ -29,6 +31,7 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.core import SQL, ParameterStyle, SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
+    has_expression_and_parameters,
     has_expression_and_sql,
     has_parameter_builder,
     has_sqlglot_expression,
@@ -197,7 +200,7 @@ class SubqueryBuilder:
         if self._operation == "exists":
             return exp.Exists(this=subquery_expr)
         if self._operation == "in":
-            return exp.In(expressions=[subquery_expr])
+            return exp.In(this=exp.Var(this=""), expressions=[subquery_expr])
         if self._operation == "any":
             return exp.Any(this=subquery_expr)
         if self._operation == "all":
@@ -222,7 +225,7 @@ class WindowFunctionBuilder:
         return self
 
     def partition_by(self, *columns: str | exp.Expr) -> "WindowFunctionBuilder":
-        self._partition_by = [exp.column(column) if isinstance(column, str) else column for column in columns]
+        self._partition_by = [_coerce_column(column) for column in columns]
         return self
 
     def order_by(self, *columns: str | exp.Expr) -> "WindowFunctionBuilder":
@@ -233,7 +236,7 @@ class WindowFunctionBuilder:
             elif isinstance(column, exp.Ordered):
                 ordered_columns.append(column)
             else:
-                ordered_columns.append(exp.Ordered(this=column, desc=False))
+                ordered_columns.append(exp.Ordered(this=column, desc=False, nulls_first=False))
         self._order_by = ordered_columns
         return self
 
@@ -357,25 +360,24 @@ class SelectClauseMixin:
             return cast("Self", builder)
 
         for column in columns:
-            column_expr = exp.column(column) if isinstance(column, str) else column
+            column_expr = _coerce_column(column)
             select_expr = select_expr.group_by(column_expr, copy=False)
         builder.set_expression(select_expr)
         return cast("Self", builder)
 
     def group_by_rollup(self, *columns: str | exp.Expr) -> Self:
-        column_exprs = [exp.column(column) if isinstance(column, str) else column for column in columns]
+        column_exprs = [_coerce_column(column) for column in columns]
         rollup_expr = exp.Rollup(expressions=column_exprs)
         return self.group_by(rollup_expr)
 
     def group_by_cube(self, *columns: str | exp.Expr) -> Self:
-        column_exprs = [exp.column(column) if isinstance(column, str) else column for column in columns]
+        column_exprs = [_coerce_column(column) for column in columns]
         cube_expr = exp.Cube(expressions=column_exprs)
         return self.group_by(cube_expr)
 
     def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
         grouping_sets = [
-            exp.Tuple(expressions=[exp.column(col) if isinstance(col, str) else col for col in column_set])
-            for column_set in column_sets
+            exp.Tuple(expressions=[_coerce_column(col) for col in column_set]) for column_set in column_sets
         ]
         grouping_expr = exp.GroupingSets(expressions=grouping_sets)
         return self.group_by(grouping_expr)
@@ -402,7 +404,9 @@ class OrderByClauseMixin:
                 if isinstance(extracted_item, exp.Alias):
                     alias_name = (extracted_item.alias or "").lower()
                     if alias_name in {"asc", "desc"}:
-                        extracted_item = exp.Ordered(this=extracted_item.this, desc=alias_name == "desc")
+                        extracted_item = exp.Ordered(
+                            this=extracted_item.this, desc=alias_name == "desc", nulls_first=False
+                        )
                 order_item = (
                     extracted_item.desc() if desc and not isinstance(extracted_item, exp.Ordered) else extracted_item
                 )
@@ -646,17 +650,16 @@ class WhereClauseMixin:
                 builder.add_parameter(parameters)
             return subquery_expr
 
-        if has_expression_and_sql(subquery):
-            self._merge_parameters(subquery)
-            expression_attr = subquery.expression
-            if isinstance(expression_attr, exp.Expr):
-                return expression_attr
-            sql_text = subquery.sql
-            parsed_from_sql: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
-            if parsed_from_sql is None:
-                msg = f"Could not parse subquery SQL: {sql_text}"
-                raise SQLBuilderError(msg)
-            return parsed_from_sql
+        if has_expression_and_sql(subquery) or has_expression_and_parameters(subquery):
+
+            def parse_subquery(sql_text: str) -> exp.Expr:
+                parsed_from_sql: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
+                if parsed_from_sql is None:
+                    msg = f"Could not parse subquery SQL: {sql_text}"
+                    raise SQLBuilderError(msg)
+                return parsed_from_sql
+
+            return extract_sql_object_expression(subquery, builder=self, parse_sql=parse_subquery)
 
         if isinstance(subquery, exp.Expr):
             return subquery
@@ -777,16 +780,10 @@ class WhereClauseMixin:
             if isinstance(raw_expr, exp.Expr):
                 return builder._parameterize_expression(_normalize_condition_expression(raw_expr))
             return parse_condition_expression(str(condition))
-        if has_expression_and_sql(condition):
-            expression_attr = condition.expression
-            if isinstance(expression_attr, exp.Expr):
-                self._merge_parameters(condition)
-                return _normalize_condition_expression(expression_attr)
-            sql_text = getattr(condition, "raw_sql", None)
-            if sql_text is None:
-                sql_text = condition.sql
-            self._merge_parameters(condition)
-            return parse_condition_expression(sql_text)
+        if has_expression_and_sql(condition) or has_expression_and_parameters(condition):
+            return _normalize_condition_expression(
+                extract_sql_object_expression(condition, builder=self, parse_sql=parse_condition_expression)
+            )
 
         msg = f"Unsupported condition type: {type(condition).__name__}"
         raise SQLBuilderError(msg)
@@ -1053,8 +1050,8 @@ class PivotClauseMixin:
             raise TypeError(msg)
 
         agg_name = aggregate_function if isinstance(aggregate_function, str) else aggregate_function.name
-        agg_column = exp.column(aggregate_column) if isinstance(aggregate_column, str) else aggregate_column
-        pivot_col_expr = exp.column(pivot_column) if isinstance(pivot_column, str) else pivot_column
+        agg_column = _coerce_column(aggregate_column)
+        pivot_col_expr = _coerce_column(pivot_column)
 
         pivot_agg_expr = exp.func(agg_name, agg_column)
 

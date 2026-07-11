@@ -18,7 +18,7 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import extract_sql_object_expression
+from sqlspec.builder._parsing_utils import _coerce_column, _resolve_dialect, extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
@@ -137,7 +137,7 @@ class _MergeAssignmentMixin:
         return False
 
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expr:
-        column_identifier = exp.column(target_column) if isinstance(target_column, str) else target_column
+        column_identifier = _coerce_column(target_column)
 
         if has_expression_and_sql(value):
             value_expr = extract_sql_object_expression(value, builder=self)
@@ -724,7 +724,7 @@ class Merge(
             Built statement object.
         """
         self._validate_dialect_support()
-        target_dialect = dialect or self.dialect
+        target_dialect = _resolve_dialect(dialect, self.dialect)
         if isinstance(target_dialect, str):
             dialect_name = target_dialect
         elif isinstance(target_dialect, type):

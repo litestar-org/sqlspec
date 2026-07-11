@@ -5,7 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, final
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
@@ -43,7 +43,14 @@ from sqlspec.builder._expression_wrappers import (
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
-from sqlspec.builder._parsing_utils import extract_expression, to_expression
+from sqlspec.builder._parsing_utils import (
+    _coerce_column,
+    _normalize_order_by,
+    _normalize_partition_by,
+    _resolve_dialect,
+    extract_expression,
+    to_expression,
+)
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
 from sqlspec.core import SQL
@@ -93,6 +100,7 @@ __all__ = (
 logger = get_logger("sqlspec.builder.factory")
 
 BuilderT = TypeVar("BuilderT", bound=QueryBuilder)
+ColumnLike: TypeAlias = Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"]
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -277,7 +285,7 @@ class SQLFactory:
         """
 
         try:
-            parsed_expr = sqlglot.parse_one(statement, read=dialect or self.dialect)
+            parsed_expr = sqlglot.parse_one(statement, read=_resolve_dialect(dialect, self.dialect))
         except Exception as e:
             msg = f"Failed to parse SQL: {e}"
             raise SQLBuilderError(msg) from e
@@ -294,7 +302,7 @@ class SQLFactory:
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
-            builder = Select(dialect=dialect or self.dialect)
+            builder = Select(dialect=_resolve_dialect(dialect, self.dialect))
             builder.set_expression(parsed_expr)
             return builder
 
@@ -311,89 +319,83 @@ class SQLFactory:
     def select(
         self, *columns_or_sql: Union[str, exp.Expr, Column, "SQL", "Case"], dialect: DialectType = None
     ) -> "Select":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
             if self._looks_like_sql(sql_candidate):
-                parsed_expr = self._parse_sql_expression(sql_candidate, builder_dialect)
-                detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
-                if detected not in {"SELECT", "WITH"}:
-                    msg = (
-                        f"sql.select() expects a SELECT or WITH statement, got {detected}. "
-                        f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH."
-                    )
-                    raise SQLBuilderError(msg)
+                parsed_expr = self._detect_or_raise(
+                    sql_candidate,
+                    builder_dialect,
+                    {"SELECT", "WITH"},
+                    "sql.select() expects a SELECT or WITH statement, got {detected}. "
+                    "Use sql.{detected_lower}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH.",
+                )
                 select_builder = Select(dialect=builder_dialect)
-                return self._populate_select_from_sql(select_builder, sql_candidate, parsed_expr)
+                return self._populate_builder_from_sql(select_builder, sql_candidate, exp.Select, parsed_expr)
         select_builder = Select(dialect=builder_dialect)
         if columns_or_sql:
             select_builder.select(*columns_or_sql)
         return select_builder
 
     def insert(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Insert":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         builder = Insert(dialect=builder_dialect)
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-                detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
-                if detected not in {"INSERT", "SELECT"}:
-                    msg = (
-                        f"sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
-                        f"Use sql.{detected.lower()}() if a dedicated builder exists, "
-                        f"or ensure the SQL is INSERT/SELECT."
-                    )
-                    raise SQLBuilderError(msg)
-                return self._populate_insert_from_sql(builder, table_or_sql, parsed_expr)
+                parsed_expr = self._detect_or_raise(
+                    table_or_sql,
+                    builder_dialect,
+                    {"INSERT", "SELECT"},
+                    "sql.insert() expects INSERT or SELECT (for insert-from-select), got {detected}. "
+                    "Use sql.{detected_lower}() if a dedicated builder exists, or ensure the SQL is INSERT/SELECT.",
+                )
+                return self._populate_builder_from_sql(builder, table_or_sql, exp.Insert, parsed_expr)
             return builder.into(table_or_sql)
         return builder
 
     def update(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Update":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         builder = Update(dialect=builder_dialect)
         if table_or_sql:
             if self._looks_like_sql(table_or_sql):
-                parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-                detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
-                if detected != "UPDATE":
-                    msg = (
-                        f"sql.update() expects UPDATE statement, got {detected}. "
-                        f"Use sql.{detected.lower()}() if a dedicated builder exists."
-                    )
-                    raise SQLBuilderError(msg)
-                return self._populate_update_from_sql(builder, table_or_sql, parsed_expr)
+                parsed_expr = self._detect_or_raise(
+                    table_or_sql,
+                    builder_dialect,
+                    {"UPDATE"},
+                    "sql.update() expects UPDATE statement, got {detected}. "
+                    "Use sql.{detected_lower}() if a dedicated builder exists.",
+                )
+                return self._populate_builder_from_sql(builder, table_or_sql, exp.Update, parsed_expr)
             return builder.table(table_or_sql)
         return builder
 
     def delete(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Delete":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Delete(dialect=builder_dialect)
-            parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-            detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
-            if detected != "DELETE":
-                msg = (
-                    f"sql.delete() expects DELETE statement, got {detected}. "
-                    f"Use sql.{detected.lower()}() if a dedicated builder exists."
-                )
-                raise SQLBuilderError(msg)
-            return self._populate_delete_from_sql(builder, table_or_sql, parsed_expr)
+            parsed_expr = self._detect_or_raise(
+                table_or_sql,
+                builder_dialect,
+                {"DELETE"},
+                "sql.delete() expects DELETE statement, got {detected}. "
+                "Use sql.{detected_lower}() if a dedicated builder exists.",
+            )
+            return self._populate_builder_from_sql(builder, table_or_sql, exp.Delete, parsed_expr)
 
         return Delete(table_or_sql, dialect=builder_dialect) if table_or_sql else Delete(dialect=builder_dialect)
 
     def merge(self, table_or_sql: str | None = None, dialect: DialectType = None) -> "Merge":
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         if table_or_sql and self._looks_like_sql(table_or_sql):
             builder = Merge(dialect=builder_dialect)
-            parsed_expr = self._parse_sql_expression(table_or_sql, builder_dialect)
-            detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
-            if detected != "MERGE":
-                msg = (
-                    f"sql.merge() expects MERGE statement, got {detected}. "
-                    f"Use sql.{detected.lower()}() if a dedicated builder exists."
-                )
-                raise SQLBuilderError(msg)
-            return self._populate_merge_from_sql(builder, table_or_sql, parsed_expr)
+            parsed_expr = self._detect_or_raise(
+                table_or_sql,
+                builder_dialect,
+                {"MERGE"},
+                "sql.merge() expects MERGE statement, got {detected}. "
+                "Use sql.{detected_lower}() if a dedicated builder exists.",
+            )
+            return self._populate_builder_from_sql(builder, table_or_sql, exp.Merge, parsed_expr)
 
         return Merge(table_or_sql, dialect=builder_dialect) if table_or_sql else Merge(dialect=builder_dialect)
 
@@ -421,7 +423,7 @@ class SQLFactory:
         Returns:
             Explain builder for further configuration
         """
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
 
         fmt = None
         if format is not None:
@@ -457,7 +459,7 @@ class SQLFactory:
         Returns:
             MERGE builder for supported databases, INSERT builder otherwise
         """
-        builder_dialect = dialect or self.dialect
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
         dialect_str = str(builder_dialect).lower() if builder_dialect else None
 
         merge_supported = {"postgres", "postgresql", "oracle", "bigquery"}
@@ -477,7 +479,7 @@ class SQLFactory:
         Returns:
             CreateTable builder instance
         """
-        return CreateTable(table_name, dialect=dialect or self.dialect)
+        return CreateTable(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_table_as_select(self, dialect: DialectType = None) -> "CreateTableAsSelect":
         """Create a CREATE TABLE AS SELECT builder.
@@ -488,7 +490,7 @@ class SQLFactory:
         Returns:
             CreateTableAsSelect builder instance
         """
-        return CreateTableAsSelect(dialect=dialect or self.dialect)
+        return CreateTableAsSelect(dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_view(self, view_name: str, dialect: DialectType = None) -> "CreateView":
         """Create a CREATE VIEW builder.
@@ -500,7 +502,7 @@ class SQLFactory:
         Returns:
             CreateView builder instance
         """
-        return CreateView(view_name, dialect=dialect or self.dialect)
+        return CreateView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_materialized_view(self, view_name: str, dialect: DialectType = None) -> "CreateMaterializedView":
         """Create a CREATE MATERIALIZED VIEW builder.
@@ -512,7 +514,7 @@ class SQLFactory:
         Returns:
             CreateMaterializedView builder instance
         """
-        return CreateMaterializedView(view_name, dialect=dialect or self.dialect)
+        return CreateMaterializedView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_index(self, index_name: str, dialect: DialectType = None) -> "CreateIndex":
         """Create a CREATE INDEX builder.
@@ -524,7 +526,7 @@ class SQLFactory:
         Returns:
             CreateIndex builder instance
         """
-        return CreateIndex(index_name, dialect=dialect or self.dialect)
+        return CreateIndex(index_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def create_schema(self, schema_name: str, dialect: DialectType = None) -> "CreateSchema":
         """Create a CREATE SCHEMA builder.
@@ -536,7 +538,7 @@ class SQLFactory:
         Returns:
             CreateSchema builder instance
         """
-        return CreateSchema(schema_name, dialect=dialect or self.dialect)
+        return CreateSchema(schema_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_table(self, table_name: str, dialect: DialectType = None) -> "DropTable":
         """Create a DROP TABLE builder.
@@ -548,7 +550,7 @@ class SQLFactory:
         Returns:
             DropTable builder instance
         """
-        return DropTable(table_name, dialect=dialect or self.dialect)
+        return DropTable(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_view(self, view_name: str, dialect: DialectType = None) -> "DropView":
         """Create a DROP VIEW builder.
@@ -560,7 +562,7 @@ class SQLFactory:
         Returns:
             DropView builder instance
         """
-        return DropView(view_name, dialect=dialect or self.dialect)
+        return DropView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_materialized_view(self, view_name: str, dialect: DialectType = None) -> "DropMaterializedView":
         """Create a DROP MATERIALIZED VIEW builder.
@@ -572,7 +574,7 @@ class SQLFactory:
         Returns:
             DropMaterializedView builder instance
         """
-        return DropMaterializedView(view_name, dialect=dialect or self.dialect)
+        return DropMaterializedView(view_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_index(self, index_name: str, dialect: DialectType = None) -> "DropIndex":
         """Create a DROP INDEX builder.
@@ -584,7 +586,7 @@ class SQLFactory:
         Returns:
             DropIndex builder instance
         """
-        return DropIndex(index_name, dialect=dialect or self.dialect)
+        return DropIndex(index_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def drop_schema(self, schema_name: str, dialect: DialectType = None) -> "DropSchema":
         """Create a DROP SCHEMA builder.
@@ -596,7 +598,7 @@ class SQLFactory:
         Returns:
             DropSchema builder instance
         """
-        return DropSchema(schema_name, dialect=dialect or self.dialect)
+        return DropSchema(schema_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def alter_table(self, table_name: str, dialect: DialectType = None) -> "AlterTable":
         """Create an ALTER TABLE builder.
@@ -608,7 +610,7 @@ class SQLFactory:
         Returns:
             AlterTable builder instance
         """
-        return AlterTable(table_name, dialect=dialect or self.dialect)
+        return AlterTable(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def rename_table(self, old_name: str, dialect: DialectType = None) -> "RenameTable":
         """Create a RENAME TABLE builder.
@@ -620,7 +622,7 @@ class SQLFactory:
         Returns:
             RenameTable builder instance
         """
-        return RenameTable(old_name, dialect=dialect or self.dialect)
+        return RenameTable(old_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     def comment_on(self, dialect: DialectType = None) -> "CommentOn":
         """Create a COMMENT ON builder.
@@ -631,7 +633,7 @@ class SQLFactory:
         Returns:
             CommentOn builder instance
         """
-        return CommentOn(dialect=dialect or self.dialect)
+        return CommentOn(dialect=_resolve_dialect(dialect, self.dialect))
 
     def copy_from(
         self,
@@ -644,7 +646,7 @@ class SQLFactory:
     ) -> SQL:
         """Build a COPY ... FROM statement."""
 
-        effective_dialect = dialect or self.dialect
+        effective_dialect = _resolve_dialect(dialect, self.dialect)
         return build_copy_from_statement(table, source, columns=columns, options=options, dialect=effective_dialect)
 
     def copy_to(
@@ -658,7 +660,7 @@ class SQLFactory:
     ) -> SQL:
         """Build a COPY ... TO statement."""
 
-        effective_dialect = dialect or self.dialect
+        effective_dialect = _resolve_dialect(dialect, self.dialect)
         return build_copy_to_statement(table, target, columns=columns, options=options, dialect=effective_dialect)
 
     def copy(
@@ -749,35 +751,14 @@ class SQLFactory:
             )
         return builder
 
-    def _populate_insert_from_sql(
-        self, builder: "Insert", sql_string: str, parsed_expr: "exp.Expr | None" = None
-    ) -> "Insert":
-        """Parse SQL string and populate INSERT builder using SQLGlot directly."""
-        return self._populate_builder_from_sql(builder, sql_string, exp.Insert, parsed_expr)
-
-    def _populate_select_from_sql(
-        self, builder: "Select", sql_string: str, parsed_expr: "exp.Expr | None" = None
-    ) -> "Select":
-        """Parse SQL string and populate SELECT builder using SQLGlot directly."""
-        return self._populate_builder_from_sql(builder, sql_string, exp.Select, parsed_expr)
-
-    def _populate_update_from_sql(
-        self, builder: "Update", sql_string: str, parsed_expr: "exp.Expr | None" = None
-    ) -> "Update":
-        """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
-        return self._populate_builder_from_sql(builder, sql_string, exp.Update, parsed_expr)
-
-    def _populate_delete_from_sql(
-        self, builder: "Delete", sql_string: str, parsed_expr: "exp.Expr | None" = None
-    ) -> "Delete":
-        """Parse SQL string and populate DELETE builder using SQLGlot directly."""
-        return self._populate_builder_from_sql(builder, sql_string, exp.Delete, parsed_expr)
-
-    def _populate_merge_from_sql(
-        self, builder: "Merge", sql_string: str, parsed_expr: "exp.Expr | None" = None
-    ) -> "Merge":
-        """Parse SQL string and populate MERGE builder using SQLGlot directly."""
-        return self._populate_builder_from_sql(builder, sql_string, exp.Merge, parsed_expr)
+    def _detect_or_raise(
+        self, sql_string: str, dialect: DialectType, expected_types: set[str], error_message: str
+    ) -> exp.Expr | None:
+        parsed_expr = self._parse_sql_expression(sql_string, dialect)
+        detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+        if detected not in expected_types:
+            raise SQLBuilderError(error_message.format(detected=detected, detected_lower=detected.lower()))
+        return parsed_expr
 
     def column(self, name: str, table: str | None = None) -> Column:
         """Create a column reference.
@@ -967,9 +948,7 @@ class SQLFactory:
 
         return SQL(sql_fragment, parameters)
 
-    def count(
-        self, column: Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"] = "*", distinct: bool = False
-    ) -> AggregateExpression:
+    def count(self, column: ColumnLike = "*", distinct: bool = False) -> AggregateExpression:
         """Create a COUNT expression.
 
         Args:
@@ -989,7 +968,7 @@ class SQLFactory:
             expr = exp.Count(this=exp.Distinct(expressions=[col_expr])) if distinct else exp.Count(this=col_expr)
         return AggregateExpression(expr)
 
-    def count_distinct(self, column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def count_distinct(self, column: ColumnLike) -> AggregateExpression:
         """Create a COUNT(DISTINCT column) expression.
 
         Args:
@@ -1002,8 +981,9 @@ class SQLFactory:
 
     def count_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"] = "*",
+        column: ColumnLike = "*",
         partition_by: str | list[str] | exp.Expr | None = None,
+        order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
         """Create a COUNT() OVER() window function for inline total counts.
 
@@ -1013,6 +993,7 @@ class SQLFactory:
         Args:
             column: Column to count (default "*" for COUNT(*)).
             partition_by: Optional columns to partition by.
+            order_by: Optional columns to order by.
 
         Returns:
             COUNT() OVER() window function expression.
@@ -1024,19 +1005,18 @@ class SQLFactory:
             count_expr = exp.Count(this=col_expr)
 
         over_args: dict[str, Any] = {}
-        if partition_by:
-            if isinstance(partition_by, str):
-                over_args["partition_by"] = [exp.column(partition_by)]
-            elif isinstance(partition_by, list):
-                over_args["partition_by"] = [exp.column(col) for col in partition_by]
-            elif isinstance(partition_by, exp.Expr):
-                over_args["partition_by"] = [partition_by]
+        normalized_partition = _normalize_partition_by(partition_by)
+        if normalized_partition is not None:
+            over_args["partition_by"] = normalized_partition
+        normalized_order = _normalize_order_by(order_by)
+        if normalized_order is not None:
+            over_args["order"] = normalized_order
 
         return FunctionExpression(exp.Window(this=count_expr, **over_args))
 
     def sum_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1055,7 +1035,7 @@ class SQLFactory:
 
     def avg_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1074,7 +1054,7 @@ class SQLFactory:
 
     def max_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1093,7 +1073,7 @@ class SQLFactory:
 
     def min_over(
         self,
-        column: Union[str, exp.Expr, "ExpressionWrapper", "Case"],
+        column: ColumnLike,
         partition_by: str | list[str] | exp.Expr | None = None,
         order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
@@ -1111,7 +1091,7 @@ class SQLFactory:
         return self._create_window_function("MIN", [col_expr], partition_by, order_by)
 
     @staticmethod
-    def sum(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"], distinct: bool = False) -> AggregateExpression:
+    def sum(column: ColumnLike, distinct: bool = False) -> AggregateExpression:
         """Create a SUM expression.
 
         Args:
@@ -1127,7 +1107,7 @@ class SQLFactory:
         return AggregateExpression(exp.Sum(this=col_expr))
 
     @staticmethod
-    def avg(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def avg(column: ColumnLike) -> AggregateExpression:
         """Create an AVG expression.
 
         Args:
@@ -1140,7 +1120,7 @@ class SQLFactory:
         return AggregateExpression(exp.Avg(this=col_expr))
 
     @staticmethod
-    def max(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def max(column: ColumnLike) -> AggregateExpression:
         """Create a MAX expression.
 
         Args:
@@ -1153,7 +1133,7 @@ class SQLFactory:
         return AggregateExpression(exp.Max(this=col_expr))
 
     @staticmethod
-    def min(column: Union[str, exp.Expr, "ExpressionWrapper", "Case"]) -> AggregateExpression:
+    def min(column: ColumnLike) -> AggregateExpression:
         """Create a MIN expression.
 
         Args:
@@ -1175,7 +1155,7 @@ class SQLFactory:
         Returns:
             ROLLUP expression.
         """
-        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+        column_exprs = [_coerce_column(col) for col in columns]
         return FunctionExpression(exp.Rollup(expressions=column_exprs))
 
     @staticmethod
@@ -1188,7 +1168,7 @@ class SQLFactory:
         Returns:
             CUBE expression.
         """
-        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
+        column_exprs = [_coerce_column(col) for col in columns]
         return FunctionExpression(exp.Cube(expressions=column_exprs))
 
     @staticmethod
@@ -1254,11 +1234,11 @@ class SQLFactory:
         Returns:
             CONCAT expression.
         """
-        exprs = [exp.column(expr) if isinstance(expr, str) else expr for expr in expressions]
+        exprs = [_coerce_column(expr) for expr in expressions]
         return StringExpression(exp.Concat(expressions=exprs))
 
     @staticmethod
-    def upper(column: str | exp.Expr) -> StringExpression:
+    def upper(column: ColumnLike) -> StringExpression:
         """Create an UPPER expression.
 
         Args:
@@ -1267,11 +1247,11 @@ class SQLFactory:
         Returns:
             UPPER expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return StringExpression(exp.Upper(this=col_expr))
 
     @staticmethod
-    def lower(column: str | exp.Expr) -> StringExpression:
+    def lower(column: ColumnLike) -> StringExpression:
         """Create a LOWER expression.
 
         Args:
@@ -1280,11 +1260,11 @@ class SQLFactory:
         Returns:
             LOWER expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return StringExpression(exp.Lower(this=col_expr))
 
     @staticmethod
-    def length(column: str | exp.Expr) -> StringExpression:
+    def length(column: ColumnLike) -> StringExpression:
         """Create a LENGTH expression.
 
         Args:
@@ -1293,11 +1273,11 @@ class SQLFactory:
         Returns:
             LENGTH expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return StringExpression(exp.Length(this=col_expr))
 
     @staticmethod
-    def round(column: str | exp.Expr, decimals: int = 0) -> MathExpression:
+    def round(column: ColumnLike, decimals: int = 0) -> MathExpression:
         """Create a ROUND expression.
 
         Args:
@@ -1307,7 +1287,7 @@ class SQLFactory:
         Returns:
             ROUND expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         if decimals == 0:
             return MathExpression(exp.Round(this=col_expr))
         return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(decimals)))
@@ -1335,7 +1315,7 @@ class SQLFactory:
         return FunctionExpression(exp.convert(value))
 
     @staticmethod
-    def decode(column: str | exp.Expr, *args: str | exp.Expr | Any) -> FunctionExpression:
+    def decode(column: ColumnLike, *args: str | exp.Expr | Any) -> FunctionExpression:
         """Create a DECODE expression (Oracle-style conditional logic).
 
         DECODE compares column to each search value and returns the corresponding result.
@@ -1352,7 +1332,7 @@ class SQLFactory:
         Returns:
             CASE expression equivalent to DECODE.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
 
         if len(args) < MIN_DECODE_ARGS:
             msg = "DECODE requires at least one search/result pair"
@@ -1378,7 +1358,7 @@ class SQLFactory:
         return FunctionExpression(exp.Case(ifs=conditions, default=default))
 
     @staticmethod
-    def cast(column: str | exp.Expr, data_type: str) -> ConversionExpression:
+    def cast(column: ColumnLike, data_type: str) -> ConversionExpression:
         """Create a CAST expression for type conversion.
 
         Args:
@@ -1388,7 +1368,7 @@ class SQLFactory:
         Returns:
             CAST expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         return ConversionExpression(exp.Cast(this=col_expr, to=exp.DataType.build(data_type)))
 
     @staticmethod
@@ -1401,11 +1381,13 @@ class SQLFactory:
         Returns:
             COALESCE expression.
         """
-        exprs = [exp.column(expr) if isinstance(expr, str) else expr for expr in expressions]
-        return ConversionExpression(exp.Coalesce(expressions=exprs))
+        exprs = [_coerce_column(expr) for expr in expressions]
+        return ConversionExpression(
+            exp.Coalesce(this=exprs[0], expressions=exprs[1:]) if exprs else exp.Coalesce(this=exp.Var(this=""))
+        )
 
     @staticmethod
-    def nvl(column: str | exp.Expr, substitute_value: str | exp.Expr | Any) -> ConversionExpression:
+    def nvl(column: ColumnLike, substitute_value: str | exp.Expr | Any) -> ConversionExpression:
         """Create an NVL (Oracle-style) expression using COALESCE.
 
         Args:
@@ -1415,13 +1397,13 @@ class SQLFactory:
         Returns:
             COALESCE expression equivalent to NVL.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         sub_expr = to_expression(substitute_value)
-        return ConversionExpression(exp.Coalesce(expressions=[col_expr, sub_expr]))
+        return ConversionExpression(exp.Coalesce(this=col_expr, expressions=[sub_expr]))
 
     @staticmethod
     def nvl2(
-        column: str | exp.Expr, value_if_not_null: str | exp.Expr | Any, value_if_null: str | exp.Expr | Any
+        column: ColumnLike, value_if_not_null: str | exp.Expr | Any, value_if_null: str | exp.Expr | Any
     ) -> ConversionExpression:
         """Create an NVL2 (Oracle-style) expression using CASE.
 
@@ -1436,7 +1418,7 @@ class SQLFactory:
         Returns:
             CASE expression equivalent to NVL2.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         not_null_expr = to_expression(value_if_not_null)
         null_expr = to_expression(value_if_null)
 
@@ -1536,7 +1518,7 @@ class SQLFactory:
 
     def lag(
         self,
-        column: str | exp.Expr,
+        column: ColumnLike,
         offset: int = 1,
         default: Any = None,
         partition_by: str | list[str] | exp.Expr | None = None,
@@ -1556,7 +1538,7 @@ class SQLFactory:
         Returns:
             LAG window function expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
         if default is not None:
             func_args.append(exp.convert(default))
@@ -1564,7 +1546,7 @@ class SQLFactory:
 
     def lead(
         self,
-        column: str | exp.Expr,
+        column: ColumnLike,
         offset: int = 1,
         default: Any = None,
         partition_by: str | list[str] | exp.Expr | None = None,
@@ -1584,7 +1566,7 @@ class SQLFactory:
         Returns:
             LEAD window function expression.
         """
-        col_expr = exp.column(column) if isinstance(column, str) else column
+        col_expr = extract_expression(column)
         func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
         if default is not None:
             func_args.append(exp.convert(default))
@@ -1612,21 +1594,12 @@ class SQLFactory:
 
         over_args: dict[str, Any] = {}
 
-        if partition_by:
-            if isinstance(partition_by, str):
-                over_args["partition_by"] = [exp.column(partition_by)]
-            elif isinstance(partition_by, list):
-                over_args["partition_by"] = [exp.column(col) for col in partition_by]
-            elif isinstance(partition_by, exp.Expr):
-                over_args["partition_by"] = [partition_by]
-
-        if order_by:
-            if isinstance(order_by, str):
-                over_args["order"] = exp.Order(expressions=[exp.column(order_by).asc()])
-            elif isinstance(order_by, list):
-                over_args["order"] = exp.Order(expressions=[exp.column(col).asc() for col in order_by])
-            elif isinstance(order_by, exp.Expr):
-                over_args["order"] = exp.Order(expressions=[order_by])
+        normalized_partition = _normalize_partition_by(partition_by)
+        if normalized_partition is not None:
+            over_args["partition_by"] = normalized_partition
+        normalized_order = _normalize_order_by(order_by)
+        if normalized_order is not None:
+            over_args["order"] = normalized_order
 
         return FunctionExpression(exp.Window(this=func_expr, **over_args))
 

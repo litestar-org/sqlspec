@@ -143,11 +143,11 @@ class _ScalarExpressionMixin:
 
     def asc(self) -> exp.Ordered:
         """Create an ASC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=False)
+        return exp.Ordered(this=self._expression, desc=False, nulls_first=False)
 
     def desc(self) -> exp.Ordered:
         """Create a DESC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=True)
+        return exp.Ordered(this=self._expression, desc=True, nulls_first=False)
 
     def as_(self, alias: str) -> exp.Alias:
         """Create an aliased expression."""
@@ -248,7 +248,11 @@ class Column(_ScalarExpressionMixin):
     def coalesce(self, *values: Any) -> "FunctionColumn":
         """SQL COALESCE() function."""
         expressions = [self._expression] + [self._convert_value(v) for v in values]
-        return FunctionColumn(exp.Coalesce(expressions=expressions))
+        return FunctionColumn(
+            exp.Coalesce(this=expressions[0], expressions=expressions[1:])
+            if expressions
+            else exp.Coalesce(this=exp.Var(this=""))
+        )
 
     def count(self) -> "FunctionColumn":
         """SQL COUNT() function."""

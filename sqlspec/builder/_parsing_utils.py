@@ -6,6 +6,7 @@ passed as strings to builder methods.
 
 import contextlib
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp, maybe_parse
@@ -301,7 +302,9 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
     return exp.condition(condition_input)
 
 
-def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp.Expr:
+def extract_sql_object_expression(
+    value: Any, builder: Any | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
+) -> exp.Expr:
     """Extract SQLGlot expression from SQL object value with parameter merging.
 
     Handles the common pattern of:
@@ -317,6 +320,7 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
     Args:
         value: The SQL object value to process
         builder: Optional builder instance for parameter merging (must have add_parameter method)
+        parse_sql: Optional parser for raw SQL fallback text.
 
     Returns:
         SQLGlot Expression extracted from the SQL object
@@ -324,19 +328,27 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
     Raises:
         ValueError: If the value doesn't appear to be a SQL object
     """
-    if not has_expression_and_sql(value):
-        msg = f"Value does not have both expression and sql attributes: {type(value)}"
+    has_sql = has_expression_and_sql(value)
+    has_parameters = has_expression_and_parameters(value)
+    if not has_sql and not has_parameters:
+        msg = f"Value does not expose an expression with SQL or parameters: {type(value)}"
         raise ValueError(msg)
 
     if value.expression is not None and isinstance(value.expression, exp.Expr):
         _merge_sql_parameters(value, builder)
         return value.expression
 
+    if not has_sql:
+        msg = f"Value has no SQL text fallback: {type(value)}"
+        raise ValueError(msg)
+
     _merge_sql_parameters(value, builder)
     sql_text = getattr(value, "raw_sql", None)
     if sql_text is None:
         sql_text = value.sql if not callable(value.sql) else str(value)
 
+    if parse_sql is not None:
+        return parse_sql(sql_text)
     return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
 
 
@@ -376,3 +388,31 @@ def to_expression(value: Any) -> exp.Expr:
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
+
+
+def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
+    if isinstance(partition_by, str):
+        return [exp.column(partition_by)]
+    if isinstance(partition_by, list):
+        return [exp.column(column) for column in partition_by]
+    if isinstance(partition_by, exp.Expr):
+        return [partition_by]
+    return None
+
+
+def _normalize_order_by(order_by: str | list[str] | exp.Expr | None) -> exp.Order | None:
+    if isinstance(order_by, str):
+        return exp.Order(expressions=[exp.column(order_by).asc()])
+    if isinstance(order_by, list):
+        return exp.Order(expressions=[exp.column(column).asc() for column in order_by])
+    if isinstance(order_by, exp.Expr):
+        return exp.Order(expressions=[order_by])
+    return None
+
+
+def _coerce_column(value: str | exp.Expr) -> exp.Expr:
+    return exp.column(value) if isinstance(value, str) else value
+
+
+def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None") -> "DialectType | None":
+    return dialect or default

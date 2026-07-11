@@ -3,6 +3,8 @@
 
 import importlib.util
 import math
+from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 from sqlglot import exp, parse_one
@@ -24,6 +26,7 @@ from sqlspec.builder import (
     build_copy_from_statement,
     build_copy_to_statement,
 )
+from sqlspec.builder import _select as select_module
 from sqlspec.builder._expression_wrappers import (
     ConversionExpression,
     ExpressionWrapper,
@@ -32,8 +35,22 @@ from sqlspec.builder._expression_wrappers import (
     StringExpression,
 )
 from sqlspec.builder._join import create_join_builder
+from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
+
+
+class _SQLExpressionObject:
+    def __init__(self, sql_text: str, expression: exp.Expr, parameters: dict[str, object]) -> None:
+        self.expression = expression
+        self.parameters = parameters
+        self.sql = sql_text
+
+
+class _ParametersExpressionObject:
+    def __init__(self, _sql_text: str, expression: exp.Expr, parameters: dict[str, object]) -> None:
+        self.expression = expression
+        self.parameters = parameters
 
 
 def test_sql_factory_instance() -> None:
@@ -53,6 +70,50 @@ def test_decode_renders_trailing_default_else_clause() -> None:
     expr = sql.decode("status", "A", 1, "B", 2, 0)
     rendered = expr.expression.sql()
     assert "ELSE 0" in rendered.upper()
+
+
+@pytest.mark.parametrize(
+    "function",
+    [
+        lambda value: sql.upper(value),
+        lambda value: sql.lower(value),
+        lambda value: sql.length(value),
+        lambda value: sql.round(value),
+        lambda value: sql.decode(value, "active", 1),
+        lambda value: sql.cast(value, "TEXT"),
+        lambda value: sql.nvl(value, 0),
+        lambda value: sql.nvl2(value, 1, 0),
+        lambda value: sql.lag(value),
+        lambda value: sql.lead(value),
+    ],
+)
+@pytest.mark.parametrize(
+    "value", [Column("amount"), ExpressionWrapper(exp.column("amount")), sql.case().when("amount > 0", 1).else_(0)]
+)
+def test_scalar_functions_accept_builder_expressions(function: object, value: object) -> None:
+    result = function(value)  # type: ignore[operator]
+    assert isinstance(result.expression, exp.Expr)  # type: ignore[attr-defined]
+    assert result.expression.sql()  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "function",
+    [
+        lambda value: sql.count_distinct(value),
+        lambda value: sql.sum_over(value),
+        lambda value: sql.avg_over(value),
+        lambda value: sql.max_over(value),
+        lambda value: sql.min_over(value),
+        lambda value: sql.sum(value),
+        lambda value: sql.avg(value),
+        lambda value: sql.max(value),
+        lambda value: sql.min(value),
+    ],
+)
+def test_aggregate_functions_accept_columns(function: object) -> None:
+    result = function(Column("amount"))  # type: ignore[operator]
+    assert isinstance(result.expression, exp.Expr)  # type: ignore[attr-defined]
+    assert result.expression.sql()  # type: ignore[attr-defined]
 
 
 def test_where_eq_uses_placeholder_not_var() -> None:
@@ -933,6 +994,58 @@ def test_multiple_sql_raw_objects_parameter_merging() -> None:
     assert ":min_date" in stmt.sql
 
 
+def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def extract(
+        value: object, builder: object | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
+    ) -> exp.Expr:
+        nonlocal calls
+        calls += 1
+        return extract_sql_object_expression(value, builder, parse_sql)
+
+    monkeypatch.setattr(select_module, "extract_sql_object_expression", extract)
+    sql.select("*").from_("users").where_exists(
+        sql.raw("SELECT 1 FROM posts WHERE posts.user_id = :user_id", user_id=1)
+    ).where(sql.raw("id = :id", id=1))
+    assert calls == 2
+
+
+@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
+def test_sql_object_protocol_shapes_merge_where_parameters(
+    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
+) -> None:
+    condition = object_type("users.id = :user_id", exp.condition("users.id = :user_id"), {"user_id": 41})
+    statement = sql.select("*").from_("users").where(cast("Any", condition)).build()
+    assert ":user_id" in statement.sql
+    assert statement.parameters["user_id"] == 41
+
+
+@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
+def test_sql_object_protocol_shapes_merge_subquery_parameters(
+    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
+) -> None:
+    sql_text = "SELECT 1 FROM posts WHERE posts.user_id = :user_id"
+    subquery = object_type(sql_text, parse_one(sql_text), {"user_id": 42})
+    statement = sql.select("*").from_("users").where_exists(subquery).build()
+    assert ":user_id" in statement.sql
+    assert statement.parameters["user_id"] == 42
+
+
+@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
+def test_sql_object_protocol_shapes_merge_join_parameters(
+    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
+) -> None:
+    condition = object_type(
+        "users.id = posts.user_id AND posts.status = :status",
+        exp.condition("users.id = posts.user_id AND posts.status = :status"),
+        {"status": "published"},
+    )
+    statement = sql.select("*").from_("users").join("posts", cast("Any", condition)).build()
+    assert ":status" in statement.sql
+    assert statement.parameters["status"] == "published"
+
+
 def test_sql_raw_without_parameters_still_works() -> None:
     """Test that SQL objects without parameters still work correctly."""
     raw_expr = sql.raw("NOW()")
@@ -1710,6 +1823,14 @@ def test_count_over_method_with_multiple_partition_columns() -> None:
     assert "PARTITION BY" in built.upper()
     assert "department" in built.lower()
     assert "status" in built.lower()
+
+
+def test_count_over_method_with_ordering() -> None:
+    """Test count_over() accepts the same ordering inputs as other window functions."""
+    count_expr = sql.count_over(partition_by="department", order_by=["created_at", "id"])
+    built = str(count_expr)
+    assert "PARTITION BY department" in built
+    assert "ORDER BY created_at, id" in built
 
 
 def test_count_over_property_basic() -> None:

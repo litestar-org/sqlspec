@@ -11,7 +11,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import parse_table_expression
+from sqlspec.builder._parsing_utils import extract_sql_object_expression, parse_table_expression
 from sqlspec.builder._temporal import register_version_generators
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
@@ -23,28 +23,17 @@ if TYPE_CHECKING:
 __all__ = ("JoinBuilder", "JoinClauseMixin", "create_join_builder")
 
 
-def _condition_from_sql_object(on: Any, builder: "SQLBuilderProtocol") -> exp.Expr:
-    if has_expression_and_parameters(on) and on.expression is not None:
-        for param_name, param_value in on.parameters.items():
-            builder.add_parameter(param_value, name=param_name)
-        return cast("exp.Expr", on.expression)
-    if has_expression_and_parameters(on):
-        for param_name, param_value in on.parameters.items():
-            builder.add_parameter(param_value, name=param_name)
-    raw_sql = getattr(on, "raw_sql", None)
-    if raw_sql is None:
-        raw_sql = on.sql  # pyright: ignore[reportAttributeAccessIssue]
-    parsed_expr = exp.maybe_parse(raw_sql, dialect=builder.dialect)
-    return parsed_expr if parsed_expr is not None else exp.condition(raw_sql)
-
-
 def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None) -> exp.Expr | None:
     if on is None:
         return None
     if isinstance(on, str):
         return exp.condition(on)
-    if has_expression_and_sql(on):
-        return _condition_from_sql_object(on, builder)
+    if has_expression_and_sql(on) or has_expression_and_parameters(on):
+
+        def parse_join_condition(sql_text: str) -> exp.Expr:
+            return exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.condition(sql_text)
+
+        return extract_sql_object_expression(on, builder=builder, parse_sql=parse_join_condition)
     if isinstance(on, exp.Expr):
         return on
     return exp.condition(str(on))
