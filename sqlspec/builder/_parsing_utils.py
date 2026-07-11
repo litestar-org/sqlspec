@@ -376,3 +376,25 @@ def to_expression(value: Any) -> exp.Expr:
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
+
+
+def _normalize_partition_by(
+    partition_by: str | list[str] | exp.Expr | None,
+) -> list[exp.Expr] | None:
+    if isinstance(partition_by, str):
+        return [exp.column(partition_by)]
+    if isinstance(partition_by, list):
+        return [exp.column(column) for column in partition_by]
+    if isinstance(partition_by, exp.Expr):
+        return [partition_by]
+    return None
+
+
+def _normalize_order_by(order_by: str | list[str] | exp.Expr | None) -> exp.Order | None:
+    if isinstance(order_by, str):
+        return exp.Order(expressions=[exp.column(order_by).asc()])
+    if isinstance(order_by, list):
+        return exp.Order(expressions=[exp.column(column).asc() for column in order_by])
+    if isinstance(order_by, exp.Expr):
+        return exp.Order(expressions=[order_by])
+    return None

@@ -43,7 +43,12 @@ from sqlspec.builder._expression_wrappers import (
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
-from sqlspec.builder._parsing_utils import extract_expression, to_expression
+from sqlspec.builder._parsing_utils import (
+    _normalize_order_by,
+    _normalize_partition_by,
+    extract_expression,
+    to_expression,
+)
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
 from sqlspec.core import SQL
@@ -1004,6 +1009,7 @@ class SQLFactory:
         self,
         column: Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"] = "*",
         partition_by: str | list[str] | exp.Expr | None = None,
+        order_by: str | list[str] | exp.Expr | None = None,
     ) -> FunctionExpression:
         """Create a COUNT() OVER() window function for inline total counts.
 
@@ -1013,6 +1019,7 @@ class SQLFactory:
         Args:
             column: Column to count (default "*" for COUNT(*)).
             partition_by: Optional columns to partition by.
+            order_by: Optional columns to order by.
 
         Returns:
             COUNT() OVER() window function expression.
@@ -1024,13 +1031,12 @@ class SQLFactory:
             count_expr = exp.Count(this=col_expr)
 
         over_args: dict[str, Any] = {}
-        if partition_by:
-            if isinstance(partition_by, str):
-                over_args["partition_by"] = [exp.column(partition_by)]
-            elif isinstance(partition_by, list):
-                over_args["partition_by"] = [exp.column(col) for col in partition_by]
-            elif isinstance(partition_by, exp.Expr):
-                over_args["partition_by"] = [partition_by]
+        normalized_partition = _normalize_partition_by(partition_by)
+        if normalized_partition is not None:
+            over_args["partition_by"] = normalized_partition
+        normalized_order = _normalize_order_by(order_by)
+        if normalized_order is not None:
+            over_args["order"] = normalized_order
 
         return FunctionExpression(exp.Window(this=count_expr, **over_args))
 
@@ -1612,21 +1618,12 @@ class SQLFactory:
 
         over_args: dict[str, Any] = {}
 
-        if partition_by:
-            if isinstance(partition_by, str):
-                over_args["partition_by"] = [exp.column(partition_by)]
-            elif isinstance(partition_by, list):
-                over_args["partition_by"] = [exp.column(col) for col in partition_by]
-            elif isinstance(partition_by, exp.Expr):
-                over_args["partition_by"] = [partition_by]
-
-        if order_by:
-            if isinstance(order_by, str):
-                over_args["order"] = exp.Order(expressions=[exp.column(order_by).asc()])
-            elif isinstance(order_by, list):
-                over_args["order"] = exp.Order(expressions=[exp.column(col).asc() for col in order_by])
-            elif isinstance(order_by, exp.Expr):
-                over_args["order"] = exp.Order(expressions=[order_by])
+        normalized_partition = _normalize_partition_by(partition_by)
+        if normalized_partition is not None:
+            over_args["partition_by"] = normalized_partition
+        normalized_order = _normalize_order_by(order_by)
+        if normalized_order is not None:
+            over_args["order"] = normalized_order
 
         return FunctionExpression(exp.Window(this=func_expr, **over_args))
 

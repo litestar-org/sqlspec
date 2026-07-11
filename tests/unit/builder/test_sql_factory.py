@@ -1712,6 +1712,14 @@ def test_count_over_method_with_multiple_partition_columns() -> None:
     assert "status" in built.lower()
 
 
+def test_count_over_method_with_ordering() -> None:
+    """Test count_over() accepts the same ordering inputs as other window functions."""
+    count_expr = sql.count_over(partition_by="department", order_by=["created_at", "id"])
+    built = str(count_expr)
+    assert "PARTITION BY department" in built
+    assert "ORDER BY created_at, id" in built
+
+
 def test_count_over_property_basic() -> None:
     """Test count_over_ property returns WindowFunctionBuilder."""
     builder = sql.count_over_
