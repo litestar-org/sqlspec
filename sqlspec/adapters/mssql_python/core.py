@@ -25,7 +25,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from logging import Logger
 
     from sqlspec.core import StatementConfig
@@ -39,6 +39,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "materialize_tuple_rows",
 )
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
@@ -116,6 +117,19 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
     if exc_name == "DataError":
         return DataError(f"SQL Server data error. Original error: {error}")
     return SQLSpecError(f"SQL Server database error. Original error: {error}")
+
+
+def materialize_tuple_rows(fetched: "Sequence[Any] | None") -> "list[tuple[Any, ...]]":
+    """Materialize mssql-python ``Row`` objects into plain tuples.
+
+    ``mssql-python`` returns ``mssql_python.Row`` objects that are iterable and
+    indexable but are not ``tuple`` subclasses. The driver reports
+    ``row_format="tuple"``, so fetched rows are converted to real tuples to keep
+    that contract accurate when results are materialized.
+    """
+    if not fetched:
+        return []
+    return [tuple(row) for row in fetched]
 
 
 def apply_driver_features(

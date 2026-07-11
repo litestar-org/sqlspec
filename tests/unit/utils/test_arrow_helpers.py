@@ -85,6 +85,31 @@ def test_convert_with_null_values() -> None:
     assert pydict["email"][2] is None
 
 
+def test_all_null_column_falls_back_to_string_type() -> None:
+    """All-NULL columns must not collapse to Arrow ``null`` type (issue #631)."""
+    import pyarrow as pa
+
+    data = [{"id": 1, "label": None}, {"id": 2, "label": None}]
+    result = convert_dict_to_arrow(data, return_format="table")
+
+    label_type = result.schema.field("label").type
+    assert not pa.types.is_null(label_type)
+    assert label_type == pa.string()
+    assert result.schema.field("id").type == pa.int64()
+    assert result.to_pydict()["label"] == [None, None]
+
+
+def test_all_null_column_fallback_applies_to_reader_format() -> None:
+    """The null-type fallback must also flow through non-table return formats."""
+    import pyarrow as pa
+
+    data = [{"label": None}, {"label": None}]
+    reader = convert_dict_to_arrow(data, return_format="reader")
+
+    assert not pa.types.is_null(reader.schema.field("label").type)
+    assert reader.schema.field("label").type == pa.string()
+
+
 def test_convert_with_various_types() -> None:
     """Test converting data with various Python types."""
 

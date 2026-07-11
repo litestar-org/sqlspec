@@ -104,7 +104,7 @@ def convert_dict_to_arrow(
             return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
         return empty_table
-    arrow_table = pa.Table.from_pylist(data)
+    arrow_table = _coerce_null_columns_to_string(pa.Table.from_pylist(data))
 
     if return_format == "reader":
         batches = arrow_table.to_batches(max_chunksize=batch_size)
@@ -118,6 +118,23 @@ def convert_dict_to_arrow(
         return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
     return arrow_table
+
+
+def _coerce_null_columns_to_string(table: "ArrowTable") -> "ArrowTable":
+    """Retype value-inferred Arrow ``null`` columns to ``string``.
+
+    ``pa.Table.from_pylist`` infers column types from values only, so a column
+    that is ``NULL`` in every row becomes Arrow ``null`` type and loses the
+    database column's declared type. Downstream consumers (notably DuckDB) then
+    misread such columns, so fall back to ``string`` which safely holds the
+    all-null values without breaking string operations.
+    """
+    import pyarrow as pa
+
+    if not any(pa.types.is_null(field.type) for field in table.schema):
+        return table
+    fields = [field.with_type(pa.string()) if pa.types.is_null(field.type) else field for field in table.schema]
+    return table.cast(pa.schema(fields))
 
 
 def convert_dict_to_arrow_with_schema(
