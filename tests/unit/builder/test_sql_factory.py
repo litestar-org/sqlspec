@@ -74,12 +74,7 @@ def test_decode_renders_trailing_default_else_clause() -> None:
     ],
 )
 @pytest.mark.parametrize(
-    "value",
-    [
-        Column("amount"),
-        ExpressionWrapper(exp.column("amount")),
-        sql.case().when("amount > 0", 1).else_(0),
-    ],
+    "value", [Column("amount"), ExpressionWrapper(exp.column("amount")), sql.case().when("amount > 0", 1).else_(0)]
 )
 def test_scalar_functions_accept_builder_expressions(function: object, value: object) -> None:
     result = function(value)  # type: ignore[operator]

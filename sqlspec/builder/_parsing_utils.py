@@ -384,9 +384,7 @@ def to_expression(value: Any) -> exp.Expr:
     return exp.convert(value)
 
 
-def _normalize_partition_by(
-    partition_by: str | list[str] | exp.Expr | None,
-) -> list[exp.Expr] | None:
+def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
     if isinstance(partition_by, str):
         return [exp.column(partition_by)]
     if isinstance(partition_by, list):

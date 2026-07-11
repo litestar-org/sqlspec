@@ -752,11 +752,7 @@ class SQLFactory:
         return builder
 
     def _detect_or_raise(
-        self,
-        sql_string: str,
-        dialect: DialectType,
-        expected_types: set[str],
-        error_message: str,
+        self, sql_string: str, dialect: DialectType, expected_types: set[str], error_message: str
     ) -> exp.Expr | None:
         parsed_expr = self._parse_sql_expression(sql_string, dialect)
         detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
@@ -952,9 +948,7 @@ class SQLFactory:
 
         return SQL(sql_fragment, parameters)
 
-    def count(
-        self, column: ColumnLike = "*", distinct: bool = False
-    ) -> AggregateExpression:
+    def count(self, column: ColumnLike = "*", distinct: bool = False) -> AggregateExpression:
         """Create a COUNT expression.
 
         Args:

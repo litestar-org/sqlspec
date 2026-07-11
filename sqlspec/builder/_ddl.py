@@ -241,6 +241,7 @@ class DDLBuilder(QueryBuilder):
             self._expression = self._create_base_expression()
         return super().build(dialect=dialect)
 
+
 @trait
 class _IfExistsDDLMixin:
     __slots__ = ()

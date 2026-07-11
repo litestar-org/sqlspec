@@ -376,8 +376,7 @@ class SelectClauseMixin:
 
     def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
         grouping_sets = [
-            exp.Tuple(expressions=[_coerce_column(col) for col in column_set])
-            for column_set in column_sets
+            exp.Tuple(expressions=[_coerce_column(col) for col in column_set]) for column_set in column_sets
         ]
         grouping_expr = exp.GroupingSets(expressions=grouping_sets)
         return self.group_by(grouping_expr)
@@ -651,6 +650,7 @@ class WhereClauseMixin:
             return subquery_expr
 
         if has_expression_and_sql(subquery):
+
             def parse_subquery(sql_text: str) -> exp.Expr:
                 parsed_from_sql = exp.maybe_parse(sql_text, dialect=builder.dialect)
                 if parsed_from_sql is None:

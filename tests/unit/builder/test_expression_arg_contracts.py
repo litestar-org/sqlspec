@@ -84,15 +84,21 @@ def test_builder_expressions_satisfy_required_sqlglot_arguments() -> None:
         Column("a").desc(),
         next(sql.row_number_.order_by(exp.column("a")).build().find_all(exp.Ordered)),
         next(
-            sql.select("a")
+            sql
+            .select("a")
             .from_("t")
             .order_by(exp.alias_(exp.column("a"), "asc"))
             .get_expression()
             .find_all(exp.Ordered)
         ),
-        next(build_column_expression(ColumnDefinition("id", "INT", auto_increment=True)).find_all(exp.AutoIncrementColumnConstraint)),
         next(
-            sql.create_materialized_view("mv")
+            build_column_expression(ColumnDefinition("id", "INT", auto_increment=True)).find_all(
+                exp.AutoIncrementColumnConstraint
+            )
+        ),
+        next(
+            sql
+            .create_materialized_view("mv")
             .as_select("SELECT 1")
             .with_data()
             ._create_base_expression()
