@@ -441,6 +441,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         direct_statement: SQL | None = None
+        returns_rows = cached.operation_profile.returns_rows
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
@@ -448,7 +449,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 if hasattr(cursor, "execute"):
                     try:
                         cursor.execute(cached.compiled_sql, params)
-                        if cached.operation_profile.returns_rows:
+                        if returns_rows:
                             fetched_data = cursor.fetchall()
                             data, column_names, row_count = self.collect_rows(cursor, fetched_data)
                             execution_result = self.create_execution_result(
@@ -476,7 +477,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = (

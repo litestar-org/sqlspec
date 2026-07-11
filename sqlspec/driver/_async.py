@@ -460,6 +460,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         direct_statement: SQL | None = None
+        returns_rows = cached.operation_profile.returns_rows
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
@@ -467,8 +468,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 execute = getattr(cursor, "execute", None)
                 fetchall = getattr(cursor, "fetchall", None)
                 can_use_cursor_fast_path = execute is not None and (
-                    (cached.operation_profile.returns_rows and fetchall is not None)
-                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
+                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
                 )
                 if can_use_cursor_fast_path:
                     assert execute is not None
@@ -476,7 +476,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         execute_result = execute(cached.compiled_sql, params)
                         if isawaitable(execute_result):
                             await execute_result
-                            if cached.operation_profile.returns_rows:
+                            if returns_rows:
                                 assert fetchall is not None
                                 fetched_data = fetchall()
                                 if isawaitable(fetched_data):
@@ -511,7 +511,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                     )
                     execution_result = await self.dispatch_execute(cursor, direct_statement)
 
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         # DML path: use DMLResult to bypass full SQLResult construction

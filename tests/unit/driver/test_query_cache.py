@@ -631,6 +631,14 @@ def test_query_cache_zero_size_is_noop() -> None:
     assert cache.get("SELECT 1") is None
 
 
+def test_single_mapping_cache_parameter_uses_values_view() -> None:
+    """Single mapping parameters avoid allocation without requiring indexing."""
+    values = driver_common._cache_param_values({"id": 1})
+
+    assert tuple(values) == (1,)
+    assert driver_common.parameter_values_need_processing(values, {}) is False
+
+
 def test_release_pooled_statement_uses_direct_pooled_attribute(sqlite_sync_driver: Any) -> None:
     """_release_pooled_statement reads SQL._pooled directly."""
     statement = SQL("SELECT 1")
