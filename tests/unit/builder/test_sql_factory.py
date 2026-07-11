@@ -1,9 +1,9 @@
 # pyright: reportAttributeAccessIssue=false
 """Unit tests for SQL factory functionality including parameter binding fixes and new features."""
 
-from collections.abc import Callable
 import importlib.util
 import math
+from collections.abc import Callable
 
 import pytest
 from sqlglot import exp, parse_one

@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder._column import ColumnExpression
-    from sqlspec.core import StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -204,6 +203,10 @@ class DDLBuilder(QueryBuilder):
         msg = "Subclasses must implement _create_base_expression."
         raise NotImplementedError(msg)
 
+    def _require(self, value: object, message: str) -> None:
+        if not value:
+            self._raise_builder_error(message)
+
     def _resolve_select_query(self, query: object, context: str, *, require_select_type: bool = True) -> exp.Expr:
         select_parameters: dict[str, Any] | None = None
 
@@ -237,10 +240,6 @@ class DDLBuilder(QueryBuilder):
         if self._expression is None:
             self._expression = self._create_base_expression()
         return super().build(dialect=dialect)
-
-    def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
-        return super().to_statement(config=config)
-
 
 @trait
 class _IfExistsDDLMixin:
@@ -589,8 +588,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
     def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for CREATE TABLE."""
-        if not self._columns and not self._like_table:
-            self._raise_builder_error("Table must have at least one column or use LIKE clause")
+        self._require(self._columns or self._like_table, "Table must have at least one column or use LIKE clause")
 
         column_defs: list[exp.Expr] = []
         for col in self._columns:
@@ -632,7 +630,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             props.append(exp.TemporaryProperty())
         if self._like_table:
             props.append(exp.LikeProperty(this=exp.to_table(self._like_table)))
-        properties_node = exp.Properties(expressions=props) if props else None
+        properties_node = _wrap_properties(props)
 
         create_target: exp.Expr = table_identifier if self._like_table and not column_defs else schema_expr
         return exp.Create(kind="TABLE", this=create_target, exists=self._if_not_exists, properties=properties_node)
@@ -686,8 +684,7 @@ class _SingleObjectDropBuilder(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDD
         return {}
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._name:
-            self._raise_builder_error(f"{self._object_label} name must be set for DROP {self._drop_kind}.")
+        self._require(self._name, f"{self._object_label} name must be set for DROP {self._drop_kind}.")
         return exp.Drop(
             kind=self._drop_kind,
             this=self._build_drop_this(),
@@ -874,8 +871,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         Columns are turned into raw expressions (not ``Ordered``) to preserve natural NULL ordering,
         string ``where`` clauses become expressions, and the final ``exp.Index`` is wrapped in an ``exp.Create`` with the configured flags.
         """
-        if not self._index_name or not self._table_name:
-            self._raise_builder_error("Index name and table name must be set for CREATE INDEX.")
+        self._require(self._index_name and self._table_name, "Index name and table name must be set for CREATE INDEX.")
 
         cols: list[exp.Expr] = []
         for col in self._columns:
@@ -937,8 +933,7 @@ class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._table_name:
-            self._raise_builder_error("Table name must be set for TRUNCATE TABLE.")
+        self._require(self._table_name, "Table name must be set for TRUNCATE TABLE.")
         identity_expr = exp.Var(this=self._identity) if self._identity else None
         option_expr = exp.Var(this="CASCADE") if self._cascade else None
         return exp.TruncateTable(
@@ -1013,14 +1008,13 @@ class CreateSchema(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._schema_name:
-            self._raise_builder_error("Schema name must be set for CREATE SCHEMA.")
+        self._require(self._schema_name, "Schema name must be set for CREATE SCHEMA.")
         props: list[exp.Property] = []
         if self._authorization:
             props.append(
                 exp.Property(this=exp.to_identifier("AUTHORIZATION"), value=exp.to_identifier(self._authorization))
             )
-        properties_node = exp.Properties(expressions=props) if props else None
+        properties_node = _wrap_properties(props)
         return exp.Create(
             kind="SCHEMA",
             this=exp.to_identifier(self._schema_name),
@@ -1061,8 +1055,7 @@ class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._table_name:
-            self._raise_builder_error("Table name must be set for CREATE TABLE AS SELECT.")
+        self._require(self._table_name, "Table name must be set for CREATE TABLE AS SELECT.")
         if self._select_query is None:
             self._raise_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
 
@@ -1157,16 +1150,13 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._view_name:
-            self._raise_builder_error("View name must be set for CREATE MATERIALIZED VIEW.")
+        self._require(self._view_name, "View name must be set for CREATE MATERIALIZED VIEW.")
         if self._select_query is None:
             self._raise_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
         select_expr = self._resolve_select_query(self._select_query, "materialized view")
 
-        schema_expr = None
-        if self._columns:
-            schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
+        schema_expr = _build_optional_column_schema(self._columns)
 
         props: list[exp.Property] = []
         if self._refresh_mode:
@@ -1182,7 +1172,7 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         if self._with_data is not None:
             props.append(exp.Property(this=exp.to_identifier("WITH_DATA" if self._with_data else "NO_DATA")))
         props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
-        properties_node = exp.Properties(expressions=props) if props else None
+        properties_node = _wrap_properties(props)
 
         create_target: exp.Expr = exp.to_table(self._view_name)
         if schema_expr is not None:
@@ -1233,21 +1223,18 @@ class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._view_name:
-            self._raise_builder_error("View name must be set for CREATE VIEW.")
+        self._require(self._view_name, "View name must be set for CREATE VIEW.")
         if self._select_query is None:
             self._raise_builder_error("SELECT query must be set for CREATE VIEW.")
 
         select_expr = self._resolve_select_query(self._select_query, "view")
 
-        schema_expr = None
-        if self._columns:
-            schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
+        schema_expr = _build_optional_column_schema(self._columns)
 
         props: list[exp.Property] = [
             exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(h)) for h in self._hints
         ]
-        properties_node = exp.Properties(expressions=props) if props else None
+        properties_node = _wrap_properties(props)
 
         create_target: exp.Expr = exp.to_table(self._view_name)
         if schema_expr is not None:
@@ -1453,8 +1440,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
 
     def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for ALTER TABLE."""
-        if not self._operations:
-            self._raise_builder_error("At least one operation must be specified for ALTER TABLE")
+        self._require(self._operations, "At least one operation must be specified for ALTER TABLE")
 
         if self._schema:
             table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
@@ -1616,10 +1602,19 @@ class RenameTable(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        if not self._old_name or not self._new_name:
-            self._raise_builder_error("Both old and new table names must be set for RENAME TABLE.")
+        self._require(self._old_name and self._new_name, "Both old and new table names must be set for RENAME TABLE.")
         return exp.Alter(
             this=exp.to_table(self._old_name),
             kind="TABLE",
             actions=[exp.AlterRename(this=exp.to_identifier(self._new_name))],
         )
+
+
+def _build_optional_column_schema(columns: list[str]) -> exp.Schema | None:
+    if not columns:
+        return None
+    return exp.Schema(expressions=[exp.column(column) for column in columns])
+
+
+def _wrap_properties(properties: list[exp.Property]) -> exp.Properties | None:
+    return exp.Properties(expressions=properties) if properties else None
