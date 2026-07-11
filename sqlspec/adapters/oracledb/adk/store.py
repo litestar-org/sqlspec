@@ -2147,7 +2147,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             self._config,
             "session",
             in_memory=self._in_memory,
-            hash_partition_key="session_id",
+            hash_partition_key="id",
             range_partition_key="create_time",
         )
 
