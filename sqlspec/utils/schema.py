@@ -55,6 +55,7 @@ _MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
     "pascal": pascalize,
 }
 _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
+_LIST_ALIAS_CACHE: "dict[type, Any]" = {}
 
 
 # =============================================================================
@@ -358,9 +359,9 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     rename_config = get_msgspec_rename_config(schema_type)
 
     transformed_data = data
-    if (rename_config and is_dict(data)) or (isinstance(data, Sequence) and data and is_dict(data[0])):
+    if rename_config and (is_dict(data) or (isinstance(data, Sequence) and data and is_dict(data[0]))):
         try:
-            converter = _MSGSPEC_RENAME_CONVERTERS.get(rename_config) if rename_config else None
+            converter = _MSGSPEC_RENAME_CONVERTERS.get(rename_config)
             if converter:
                 transformed_data = (
                     [transform_dict_keys(item, converter) if is_dict(item) else item for item in data]
@@ -370,7 +371,7 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
         except Exception as e:
             logger.debug("Field name transformation failed for msgspec schema: %s", e)
 
-    target_type = list[schema_type] if isinstance(transformed_data, Sequence) else schema_type
+    target_type = _list_alias(schema_type) if isinstance(transformed_data, Sequence) else schema_type
 
     try:
         return convert(
@@ -388,7 +389,7 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
 def _convert_pydantic(data: Any, schema_type: Any) -> Any:
     """Convert data to Pydantic model."""
     if isinstance(data, Sequence):
-        return get_type_adapter(list[schema_type]).validate_python(data, from_attributes=True)
+        return get_type_adapter(_list_alias(schema_type)).validate_python(data, from_attributes=True)
     return get_type_adapter(schema_type).validate_python(data, from_attributes=True)
 
 
@@ -398,7 +399,7 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
         cattrs_structure = import_optional_attr("cattrs", "structure")
         cattrs_unstructure = import_optional_attr("cattrs", "unstructure")
         if isinstance(data, Sequence):
-            return cattrs_structure(data, list[schema_type])
+            return cattrs_structure(data, _list_alias(schema_type))
         structured = cattrs_unstructure(data) if is_attrs_instance(data) else data
         return cattrs_structure(structured, schema_type)
 
@@ -411,6 +412,16 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
 # Cache for schema converters - maps type directly to converter callable (or None if unsupported)
 # Manual dict cache is faster than lru_cache for mypyc: direct dict[type] lookup vs decorated call
 _SCHEMA_CONVERTER_CACHE: "dict[type, Callable[[Any, Any], Any] | None]" = {}
+
+
+def _list_alias(schema_type: type) -> Any:
+    """Return the cached list alias for a schema type."""
+    try:
+        return _LIST_ALIAS_CACHE[schema_type]
+    except KeyError:
+        alias = list[schema_type]
+        _LIST_ALIAS_CACHE[schema_type] = alias
+        return alias
 
 
 def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | None":
