@@ -1,6 +1,7 @@
 # pyright: reportAttributeAccessIssue=false
 """Unit tests for SQL factory functionality including parameter binding fixes and new features."""
 
+from collections.abc import Callable
 import importlib.util
 import math
 
@@ -24,6 +25,7 @@ from sqlspec.builder import (
     build_copy_from_statement,
     build_copy_to_statement,
 )
+from sqlspec.builder import _select as select_module
 from sqlspec.builder._expression_wrappers import (
     ConversionExpression,
     ExpressionWrapper,
@@ -32,7 +34,6 @@ from sqlspec.builder._expression_wrappers import (
     StringExpression,
 )
 from sqlspec.builder._join import create_join_builder
-from sqlspec.builder import _select as select_module
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
@@ -987,10 +988,12 @@ def test_multiple_sql_raw_objects_parameter_merging() -> None:
 def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    def extract(value: object, builder: object | None = None) -> exp.Expr:
+    def extract(
+        value: object, builder: object | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
+    ) -> exp.Expr:
         nonlocal calls
         calls += 1
-        return extract_sql_object_expression(value, builder)
+        return extract_sql_object_expression(value, builder, parse_sql)
 
     monkeypatch.setattr(select_module, "extract_sql_object_expression", extract)
     sql.select("*").from_("users").where_exists(

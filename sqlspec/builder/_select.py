@@ -649,7 +649,14 @@ class WhereClauseMixin:
             return subquery_expr
 
         if has_expression_and_sql(subquery):
-            return extract_sql_object_expression(subquery, builder=self)
+            def parse_subquery(sql_text: str) -> exp.Expr:
+                parsed_from_sql = exp.maybe_parse(sql_text, dialect=builder.dialect)
+                if parsed_from_sql is None:
+                    msg = f"Could not parse subquery SQL: {sql_text}"
+                    raise SQLBuilderError(msg)
+                return parsed_from_sql
+
+            return extract_sql_object_expression(subquery, builder=self, parse_sql=parse_subquery)
 
         if isinstance(subquery, exp.Expr):
             return subquery
@@ -771,7 +778,9 @@ class WhereClauseMixin:
                 return builder._parameterize_expression(_normalize_condition_expression(raw_expr))
             return parse_condition_expression(str(condition))
         if has_expression_and_sql(condition):
-            return _normalize_condition_expression(extract_sql_object_expression(condition, builder=self))
+            return _normalize_condition_expression(
+                extract_sql_object_expression(condition, builder=self, parse_sql=parse_condition_expression)
+            )
 
         msg = f"Unsupported condition type: {type(condition).__name__}"
         raise SQLBuilderError(msg)

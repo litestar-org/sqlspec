@@ -6,6 +6,7 @@ passed as strings to builder methods.
 
 import contextlib
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp, maybe_parse
@@ -301,7 +302,9 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
     return exp.condition(condition_input)
 
 
-def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp.Expr:
+def extract_sql_object_expression(
+    value: Any, builder: Any | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
+) -> exp.Expr:
     """Extract SQLGlot expression from SQL object value with parameter merging.
 
     Handles the common pattern of:
@@ -317,6 +320,7 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
     Args:
         value: The SQL object value to process
         builder: Optional builder instance for parameter merging (must have add_parameter method)
+        parse_sql: Optional parser for raw SQL fallback text.
 
     Returns:
         SQLGlot Expression extracted from the SQL object
@@ -337,6 +341,8 @@ def extract_sql_object_expression(value: Any, builder: Any | None = None) -> exp
     if sql_text is None:
         sql_text = value.sql if not callable(value.sql) else str(value)
 
+    if parse_sql is not None:
+        return parse_sql(sql_text)
     return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
 
 
