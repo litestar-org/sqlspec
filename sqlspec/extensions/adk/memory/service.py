@@ -1,6 +1,7 @@
 """SQLSpec-backed memory service for Google ADK."""
 
-from typing import TYPE_CHECKING
+import inspect
+from typing import TYPE_CHECKING, Any, cast
 
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
 
@@ -10,9 +11,10 @@ from sqlspec.extensions.adk.memory.converters import (
     session_to_memory_records,
 )
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from google.adk.events.event import Event
     from google.adk.memory.memory_entry import MemoryEntry
@@ -39,7 +41,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         store: Database store implementation.
     """
 
-    def __init__(self, store: "BaseAsyncADKMemoryStore") -> None:
+    def __init__(self, store: "BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore") -> None:
         """Initialize the memory service.
 
         Args:
@@ -48,7 +50,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         self._store = store
 
     @property
-    def store(self) -> "BaseAsyncADKMemoryStore":
+    def store(self) -> "BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore":
         """Return the database store."""
         return self._store
 
@@ -73,7 +75,7 @@ class SQLSpecMemoryService(BaseMemoryService):
             )
             return
 
-        inserted_count = await self._store.insert_memory_entries(records)
+        inserted_count = await self._call_store("insert_memory_entries", records)
         logger.debug(
             "Stored %d memory entries for session %s (total events: %d)", inserted_count, session.id, len(records)
         )
@@ -121,7 +123,7 @@ class SQLSpecMemoryService(BaseMemoryService):
             )
             return
 
-        inserted_count = await self._store.insert_memory_entries(records)
+        inserted_count = await self._call_store("insert_memory_entries", records)
         logger.debug(
             "Stored %d memory entries from %d events (app=%s, user=%s)", inserted_count, len(records), app_name, user_id
         )
@@ -161,7 +163,7 @@ class SQLSpecMemoryService(BaseMemoryService):
             logger.debug("No content to store for memories (app=%s, user=%s)", app_name, user_id)
             return
 
-        inserted_count = await self._store.insert_memory_entries(records)
+        inserted_count = await self._call_store("insert_memory_entries", records)
         logger.debug(
             "Stored %d memory entries from %d memories (app=%s, user=%s)",
             inserted_count,
@@ -183,13 +185,23 @@ class SQLSpecMemoryService(BaseMemoryService):
         Returns:
             SearchMemoryResponse with memories: List[MemoryEntry].
         """
-        records = await self._store.search_entries(query=query, app_name=app_name, user_id=user_id)
+        records = await self._call_store("search_entries", query=query, app_name=app_name, user_id=user_id)
 
         memories = records_to_memory_entries(records)
 
         logger.debug("Found %d memories for query '%s' (app=%s, user=%s)", len(memories), query[:50], app_name, user_id)
 
         return SearchMemoryResponse(memories=memories)
+
+    async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Call an async store method or bridge a sync store method."""
+        method = getattr(self._store, method_name)
+        if inspect.iscoroutinefunction(method):
+            return await method(*args, **kwargs)
+        sync_method = method
+        if TYPE_CHECKING:
+            sync_method = cast("Callable[..., Any]", method)
+        return await async_(sync_method)(*args, **kwargs)
 
 
 class SQLSpecSyncMemoryService:
