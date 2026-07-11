@@ -247,7 +247,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.emit_query_start_sync(**query_context)
             sql_hash = None
             if runtime.span_manager.is_enabled or (
-                runtime.has_statement_observers and runtime.config.logging.include_sql_hash  # type: ignore[union-attr]
+                runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
             ):
                 sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
             span = runtime.start_query_span(compiled_sql, operation, type(self).__name__, sql_hash=sql_hash)
@@ -441,7 +441,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         direct_statement: SQL | None = None
-        returns_rows = cached.operation_profile.returns_rows
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
@@ -449,7 +448,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 if hasattr(cursor, "execute"):
                     try:
                         cursor.execute(cached.compiled_sql, params)
-                        if returns_rows:
+                        if cached.operation_profile.returns_rows:
                             fetched_data = cursor.fetchall()
                             data, column_names, row_count = self.collect_rows(cursor, fetched_data)
                             execution_result = self.create_execution_result(
@@ -477,7 +476,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
-                    if returns_rows:
+                    if cached.operation_profile.returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = (

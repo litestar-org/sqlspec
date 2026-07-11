@@ -34,24 +34,6 @@ _MYSQL_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _ORACLE_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _BIGQUERY_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _DUCKDB_OPERATOR_TRANSFORM: _OperatorTransform | None = None
-_POSTGRES_VECTOR_OPERATOR_MAP: Final[dict[str, str]] = {"euclidean": "<->", "cosine": "<=>", "inner_product": "<#>"}
-_MYSQL_VECTOR_METRIC_MAP: Final[dict[str, str]] = {"euclidean": "EUCLIDEAN", "cosine": "COSINE", "inner_product": "DOT"}
-_ORACLE_VECTOR_METRIC_MAP: Final[dict[str, str]] = {
-    "euclidean": "EUCLIDEAN",
-    "cosine": "COSINE",
-    "inner_product": "DOT",
-    "euclidean_squared": "EUCLIDEAN_SQUARED",
-}
-_BIGQUERY_VECTOR_FUNCTION_MAP: Final[dict[str, str]] = {
-    "euclidean": "EUCLIDEAN_DISTANCE",
-    "cosine": "COSINE_DISTANCE",
-    "inner_product": "DOT_PRODUCT",
-}
-_DUCKDB_VECTOR_FUNCTION_MAP: Final[dict[str, str]] = {
-    "euclidean": "array_distance",
-    "cosine": "array_cosine_distance",
-    "inner_product": "array_negative_inner_product",
-}
 
 
 def is_vector_distance_expression(expression: object) -> bool:
@@ -108,7 +90,9 @@ def VectorDistance(*, this: exp.Expr, expression: exp.Expr, metric: Any = "eucli
 
 def render_vector_distance_postgres(left: str, right: str, metric: str) -> str:
     """Render PostgreSQL pgvector operator syntax."""
-    operator = _POSTGRES_VECTOR_OPERATOR_MAP.get(metric)
+    operator_map = {"euclidean": "<->", "cosine": "<=>", "inner_product": "<#>"}
+
+    operator = operator_map.get(metric)
     if operator:
         return f"{left} {operator} {right}"
 
@@ -117,7 +101,9 @@ def render_vector_distance_postgres(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_mysql(left: str, right: str, metric: str) -> str:
     """Render MySQL DISTANCE function syntax."""
-    mysql_metric = _MYSQL_VECTOR_METRIC_MAP.get(metric, "EUCLIDEAN")
+    metric_map = {"euclidean": "EUCLIDEAN", "cosine": "COSINE", "inner_product": "DOT"}
+
+    mysql_metric = metric_map.get(metric, "EUCLIDEAN")
 
     if ("ARRAY" in right or "[" in right) and "STRING_TO_VECTOR" not in right:
         right = f"STRING_TO_VECTOR({right})"
@@ -127,7 +113,14 @@ def render_vector_distance_mysql(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_oracle(left: str, right: str, metric: str) -> str:
     """Render Oracle VECTOR_DISTANCE function syntax."""
-    oracle_metric = _ORACLE_VECTOR_METRIC_MAP.get(metric, "EUCLIDEAN")
+    metric_map = {
+        "euclidean": "EUCLIDEAN",
+        "cosine": "COSINE",
+        "inner_product": "DOT",
+        "euclidean_squared": "EUCLIDEAN_SQUARED",
+    }
+
+    oracle_metric = metric_map.get(metric, "EUCLIDEAN")
 
     if ("[" in right or "ARRAY" in right) and "TO_VECTOR" not in right:
         right = f"TO_VECTOR({right})"
@@ -137,7 +130,9 @@ def render_vector_distance_oracle(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_bigquery(left: str, right: str, metric: str) -> str:
     """Render BigQuery vector distance function syntax."""
-    function_name = _BIGQUERY_VECTOR_FUNCTION_MAP.get(metric)
+    function_map = {"euclidean": "EUCLIDEAN_DISTANCE", "cosine": "COSINE_DISTANCE", "inner_product": "DOT_PRODUCT"}
+
+    function_name = function_map.get(metric)
     if function_name:
         return f"{function_name}({left}, {right})"
 
@@ -146,7 +141,12 @@ def render_vector_distance_bigquery(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_duckdb(left: str, right: str, metric: str, *, dimension: int | None = None) -> str:
     """Render DuckDB VSS extension function syntax."""
-    function_name = _DUCKDB_VECTOR_FUNCTION_MAP.get(metric)
+    function_map = {
+        "euclidean": "array_distance",
+        "cosine": "array_cosine_distance",
+        "inner_product": "array_negative_inner_product",
+    }
+    function_name = function_map.get(metric)
     if function_name:
         target_type = f"DOUBLE[{dimension}]" if dimension is not None else "DOUBLE[]"
         return f"{function_name}({left}, CAST({right} AS {target_type}))"

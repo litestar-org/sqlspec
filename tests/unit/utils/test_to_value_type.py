@@ -223,15 +223,6 @@ def test_msgspec_conversion_does_not_walk_numpy_for_plain_payload(monkeypatch: p
     assert result == [User(id=1, name="Alice")]
 
 
-def test_list_schema_alias_is_cached() -> None:
-    """Repeated schema conversion reuses its parameterized list type."""
-
-    class User(msgspec.Struct):
-        id: int
-
-    assert schema_utils._list_alias(User) is schema_utils._list_alias(User)
-
-
 @pytest.mark.skipif(not schema_utils.NUMPY_INSTALLED, reason="numpy is not installed")
 def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ndarray payloads should still convert through the numpy fallback path."""

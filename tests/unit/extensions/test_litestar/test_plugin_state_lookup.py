@@ -30,12 +30,3 @@ def test_get_config_and_get_annotation_agree_on_session_key() -> None:
     config = plugin.get_config(DEFAULT_SESSION_KEY)
     assert plugin.get_config(DEFAULT_CONNECTION_KEY) is config
     assert plugin.get_annotation(DEFAULT_SESSION_KEY) is type(config)
-
-
-def test_plugin_state_precomputes_session_instance_key() -> None:
-    """Request session state uses a stable precomputed scope key."""
-    plugin = _build_initialized_plugin()
-
-    state = plugin._get_plugin_state(DEFAULT_SESSION_KEY)
-
-    assert state.session_key_instance == f"{DEFAULT_SESSION_KEY}_instance"

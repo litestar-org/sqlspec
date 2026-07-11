@@ -12,7 +12,6 @@ Components:
 import logging
 import threading
 import time
-from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
@@ -63,9 +62,9 @@ DEFAULT_MAX_SIZE: Final = 10000
 DEFAULT_TTL_SECONDS: Final = 3600
 
 
-LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_stats", "_namespace")
+CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp")
+LRU_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats", "_namespace")
 CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
-_CACHE_MISSING: Final = object()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -170,6 +169,26 @@ class CacheStats:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
+class CacheNode:
+    """Internal cache node for LRU linked list implementation."""
+
+    __slots__ = CACHE_NODE_SLOTS
+
+    def __init__(self, key: CacheKey, value: Any) -> None:
+        """Initialize cache node.
+
+        Args:
+            key: Cache key for this node
+            value: Cached value
+        """
+        self.key = key
+        self.value = value
+        self.prev: CacheNode | None = None
+        self.next: CacheNode | None = None
+        self.timestamp = time.time()
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class LRUCache:
     """Cache with LRU eviction and TTL support.
 
@@ -193,14 +212,19 @@ class LRUCache:
             ttl_seconds: Time-to-live in seconds (None for no expiration)
             namespace: Optional namespace identifier for logging context
         """
-        self._cache: OrderedDict[Any, tuple[Any, float]] = OrderedDict()
+        self._cache: dict[CacheKey, CacheNode] = {}
         self._lock = threading.Lock()
         self._max_size = max_size
         self._ttl = ttl_seconds
         self._stats = CacheStats()
         self._namespace = namespace
 
-    def get(self, key: Any) -> Any | None:
+        self._head = CacheNode(CacheKey(()), None)
+        self._tail = CacheNode(CacheKey(()), None)
+        self._head.next = self._tail
+        self._tail.prev = self._head
+
+    def get(self, key: CacheKey) -> Any | None:
         """Get value from cache.
 
         Args:
@@ -216,16 +240,16 @@ class LRUCache:
         result: Any | None = None
 
         with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
+            node = self._cache.get(key)
+            if node is None:
                 self._stats.record_miss()
                 if debug_enabled:
                     log_event = "cache.miss"
                     log_cache_size = len(self._cache)
             else:
                 ttl = self._ttl
-                value, timestamp = entry
-                if ttl is not None and (time.time() - timestamp) > ttl:
+                if ttl is not None and (time.time() - node.timestamp) > ttl:
+                    self._remove_node(node)
                     del self._cache[key]
                     self._stats.record_miss()
                     self._stats.record_eviction()
@@ -234,12 +258,12 @@ class LRUCache:
                         log_reason = "expired"
                         log_cache_size = len(self._cache)
                 else:
-                    self._cache.move_to_end(key)
+                    self._move_to_head(node)
                     self._stats.record_hit()
                     if debug_enabled:
                         log_event = "cache.hit"
                         log_cache_size = len(self._cache)
-                    result = value
+                    result = node.value
 
         if log_event is not None:
             if log_reason is not None:
@@ -257,7 +281,7 @@ class LRUCache:
                 )
         return result
 
-    def put(self, key: Any, value: Any) -> None:
+    def put(self, key: CacheKey, value: Any) -> None:
         """Put value in cache.
 
         Args:
@@ -265,27 +289,34 @@ class LRUCache:
             value: Value to cache
         """
         with self._lock:
-            if key in self._cache:
-                self._cache[key] = (value, time.time())
-                self._cache.move_to_end(key)
+            existing_node = self._cache.get(key)
+            if existing_node is not None:
+                existing_node.value = value
+                existing_node.timestamp = time.time()
+                self._move_to_head(existing_node)
                 return
 
-            self._cache[key] = (value, time.time())
+            new_node = CacheNode(key, value)
+            self._cache[key] = new_node
+            self._add_to_head(new_node)
 
             if len(self._cache) > self._max_size:
-                self._cache.popitem(last=False)
-                self._stats.record_eviction()
-                if logger.isEnabledFor(logging.DEBUG):
-                    log_with_context(
-                        logger,
-                        logging.DEBUG,
-                        "cache.evict",
-                        cache_namespace=self._namespace,
-                        cache_size=len(self._cache),
-                        reason="max_size",
-                    )
+                tail_node = self._tail.prev
+                if tail_node is not None and tail_node is not self._head:
+                    self._remove_node(tail_node)
+                    del self._cache[tail_node.key]
+                    self._stats.record_eviction()
+                    if logger.isEnabledFor(logging.DEBUG):
+                        log_with_context(
+                            logger,
+                            logging.DEBUG,
+                            "cache.evict",
+                            cache_namespace=self._namespace,
+                            cache_size=len(self._cache),
+                            reason="max_size",
+                        )
 
-    def delete(self, key: Any) -> bool:
+    def delete(self, key: CacheKey) -> bool:
         """Delete entry from cache.
 
         Args:
@@ -295,12 +326,20 @@ class LRUCache:
             True if key was found and deleted, False otherwise
         """
         with self._lock:
-            return self._cache.pop(key, _CACHE_MISSING) is not _CACHE_MISSING
+            node: CacheNode | None = self._cache.get(key)
+            if node is None:
+                return False
+
+            self._remove_node(node)
+            del self._cache[key]
+            return True
 
     def clear(self) -> None:
         """Clear all cache entries."""
         with self._lock:
             self._cache.clear()
+            self._head.next = self._tail
+            self._tail.prev = self._head
             self._stats.reset()
 
     def is_empty(self) -> bool:
@@ -311,19 +350,42 @@ class LRUCache:
         """Get cache statistics."""
         return self._stats
 
+    def _add_to_head(self, node: CacheNode) -> None:
+        """Add node to head of list."""
+        node.prev = self._head
+        head_next: CacheNode | None = self._head.next
+        node.next = head_next
+        if head_next is not None:
+            head_next.prev = node
+        self._head.next = node
+
+    def _remove_node(self, node: CacheNode) -> None:
+        """Remove node from linked list."""
+        node_prev: CacheNode | None = node.prev
+        node_next: CacheNode | None = node.next
+        if node_prev is not None:
+            node_prev.next = node_next
+        if node_next is not None:
+            node_next.prev = node_prev
+
+    def _move_to_head(self, node: CacheNode) -> None:
+        """Move node to head of list."""
+        self._remove_node(node)
+        self._add_to_head(node)
+
     def __len__(self) -> int:
         """Get current cache size."""
         return len(self._cache)
 
-    def __contains__(self, key: Any) -> bool:
+    def __contains__(self, key: CacheKey) -> bool:
         """Check if key exists in cache."""
         with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
+            node = self._cache.get(key)
+            if node is None:
                 return False
 
             ttl = self._ttl
-            return not (ttl is not None and time.time() - entry[1] > ttl)
+            return not (ttl is not None and time.time() - node.timestamp > ttl)
 
 
 _default_cache: LRUCache | None = None
@@ -652,7 +714,8 @@ class NamespacedCache:
             return None
         cache = self._caches[namespace]
         full_key = create_cache_key(namespace, key, dialect)
-        return cache.get(full_key)
+        cache_key = CacheKey((full_key,))
+        return cache.get(cache_key)
 
     def _put(self, namespace: str, key: str, value: Any, dialect: str | None = None) -> None:
         """Put cached value by namespace.
@@ -667,7 +730,8 @@ class NamespacedCache:
             return
         cache = self._caches[namespace]
         full_key = create_cache_key(namespace, key, dialect)
-        cache.put(full_key, value)
+        cache_key = CacheKey((full_key,))
+        cache.put(cache_key, value)
 
     def _delete(self, namespace: str, key: str, dialect: str | None = None) -> bool:
         """Delete cached value by namespace.
@@ -684,7 +748,8 @@ class NamespacedCache:
             return False
         cache = self._caches[namespace]
         full_key = create_cache_key(namespace, key, dialect)
-        return cache.delete(full_key)
+        cache_key = CacheKey((full_key,))
+        return cache.delete(cache_key)
 
     def get_statement(self, key: str, dialect: str | None = None) -> Any | None:
         """Get cached statement data.

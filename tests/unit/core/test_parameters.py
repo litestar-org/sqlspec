@@ -1222,8 +1222,7 @@ def test_process_type_coercion_supports_subclass_fallback(processor: "ParameterP
 
 def test_coerce_parameter_types_returns_decimal_scalar(processor: "ParameterProcessor") -> None:
     """Test scalar type coercion results are preserved."""
-    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={Decimal: float})
-    result = processor._coerce_parameter_types(Decimal("3.14"), config)
+    result = processor._coerce_parameter_types(Decimal("3.14"), {Decimal: float})
     assert result == 3.14
     assert isinstance(result, float)
 
@@ -1234,25 +1233,8 @@ def test_coerce_parameter_types_returns_custom_scalar(processor: "ParameterProce
     class CustomValue:
         pass
 
-    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={CustomValue: lambda value: "coerced"})
-    result = processor._coerce_parameter_types(CustomValue(), config)
+    result = processor._coerce_parameter_types(CustomValue(), {CustomValue: lambda value: "coerced"})
     assert result == "coerced"
-
-
-def test_type_coercion_map_in_place_mutation_updates_subclass_fallback(
-    processor: "ParameterProcessor",
-) -> None:
-    """Mutating the public coercion map keeps subclass dispatch behavior current."""
-
-    class MyInt(int):
-        pass
-
-    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: lambda value: value + 1})
-    config.type_coercion_map[int] = lambda value: value + 2
-
-    result = processor.process("SELECT ?", [MyInt(1)], config, wrap_types=False)
-
-    assert result.parameters == [3]
 
 
 def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterProcessor") -> None:

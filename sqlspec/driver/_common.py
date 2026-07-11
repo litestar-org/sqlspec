@@ -692,7 +692,7 @@ class CommonDriverAttributesMixin:
     ) -> "ConvertedParameters":
         """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
-        needs_style_remap = not _CACHED_NAMED_STYLES.isdisjoint(cached.parameter_profile.styles)
+        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
         if (
             not cached.input_named_parameters
             and not cached.applied_wrap_types
@@ -1131,7 +1131,7 @@ class CommonDriverAttributesMixin:
         if not needs_rebind:
             needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
 
-        if not needs_rebind and not _CACHED_NAMED_STYLES.isdisjoint(cached.parameter_profile.styles):
+        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
             needs_rebind = True
 
         if not needs_rebind and not config._has_output_transformer:
@@ -1978,23 +1978,21 @@ def _lazy_copy_coerce_dict(
     return result
 
 
-def _cache_param_values(
-    params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
-) -> "tuple[Any, ...] | list[Any] | abc.ValuesView[Any]":
+def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") -> "tuple[Any, ...] | list[Any]":
     if isinstance(params, dict):
-        return params.values()
+        return tuple(params.values())
     return params
 
 
 def parameter_values_need_processing(
-    values: "abc.Collection[Any]",
+    values: "tuple[Any, ...] | list[Any]",
     type_coercion_map: "dict[type, Any] | None",
     fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
 ) -> bool:
     if fallback_items is None:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
     if len(values) == 1:
-        return parameter_value_needs_processing(next(iter(values)), type_coercion_map, fallback_items)
+        return parameter_value_needs_processing(values[0], type_coercion_map, fallback_items)
     return any(parameter_value_needs_processing(value, type_coercion_map, fallback_items) for value in values)
 
 

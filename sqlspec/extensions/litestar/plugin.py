@@ -115,12 +115,11 @@ def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundErr
 
 
 class CorrelationMiddleware:
-    __slots__ = ("_app", "_extractor", "_header_names_lower", "_headers")
+    __slots__ = ("_app", "_extractor", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
         self._app = app
         self._headers = headers
-        self._header_names_lower = frozenset(header.lower().encode() for header in headers)
         self._extractor = (
             CorrelationExtractor(
                 primary_header=headers[0],
@@ -138,11 +137,7 @@ class CorrelationMiddleware:
             return
 
         raw_headers = scope.get("headers") or []
-        header_dict = {
-            name.decode().lower(): value.decode()
-            for name, value in raw_headers
-            if name.lower() in self._header_names_lower
-        }
+        header_dict = {name.decode().lower(): value.decode() for name, value in raw_headers}
         header_value = self._extractor.extract(lambda header: header_dict.get(header))
 
         previous_correlation_id = CorrelationContext.get()
@@ -171,7 +166,6 @@ class PluginConfigState:
     correlation_header: str
     enable_sqlcommenter_middleware: bool
     correlation_headers: tuple[str, ...] = field(init=False)
-    session_key_instance: str = field(init=False)
     disable_di: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
     pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
@@ -282,7 +276,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             disable_di=settings["disable_di"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
-        state.session_key_instance = f"{state.session_key}_instance"
 
         if not state.disable_di:
             self._setup_handlers(state)
@@ -514,7 +507,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Create a session from a connection and store it in scope."""
-        session_scope_key = plugin_state.session_key_instance
+        session_scope_key = f"{plugin_state.session_key}_instance"
 
         session = get_sqlspec_scope_state(scope, session_scope_key)
         if session is not None:

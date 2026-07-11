@@ -327,7 +327,7 @@ class ParameterProcessor:
 
         param_info = self._validator.extract_parameters(sql)
         original_styles = {p.style for p in param_info} if param_info else set()
-        needs_execution_conversion = self._needs_placeholder_conversion(original_styles, config)
+        needs_execution_conversion = self._needs_placeholder_conversion(param_info, config)
 
         input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
 
@@ -336,7 +336,7 @@ class ParameterProcessor:
                 sql, parameters, config, is_many, cache_key, input_named_parameters=input_named_parameters
             )
 
-        requires_mapping = self._needs_mapping_normalization(parameters, param_info, original_styles, is_many)
+        requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
         if (
             not needs_execution_conversion
             and not config.type_coercion_map
@@ -388,7 +388,7 @@ class ParameterProcessor:
                 applied_wrap_types = True
 
         if config.type_coercion_map and processed_parameters:
-            processed_parameters = self._coerce_parameter_types(processed_parameters, config, is_many)
+            processed_parameters = self._coerce_parameter_types(processed_parameters, config.type_coercion_map, is_many)
 
         processed_sql, processed_parameters, converted_param_info = self._execution_placeholders(
             processed_sql,
@@ -433,7 +433,7 @@ class ParameterProcessor:
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
         if config.type_coercion_map and parameters:
-            coerced_params = self._coerce_parameter_types(parameters, config, is_many)
+            coerced_params = self._coerce_parameter_types(parameters, config.type_coercion_map, is_many)
 
         static_sql, static_params = self._converter.convert_placeholder_style(
             sql, coerced_params, ParameterStyle.STATIC, is_many, strict_named_parameters=config.strict_named_parameters
@@ -513,12 +513,23 @@ class ParameterProcessor:
         return None
 
     def _coerce_parameter_types(
-        self, parameters: "ParameterPayload", config: "ParameterStyleConfig", is_many: bool = False
+        self,
+        parameters: "ParameterPayload",
+        type_coercion_map: "dict[type, Callable[[Any], Any]]",
+        is_many: bool = False,
     ) -> "ConvertedParameters":
-        fallback_items = _type_coercion_fallbacks(config.type_coercion_map)
-        result = _coerce_parameters_payload(parameters, config.type_coercion_map, fallback_items, is_many)
+        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        result = _coerce_parameters_payload(parameters, type_coercion_map, fallback_items, is_many)
+        # Fast type narrowing - _coerce_parameters_payload returns object but produces concrete types
         if result is None:
             return None
+        result_type = type(result)
+        if result_type is dict:
+            return result
+        if result_type is list:
+            return result
+        if result_type is tuple:
+            return result
         return result
 
     def _store_cached_result(
@@ -568,7 +579,7 @@ class ParameterProcessor:
             processed = self._wrap_parameter_types(processed)
 
         if config.type_coercion_map and processed:
-            processed = self._coerce_parameter_types(processed, config, is_many)
+            processed = self._coerce_parameter_types(processed, config.type_coercion_map, is_many)
 
         if processed:
             cached_styles = cached_profile.styles
@@ -725,16 +736,12 @@ class ParameterProcessor:
         return parameters
 
     def _needs_mapping_normalization(
-        self,
-        payload: "ParameterPayload",
-        param_info: "list[ParameterInfo]",
-        styles: "set[ParameterStyle]",
-        is_many: bool,
+        self, payload: "ParameterPayload", param_info: "list[ParameterInfo]", is_many: bool
     ) -> bool:
         if not payload or not param_info:
             return False
 
-        has_named_placeholders = bool(styles & _NAMED_STYLES)
+        has_named_placeholders = any(param.style in _NAMED_STYLES for param in param_info)
         if has_named_placeholders:
             return False
 
@@ -822,15 +829,15 @@ class ParameterProcessor:
             sql, param_fingerprint, input_style, exec_style, dialect_marker, is_many, wrap_types, normalize_for_parsing
         )
 
-    def _needs_placeholder_conversion(
-        self, current_styles: "set[ParameterStyle]", config: "ParameterStyleConfig"
-    ) -> bool:
+    def _needs_placeholder_conversion(self, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig") -> bool:
         """Determine whether execution placeholder conversion is required."""
         if config.needs_static_script_compilation:
             return True
 
-        if not current_styles:
+        if not param_info:
             return False
+
+        current_styles = {param.style for param in param_info}
 
         if (
             config.allow_mixed_parameter_styles

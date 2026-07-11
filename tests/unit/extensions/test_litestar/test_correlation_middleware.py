@@ -47,20 +47,7 @@ async def test_litestar_correlation_middleware_restores_previous_correlation_id(
 
 
 def test_correlation_middleware_slots_include_cached_extractor() -> None:
-    assert CorrelationMiddleware.__slots__ == ("_app", "_extractor", "_header_names_lower", "_headers")
-
-
-async def test_litestar_correlation_middleware_decodes_only_matching_headers() -> None:
-    seen: dict[str, Any] = {}
-
-    async def app(_scope: Any, _receive: Any, _send: Any) -> None:
-        seen["cid"] = CorrelationContext.get()
-
-    scope = {"type": "http", "headers": [(b"x-ignored", b"\xff"), (b"X-Request-ID", b"matching")]}
-
-    await _call_middleware(scope, app)
-
-    assert seen["cid"] == "matching"
+    assert CorrelationMiddleware.__slots__ == ("_app", "_extractor", "_headers")
 
 
 async def test_litestar_correlation_middleware_sanitizes_header_value() -> None:

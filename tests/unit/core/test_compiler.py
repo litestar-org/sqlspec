@@ -92,20 +92,6 @@ def postgres_statement_config() -> "StatementConfig":
     )
 
 
-def test_dynamic_sqlcommenter_flag_is_precomputed(basic_statement_config: "StatementConfig") -> None:
-    """Processor construction captures static SQLCommenter configuration."""
-    disabled = SQLProcessor(basic_statement_config)
-    enabled_config = StatementConfig(
-        dialect="sqlite",
-        parameter_config=basic_statement_config.parameter_config,
-        enable_sqlcommenter=True,
-        sqlcommenter_enable_context=True,
-    )
-
-    assert disabled._dynamic_sqlcommenter is False
-    assert SQLProcessor(enabled_config)._dynamic_sqlcommenter is True
-
-
 @pytest.fixture
 def mysql_statement_config() -> "StatementConfig":
     """Create a MySQL StatementConfig for testing."""
@@ -1166,7 +1152,6 @@ def test_processor_memory_efficiency_with_slots() -> None:
         "_cache_misses",
         "_config",
         "_dialect_str",
-        "_dynamic_sqlcommenter",
         "_enable_parameter_type_wrapping",
         "_exec_style",
         "_input_style",

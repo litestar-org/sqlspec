@@ -64,7 +64,7 @@ class PrometheusStatementObserver:
 
     def _label_values(self, event: StatementEvent) -> tuple[str, ...]:
         values: list[str] = []
-        payload: dict[str, Any] | None = None
+        payload = event.as_dict()
         for name in self._label_names:
             match name:
                 case "db_system":
@@ -81,8 +81,6 @@ class PrometheusStatementObserver:
                 case "bind_key":
                     values.append(event.bind_key or "default")
                 case _:
-                    if payload is None:
-                        payload = event.as_dict()
                     value = payload.get(name)
                     values.append("" if value is None else str(value))
         return tuple(values)
