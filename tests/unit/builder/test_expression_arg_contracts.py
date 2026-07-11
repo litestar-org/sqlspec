@@ -7,9 +7,11 @@ expression and require the full clause text.
 """
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import Column
+from sqlspec.builder._ddl import ColumnDefinition, build_column_expression
 from sqlspec.exceptions import SQLBuilderError
 
 
@@ -71,3 +73,33 @@ def test_column_any_renders_operand_array() -> None:
 def test_column_not_any_renders_operand_array() -> None:
     rendered = Column("status").not_any_(["a", "b"]).sqlglot_expression.sql(dialect="postgres")
     assert rendered == "status <> ANY(ARRAY['a', 'b'])"
+
+
+def test_builder_expressions_satisfy_required_sqlglot_arguments() -> None:
+    expressions = [
+        sql.coalesce("a", "b").expression,
+        sql.nvl("a", "b").expression,
+        Column("a").coalesce("b").sqlglot_expression,
+        Column("a").asc(),
+        Column("a").desc(),
+        next(sql.row_number_.order_by(exp.column("a")).build().find_all(exp.Ordered)),
+        next(
+            sql.select("a")
+            .from_("t")
+            .order_by(exp.alias_(exp.column("a"), "asc"))
+            .get_expression()
+            .find_all(exp.Ordered)
+        ),
+        next(build_column_expression(ColumnDefinition("id", "INT", auto_increment=True)).find_all(exp.AutoIncrementColumnConstraint)),
+        next(
+            sql.create_materialized_view("mv")
+            .as_select("SELECT 1")
+            .with_data()
+            ._create_base_expression()
+            .find_all(exp.Property)
+        ),
+        sql.in_(sql.select("id").from_("items")),
+    ]
+    assert [(type(expression).__name__, expression.error_messages()) for expression in expressions] == [
+        (type(expression).__name__, []) for expression in expressions
+    ]

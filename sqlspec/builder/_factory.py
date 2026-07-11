@@ -1388,7 +1388,9 @@ class SQLFactory:
             COALESCE expression.
         """
         exprs = [_coerce_column(expr) for expr in expressions]
-        return ConversionExpression(exp.Coalesce(expressions=exprs))
+        return ConversionExpression(
+            exp.Coalesce(this=exprs[0], expressions=exprs[1:]) if exprs else exp.Coalesce(this=exp.Var(this=""))
+        )
 
     @staticmethod
     def nvl(column: ColumnLike, substitute_value: str | exp.Expr | Any) -> ConversionExpression:
@@ -1403,7 +1405,7 @@ class SQLFactory:
         """
         col_expr = extract_expression(column)
         sub_expr = to_expression(substitute_value)
-        return ConversionExpression(exp.Coalesce(expressions=[col_expr, sub_expr]))
+        return ConversionExpression(exp.Coalesce(this=col_expr, expressions=[sub_expr]))
 
     @staticmethod
     def nvl2(

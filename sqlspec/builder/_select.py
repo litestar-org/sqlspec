@@ -199,7 +199,7 @@ class SubqueryBuilder:
         if self._operation == "exists":
             return exp.Exists(this=subquery_expr)
         if self._operation == "in":
-            return exp.In(expressions=[subquery_expr])
+            return exp.In(this=exp.Var(this=""), expressions=[subquery_expr])
         if self._operation == "any":
             return exp.Any(this=subquery_expr)
         if self._operation == "all":
@@ -235,7 +235,7 @@ class WindowFunctionBuilder:
             elif isinstance(column, exp.Ordered):
                 ordered_columns.append(column)
             else:
-                ordered_columns.append(exp.Ordered(this=column, desc=False))
+                ordered_columns.append(exp.Ordered(this=column, desc=False, nulls_first=False))
         self._order_by = ordered_columns
         return self
 
@@ -404,7 +404,9 @@ class OrderByClauseMixin:
                 if isinstance(extracted_item, exp.Alias):
                     alias_name = (extracted_item.alias or "").lower()
                     if alias_name in {"asc", "desc"}:
-                        extracted_item = exp.Ordered(this=extracted_item.this, desc=alias_name == "desc")
+                        extracted_item = exp.Ordered(
+                            this=extracted_item.this, desc=alias_name == "desc", nulls_first=False
+                        )
                 order_item = (
                     extracted_item.desc() if desc and not isinstance(extracted_item, exp.Ordered) else extracted_item
                 )
