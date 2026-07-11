@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
 from sqlspec.observability._config import LoggingConfig, ObservabilityConfig, StatementObserver
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
-from sqlspec.observability._observer import create_event, create_statement_observer
+from sqlspec.observability._observer import _truncate_text, create_event, create_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.type_guards import has_span_attribute
@@ -426,7 +426,7 @@ class ObservabilityRuntime:
         sql_payload = ""
         if self.config.print_sql:
             sql_payload = self._redact_sql(sql)
-            sql_payload, truncated = _truncate_text(sql_payload, max_chars=4096)
+            sql_payload, truncated, _length = _truncate_text(sql_payload, max_chars=4096)
             if truncated:
                 connection_info["sqlspec.statement.truncated"] = True
 
@@ -563,10 +563,3 @@ def _mask_parameters(value: Any, allow_list: set[str]) -> Any:
     if isinstance(value, tuple):
         return tuple(_mask_parameters(item, allow_list) for item in value)
     return "***"
-
-
-# Keep in sync with sqlspec.observability._observer._truncate_text.
-def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
-    if len(value) <= max_chars:
-        return value, False
-    return value[:max_chars], True

@@ -247,7 +247,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.emit_query_start_sync(**query_context)
             sql_hash = None
             if runtime.span_manager.is_enabled or (
-                runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
+                runtime.has_statement_observers and runtime.config.logging.include_sql_hash  # type: ignore[union-attr]
             ):
                 sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
             span = runtime.start_query_span(compiled_sql, operation, type(self).__name__, sql_hash=sql_hash)
