@@ -78,7 +78,6 @@ TYPED_PARAMETER_SLOTS: Final[tuple[str, ...]] = ("_hash", "original_type", "sema
 PARAMETER_INFO_SLOTS: Final[tuple[str, ...]] = ("name", "ordinal", "placeholder_text", "position", "style")
 PARAMETER_STYLE_CONFIG_SLOTS: Final[tuple[str, ...]] = (
     "_hash_cache",
-    "_type_coercion_fallback_items",
     "allow_mixed_parameter_styles",
     "ast_transformer",
     "default_execution_parameter_style",
@@ -289,7 +288,6 @@ class ParameterStyleConfig:
         )
         self.default_execution_parameter_style = default_execution_parameter_style or default_parameter_style
         self.type_coercion_map = dict(type_coercion_map or {})
-        self._type_coercion_fallback_items = tuple(self.type_coercion_map.items())
         self.has_native_list_expansion = has_native_list_expansion
         self.output_transformer = output_transformer
         self.ast_transformer = ast_transformer

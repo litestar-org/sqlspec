@@ -1239,13 +1239,20 @@ def test_coerce_parameter_types_returns_custom_scalar(processor: "ParameterProce
     assert result == "coerced"
 
 
-def test_parameter_style_config_caches_type_coercion_fallback_items() -> None:
-    """Construction and replacement keep fallback items synchronized."""
-    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={Decimal: float})
-    replacement = config.replace(type_coercion_map={int: str})
+def test_type_coercion_map_in_place_mutation_updates_subclass_fallback(
+    processor: "ParameterProcessor",
+) -> None:
+    """Mutating the public coercion map keeps subclass dispatch behavior current."""
 
-    assert config._type_coercion_fallback_items == tuple(config.type_coercion_map.items())
-    assert replacement._type_coercion_fallback_items == tuple(replacement.type_coercion_map.items())
+    class MyInt(int):
+        pass
+
+    config = ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: lambda value: value + 1})
+    config.type_coercion_map[int] = lambda value: value + 2
+
+    result = processor.process("SELECT ?", [MyInt(1)], config, wrap_types=False)
+
+    assert result.parameters == [3]
 
 
 def test_process_type_coercion_preserves_scalar_parameter(processor: "ParameterProcessor") -> None:
