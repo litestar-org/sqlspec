@@ -279,6 +279,7 @@ class SQLProcessor:
         "_cache_misses",
         "_config",
         "_dialect_str",
+        "_dynamic_sqlcommenter",
         "_enable_parameter_type_wrapping",
         "_exec_style",
         "_input_style",
@@ -313,6 +314,10 @@ class SQLProcessor:
             cache_enabled: Toggle compiled SQL caching (parse/parameter caches remain size-driven)
         """
         self._config = config
+        self._dynamic_sqlcommenter = bool(
+            config.enable_sqlcommenter
+            and (config.sqlcommenter_enable_context or config.sqlcommenter_enable_traceparent)
+        )
         parameter_config = config.parameter_config
         self._parameter_config = parameter_config
         self._enable_parameter_type_wrapping = config.enable_parameter_type_wrapping
@@ -406,16 +411,9 @@ class SQLProcessor:
         self._last_result = result
         return self._apply_dynamic_sqlcommenter(result)
 
-    def _has_dynamic_sqlcommenter(self) -> bool:
-        """Return whether SQLCommenter resolves per-call context during compilation."""
-        return bool(
-            self._config.enable_sqlcommenter
-            and (self._config.sqlcommenter_enable_context or self._config.sqlcommenter_enable_traceparent)
-        )
-
     def _apply_dynamic_sqlcommenter(self, result: CompiledSQL) -> CompiledSQL:
         """Append current dynamic SQLCommenter attributes to a compiled result."""
-        if not self._has_dynamic_sqlcommenter():
+        if not self._dynamic_sqlcommenter:
             return result
 
         attrs = _comment_attributes(
@@ -658,7 +656,7 @@ class SQLProcessor:
             Updated expression metadata and transformation state.
         """
         statement_transformers = self._config.statement_transformers
-        if statement_transformers and self._has_dynamic_sqlcommenter():
+        if statement_transformers and self._dynamic_sqlcommenter:
             statement_transformers = statement_transformers[:-1]
         ast_transformer = self._parameter_config.ast_transformer
         if expression is None or (not statement_transformers and not ast_transformer):
