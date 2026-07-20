@@ -32,6 +32,8 @@ Unreleased
 
 **Added:**
 
+* New sync and async schema checks can create missing tables and add columns.
+  Use ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
 * Added sync and async event-channel ``publish_many()`` APIs. Batch-capable
   implementations preserve input order and publish a grouped call in one
   transaction; custom backends retain an ordered single-event fallback.
@@ -40,6 +42,9 @@ Unreleased
 
 **Changed:**
 
+* ADK, Litestar session, and durable event stores now derive additive schema
+  currency from their canonical DDL. ADK no longer seeds or bumps a
+  ``schema_version`` row for additive changes.
 * PostgreSQL listeners now hold one dedicated long-lived connection while
   publishers use short pooled sessions. Native PostgreSQL batch publication
   reuses one publisher transaction per grouped call.

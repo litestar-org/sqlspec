@@ -204,6 +204,12 @@ The durable table queue is available for SQL Server through ``arrow_odbc`` when
 configured with Microsoft ODBC Driver 18. It uses SQL Server ``DATETIME2(6)``
 timestamps and ``NVARCHAR`` payload columns.
 
+Durable queue migrations reconcile missing tables and additive columns from the
+adapter store's canonical DDL. Set ``events.manage_schema=False`` when an
+external migration system owns the queue schema. Set
+``events.create_schema=False`` to avoid creating an absent queue table. Column
+renames, drops, and type changes still require an explicit migration.
+
 .. autoclass:: sqlspec.extensions.events.AsyncTableEventQueue
    :members:
    :show-inheritance:

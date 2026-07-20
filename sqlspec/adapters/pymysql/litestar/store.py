@@ -44,6 +44,34 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
         self._table_options: str = _mysql_table_options(litestar_config)
 
+    async def create_table(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        return await async_(self._delete_expired)()
+
     def _table_ddl(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
@@ -68,9 +96,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             driver.execute_script(sql)
             driver.commit()
         self._log_table_created()
-
-    async def create_table(self) -> None:
-        await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         import pymysql
@@ -115,9 +140,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 return None
             raise
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        return await async_(self._get)(key, renew_for)
-
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -140,9 +162,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 cursor.close()
             conn.commit()
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
@@ -153,9 +172,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             finally:
                 cursor.close()
             conn.commit()
-
-    async def delete(self, key: str) -> None:
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         import pymysql
@@ -176,9 +192,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
             raise
-
-    async def delete_all(self) -> None:
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         import pymysql
@@ -202,9 +215,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise
-
-    async def exists(self, key: str) -> bool:
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         sql = f"""
@@ -233,9 +243,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             delta = expires_at_utc - now
             return int(delta.total_seconds())
 
-    async def expires_in(self, key: str) -> "int | None":
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
@@ -250,6 +257,3 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
-
-    async def delete_expired(self) -> int:
-        return await async_(self._delete_expired)()

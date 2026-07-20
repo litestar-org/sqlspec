@@ -30,8 +30,6 @@ __all__ = (
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
-_ADK_METADATA_SEED_SQL_TEMPLATE = "INSERT IGNORE INTO {0} (`key`, value) VALUES ('schema_version', '1')"
-
 _ADK_MEMORY_TABLE_DDL_TEMPLATE = ",\n            {0}"
 
 _ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = ",\n            FULLTEXT INDEX idx_{0}_fts (content_text)"
@@ -165,13 +163,16 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         super().__init__(config)
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._sessions_table_ddl())
             await driver.execute_script(await self._events_table_ddl())
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -484,9 +485,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def _metadata_table_ddl(self) -> str:
         return _mysql_metadata_ddl(self._metadata_table)
 
-    async def _metadata_seed_sql(self) -> str:
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
@@ -516,13 +514,16 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         with self._config.provide_session() as driver:
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
-            driver.execute_script(self._metadata_seed_sql())
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -848,9 +849,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def _metadata_table_ddl(self) -> str:
         return _mysql_metadata_ddl(self._metadata_table)
 
-    def _metadata_seed_sql(self) -> str:
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
@@ -879,6 +877,10 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         super().__init__(config)
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
@@ -1063,6 +1065,10 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 

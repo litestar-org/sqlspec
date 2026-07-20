@@ -36,44 +36,16 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         """
         super().__init__(config)
 
-    def _table_ddl(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL with optimized schema.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id TEXT PRIMARY KEY,
-            data BYTEA NOT NULL,
-            expires_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-
-        ALTER TABLE {self._table_name} SET (
-            autovacuum_vacuum_scale_factor = 0.05,
-            autovacuum_analyze_scale_factor = 0.02
-        );
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop indexes and table.
-        """
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -212,3 +184,35 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+    def _table_ddl(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL with optimized schema.
+
+        Returns:
+            SQL statement to create the sessions table with proper indexes.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id TEXT PRIMARY KEY,
+            data BYTEA NOT NULL,
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) WITH (fillfactor = 80);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+
+        ALTER TABLE {self._table_name} SET (
+            autovacuum_vacuum_scale_factor = 0.05,
+            autovacuum_analyze_scale_factor = 0.02
+        );
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]

@@ -54,6 +54,10 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
 
     def create_tables(self) -> None:
         """Create ADK tables (idempotent T-SQL) and DD-gated indexes."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         with self._config.provide_session() as driver:
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
@@ -66,7 +70,6 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             for index_name, index_table, columns in self._index_specs():
                 if _bare_name(index_name) not in existing_indexes:
                     driver.execute(_create_index_sql(index_table, index_name, columns))
-            driver.execute_script(self._metadata_seed_sql())
             driver.commit()
 
     def create_session(
@@ -326,10 +329,6 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         """Return T-SQL DDL for the ADK metadata table."""
         return _metadata_table_ddl(self._metadata_table)
 
-    def _metadata_seed_sql(self) -> str:
-        """Return T-SQL to seed schema-version metadata."""
-        return _metadata_seed_sql(self._metadata_table)
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(self._app_state_table)}"
 
@@ -407,6 +406,10 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
 
     def create_tables(self) -> None:
         """Create the memory table (idempotent T-SQL) and DD-gated indexes."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
@@ -717,19 +720,6 @@ def _upsert_metadata_sql(table: str) -> str:
     return f"""
     MERGE INTO {_table_ref(table)} WITH (HOLDLOCK) AS target
     USING (SELECT %s AS [key], %s AS value) AS source
-    ON (target.[key] = source.[key])
-    WHEN MATCHED THEN
-        UPDATE SET value = source.value
-    WHEN NOT MATCHED THEN
-        INSERT ([key], value)
-        VALUES (source.[key], source.value);
-    """
-
-
-def _metadata_seed_sql(table: str) -> str:
-    return f"""
-    MERGE INTO {_table_ref(table)} WITH (HOLDLOCK) AS target
-    USING (SELECT N'schema_version' AS [key], N'1' AS value) AS source
     ON (target.[key] = source.[key])
     WHEN MATCHED THEN
         UPDATE SET value = source.value

@@ -39,6 +39,37 @@ def test_ensure_diff_creates_missing_table_idempotently() -> None:
     driver.execute.assert_called_once_with(target.create_table)
 
 
+def test_schema_target_from_ddl_preserves_create_statement_and_parses_columns() -> None:
+    ddl = """
+    CREATE TABLE IF NOT EXISTS widgets (
+        id INTEGER PRIMARY KEY,
+        label VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_widgets_label ON widgets(label);
+    """
+
+    target = SchemaTarget.from_ddl("widgets", ddl, dialect="sqlite")
+
+    assert target.create_statement == ddl
+    assert [column.name for column in target.create_table.columns] == ["id", "label", "created_at"]
+    assert target.create_table.columns[1].not_null is True
+    assert target.create_table.columns[2].default == "CURRENT_TIMESTAMP"
+
+
+def test_ensure_diff_executes_canonical_ddl_as_script() -> None:
+    ddl = "CREATE TABLE widgets (id INTEGER); CREATE INDEX idx_widgets_id ON widgets(id);"
+    target = SchemaTarget.from_ddl("widgets", ddl)
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = []
+
+    result = ensure_schema_sync(driver, [target], manage_schema=True)
+
+    assert result.created_tables == ["widgets"]
+    driver.execute_script.assert_called_once_with(ddl)
+    driver.execute.assert_not_called()
+
+
 def test_ensure_diff_additive_only_ignores_rename() -> None:
     target = SchemaTarget(
         "widgets", sql.create_table("widgets").column("id", "INTEGER").column("new_name", "VARCHAR(50)")
@@ -86,11 +117,7 @@ def test_run_migrations_flag_invokes_explicit_migration_path() -> None:
     migration_runner = MagicMock()
 
     result = ensure_schema_sync(
-        driver,
-        [target],
-        manage_schema=False,
-        run_migrations=True,
-        migration_runner=migration_runner,
+        driver, [target], manage_schema=False, run_migrations=True, migration_runner=migration_runner
     )
 
     assert result.migrations_run is True
@@ -100,9 +127,7 @@ def test_run_migrations_flag_invokes_explicit_migration_path() -> None:
 
 @pytest.mark.anyio
 async def test_async_ensure_diff_adds_missing_column() -> None:
-    target = SchemaTarget(
-        "widgets", sql.create_table("widgets").column("id", "INTEGER").column("label", "VARCHAR(50)")
-    )
+    target = SchemaTarget("widgets", sql.create_table("widgets").column("id", "INTEGER").column("label", "VARCHAR(50)"))
     driver = MagicMock()
     driver.data_dictionary.get_tables = AsyncMock(return_value=[{"table_name": "widgets"}])
     driver.data_dictionary.get_columns = AsyncMock(return_value=[{"column_name": "id"}])

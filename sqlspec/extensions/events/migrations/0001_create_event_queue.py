@@ -25,7 +25,24 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     store = _load_store(context)
     statements = store.create_statements()
     statements = await _drop_present_index(store, context, statements)
+    if context is not None and context.driver is not None and store.settings.get("manage_schema", True):
+        if context.is_async_driver:
+            result = await store.reconcile_schema_async(context.driver)
+        else:
+            result = store.reconcile_schema_sync(context.driver)
+        if store.table_name in result.deferred_tables:
+            return []
+        statements = statements[1:]
     log_with_context(logger, logging.DEBUG, "events.migration.create.prepared", table_name=store.table_name)
+    return statements
+
+
+async def down(context: "MigrationContext | None" = None) -> "list[str]":
+    """Return SQL statements that drop the queue table."""
+
+    store = _load_store(context)
+    statements = store.drop_statements()
+    log_with_context(logger, logging.DEBUG, "events.migration.drop.prepared", table_name=store.table_name)
     return statements
 
 
@@ -51,15 +68,6 @@ async def _drop_present_index(
     existing = {str(row.get("index_name", "")).casefold() for row in result}
     if store._index_name().casefold() in existing:
         return statements[:-1]
-    return statements
-
-
-async def down(context: "MigrationContext | None" = None) -> "list[str]":
-    """Return SQL statements that drop the queue table."""
-
-    store = _load_store(context)
-    statements = store.drop_statements()
-    log_with_context(logger, logging.DEBUG, "events.migration.drop.prepared", table_name=store.table_name)
     return statements
 
 

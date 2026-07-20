@@ -66,7 +66,6 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
     sessions_sql = store._sessions_table_ddl()
     events_sql = store._events_table_ddl()
     app_state_sql = store._app_states_table_ddl()
-    metadata_sql = store._metadata_seed_sql()
 
     assert "IF NOT EXISTS (SELECT 1 FROM sys.tables" in sessions_sql
     assert "schema_id = SCHEMA_ID(N'dbo')" in sessions_sql
@@ -77,9 +76,6 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
     assert "sys.indexes" not in sessions_sql
     assert "ON DELETE CASCADE" in events_sql
     assert "event_data NVARCHAR(MAX) NOT NULL" in events_sql
-    assert "MERGE INTO [dbo].[adk_internal_metadata]" in metadata_sql
-    assert "?" not in metadata_sql
-    assert "N'schema_version'" in metadata_sql
     assert "state NVARCHAR(MAX) NOT NULL" in app_state_sql
 
 

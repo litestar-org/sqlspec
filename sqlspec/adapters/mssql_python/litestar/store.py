@@ -20,6 +20,42 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
 
+    async def create_table(self) -> None:
+        """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Get a session value by key."""
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Store a session value."""
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key."""
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        """Delete all sessions from the store."""
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        """Check if a session key exists and is not expired."""
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Get the time in seconds until the session expires."""
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        """Delete all expired sessions."""
+        return await async_(self._delete_expired)()
+
     def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
         return f"""
@@ -53,10 +89,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             driver.execute_script(self._table_ddl())
             driver.commit()
         self._log_table_created()
-
-    async def create_table(self) -> None:
-        """Create the session table if it doesn't exist."""
-        await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = f"""
@@ -95,10 +127,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key."""
-        return await async_(self._get)(key, renew_for)
-
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -123,10 +151,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 cursor.close()
             conn.commit()
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value."""
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -135,10 +159,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             finally:
                 cursor.close()
             conn.commit()
-
-    async def delete(self, key: str) -> None:
-        """Delete a session by key."""
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         with self._config.provide_connection() as conn:
@@ -149,10 +169,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 cursor.close()
             conn.commit()
         self._log_delete_all()
-
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         sql = f"""
@@ -168,10 +184,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 return cursor.fetchone() is not None
             finally:
                 cursor.close()
-
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired."""
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         with self._config.provide_connection() as conn:
@@ -190,10 +202,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         remaining = expires_at - datetime.now(timezone.utc)
         return max(0, int(remaining.total_seconds()))
 
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires."""
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         sql = f"""
         DELETE FROM {self._table_name}
@@ -211,10 +219,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         if count > 0:
             self._log_delete_expired(count)
         return count
-
-    async def delete_expired(self) -> int:
-        """Delete all expired sessions."""
-        return await async_(self._delete_expired)()
 
 
 def _row_value(row: object, key: str, index: int) -> Any:

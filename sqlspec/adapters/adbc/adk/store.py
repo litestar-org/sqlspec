@@ -72,6 +72,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def create_session(
@@ -496,19 +500,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
-    def _metadata_seed_sql(self) -> str:
-        if self._dialect in {DIALECT_POSTGRESQL, DIALECT_SQLITE, DIALECT_DUCKDB}:
-            return f"""
-            INSERT INTO {self._metadata_table} (key, value)
-            VALUES ('schema_version', '1')
-            ON CONFLICT(key) DO NOTHING
-            """
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        SELECT 'schema_version', '1'
-        WHERE NOT EXISTS (SELECT 1 FROM {self._metadata_table} WHERE key = 'schema_version')
-        """
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
@@ -564,9 +555,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 conn.commit()
 
                 cursor.execute(self._metadata_table_ddl())
-                conn.commit()
-
-                cursor.execute(self._metadata_seed_sql())
                 conn.commit()
             finally:
                 cursor.close()
@@ -1192,6 +1180,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:

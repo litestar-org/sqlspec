@@ -11,6 +11,15 @@ class LitestarConfig(TypedDict):
     All fields are optional with sensible defaults. Use in extension_config["litestar"]:
     """
 
+    manage_schema: NotRequired[bool]
+    """Apply additive target-schema reconciliation. Default: True."""
+
+    create_schema: NotRequired[bool]
+    """Create the session table during managed reconciliation. Default: True."""
+
+    run_migrations: NotRequired[bool]
+    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
+
     session_table: NotRequired[str]
     """Name of the sessions table. Default: 'litestar_session'"""
 

@@ -54,7 +54,6 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
         await _resolve_sql(store_instance._app_states_table_ddl()),  # pyright: ignore[reportPrivateUsage]
         await _resolve_sql(store_instance._user_states_table_ddl()),  # pyright: ignore[reportPrivateUsage]
         await _resolve_sql(store_instance._metadata_table_ddl()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._metadata_seed_sql()),  # pyright: ignore[reportPrivateUsage]
     ])
 
     if _is_memory_enabled(context) and memory_store_class is not None:

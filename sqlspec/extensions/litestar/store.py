@@ -5,8 +5,10 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
 
 if TYPE_CHECKING:
@@ -57,21 +59,15 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         self._table_name = self._table_name_from_config()
         self._ensure_table_name(self._table_name)
 
-    def _table_name_from_config(self) -> str:
-        """Extract table name from config.extension_config.
+    async def __aenter__(self) -> "Self":
+        """Enter context manager."""
+        return self
 
-        Returns:
-            Table name for the session store.
-        """
-        default_name = "litestar_session"
-        if has_extension_config(self._config):
-            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
-            litestar_config: dict[str, Any] = extension_config.get("litestar", {})
-            session_table = litestar_config.get("session_table", default_name)
-            if session_table is True:
-                return default_name
-            return str(session_table)
-        return default_name
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        """Exit context manager."""
+        return
 
     @property
     def config(self) -> ConfigT:
@@ -82,6 +78,12 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
     def table_name(self) -> str:
         """Return the session table name."""
         return self._table_name
+
+    @property
+    def create_schema_enabled(self) -> bool:
+        """Return whether adapter-level creation should run."""
+        manage_schema, create_schema = self._schema_management_flags()
+        return manage_schema and create_schema
 
     @abstractmethod
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -161,6 +163,49 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         """Create the session table if it doesn't exist."""
         raise NotImplementedError
 
+    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive session-table changes from the canonical store DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        target = SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
+        session_context = cast("Any", self._config).provide_session()
+        if hasattr(session_context, "__aenter__"):
+            async with session_context as driver:
+                await ensure_schema_async(
+                    driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+                )
+            return
+        await async_(_reconcile_schema_sync)(
+            self._config, target, create_schema=create_schema, assume_existing=assume_existing
+        )
+
+    def _table_name_from_config(self) -> str:
+        """Extract the configured session table name."""
+        default_name = "litestar_session"
+        if has_extension_config(self._config):
+            extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+            litestar_config: dict[str, Any] = extension_config.get("litestar", {})
+            session_table = litestar_config.get("session_table", default_name)
+            if session_table is True:
+                return default_name
+            return str(session_table)
+        return default_name
+
+    def _schema_management_flags(self) -> "tuple[bool, bool]":
+        """Return automatic-management and missing-table creation flags."""
+        if not has_extension_config(self._config):
+            return True, True
+        extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+        settings = extension_config.get("litestar", {})
+        return bool(settings.get("manage_schema", True)), bool(settings.get("create_schema", True))
+
     @abstractmethod
     def _table_ddl(self) -> str:
         """Get the CREATE TABLE SQL for this database dialect.
@@ -179,16 +224,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             Order matters: drop indexes before table.
         """
         raise NotImplementedError
-
-    async def __aenter__(self) -> "Self":
-        """Enter context manager."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> None:
-        """Exit context manager."""
-        return
 
     def _log_table_created(self) -> None:
         logger.debug(
@@ -265,3 +300,11 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         if not VALID_TABLE_NAME_PATTERN.match(table_name):
             msg = f"Invalid table name: {table_name!r}. Must start with letter/underscore and contain only alphanumeric characters and underscores"
             raise ValueError(msg)
+
+
+def _reconcile_schema_sync(config: Any, target: SchemaTarget, *, create_schema: bool, assume_existing: bool) -> None:
+    """Run additive reconciliation for a synchronous Litestar store."""
+    with config.provide_session() as driver:
+        ensure_schema_sync(
+            driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+        )

@@ -48,7 +48,6 @@ async def _session_ddl(store: object) -> dict[str, str]:
         "app_state": await store._app_states_table_ddl(),  # type: ignore[attr-defined]
         "user_state": await store._user_states_table_ddl(),  # type: ignore[attr-defined]
         "metadata": await store._metadata_table_ddl(),  # type: ignore[attr-defined]
-        "seed": await store._metadata_seed_sql(),  # type: ignore[attr-defined]
     }
 
 
@@ -59,7 +58,6 @@ def _sync_session_ddl(store: object) -> dict[str, str]:
         "app_state": store._app_states_table_ddl(),  # type: ignore[attr-defined]
         "user_state": store._user_states_table_ddl(),  # type: ignore[attr-defined]
         "metadata": store._metadata_table_ddl(),  # type: ignore[attr-defined]
-        "seed": store._metadata_seed_sql(),  # type: ignore[attr-defined]
     }
 
 
@@ -229,4 +227,3 @@ async def test_oracle_templates_bind_identically_for_every_json_storage_type() -
         assert "PARTITION BY HASH (id) PARTITIONS 8" in async_session_ddl
 
     assert await async_store._metadata_table_ddl() == sync_store._metadata_table_ddl()
-    assert await async_store._metadata_seed_sql() == sync_store._metadata_seed_sql()

@@ -2,7 +2,8 @@
 Google ADK
 ==========
 
-Session, event, memory, and artifact service contracts for
+SQLSpec provides session, event, memory, and artifact service contracts. These
+contracts support the
 `Google Agent Development Kit <https://google.github.io/adk-docs/>`_.
 
 Session Service

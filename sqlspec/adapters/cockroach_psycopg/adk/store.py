@@ -106,13 +106,6 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
     "        "
 )
 
-_ADK_METADATA_SEED_SQL_TEMPLATE = (
-    "\n"
-    "        INSERT INTO {0} (key, value)\n"
-    "        VALUES ('schema_version', '1')\n"
-    "        ON CONFLICT (key) DO NOTHING\n"
-    "        "
-)
 
 _ADK_MEMORY_TABLE_DDL_TEMPLATE = (
     "\n"
@@ -204,13 +197,16 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         super().__init__(config)
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._sessions_table_ddl())
             await driver.execute_script(await self._events_table_ddl())
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -615,9 +611,6 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table, metadata_locality)
 
-    async def _metadata_seed_sql(self) -> str:
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
@@ -647,13 +640,16 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         with self._config.provide_session() as driver:
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
-            driver.execute_script(self._metadata_seed_sql())
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1056,9 +1052,6 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table, metadata_locality)
 
-    def _metadata_seed_sql(self) -> str:
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table)
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
 
@@ -1109,6 +1102,10 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         super().__init__(config)
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
@@ -1268,6 +1265,10 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 

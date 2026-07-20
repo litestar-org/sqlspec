@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
+from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -60,6 +61,32 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def drop_statements(self) -> "list[str]":
         """Return statements required to drop queue artifacts."""
         return [self._wrap_drop_statement(f"DROP TABLE {self.table_name}")]
+
+    def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
+        """Apply additive queue-table changes with a synchronous driver."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return ensure_schema_sync(driver, [], manage_schema=False)
+        return ensure_schema_sync(driver, [self._schema_target()], manage_schema=True, create_schema=create_schema)
+
+    async def reconcile_schema_async(self, driver: Any) -> SchemaEnsureResult:
+        """Apply additive queue-table changes with an asynchronous driver."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return await ensure_schema_async(driver, [], manage_schema=False)
+        return await ensure_schema_async(
+            driver, [self._schema_target()], manage_schema=True, create_schema=create_schema
+        )
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build a schema target from the canonical queue table DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=dialect)
+
+    def _schema_management_flags(self) -> "tuple[bool, bool]":
+        """Return automatic-management and missing-table creation flags."""
+        return bool(self.settings.get("manage_schema", True)), bool(self.settings.get("create_schema", True))
 
     def _string_type(self, length: int) -> str:
         """Return string type syntax for the given length.

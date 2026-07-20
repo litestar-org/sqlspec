@@ -2,6 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
+from unittest.mock import AsyncMock
+
+import pytest
 
 from sqlspec.adapters.mssql_python.litestar import MssqlPythonStore
 
@@ -121,9 +124,10 @@ def test_mssql_python_store_create_table_uses_tsql_guards() -> None:
     assert "WHERE expires_at IS NOT NULL" in ddl
 
 
-async def test_mssql_python_store_create_table_bridges_sync_session() -> None:
+async def test_mssql_python_store_create_table_bridges_sync_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """create_table should run the DDL script through the sync session."""
     session = FakeSession()
+    monkeypatch.setattr(MssqlPythonStore, "reconcile_schema", AsyncMock())
     store = MssqlPythonStore(cast("Any", FakeConfig(session=session)))
 
     await store.create_table()

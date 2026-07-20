@@ -128,9 +128,6 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def _metadata_table_ddl(self) -> str:
         return ""
 
-    async def _metadata_seed_sql(self) -> str:
-        return ""
-
     def _drop_app_states_table_sql(self) -> str:
         return ""
 
@@ -249,9 +246,6 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
     def _metadata_table_ddl(self) -> str:
         return ""
 
-    def _metadata_seed_sql(self) -> str:
-        return ""
-
     def _drop_app_states_table_sql(self) -> str:
         return ""
 
@@ -301,7 +295,7 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
 def test_adk_store_private_sql_helpers_use_purpose_names() -> None:
     assert hasattr(_SyncSessionStore, "_sessions_table_ddl")
     assert hasattr(_SyncSessionStore, "_events_table_ddl")
-    assert hasattr(_SyncSessionStore, "_metadata_seed_sql")
+    assert not hasattr(_SyncSessionStore, "_metadata_seed_sql")
     assert hasattr(_SyncSessionStore, "_drop_tables_sql")
     assert not hasattr(_SyncSessionStore, "_get_create_sessions_table_sql")
     assert not hasattr(_SyncSessionStore, "_get_create_events_table_sql")
@@ -372,12 +366,12 @@ def test_adk_table_helpers_have_one_private_owner() -> None:
     assert "def _owner_id_column_name(" not in inspect.getsource(memory_store_module)
 
 
-def test_sync_session_store_ensure_tables_runs_sync_create_tables() -> None:
-    store = _SyncSessionStore(_Config({"session_table": "sessions", "events_table": "events"}))
+def test_sync_session_store_manage_schema_false_skips_creation() -> None:
+    store = _SyncSessionStore(_Config({"session_table": "sessions", "events_table": "events", "manage_schema": False}))
 
     store.ensure_tables()
 
-    assert store.create_tables_called
+    assert not store.create_tables_called
 
 
 def test_sync_memory_store_logs_ready_with_log_with_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -387,11 +381,11 @@ def test_sync_memory_store_logs_ready_with_log_with_context(monkeypatch: pytest.
         calls.append({"level": level, "event": event, "context": context})
 
     monkeypatch.setattr(memory_store_module, "log_with_context", fake_log_with_context)
-    store = _SyncMemoryStore(_Config({"memory_table": "test_memories"}))
+    store = _SyncMemoryStore(_Config({"memory_table": "test_memories", "manage_schema": False}))
 
     store.ensure_tables()
 
-    assert store.create_tables_called
+    assert not store.create_tables_called
     assert len(calls) == 1
     assert calls[0]["level"] == logging.DEBUG
     assert calls[0]["event"] == "adk.memory.table.ready"

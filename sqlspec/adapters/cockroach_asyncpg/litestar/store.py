@@ -20,29 +20,15 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
         super().__init__(config)
 
-    def _table_ddl(self) -> str:
-        """Get CockroachDB CREATE TABLE SQL with optimized schema."""
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id TEXT PRIMARY KEY,
-            data BYTEA NOT NULL,
-            expires_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
-
     async def create_table(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = f"""
@@ -140,3 +126,21 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+    def _table_ddl(self) -> str:
+        """Get CockroachDB CREATE TABLE SQL with optimized schema."""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id TEXT PRIMARY KEY,
+            data BYTEA NOT NULL,
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]

@@ -138,6 +138,10 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
         """Synchronous implementation of create_tables."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         with self._config.provide_session() as driver:
             self._apply_pragmas(driver.connection)
             driver.execute_script(self._sessions_table_ddl())
@@ -145,7 +149,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
-            driver.execute_script(self._metadata_seed_sql())
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -764,14 +767,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         );
         """
 
-    def _metadata_seed_sql(self) -> str:
-        """Get SQLite SQL to seed the ADK schema-version metadata row."""
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT(key) DO NOTHING;
-        """
-
     def _drop_app_states_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -828,6 +823,10 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         Skips table creation if memory store is disabled.
         """
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 

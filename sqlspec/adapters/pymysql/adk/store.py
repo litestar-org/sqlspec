@@ -62,6 +62,10 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
 
     def create_tables(self) -> None:
         """Create all ADK session tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         _create_tables(self)
 
     def create_session(
@@ -177,10 +181,6 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         """Get MySQL CREATE TABLE SQL for ADK metadata."""
         return _mysql_metadata_ddl(self._metadata_table)
 
-    def _metadata_seed_sql(self) -> str:
-        """Get MySQL metadata seed SQL."""
-        return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
-
     def _drop_app_states_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -214,6 +214,10 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
@@ -424,7 +428,6 @@ def _create_tables(store: PyMysqlADKStore) -> None:
         driver.execute_script(store._app_states_table_ddl())
         driver.execute_script(store._user_states_table_ddl())
         driver.execute_script(store._metadata_table_ddl())
-        driver.execute_script(store._metadata_seed_sql())
 
 
 def _create_session(

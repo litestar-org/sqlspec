@@ -39,68 +39,16 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         """
         super().__init__(config)
 
-    def _table_ddl(self) -> str:
-        """Get SQLite CREATE TABLE SQL.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id TEXT PRIMARY KEY,
-            data BLOB NOT NULL,
-            expires_at REAL
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        """Get SQLite DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop indexes and table.
-        """
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
-
-    def _datetime_to_julian(self, dt: "datetime | None") -> "float | None":
-        """Convert datetime to Julian Day number for SQLite storage.
-
-        Args:
-            dt: Datetime to convert (must be UTC-aware).
-
-        Returns:
-            Julian Day number as REAL, or None if dt is None.
-        """
-        if dt is None:
-            return None
-
-        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
-        return JULIAN_EPOCH + delta_days
-
-    def _julian_to_datetime(self, julian: "float | None") -> "datetime | None":
-        """Convert Julian Day number back to datetime.
-
-        Args:
-            julian: Julian Day number.
-
-        Returns:
-            UTC-aware datetime, or None if julian is None.
-        """
-        if julian is None:
-            return None
-
-        days_since_epoch = julian - JULIAN_EPOCH
-        timestamp = days_since_epoch * SECONDS_PER_DAY
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -252,3 +200,59 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+    def _table_ddl(self) -> str:
+        """Get SQLite CREATE TABLE SQL.
+
+        Returns:
+            SQL statement to create the sessions table with proper indexes.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id TEXT PRIMARY KEY,
+            data BLOB NOT NULL,
+            expires_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get SQLite DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+
+    def _datetime_to_julian(self, dt: "datetime | None") -> "float | None":
+        """Convert datetime to Julian Day number for SQLite storage.
+
+        Args:
+            dt: Datetime to convert (must be UTC-aware).
+
+        Returns:
+            Julian Day number as REAL, or None if dt is None.
+        """
+        if dt is None:
+            return None
+
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+        return JULIAN_EPOCH + delta_days
+
+    def _julian_to_datetime(self, julian: "float | None") -> "datetime | None":
+        """Convert Julian Day number back to datetime.
+
+        Args:
+            julian: Julian Day number.
+
+        Returns:
+            UTC-aware datetime, or None if julian is None.
+        """
+        if julian is None:
+            return None
+
+        days_since_epoch = julian - JULIAN_EPOCH
+        timestamp = days_since_epoch * SECONDS_PER_DAY
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)

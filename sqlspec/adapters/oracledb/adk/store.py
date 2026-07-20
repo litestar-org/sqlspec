@@ -80,18 +80,6 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
     "        "
 )
 
-_ADK_METADATA_SEED_SQL_TEMPLATE = (
-    "\n"
-    "        BEGIN\n"
-    "            INSERT INTO {0} (key, value)\n"
-    "            SELECT 'schema_version', '1'\n"
-    "            FROM DUAL\n"
-    "            WHERE NOT EXISTS (\n"
-    "                SELECT 1 FROM {1} WHERE key = 'schema_version'\n"
-    "            );\n"
-    "        END;\n"
-    "        "
-)
 
 _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE = ", {0}"
 
@@ -358,6 +346,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             Consults ``data_dictionary.get_tables`` so existing tables are left
             untouched instead of relying on an ORA-955 swallow.
         """
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         storage_type = await self._detect_json_storage_type()
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
@@ -373,7 +365,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await driver.execute_script(self._user_states_table_ddl_for_type(storage_type))
             if _bare_table_name(self._metadata_table) not in existing:
                 await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
             await driver.commit()
 
     async def create_session(
@@ -957,10 +948,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
-    async def _metadata_seed_sql(self) -> str:
-        """Get Oracle SQL to seed the ADK schema-version metadata row."""
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
-
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Resolve the JSON storage type from the pool-scoped Oracle version.
 
@@ -1309,6 +1296,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             Consults ``data_dictionary.get_tables`` so existing tables are left
             untouched instead of relying on an ORA-955 swallow.
         """
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         storage_type = self._detect_json_storage_type()
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
@@ -1324,7 +1315,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
             if _bare_table_name(self._metadata_table) not in existing:
                 driver.execute_script(SQL(self._metadata_table_ddl()))
-            driver.execute_script(SQL(self._metadata_seed_sql()))
             driver.commit()
 
     def create_session(
@@ -1912,10 +1902,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
-    def _metadata_seed_sql(self) -> str:
-        """Get Oracle SQL to seed the ADK schema-version metadata row."""
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
-
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Resolve the JSON storage type from the pool-scoped Oracle version.
 
@@ -2217,6 +2203,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
@@ -2521,6 +2511,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     def create_tables(self) -> None:
         """Create the memory table when the data dictionary reports it missing."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 

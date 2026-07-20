@@ -3,6 +3,8 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from sqlglot import exp, parse
+
 from sqlspec.builder import AlterTable, CreateTable, sql
 
 if TYPE_CHECKING:
@@ -20,12 +22,19 @@ class SchemaTarget:
         schema: Optional schema containing the table.
     """
 
-    __slots__ = ("create_table", "schema", "table_name")
+    __slots__ = ("create_statement", "create_table", "schema", "table_name")
 
-    def __init__(self, table_name: str, create_table: CreateTable, schema: str | None = None) -> None:
+    def __init__(
+        self,
+        table_name: str,
+        create_table: CreateTable,
+        schema: str | None = None,
+        create_statement: "str | CreateTable | None" = None,
+    ) -> None:
         self.table_name = table_name
         self.create_table = create_table
         self.schema = schema
+        self.create_statement = create_statement or create_table
 
     @property
     def identity(self) -> str:
@@ -33,6 +42,55 @@ class SchemaTarget:
         if self.schema:
             return f"{self.schema}.{self.table_name}"
         return self.table_name
+
+    @classmethod
+    def from_ddl(
+        cls, table_name: str, create_statement: str, *, schema: str | None = None, dialect: Any = None
+    ) -> "SchemaTarget":
+        """Build a target descriptor from an adapter's canonical CREATE TABLE DDL.
+
+        Args:
+            table_name: Unqualified table name used for introspection.
+            create_statement: Canonical adapter DDL, including any companion statements.
+            schema: Optional schema containing the table.
+            dialect: SQLGlot dialect used to parse column definitions.
+
+        Returns:
+            Target descriptor that executes the original DDL while deriving
+            additive column statements from the parsed table definition.
+
+        Raises:
+            ValueError: If no CREATE TABLE definition can be parsed.
+        """
+        create_expression = _find_create_table_expression(create_statement, table_name, dialect)
+        target = sql.create_table(table_name, dialect=dialect)
+        if schema:
+            target.in_schema(schema)
+        for column in create_expression.find_all(exp.ColumnDef):
+            kind = column.args.get("kind")
+            if not isinstance(kind, exp.DataType):
+                continue
+            constraints = [constraint.args.get("kind") for constraint in column.args.get("constraints", [])]
+            default = next(
+                (
+                    constraint.this.sql(dialect=dialect)
+                    for constraint in constraints
+                    if isinstance(constraint, exp.DefaultColumnConstraint) and constraint.this is not None
+                ),
+                None,
+            )
+            target.column(
+                column.name,
+                kind.sql(dialect=dialect),
+                default=default,
+                not_null=any(isinstance(constraint, exp.NotNullColumnConstraint) for constraint in constraints),
+                primary_key=any(isinstance(constraint, exp.PrimaryKeyColumnConstraint) for constraint in constraints),
+                unique=any(isinstance(constraint, exp.UniqueColumnConstraint) for constraint in constraints),
+            )
+        if not target.columns:
+            msg = f"CREATE TABLE DDL for {table_name!r} has no parseable columns"
+            raise ValueError(msg)
+        return cls(table_name, target, schema, create_statement)
 
 
 class SchemaEnsureResult:
@@ -107,7 +165,7 @@ def ensure_schema_sync(
 
         if target.table_name.casefold() not in existing_tables:
             if create_schema:
-                driver.execute(target.create_table)
+                _execute_create_sync(driver, target)
                 result.created_tables.append(target.identity)
                 existing_tables.add(target.table_name.casefold())
                 changed = True
@@ -194,7 +252,7 @@ async def ensure_schema_async(
 
         if target.table_name.casefold() not in existing_tables:
             if create_schema:
-                await driver.execute(target.create_table)
+                await _execute_create_async(driver, target)
                 result.created_tables.append(target.identity)
                 existing_tables.add(target.table_name.casefold())
                 changed = True
@@ -225,7 +283,25 @@ async def ensure_schema_async(
     return result
 
 
-def _add_column_statements(target: SchemaTarget, existing_columns: set[str]) -> "tuple[list[tuple[str, AlterTable]], bool]":
+def _execute_create_sync(driver: Any, target: SchemaTarget) -> None:
+    """Execute canonical table DDL through the appropriate synchronous path."""
+    if isinstance(target.create_statement, str):
+        driver.execute_script(target.create_statement)
+        return
+    driver.execute(target.create_statement)
+
+
+async def _execute_create_async(driver: Any, target: SchemaTarget) -> None:
+    """Execute canonical table DDL through the appropriate asynchronous path."""
+    if isinstance(target.create_statement, str):
+        await driver.execute_script(target.create_statement)
+        return
+    await driver.execute(target.create_statement)
+
+
+def _add_column_statements(
+    target: SchemaTarget, existing_columns: set[str]
+) -> "tuple[list[tuple[str, AlterTable]], bool]":
     """Build additive statements and identify likely rename-only drift."""
     target_columns = {column.name.casefold(): column for column in target.create_table.columns}
     missing_columns = set(target_columns).difference(existing_columns)
@@ -266,3 +342,61 @@ def _metadata_names(metadata_rows: Sequence[Any], key: str) -> set[str]:
         if value is not None:
             names.add(str(value).casefold())
     return names
+
+
+def _find_create_table_expression(create_statement: str, table_name: str, dialect: Any) -> exp.Create:
+    """Return the matching CREATE TABLE expression from canonical adapter DDL."""
+    candidates = _parse_create_expressions(create_statement, dialect)
+    bare_name = table_name.rsplit(".", 1)[-1].strip('"`[]').casefold()
+    for candidate in candidates:
+        table = candidate.find(exp.Table)
+        if table is not None and table.name.strip('"`[]').casefold() == bare_name:
+            return candidate
+    if candidates:
+        return candidates[0]
+    msg = f"Unable to parse CREATE TABLE DDL for {table_name!r}"
+    raise ValueError(msg)
+
+
+def _parse_create_expressions(create_statement: str, dialect: Any) -> list[exp.Create]:
+    """Parse direct or procedural-wrapper CREATE TABLE DDL."""
+    try:
+        expressions = parse(create_statement, read=dialect)
+    except Exception:
+        expressions = []
+    creates = [
+        expression
+        for expression in expressions
+        if isinstance(expression, exp.Create) and str(expression.args.get("kind", "")).upper() == "TABLE"
+    ]
+    if creates:
+        return creates
+    extracted = _extract_create_table_statement(create_statement)
+    if extracted is None:
+        return []
+    try:
+        expression = parse(extracted, read=dialect)[0]
+    except Exception:
+        return []
+    return [expression] if isinstance(expression, exp.Create) else []
+
+
+def _extract_create_table_statement(create_statement: str) -> "str | None":
+    """Extract the first balanced CREATE TABLE statement from a wrapper."""
+    upper_statement = create_statement.upper()
+    start = upper_statement.find("CREATE TABLE")
+    if start < 0:
+        return None
+    opening = create_statement.find("(", start)
+    if opening < 0:
+        return None
+    depth = 0
+    for index in range(opening, len(create_statement)):
+        character = create_statement[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return create_statement[start : index + 1].replace("''", "'")
+    return None

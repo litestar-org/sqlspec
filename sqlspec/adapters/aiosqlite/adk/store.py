@@ -130,6 +130,10 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         async with self._config.provide_session() as driver:
             await self._apply_pragmas(driver.connection)
             await driver.execute_script(await self._sessions_table_ddl())
@@ -137,7 +141,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
             await driver.commit()
 
     async def create_session(
@@ -736,14 +739,6 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         );
         """
 
-    async def _metadata_seed_sql(self) -> str:
-        """Get SQLite SQL to seed the ADK schema-version metadata row."""
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT(key) DO NOTHING;
-        """
-
     def _drop_app_states_table_sql(self) -> str:
         """Get SQLite DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -799,6 +794,10 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         Skips table creation if memory store is disabled.
         """
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 

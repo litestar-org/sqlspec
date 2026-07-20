@@ -34,7 +34,24 @@ SQLSpec provides stores for async adapters:
 - ``AiosqliteStore`` - SQLite via aiosqlite
 - ``ArrowOdbcStore`` - SQL Server via arrow-odbc and Microsoft ODBC Driver 18
 
-Each store automatically creates its session table on first use if it doesn't exist.
+Each store can create its session table. It can also add new columns from its
+own DDL. Set this behavior under ``extension_config["litestar"]``:
+
+.. code-block:: python
+
+   config = AsyncpgConfig(
+       connection_config={"dsn": "postgresql://localhost/app"},
+       extension_config={
+           "litestar": {
+               "manage_schema": True,
+               "create_schema": True,
+           }
+       },
+   )
+
+Set ``manage_schema=False`` when another tool owns the table. Set
+``create_schema=False`` to add columns without creating a missing table. Use a
+versioned migration for renames, drops, or type changes.
 
 Session Expiry
 --------------

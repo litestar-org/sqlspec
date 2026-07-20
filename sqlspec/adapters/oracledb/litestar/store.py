@@ -82,76 +82,17 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
 
-    def _table_ddl(self) -> str:
-        """Get Oracle CREATE TABLE SQL with optimized schema.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
-                session_id VARCHAR2(255) PRIMARY KEY,
-                data BLOB NOT NULL,
-                expires_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ) {inmemory_clause}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
-                ON {self._table_name}(expires_at)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        """Get Oracle DROP TABLE SQL with PL/SQL error handling.
-
-        Returns:
-            List of SQL statements with exception handling for non-existent objects.
-        """
-        return [
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -1418 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-        ]
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
 
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -381,6 +322,69 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 self._log_delete_expired(count)
             return count
 
+    def _table_ddl(self) -> str:
+        """Get Oracle CREATE TABLE SQL with optimized schema.
+
+        Returns:
+            SQL statement to create the sessions table with proper indexes.
+        """
+        inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
+                session_id VARCHAR2(255) PRIMARY KEY,
+                data BLOB NOT NULL,
+                expires_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+            ) {inmemory_clause}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
+                ON {self._table_name}(expires_at)';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get Oracle DROP TABLE SQL with PL/SQL error handling.
+
+        Returns:
+            List of SQL statements with exception handling for non-existent objects.
+        """
+        return [
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+            f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -942 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+        ]
+
 
 class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     """Oracle session store using sync OracleDB driver.
@@ -412,6 +416,78 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
+
+    async def create_table(self) -> None:
+        """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Get a session value by key.
+
+        Args:
+            key: Session ID to retrieve.
+            renew_for: If given, renew the expiry time for this duration.
+
+        Returns:
+            Session data as bytes if found and not expired, None otherwise.
+        """
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Store a session value.
+
+        Args:
+            key: Session ID.
+            value: Session data.
+            expires_in: Time until expiration.
+        """
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key.
+
+        Args:
+            key: Session ID to delete.
+        """
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        """Delete all sessions from the store."""
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        """Check if a session key exists and is not expired.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            True if the session exists and is not expired.
+        """
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Get the time in seconds until the session expires.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            Seconds until expiration, or None if no expiry or key doesn't exist.
+        """
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        """Delete all expired sessions.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        return await async_(self._delete_expired)()
 
     def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -484,10 +560,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         self._log_table_created()
 
-    async def create_table(self) -> None:
-        """Create the session table if it doesn't exist."""
-        await async_(self._create_table)()
-
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
         sql = f"""
@@ -522,18 +594,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                     conn.commit()
 
             return _read_blob_sync(data_blob)
-
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key.
-
-        Args:
-            key: Session ID to retrieve.
-            renew_for: If given, renew the expiry time for this duration.
-
-        Returns:
-            Session data as bytes if found and not expired, None otherwise.
-        """
-        return await async_(self._get)(key, renew_for)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set."""
@@ -611,16 +671,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
                 conn.commit()
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value.
-
-        Args:
-            key: Session ID.
-            value: Session data.
-            expires_in: Time until expiration.
-        """
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = :session_id"
@@ -629,14 +679,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             cursor = conn.cursor()
             cursor.execute(sql, {"session_id": key})
             conn.commit()
-
-    async def delete(self, key: str) -> None:
-        """Delete a session by key.
-
-        Args:
-            key: Session ID to delete.
-        """
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
@@ -647,10 +689,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             cursor.execute(sql)
             conn.commit()
         self._log_delete_all()
-
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
@@ -665,17 +703,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             cursor.execute(sql, {"session_id": key})
             result = cursor.fetchone()
             return result is not None
-
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            True if the session exists and is not expired.
-        """
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
@@ -705,17 +732,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             delta = expires_at - db_now
             return int(delta.total_seconds())
 
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            Seconds until expiration, or None if no expiry or key doesn't exist.
-        """
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= SYSTIMESTAMP"
@@ -728,11 +744,3 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
-
-    async def delete_expired(self) -> int:
-        """Delete all expired sessions.
-
-        Returns:
-            Number of sessions deleted.
-        """
-        return await async_(self._delete_expired)()

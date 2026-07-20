@@ -63,13 +63,16 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def create_tables(self) -> None:
         """Create all ADK session tables if they don't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._sessions_table_ddl())
             await driver.execute_script(await self._events_table_ddl())
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -409,10 +412,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """Get MySQL CREATE TABLE SQL for ADK metadata."""
         return _mysql_metadata_ddl(self._metadata_table)
 
-    async def _metadata_seed_sql(self) -> str:
-        """Get MySQL metadata seed SQL."""
-        return f"INSERT IGNORE INTO {self._metadata_table} (`key`, value) VALUES ('schema_version', '1')"
-
     def _drop_app_states_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -447,6 +446,10 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
