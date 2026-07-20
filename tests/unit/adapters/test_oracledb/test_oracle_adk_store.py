@@ -178,6 +178,28 @@ def test_oracle_adk_events_table_applies_hash_partitioning_and_table_options() -
     assert "PARTITION BY HASH (session_id) PARTITIONS 32" in sql
 
 
+def test_oracle_adk_state_tables_honor_partition_and_table_options() -> None:
+    config = _mock_config({
+        "app_state_table_options": "TABLESPACE app_state_data",
+        "user_state_table_options": "TABLESPACE user_state_data",
+        "partitioning": {
+            "strategy": "hash",
+            "partition_count": 8,
+            "app_state_partition_key": "app_name",
+            "user_state_partition_key": "user_id",
+        },
+    })
+
+    for store in (OracleAsyncADKStore(config), OracleSyncADKStore(config)):
+        app_sql = store._app_states_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+        user_sql = store._user_states_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+
+        assert "TABLESPACE app_state_data" in app_sql
+        assert "PARTITION BY HASH (app_name) PARTITIONS 8" in app_sql
+        assert "TABLESPACE user_state_data" in user_sql
+        assert "PARTITION BY HASH (user_id) PARTITIONS 8" in user_sql
+
+
 def test_oracle_adk_memory_table_applies_memory_specific_partition_key_and_compression() -> None:
     config = _mock_config({
         "compression": {"enabled": True, "algorithm": "oltp"},

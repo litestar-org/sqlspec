@@ -146,7 +146,7 @@ _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                app_name VARCHAR2(128) PRIMARY KEY,\n"
     "                {1},\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
-    "            )';\n"
+    "            ){2}';\n"
     "        END;\n"
     "        "
 )
@@ -160,7 +160,7 @@ _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                {1},\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                PRIMARY KEY (app_name, user_id)\n"
-    "            )';\n"
+    "            ){2}';\n"
     "        END;\n"
     "        "
 )
@@ -1130,14 +1130,28 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "app_state",
+            in_memory=self._in_memory,
+            hash_partition_key="app_name",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column)
+        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column, table_clauses)
 
     def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "user_state",
+            in_memory=self._in_memory,
+            hash_partition_key="user_id",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column)
+        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column, table_clauses)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"""
@@ -2080,14 +2094,28 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "app_state",
+            in_memory=self._in_memory,
+            hash_partition_key="app_name",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column)
+        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column, table_clauses)
 
     def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _oracle_table_feature_clauses(
+            self._config,
+            "user_state",
+            in_memory=self._in_memory,
+            hash_partition_key="user_id",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column)
+        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column, table_clauses)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"""
