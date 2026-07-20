@@ -4,6 +4,8 @@ Provides hashing functions for SQL statements, expressions, parameters,
 filters, and AST sub-expressions.
 """
 
+import hashlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
@@ -243,22 +245,37 @@ def hash_optimized_expression(
         Cache key string for the optimized expression
     """
 
-    expr_hash = hash_expression(expr)
+    return f"opt:{_expression_cache_fingerprint(expr, dialect=dialect, schema=schema, settings=optimizer_settings)}"
 
-    schema_hash = 0
-    if schema:
-        schema_items = []
-        for table_name, table_schema in sorted(schema.items()):
-            if isinstance(table_schema, dict):
-                schema_items.append((table_name, len(table_schema)))
-            else:
-                schema_items.append((table_name, hash("unknown")))
-        schema_hash = hash(tuple(schema_items))
 
-    settings_hash = 0
-    if optimizer_settings:
-        settings_items = sorted(optimizer_settings.items())
-        settings_hash = hash(tuple(settings_items))
+def _expression_cache_fingerprint(
+    expr: "exp.Expr",
+    *,
+    parameter_signature: "tuple[str, ...]" = (),
+    dialect: Any = None,
+    schema: Any = None,
+    settings: Any = None,
+) -> str:
+    components = (
+        hash(expr),
+        parameter_signature,
+        str(dialect) if dialect is not None else "default",
+        _freeze_cache_value(schema),
+        _freeze_cache_value(settings),
+    )
+    return hashlib.blake2b(repr(components).encode(), digest_size=8).hexdigest()
 
-    components = (expr_hash, dialect, schema_hash, settings_hash)
-    return f"opt:{hash(components)}"
+
+def _freeze_cache_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        items = ((key, _freeze_cache_value(item)) for key, item in value.items())
+        return tuple(sorted(items, key=lambda pair: repr(pair[0])))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_cache_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze_cache_value(item) for item in value), key=repr))
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value

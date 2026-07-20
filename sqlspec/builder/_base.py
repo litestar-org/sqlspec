@@ -3,7 +3,6 @@
 Provides abstract base classes and core functionality for SQL query builders.
 """
 
-import hashlib
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
@@ -30,10 +29,10 @@ from sqlspec.core import (
     StatementConfig,
     get_cache,
     get_cache_config,
-    hash_expression,
     hash_optimized_expression,
 )
 from sqlspec.core.filters import StatementFilter
+from sqlspec.core.hashing import _expression_cache_fingerprint
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
@@ -558,42 +557,22 @@ class QueryBuilder(ABC):
         Returns:
             A unique cache key representing the builder state and configuration
         """
-        dialect_name: str = self.dialect_name or "default"
-
-        if self._expression is None:
-            self._expression = self._create_base_expression()
-
-        expr_hash = str(hash_expression(self._expression)) if self._expression is not None else "None"
-
-        parameters_snapshot = sorted(self._parameters.items())
-        parameters_hash = hashlib.sha256(str(parameters_snapshot).encode()).hexdigest()[:8]
-
-        state_parts = [
-            f"expression_hash:{expr_hash}",
-            f"parameters_hash:{parameters_hash}",
-            f"ctes:{sorted(self._with_ctes.keys())}",
-            f"dialect:{dialect_name}",
-            f"schema_hash:{hashlib.sha256(str(self.schema).encode()).hexdigest()[:8]}",
-            f"optimization:{self.enable_optimization}",
-            f"optimize_joins:{self.optimize_joins}",
-            f"optimize_predicates:{self.optimize_predicates}",
-            f"simplify_expressions:{self.simplify_expressions}",
-        ]
-
-        if config:
-            config_parts = [
-                f"config_dialect:{config.dialect or 'default'}",
-                f"enable_parsing:{config.enable_parsing}",
-                f"enable_validation:{config.enable_validation}",
-                f"enable_transformations:{config.enable_transformations}",
-                f"enable_analysis:{config.enable_analysis}",
-                f"enable_caching:{config.enable_caching}",
-                f"param_style:{config.parameter_config.default_parameter_style.value}",
-            ]
-            state_parts.extend(config_parts)
-
-        state_string = "|".join(state_parts)
-        return f"builder:{hashlib.sha256(state_string.encode()).hexdigest()[:16]}"
+        final_expression = self._build_final_expression()
+        dialect = config.dialect if config is not None and config.dialect is not None else self.dialect_name
+        settings = {
+            "enable_optimization": self.enable_optimization,
+            "optimize_joins": self.optimize_joins,
+            "optimize_predicates": self.optimize_predicates,
+            "simplify_expressions": self.simplify_expressions,
+        }
+        fingerprint = _expression_cache_fingerprint(
+            final_expression,
+            parameter_signature=tuple(self._parameters),
+            dialect=dialect,
+            schema=self.schema,
+            settings=settings,
+        )
+        return f"builder:{fingerprint}"
 
     def with_cte(self: Self, alias: str, query: "QueryBuilder | exp.Select | str") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
@@ -720,8 +699,8 @@ class QueryBuilder(ABC):
 
         cache = get_cache()
         cached_optimized = cache.get_optimized(cache_key)
-        if cached_optimized:
-            return cast("exp.Expr", cached_optimized)
+        if cached_optimized is not None:
+            return cast("exp.Expr", cached_optimized).copy()
 
         excluded_rules = set()
         if not self.optimize_joins:
@@ -737,7 +716,7 @@ class QueryBuilder(ABC):
             optimized = optimize(
                 expression, schema=cast("dict[str, object] | None", self.schema), dialect=self.dialect_name, rules=rules
             )
-            cache.put_optimized(cache_key, optimized)
+            cache.put_optimized(cache_key, optimized.copy())
         except Exception:
             logger.debug("Expression optimization failed, using original expression")
             return expression
