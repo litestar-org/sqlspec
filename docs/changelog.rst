@@ -34,6 +34,8 @@ Unreleased
 
 * New sync and async schema checks can create missing tables and add columns.
   Use ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
+* Oracle ADK, durable event, and Litestar session tables now share opt-in
+  compression, partitioning, In-Memory, and table-option configuration.
 * Added sync and async event-channel ``publish_many()`` APIs. Batch-capable
   implementations preserve input order and publish a grouped call in one
   transaction; custom backends retain an ordered single-event fallback.
@@ -45,6 +47,9 @@ Unreleased
 * ADK, Litestar session, and durable event stores now derive additive schema
   currency from their canonical DDL. ADK no longer seeds or bumps a
   ``schema_version`` row for additive changes.
+* Oracle extension-table optimizations are capability-gated through the
+  pool-scoped data dictionary and degrade to structured warnings when an
+  option is unavailable.
 * PostgreSQL listeners now hold one dedicated long-lived connection while
   publishers use short pooled sessions. Native PostgreSQL batch publication
   reuses one publisher transaction per grouped call.

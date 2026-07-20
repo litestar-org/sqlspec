@@ -18,3 +18,9 @@ SELECT sys_context('USERENV', 'CLOUD_SERVICE') AS "service" FROM dual;
 SELECT value AS compatible
 FROM v$parameter
 WHERE name = 'compatible';
+
+-- name: storage_options
+-- dialect: oracle
+SELECT parameter AS "parameter", value AS "value"
+FROM v$option
+WHERE parameter IN ('Basic Compression', 'Advanced Compression', 'Partitioning', 'In-Memory Column Store');

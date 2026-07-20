@@ -186,6 +186,9 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
     async def ensure_tables(self) -> None:
         """Create tables when enabled and emit a standardized log entry."""
 
@@ -327,6 +330,9 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         Should check self._enabled and skip table creation if False.
         """
         raise NotImplementedError
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
 
     def ensure_tables(self) -> None:
         """Create tables when enabled and emit a standardized log entry."""

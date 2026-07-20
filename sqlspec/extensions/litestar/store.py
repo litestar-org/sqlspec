@@ -163,6 +163,12 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         """Create the session table if it doesn't exist."""
         raise NotImplementedError
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive session-table changes from the canonical store DDL.
 

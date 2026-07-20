@@ -251,6 +251,9 @@ Oracle Database (oracledb) provides full ADK support:
   for Oracle Database In-Memory.
 - Configurable table compression and hash/range partitioning for session,
   event, and memory tables.
+- Capability checks are cached with the Oracle data dictionary. Explicitly
+  requested but unavailable compression, partitioning, or In-Memory options
+  are logged and omitted instead of surfacing a raw Oracle licensing error.
 - Full transactional support for atomic operations.
 
 DuckDB

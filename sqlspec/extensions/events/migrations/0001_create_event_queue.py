@@ -23,6 +23,11 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     """Return SQL statements that provision the queue table and indexes."""
 
     store = _load_store(context)
+    if context is not None and context.driver is not None:
+        if context.is_async_driver:
+            await store.prepare_schema_async(context.driver)
+        else:
+            store.prepare_schema_sync(context.driver)
     statements = store.create_statements()
     statements = await _drop_present_index(store, context, statements)
     if context is not None and context.driver is not None and store.settings.get("manage_schema", True):

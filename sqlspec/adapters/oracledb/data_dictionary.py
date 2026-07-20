@@ -1,9 +1,12 @@
 """Oracle-specific data dictionary for metadata queries."""
 
+import logging
+from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
+from typing_extensions import TypedDict
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
@@ -42,7 +45,7 @@ from sqlspec.data_dictionary.dialects.oracle import (
     resolve_oracle_json_type,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -53,6 +56,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "JSONStorageType",
+    "OracleStorageCapabilities",
     "OracleVersionCache",
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
@@ -101,6 +105,16 @@ ORACLE_DDL_WARNINGS = (
 ORACLE_SYSTEM_METADATA_DOMAINS = ("system", "diagnostics", "awr", "ash", "addm", "statspack")
 ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS = ("no_diagnostics", "disabled")
 ORACLE_SYSTEM_REDACTION_FIELDS = ("query_text", "sql_text", "username", "user_name", "session_user")
+_STORAGE_OPTION_FIELD_COUNT = 2
+
+
+class OracleStorageCapabilities(TypedDict):
+    """Oracle storage options resolved from the database option catalog."""
+
+    advanced_compression: bool
+    basic_compression: bool
+    in_memory: bool
+    partitioning: bool
 
 
 def _oracle_quoted_name(owner: "str | None", object_name: str) -> str:
@@ -356,15 +370,27 @@ class OracleVersionCache:
     next pool restart.
     """
 
-    __slots__ = ("resolved", "version")
+    __slots__ = (
+        "resolved",
+        "storage_capabilities",
+        "storage_capabilities_reason",
+        "storage_capabilities_resolved",
+        "version",
+    )
 
     def __init__(self) -> None:
         self.resolved: bool = False
+        self.storage_capabilities: OracleStorageCapabilities = _unsupported_storage_capabilities()
+        self.storage_capabilities_reason: str | None = None
+        self.storage_capabilities_resolved = False
         self.version: OracleVersionInfo | None = None
 
     def reset(self) -> None:
         """Clear the cached version so the next resolution re-queries the server."""
         self.resolved = False
+        self.storage_capabilities = _unsupported_storage_capabilities()
+        self.storage_capabilities_reason = None
+        self.storage_capabilities_resolved = False
         self.version = None
 
 
@@ -405,16 +431,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         if config.default_schema is None:
             return None
         return normalize_identifier(config.default_schema, config.name)
-
-    def _build_version_info(
-        self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
-    ) -> "OracleVersionInfo | None":
-        if not version_value:
-            return None
-        parts = parse_oracle_version_components(version_value)
-        if parts is None:
-            return None
-        return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
 
     def list_available_features(self) -> "list[str]":
         return list_oracle_available_features(self.get_dialect_config())
@@ -500,16 +516,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         return SystemMetadataResult.from_rows(
             metadata_request, capability, rows=rows, source=MetadataSource.SYSTEM_VIEW
         )
-
-    def _select_domain(
-        self, driver: "OracleSyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult.unsupported(domain, source=query.capability.source)
-        select = cast("Any", driver.select)
-        rows = select(query.sql, **binds)
-        return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
 
     def get_schemas(self, driver: "OracleSyncDriver") -> MetadataResult:
         """Get Oracle user/schema metadata."""
@@ -603,23 +609,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             driver, "lob_storage", schema_name=self.resolve_schema(schema), table_name=table_name
         )
 
-    def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
-        query_text = self.get_query_text("compatible")
-        try:
-            value = driver.select_value(query_text)
-            if value is None:
-                return None
-            return str(value)
-        except Exception:
-            return None
-
-    def _is_autonomous(self, driver: "OracleSyncDriver") -> bool:
-        query_text = self.get_query_text("autonomous_service")
-        try:
-            return bool(driver.select_value_or_none(query_text))
-        except Exception:
-            return False
-
     def get_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information through the pool-scoped cache."""
         holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
@@ -638,27 +627,33 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             self.cache_version(driver_id, version_info)
         return version_info
 
-    def _fetch_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
-        """Query the server for its version, compatible level, and autonomous flag."""
-        version_row = driver.select_one_or_none(self.get_query_text("version"))
-        if not version_row:
-            self._log_version_unavailable(type(self).dialect, "missing")
-            return None
+    def get_storage_capabilities(self, driver: "OracleSyncDriver") -> OracleStorageCapabilities:
+        """Return pool-scoped Oracle storage-option capabilities.
 
-        version_value = extract_oracle_version_value(version_row)
-        if not version_value:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            return None
+        An unavailable option catalog degrades to an all-false capability set.
+        The reason is stored on the same pool-scoped holder as the version.
+        """
+        holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
+        if holder is not None and holder.storage_capabilities_resolved:
+            return cast("OracleStorageCapabilities", dict(holder.storage_capabilities))
 
-        compatible = self._get_compatible_value(driver)
-        is_autonomous = self._is_autonomous(driver)
-        version_info = self._build_version_info(version_value, compatible, is_autonomous)
-        if version_info is None:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            return None
+        self.get_version(driver)
+        capabilities = _unsupported_storage_capabilities()
+        reason: str | None = None
+        try:
+            rows = driver.select(self.get_query_text("storage_options"))
+            capabilities = _storage_capabilities_from_rows(rows)
+            if not rows:
+                reason = "options_not_reported"
+        except Exception as exc:
+            reason = f"capability_query_failed:{type(exc).__name__}"
+            log_with_context(logger, logging.WARNING, "oracle.storage.capabilities.degraded", reason=reason)
 
-        self._log_version_detected(type(self).dialect, version_info)
-        return version_info
+        if holder is not None:
+            holder.storage_capabilities = capabilities
+            holder.storage_capabilities_reason = reason
+            holder.storage_capabilities_resolved = True
+        return capabilities
 
     def get_feature_flag(self, driver: "OracleSyncDriver", feature: str) -> bool:
         """Check if Oracle database supports a specific feature."""
@@ -750,6 +745,65 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+    def _build_version_info(
+        self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
+    ) -> "OracleVersionInfo | None":
+        if not version_value:
+            return None
+        parts = parse_oracle_version_components(version_value)
+        if parts is None:
+            return None
+        return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
+
+    def _select_domain(
+        self, driver: "OracleSyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult.unsupported(domain, source=query.capability.source)
+        select = cast("Any", driver.select)
+        rows = select(query.sql, **binds)
+        return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
+
+    def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
+        query_text = self.get_query_text("compatible")
+        try:
+            value = driver.select_value(query_text)
+            if value is None:
+                return None
+            return str(value)
+        except Exception:
+            return None
+
+    def _is_autonomous(self, driver: "OracleSyncDriver") -> bool:
+        query_text = self.get_query_text("autonomous_service")
+        try:
+            return bool(driver.select_value_or_none(query_text))
+        except Exception:
+            return False
+
+    def _fetch_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
+        """Query the server for its version, compatible level, and autonomous flag."""
+        version_row = driver.select_one_or_none(self.get_query_text("version"))
+        if not version_row:
+            self._log_version_unavailable(type(self).dialect, "missing")
+            return None
+
+        version_value = extract_oracle_version_value(version_row)
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
+            return None
+
+        compatible = self._get_compatible_value(driver)
+        is_autonomous = self._is_autonomous(driver)
+        version_info = self._build_version_info(version_value, compatible, is_autonomous)
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
+            return None
+
+        self._log_version_detected(type(self).dialect, version_info)
+        return version_info
+
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -773,16 +827,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         if config.default_schema is None:
             return None
         return normalize_identifier(config.default_schema, config.name)
-
-    def _build_version_info(
-        self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
-    ) -> "OracleVersionInfo | None":
-        if not version_value:
-            return None
-        parts = parse_oracle_version_components(version_value)
-        if parts is None:
-            return None
-        return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
 
     def list_available_features(self) -> "list[str]":
         return list_oracle_available_features(self.get_dialect_config())
@@ -868,16 +912,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         return SystemMetadataResult.from_rows(
             metadata_request, capability, rows=rows, source=MetadataSource.SYSTEM_VIEW
         )
-
-    async def _select_domain(
-        self, driver: "OracleAsyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult.unsupported(domain, source=query.capability.source)
-        select = cast("Any", driver.select)
-        rows = await select(query.sql, **binds)
-        return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
 
     async def get_schemas(self, driver: "OracleAsyncDriver") -> MetadataResult:
         """Get Oracle user/schema metadata."""
@@ -977,23 +1011,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             driver, "lob_storage", schema_name=self.resolve_schema(schema), table_name=table_name
         )
 
-    async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
-        query_text = self.get_query_text("compatible")
-        try:
-            value = await driver.select_value(query_text)
-            if value is None:
-                return None
-            return str(value)
-        except Exception:
-            return None
-
-    async def _is_autonomous(self, driver: "OracleAsyncDriver") -> bool:
-        query_text = self.get_query_text("autonomous_service")
-        try:
-            return bool(await driver.select_value_or_none(query_text))
-        except Exception:
-            return False
-
     async def get_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
         """Get Oracle database version information through the pool-scoped cache."""
         holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
@@ -1012,27 +1029,29 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             self.cache_version(driver_id, version_info)
         return version_info
 
-    async def _fetch_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
-        """Query the server for its version, compatible level, and autonomous flag."""
-        version_row = await driver.select_one_or_none(self.get_query_text("version"))
-        if not version_row:
-            self._log_version_unavailable(type(self).dialect, "missing")
-            return None
+    async def get_storage_capabilities(self, driver: "OracleAsyncDriver") -> OracleStorageCapabilities:
+        """Return pool-scoped Oracle storage-option capabilities."""
+        holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
+        if holder is not None and holder.storage_capabilities_resolved:
+            return cast("OracleStorageCapabilities", dict(holder.storage_capabilities))
 
-        version_value = extract_oracle_version_value(version_row)
-        if not version_value:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            return None
+        await self.get_version(driver)
+        capabilities = _unsupported_storage_capabilities()
+        reason: str | None = None
+        try:
+            rows = await driver.select(self.get_query_text("storage_options"))
+            capabilities = _storage_capabilities_from_rows(rows)
+            if not rows:
+                reason = "options_not_reported"
+        except Exception as exc:
+            reason = f"capability_query_failed:{type(exc).__name__}"
+            log_with_context(logger, logging.WARNING, "oracle.storage.capabilities.degraded", reason=reason)
 
-        compatible = await self._get_compatible_value(driver)
-        is_autonomous = await self._is_autonomous(driver)
-        version_info = self._build_version_info(version_value, compatible, is_autonomous)
-        if version_info is None:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            return None
-
-        self._log_version_detected(type(self).dialect, version_info)
-        return version_info
+        if holder is not None:
+            holder.storage_capabilities = capabilities
+            holder.storage_capabilities_reason = reason
+            holder.storage_capabilities_resolved = True
+        return capabilities
 
     async def get_feature_flag(self, driver: "OracleAsyncDriver", feature: str) -> bool:
         """Check if Oracle database supports a specific feature."""
@@ -1124,3 +1143,90 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+    def _build_version_info(
+        self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
+    ) -> "OracleVersionInfo | None":
+        if not version_value:
+            return None
+        parts = parse_oracle_version_components(version_value)
+        if parts is None:
+            return None
+        return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
+
+    async def _select_domain(
+        self, driver: "OracleAsyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult.unsupported(domain, source=query.capability.source)
+        select = cast("Any", driver.select)
+        rows = await select(query.sql, **binds)
+        return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
+
+    async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
+        query_text = self.get_query_text("compatible")
+        try:
+            value = await driver.select_value(query_text)
+            if value is None:
+                return None
+            return str(value)
+        except Exception:
+            return None
+
+    async def _is_autonomous(self, driver: "OracleAsyncDriver") -> bool:
+        query_text = self.get_query_text("autonomous_service")
+        try:
+            return bool(await driver.select_value_or_none(query_text))
+        except Exception:
+            return False
+
+    async def _fetch_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
+        """Query the server for its version, compatible level, and autonomous flag."""
+        version_row = await driver.select_one_or_none(self.get_query_text("version"))
+        if not version_row:
+            self._log_version_unavailable(type(self).dialect, "missing")
+            return None
+
+        version_value = extract_oracle_version_value(version_row)
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
+            return None
+
+        compatible = await self._get_compatible_value(driver)
+        is_autonomous = await self._is_autonomous(driver)
+        version_info = self._build_version_info(version_value, compatible, is_autonomous)
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
+            return None
+
+        self._log_version_detected(type(self).dialect, version_info)
+        return version_info
+
+
+
+def _unsupported_storage_capabilities() -> OracleStorageCapabilities:
+    """Return the safe capability set used before or after failed detection."""
+    return {"advanced_compression": False, "basic_compression": False, "in_memory": False, "partitioning": False}
+
+
+def _storage_capabilities_from_rows(rows: "Sequence[Any]") -> OracleStorageCapabilities:
+    """Normalize ``V$OPTION`` rows into storage capability flags."""
+    option_values: dict[str, bool] = {}
+    for row in rows:
+        if isinstance(row, Mapping):
+            parameter = row.get("parameter", row.get("PARAMETER"))
+            value = row.get("value", row.get("VALUE"))
+        elif isinstance(row, (tuple, list)) and len(row) >= _STORAGE_OPTION_FIELD_COUNT:
+            parameter, value = row[0], row[1]
+        else:
+            continue
+        if parameter is not None:
+            option_values[str(parameter).casefold()] = str(value).casefold() == "true"
+
+    advanced_compression = option_values.get("advanced compression", False)
+    return {
+        "advanced_compression": advanced_compression,
+        "basic_compression": option_values.get("basic compression", False) or advanced_compression,
+        "in_memory": option_values.get("in-memory column store", False),
+        "partitioning": option_values.get("partitioning", False),
+    }

@@ -20,6 +20,11 @@ Configuration (optional override):
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._storage import (
+    _oracle_table_feature_report,
+    _resolve_oracle_storage_capabilities_async,
+    _resolve_oracle_storage_capabilities_sync,
+)
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, _storage_type_from_version
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -57,20 +62,18 @@ def _init_oracle_settings(extension_settings: "dict[str, Any]") -> "tuple[bool, 
     return in_memory, json_storage
 
 
-def _oracle_table_ddl(table_name: str, storage_type: "JSONStorageType", in_memory: bool, index_name: str) -> str:
+def _oracle_table_ddl(table_name: str, storage_type: "JSONStorageType", table_clause: str, index_name: str) -> str:
     """Build Oracle CREATE TABLE and INDEX SQL as a single PL/SQL script.
 
     Args:
         table_name: The queue table name.
         storage_type: JSON storage type (native, blob_json, or blob).
-        in_memory: Whether to add INMEMORY clause.
+        table_clause: Capability-gated table storage clauses.
         index_name: The index name to create.
 
     Returns:
         PL/SQL script for creating table and index.
     """
-    inmemory_clause = "INMEMORY PRIORITY HIGH" if in_memory else ""
-
     if storage_type == JSONStorageType.JSON_NATIVE:
         payload_col = "payload_json JSON NOT NULL"
         metadata_col = "metadata_json JSON"
@@ -94,7 +97,7 @@ def _oracle_table_ddl(table_name: str, storage_type: "JSONStorageType", in_memor
                 attempts NUMBER(10) DEFAULT 0 NOT NULL,
                 created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
                 acknowledged_at TIMESTAMP
-            ) {inmemory_clause}';
+            ){table_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -167,6 +170,41 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         super().__init__(config)
         self._in_memory, self._json_storage_override = _init_oracle_settings(self._extension_settings)
 
+    def create_statements(self) -> "list[str]":
+        """Return single PL/SQL script for table and index creation.
+
+        Uses the configured storage override when set, otherwise defaults to
+        BLOB_JSON. For auto-detection, use create_table() instead.
+        """
+        storage_type = self._json_storage_override or JSONStorageType.BLOB_JSON
+        return [_oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name())]
+
+    def drop_statements(self) -> "list[str]":
+        """Return drop statements in reverse dependency order."""
+        return _oracle_drop_sql(self.table_name, self._index_name())
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        _resolve_oracle_storage_capabilities_sync(driver)
+
+    def create_table(self) -> None:
+        """Create the event queue table with auto-detected storage type."""
+        storage_type = self._detect_json_storage_type()
+        log_with_context(
+            logger, logging.DEBUG, "events.queue.create", storage_type=storage_type.value, table_name=self.table_name
+        )
+
+        with self._config.provide_session() as driver:
+            _resolve_oracle_storage_capabilities_sync(driver)
+            sql = _oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name())
+            driver.execute_script(sql)
+
+    def drop_table(self) -> None:
+        """Drop the event queue table and index."""
+        with self._config.provide_session() as driver:
+            for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
+                driver.execute_script(stmt)
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
         storage = self._json_storage_override or JSONStorageType.BLOB_JSON
@@ -182,19 +220,6 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         """Return index name truncated to Oracle's 30-character limit."""
         base_name = f"idx_{self.table_name.replace('.', '_')}_channel_status"
         return base_name[:30]
-
-    def create_statements(self) -> "list[str]":
-        """Return single PL/SQL script for table and index creation.
-
-        Uses the configured storage override when set, otherwise defaults to
-        BLOB_JSON. For auto-detection, use create_table() instead.
-        """
-        storage_type = self._json_storage_override or JSONStorageType.BLOB_JSON
-        return [_oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())]
-
-    def drop_statements(self) -> "list[str]":
-        """Return drop statements in reverse dependency order."""
-        return _oracle_drop_sql(self.table_name, self._index_name())
 
     def _detect_json_storage_type(self) -> JSONStorageType:
         """Resolve the JSON storage type from the configured override or server version."""
@@ -222,22 +247,18 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
 
         return version_info
 
-    def create_table(self) -> None:
-        """Create the event queue table with auto-detected storage type."""
-        storage_type = self._detect_json_storage_type()
-        log_with_context(
-            logger, logging.DEBUG, "events.queue.create", storage_type=storage_type.value, table_name=self.table_name
+    def _table_feature_clause(self) -> str:
+        report = _oracle_table_feature_report(
+            self._config,
+            "events",
+            self._extension_settings,
+            "queue",
+            in_memory=self._in_memory,
+            hash_partition_key="event_id",
+            range_partition_key="available_at",
+            table_options_key="table_options",
         )
-
-        with self._config.provide_session() as driver:
-            sql = _oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())
-            driver.execute_script(sql)
-
-    def drop_table(self) -> None:
-        """Drop the event queue table and index."""
-        with self._config.provide_session() as driver:
-            for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
-                driver.execute_script(stmt)
+        return report["clause"]
 
 
 class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
@@ -259,6 +280,41 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         super().__init__(config)
         self._in_memory, self._json_storage_override = _init_oracle_settings(self._extension_settings)
 
+    def create_statements(self) -> "list[str]":
+        """Return single PL/SQL script for table and index creation.
+
+        Uses the configured storage override when set, otherwise defaults to
+        BLOB_JSON. For auto-detection, use create_table() instead.
+        """
+        storage_type = self._json_storage_override or JSONStorageType.BLOB_JSON
+        return [_oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name())]
+
+    def drop_statements(self) -> "list[str]":
+        """Return drop statements in reverse dependency order."""
+        return _oracle_drop_sql(self.table_name, self._index_name())
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        await _resolve_oracle_storage_capabilities_async(driver)
+
+    async def create_table(self) -> None:
+        """Create the event queue table with auto-detected storage type."""
+        storage_type = await self._detect_json_storage_type()
+        log_with_context(
+            logger, logging.DEBUG, "events.queue.create", storage_type=storage_type.value, table_name=self.table_name
+        )
+
+        async with self._config.provide_session() as driver:
+            await _resolve_oracle_storage_capabilities_async(driver)
+            sql = _oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name())
+            await driver.execute_script(sql)
+
+    async def drop_table(self) -> None:
+        """Drop the event queue table and index."""
+        async with self._config.provide_session() as driver:
+            for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
+                await driver.execute_script(stmt)
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
         storage = self._json_storage_override or JSONStorageType.BLOB_JSON
@@ -274,19 +330,6 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         """Return index name truncated to Oracle's 30-character limit."""
         base_name = f"idx_{self.table_name.replace('.', '_')}_channel_status"
         return base_name[:30]
-
-    def create_statements(self) -> "list[str]":
-        """Return single PL/SQL script for table and index creation.
-
-        Uses the configured storage override when set, otherwise defaults to
-        BLOB_JSON. For auto-detection, use create_table() instead.
-        """
-        storage_type = self._json_storage_override or JSONStorageType.BLOB_JSON
-        return [_oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())]
-
-    def drop_statements(self) -> "list[str]":
-        """Return drop statements in reverse dependency order."""
-        return _oracle_drop_sql(self.table_name, self._index_name())
 
     async def _detect_json_storage_type(self) -> JSONStorageType:
         """Resolve the JSON storage type from the configured override or server version."""
@@ -314,19 +357,15 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
 
         return version_info
 
-    async def create_table(self) -> None:
-        """Create the event queue table with auto-detected storage type."""
-        storage_type = await self._detect_json_storage_type()
-        log_with_context(
-            logger, logging.DEBUG, "events.queue.create", storage_type=storage_type.value, table_name=self.table_name
+    def _table_feature_clause(self) -> str:
+        report = _oracle_table_feature_report(
+            self._config,
+            "events",
+            self._extension_settings,
+            "queue",
+            in_memory=self._in_memory,
+            hash_partition_key="event_id",
+            range_partition_key="available_at",
+            table_options_key="table_options",
         )
-
-        async with self._config.provide_session() as driver:
-            sql = _oracle_table_ddl(self.table_name, storage_type, self._in_memory, self._index_name())
-            await driver.execute_script(sql)
-
-    async def drop_table(self) -> None:
-        """Drop the event queue table and index."""
-        async with self._config.provide_session() as driver:
-            for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
-                await driver.execute_script(stmt)
+        return report["clause"]

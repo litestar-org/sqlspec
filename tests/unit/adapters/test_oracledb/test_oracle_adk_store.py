@@ -26,6 +26,15 @@ from sqlspec.config import ADKConfig
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
     config = MagicMock()
     config.extension_config = {"adk": adk_config}
+    cache = OracleVersionCache()
+    cache.storage_capabilities = {
+        "advanced_compression": True,
+        "basic_compression": True,
+        "in_memory": True,
+        "partitioning": True,
+    }
+    cache.storage_capabilities_resolved = True
+    config._oracle_version_cache = cache
     return config
 
 

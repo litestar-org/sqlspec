@@ -45,6 +45,13 @@ def _config_with_version(version: "OracleVersionInfo | None") -> Any:
     cache = OracleVersionCache()
     cache.resolved = True
     cache.version = version
+    cache.storage_capabilities = {
+        "advanced_compression": True,
+        "basic_compression": True,
+        "in_memory": True,
+        "partitioning": True,
+    }
+    cache.storage_capabilities_resolved = True
     config._oracle_version_cache = cache
     return config
 
@@ -75,6 +82,47 @@ def test_oracle_version_resolved_once_per_pool() -> None:
     assert second is not None and second.major == 21
     assert first_driver.select_one_or_none.call_count == 1
     assert second_driver.select_one_or_none.call_count == 0
+
+
+def test_oracle_storage_capabilities_resolve_once_per_pool() -> None:
+    """Two sessions from one config share one Oracle option-catalog lookup."""
+    config = OracleSyncConfig(connection_config={"user": "u", "password": "p", "dsn": "d"})
+    cache = config._oracle_version_cache
+    cache.resolved = True
+    cache.version = OracleVersionInfo(21, 3, 0, compatible="21.0.0")
+    first_driver = MagicMock(_oracle_version_cache=cache)
+    second_driver = MagicMock(_oracle_version_cache=cache)
+    first_driver.select.return_value = [
+        {"parameter": "Basic Compression", "value": "TRUE"},
+        {"parameter": "Advanced Compression", "value": "FALSE"},
+        {"parameter": "Partitioning", "value": "TRUE"},
+        {"parameter": "In-Memory Column Store", "value": "FALSE"},
+    ]
+
+    first = OracledbSyncDataDictionary().get_storage_capabilities(first_driver)
+    second = OracledbSyncDataDictionary().get_storage_capabilities(second_driver)
+
+    assert (
+        first
+        == second
+        == {"advanced_compression": False, "basic_compression": True, "in_memory": False, "partitioning": True}
+    )
+    first_driver.select.assert_called_once()
+    second_driver.select.assert_not_called()
+
+
+def test_oracle_storage_capabilities_degrade_when_option_catalog_is_unavailable() -> None:
+    """An inaccessible option catalog returns safe false flags without a raw error."""
+    cache = OracleVersionCache()
+    cache.resolved = True
+    cache.version = OracleVersionInfo(19, 0, 0, compatible="19.0.0")
+    driver = MagicMock(_oracle_version_cache=cache)
+    driver.select.side_effect = RuntimeError("catalog denied")
+
+    capabilities = OracledbSyncDataDictionary().get_storage_capabilities(driver)
+
+    assert not any(capabilities.values())
+    assert cache.storage_capabilities_reason == "capability_query_failed:RuntimeError"
 
 
 @pytest.mark.parametrize("major", [11, 12, 19, 21, 23])
@@ -271,3 +319,23 @@ def test_events_store_column_types_per_rung(rung: JSONStorageType, expected_colu
 
     assert payload_col == expected_column
     assert metadata_col == expected_column
+
+
+def test_oracle_events_store_compression_partitioning_config() -> None:
+    """Events DDL applies the shared Oracle storage-option shape."""
+    config = _config_with_version(_version_for_rung(JSONStorageType.JSON_NATIVE))
+    config.extension_config = {
+        "events": {
+            "compression": {"enabled": True, "algorithm": "oltp"},
+            "partitioning": {"strategy": "range", "interval": "day"},
+            "table_options": "TABLESPACE event_data",
+        }
+    }
+    store = events_store.OracleSyncEventQueueStore(config)
+
+    sql = store.create_statements()[0]
+
+    assert "ROW STORE COMPRESS ADVANCED" in sql
+    assert "TABLESPACE event_data" in sql
+    assert "PARTITION BY RANGE (available_at)" in sql
+    assert "NUMTODSINTERVAL(1, ''DAY'')" in sql

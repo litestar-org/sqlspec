@@ -32,6 +32,11 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
     if context is None or context.config is None:
         _raise_missing_config()
     store = store_class(config=context.config)
+    if context.driver is not None:
+        if context.is_async_driver:
+            await store.prepare_schema_async(context.driver)
+        else:
+            store.prepare_schema_sync(context.driver)
 
     return [store._table_ddl()]  # pyright: ignore[reportPrivateUsage]
 

@@ -254,6 +254,9 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError
 
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> "SessionRecord":
@@ -666,6 +669,9 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
 
     @abstractmethod
     def create_session(

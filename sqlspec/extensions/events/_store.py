@@ -62,6 +62,12 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         """Return statements required to drop queue artifacts."""
         return [self._wrap_drop_statement(f"DROP TABLE {self.table_name}")]
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
     def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
         """Apply additive queue-table changes with a synchronous driver."""
         manage_schema, create_schema = self._schema_management_flags()

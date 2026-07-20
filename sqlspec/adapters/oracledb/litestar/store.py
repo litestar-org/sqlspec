@@ -1,8 +1,13 @@
 """Oracle session store for Litestar integration."""
 
 from datetime import timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.adapters.oracledb._storage import (
+    _oracle_table_feature_report,
+    _resolve_oracle_storage_capabilities_async,
+    _resolve_oracle_storage_capabilities_sync,
+)
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
@@ -87,12 +92,17 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        sql = self._table_ddl()
         async with self._config.provide_session() as driver:
+            await _resolve_oracle_storage_capabilities_async(driver)
+            sql = self._table_ddl()
             await driver.execute_script(sql)
 
         self._log_table_created()
         await self.reconcile_schema(assume_existing=True)
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -328,7 +338,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         Returns:
             SQL statement to create the sessions table with proper indexes.
         """
-        inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clause = _litestar_table_feature_clause(self._config, self._in_memory)
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
@@ -337,7 +347,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 expires_at TIMESTAMP WITH TIME ZONE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ) {inmemory_clause}';
+            ){table_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -425,6 +435,10 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        _resolve_oracle_storage_capabilities_sync(driver)
+
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
 
@@ -495,7 +509,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         Returns:
             SQL statement to create the sessions table with proper indexes.
         """
-        inmemory_clause = "INMEMORY PRIORITY HIGH" if self._in_memory else ""
+        table_clause = _litestar_table_feature_clause(self._config, self._in_memory)
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
@@ -504,7 +518,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 expires_at TIMESTAMP WITH TIME ZONE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ) {inmemory_clause}';
+            ){table_clause}';
         EXCEPTION
             WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN
@@ -554,12 +568,12 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
-        sql = self._table_ddl()
         with self._config.provide_session() as driver:
+            _resolve_oracle_storage_capabilities_sync(driver)
+            sql = self._table_ddl()
             driver.execute_script(sql)
 
         self._log_table_created()
-
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
         sql = f"""
@@ -744,3 +758,19 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+
+def _litestar_table_feature_clause(config: Any, in_memory: bool) -> str:
+    extension_config = cast("dict[str, Any]", config.extension_config)
+    settings = cast("dict[str, Any]", extension_config.get("litestar", {}))
+    report = _oracle_table_feature_report(
+        config,
+        "litestar",
+        settings,
+        "session",
+        in_memory=in_memory,
+        hash_partition_key="session_id",
+        range_partition_key="expires_at",
+        table_options_key="table_options",
+    )
+    return report["clause"]

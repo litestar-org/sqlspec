@@ -32,6 +32,46 @@ Unconstrained CLOB or BLOB columns are returned as text or bytes even when their
 contents look like JSON. Add an Oracle JSON type or ``IS JSON`` constraint when
 you want automatic JSON decoding.
 
+Extension Table Storage Options
+===============================
+
+Oracle ADK, durable event, and Litestar session tables support the same
+opt-in storage concepts under their extension configuration: ``in_memory``,
+``compression``, ``partitioning``, and table options. For example, an events
+queue can use Advanced Compression and monthly interval partitions::
+
+    extension_config = {
+        "events": {
+            "compression": {"enabled": True, "algorithm": "advanced"},
+            "partitioning": {
+                "strategy": "range",
+                "partition_key": "available_at",
+                "interval": "month",
+            },
+            "table_options": "TABLESPACE event_data",
+        }
+    }
+
+Use the same keys under ``litestar``; range partitioning defaults to
+``expires_at``. Under ``adk``, per-table options use names such as
+``session_table_options``, ``events_table_options``, and
+``memory_table_options``. ADK partition settings can likewise override a
+specific table key with ``session_partition_key``, ``events_partition_key``,
+or the corresponding state or memory key.
+
+SQLSpec resolves Oracle Partitioning, Advanced Compression, Basic Compression,
+and Database In-Memory availability once per connection pool through the data
+dictionary. If the option catalog is inaccessible or a requested feature is not
+available, SQLSpec logs a structured warning and creates the table without that
+optimization. User-provided table options are still emitted because they are
+application DDL rather than a capability-detected Oracle option.
+
+SQLSpec does not automatically add ``SECUREFILE`` LOB compression. Its safety
+also depends on tablespace segment-space management and database-level
+``DB_SECUREFILE`` policy, which cannot be established from the option catalog
+alone. Add a reviewed LOB clause through the table-options setting when the
+deployment guarantees those prerequisites.
+
 Sync Configuration
 ==================
 
