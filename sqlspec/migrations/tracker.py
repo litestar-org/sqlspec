@@ -4,13 +4,13 @@ This module provides functionality to track applied migrations in the database.
 """
 
 import logging
-from collections.abc import Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from rich.console import Console
 
 from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -26,49 +26,6 @@ _console = Console()
 
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Synchronous migration version tracker."""
-
-    def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
-        """Check for and add any missing columns to the tracking table.
-
-        Uses the adapter's data_dictionary to query existing columns,
-        then compares to the target schema and adds missing columns one by one.
-
-        Args:
-            driver: The database driver to use.
-        """
-        try:
-            if self.version_table_schema:
-                columns_data = driver.data_dictionary.get_columns(
-                    driver, self.version_table_name, schema=self.version_table_schema
-                )
-            else:
-                columns_data = driver.data_dictionary.get_columns(driver, self.version_table_name)
-            if not columns_data:
-                _log_tracking_table_missing(driver, self.version_table)
-                columns_data = []
-
-            missing_columns = self._detect_missing_columns(_extract_existing_columns(columns_data))
-            if not missing_columns:
-                _log_schema_current(driver, self.version_table)
-                return
-
-            if self._should_echo():
-                _console.print(
-                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-                )
-
-            for col_name, statement in self._add_column_statements(missing_columns):
-                driver.execute(statement)
-                _log_column_added(driver, self.version_table, col_name)
-
-            driver.commit()
-            if self._should_echo():
-                _console.print("[green]Migration tracking table schema updated successfully[/]")
-
-        except Exception as exc:
-            with suppress(Exception):
-                driver.rollback()
-            _log_schema_check_failed(driver, self.version_table, exc)
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -246,6 +203,32 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         result = driver.execute(self._check_versions_query(replaced_versions))
         return bool(result.data)
 
+    def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
+        """Add missing tracking-table columns through the shared schema engine.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            target = SchemaTarget(self.version_table_name, self._tracking_table_ddl(), self.version_table_schema)
+            result = ensure_schema_sync(driver, [target], manage_schema=True, create_schema=False, assume_existing=True)
+            added_columns = result.added_columns.get(target.identity, [])
+            if not added_columns:
+                _log_schema_current(driver, self.version_table)
+                return
+            if self._should_echo():
+                _console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]"
+                )
+            for column_name in added_columns:
+                _log_column_added(driver, self.version_table, column_name)
+            if self._should_echo():
+                _console.print("[green]Migration tracking table schema updated successfully[/]")
+        except Exception as exc:
+            with suppress(Exception):
+                driver.rollback()
+            _log_schema_check_failed(driver, self.version_table, exc)
+
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
@@ -266,49 +249,6 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
     """Asynchronous migration version tracker."""
-
-    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
-        """Check for and add any missing columns to the tracking table.
-
-        Uses the driver's data_dictionary to query existing columns,
-        then compares to the target schema and adds missing columns one by one.
-
-        Args:
-            driver: The database driver to use.
-        """
-        try:
-            if self.version_table_schema:
-                columns_data = await driver.data_dictionary.get_columns(
-                    driver, self.version_table_name, schema=self.version_table_schema
-                )
-            else:
-                columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)
-            if not columns_data:
-                _log_tracking_table_missing(driver, self.version_table)
-                columns_data = []
-
-            missing_columns = self._detect_missing_columns(_extract_existing_columns(columns_data))
-            if not missing_columns:
-                _log_schema_current(driver, self.version_table)
-                return
-
-            if self._should_echo():
-                _console.print(
-                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-                )
-
-            for col_name, statement in self._add_column_statements(missing_columns):
-                await driver.execute(statement)
-                _log_column_added(driver, self.version_table, col_name)
-
-            await driver.commit()
-            if self._should_echo():
-                _console.print("[green]Migration tracking table schema updated successfully[/]")
-
-        except Exception as exc:
-            with suppress(Exception):
-                await driver.rollback()
-            _log_schema_check_failed(driver, self.version_table, exc)
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -486,6 +426,34 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         result = await driver.execute(self._check_versions_query(replaced_versions))
         return bool(result.data)
 
+    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Add missing tracking-table columns through the shared schema engine.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            target = SchemaTarget(self.version_table_name, self._tracking_table_ddl(), self.version_table_schema)
+            result = await ensure_schema_async(
+                driver, [target], manage_schema=True, create_schema=False, assume_existing=True
+            )
+            added_columns = result.added_columns.get(target.identity, [])
+            if not added_columns:
+                _log_schema_current(driver, self.version_table)
+                return
+            if self._should_echo():
+                _console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]"
+                )
+            for column_name in added_columns:
+                _log_column_added(driver, self.version_table, column_name)
+            if self._should_echo():
+                _console.print("[green]Migration tracking table schema updated successfully[/]")
+        except Exception as exc:
+            with suppress(Exception):
+                await driver.rollback()
+            _log_schema_check_failed(driver, self.version_table, exc)
+
     async def _safe_commit(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
 
@@ -502,37 +470,6 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_commit_skipped(driver, exc)
             else:
                 raise
-
-
-def _extract_column_name(metadata: Any) -> "str | None":
-    """Extract column name from a metadata entry."""
-    if isinstance(metadata, Mapping):
-        value = metadata.get("column_name")
-        if value is None:
-            value = metadata.get("COLUMN_NAME")
-        return str(value).lower() if value is not None else None
-    value = getattr(metadata, "column_name", None)
-    if value is not None:
-        return str(value).lower()
-    return None
-
-
-def _extract_existing_columns(columns_data: "list[Any]") -> "set[str]":
-    """Return the set of existing tracking-table column names."""
-    return {name for col in columns_data if (name := _extract_column_name(col)) is not None}
-
-
-def _log_tracking_table_missing(driver: Any, version_table: str) -> None:
-    """Log that the tracking table has no columns to inspect."""
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "migration.track",
-        db_system=resolve_db_system(type(driver).__name__),
-        table=version_table,
-        operation="table_check",
-        status="missing",
-    )
 
 
 def _log_schema_current(driver: Any, version_table: str) -> None:

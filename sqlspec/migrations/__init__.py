@@ -13,6 +13,7 @@ from sqlspec.migrations.loaders import (
     get_migration_loader,
 )
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, create_migration_runner
+from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file, get_author
@@ -26,6 +27,8 @@ __all__ = (
     "MigrationSquasher",
     "PythonFileLoader",
     "SQLFileLoader",
+    "SchemaEnsureResult",
+    "SchemaTarget",
     "SquashPlan",
     "SyncMigrationCommands",
     "SyncMigrationRunner",
@@ -33,6 +36,8 @@ __all__ = (
     "create_migration_commands",
     "create_migration_file",
     "create_migration_runner",
+    "ensure_schema_async",
+    "ensure_schema_sync",
     "get_author",
     "get_migration_loader",
 )
