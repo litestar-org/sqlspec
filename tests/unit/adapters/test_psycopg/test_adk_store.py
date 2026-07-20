@@ -87,8 +87,11 @@ def test_psycopg_adk_config_types_adapter_local_optimizations() -> None:
 
     assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", PsycopgADKConfig).__optional_keys__
     assert cast("Any", PsycopgADKConfig).__optional_keys__ - cast("Any", ADKConfig).__optional_keys__ == {
+        "autovacuum_analyze_scale_factor",
+        "autovacuum_vacuum_scale_factor",
         "enable_event_generated_columns",
         "enable_covering_indexes",
+        "fillfactor",
     }
 
     for feature_name in ("enable_event_generated_columns", "enable_covering_indexes"):

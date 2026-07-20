@@ -20,8 +20,10 @@ class AdditiveSqliteADKStore(SqliteADKStore):
     """ADK target with one additive session column."""
 
     def _sessions_table_ddl(self) -> str:
-        return super()._sessions_table_ddl().replace(
-            "update_time REAL NOT NULL\n", "update_time REAL NOT NULL,\n            schema_tag TEXT\n"
+        return (
+            super()
+            ._sessions_table_ddl()
+            .replace("update_time REAL NOT NULL\n", "update_time REAL NOT NULL,\n            schema_tag TEXT\n")
         )
 
 
@@ -29,8 +31,10 @@ class AdditiveSqliteADKMemoryStore(SqliteADKMemoryStore):
     """ADK memory target with one additive column."""
 
     def _memory_table_ddl(self) -> str:
-        return super()._memory_table_ddl().replace(
-            "inserted_at REAL NOT NULL\n", "inserted_at REAL NOT NULL,\n            schema_tag TEXT\n"
+        return (
+            super()
+            ._memory_table_ddl()
+            .replace("inserted_at REAL NOT NULL\n", "inserted_at REAL NOT NULL,\n            schema_tag TEXT\n")
         )
 
 
@@ -38,9 +42,7 @@ class AdditiveSqliteEventQueueStore(SqliteEventQueueStore):
     """Event queue target with one additive column."""
 
     def _table_ddl(self) -> str:
-        return super()._table_ddl().replace(
-            "acknowledged_at TIMESTAMP", "acknowledged_at TIMESTAMP, schema_tag TEXT"
-        )
+        return super()._table_ddl().replace("acknowledged_at TIMESTAMP", "acknowledged_at TIMESTAMP, schema_tag TEXT")
 
 
 async def test_litestar_session_store_reconcile_uses_target_ddl(tmp_path: Path) -> None:
@@ -59,10 +61,7 @@ async def test_litestar_session_store_reconcile_uses_target_ddl(tmp_path: Path) 
 
 
 def test_adk_additive_column_does_not_require_schema_version_seed(tmp_path: Path) -> None:
-    config = SqliteConfig(
-        connection_config={"database": str(tmp_path / "adk.db")},
-        extension_config={"adk": {}},
-    )
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "adk.db")}, extension_config={"adk": {}})
     SqliteADKStore(config).create_tables()
 
     store = AdditiveSqliteADKStore(config)
@@ -70,19 +69,13 @@ def test_adk_additive_column_does_not_require_schema_version_seed(tmp_path: Path
 
     with config.provide_session() as driver:
         columns = driver.data_dictionary.get_columns(driver, store.session_table)
-        seed_rows = driver.select(
-            f"SELECT value FROM {store.metadata_table} WHERE key = ?",
-            ("schema_version",),
-        )
+        seed_rows = driver.select(f"SELECT value FROM {store.metadata_table} WHERE key = ?", ("schema_version",))
     assert "schema_tag" in {str(column["column_name"]).casefold() for column in columns}
     assert seed_rows == []
 
 
 def test_adk_memory_additive_column_uses_target_ddl(tmp_path: Path) -> None:
-    config = SqliteConfig(
-        connection_config={"database": str(tmp_path / "adk-memory.db")},
-        extension_config={"adk": {}},
-    )
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "adk-memory.db")}, extension_config={"adk": {}})
     SqliteADKMemoryStore(config).create_tables()
 
     store = AdditiveSqliteADKMemoryStore(config)
@@ -113,9 +106,7 @@ def test_packaged_extension_migration_and_additive_ensure_are_independent(tmp_pa
     config = SqliteConfig(connection_config={"database": str(tmp_path / "queues-consumer.db")})
     settings = {"manage_schema": True, "create_schema": True, "run_migrations": True}
     target = SchemaTarget.from_ddl(
-        "queue_jobs",
-        "CREATE TABLE IF NOT EXISTS queue_jobs (id TEXT PRIMARY KEY, payload BLOB)",
-        dialect="sqlite",
+        "queue_jobs", "CREATE TABLE IF NOT EXISTS queue_jobs (id TEXT PRIMARY KEY, payload BLOB)", dialect="sqlite"
     )
     applied_versions: list[str] = []
 

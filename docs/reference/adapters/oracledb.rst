@@ -32,6 +32,8 @@ Unconstrained CLOB or BLOB columns are returned as text or bytes even when their
 contents look like JSON. Add an Oracle JSON type or ``IS JSON`` constraint when
 you want automatic JSON decoding.
 
+.. _oracledb-extension-storage-options:
+
 Extension Table Storage Options
 ===============================
 

@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
@@ -15,8 +16,6 @@ logger = get_logger("sqlspec.adapters.asyncmy.litestar.store")
 
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
-
-
 
 
 class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
@@ -34,7 +33,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         config: AsyncmyConfig instance.
     """
 
-    __slots__ = ("_table_options",)
+    __slots__ = ("_index_options", "_table_options")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({"index_options", "table_options"})
 
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy session store.
@@ -44,6 +44,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         """
         super().__init__(config)
         litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._index_options: str = _mysql_index_options(litestar_config)
         self._table_options: str = _mysql_table_options(litestar_config)
 
     async def create_table(self) -> None:
@@ -244,7 +245,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             expires_at DATETIME(6),
             created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._table_name}_expires_at (expires_at)
+            INDEX idx_{self._table_name}_expires_at (expires_at){self._index_options}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
         """
 
@@ -270,7 +271,22 @@ def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
         A leading-space-prefixed options string, or an empty string when unset.
     """
     value = litestar_config.get("table_options")
-    if not isinstance(value, str):
+    if value is None:
         return ""
+    if not isinstance(value, str):
+        msg = "extension_config['litestar']['table_options'] must be a string"
+        raise ImproperConfigurationError(msg)
+    value = value.strip()
+    return f" {value}" if value else ""
+
+
+def _mysql_index_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``index_options`` config value for inline index DDL."""
+    value = litestar_config.get("index_options")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        msg = "extension_config['litestar']['index_options'] must be a string"
+        raise ImproperConfigurationError(msg)
     value = value.strip()
     return f" {value}" if value else ""

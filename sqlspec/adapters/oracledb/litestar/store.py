@@ -21,14 +21,6 @@ __all__ = ("OracleAsyncStore", "OracleSyncStore")
 ORACLE_SMALL_BLOB_LIMIT = 32000
 
 
-
-
-
-
-
-
-
-
 class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     """Oracle session store using async OracleDB driver.
 
@@ -45,6 +37,12 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
     """
 
     __slots__ = ("_in_memory",)
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "compression",
+        "in_memory",
+        "partitioning",
+        "table_options",
+    })
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle session store.
@@ -385,6 +383,12 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     """
 
     __slots__ = ("_in_memory",)
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "compression",
+        "in_memory",
+        "partitioning",
+        "table_options",
+    })
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle sync session store.
@@ -544,6 +548,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             driver.execute_script(sql)
 
         self._log_table_created()
+
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
         sql = f"""

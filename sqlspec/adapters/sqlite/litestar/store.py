@@ -1,8 +1,9 @@
 """SQLite sync session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.sqlite.config import _apply_extension_pragmas, _extension_pragma_statements
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -33,7 +34,11 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         config: SqliteConfig instance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_pragma_statements",)
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "pragma_overrides",
+        "pragma_profile",
+    })
 
     def __init__(self, config: "SqliteConfig") -> None:
         """Initialize SQLite session store.
@@ -42,6 +47,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
             config: SqliteConfig instance.
         """
         super().__init__(config)
+        self._pragma_statements = _extension_pragma_statements(config, "litestar")
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -50,6 +56,10 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
             return
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Apply configured SQLite PRAGMAs before migration DDL generation."""
+        _apply_extension_pragmas(driver.connection, self._pragma_statements)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -175,6 +185,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """Synchronous implementation of create_table."""
         sql = self._table_ddl()
         with self._config.provide_session() as driver:
+            _apply_extension_pragmas(driver.connection, self._pragma_statements)
             driver.execute_script(sql)
         self._log_table_created()
 

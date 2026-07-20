@@ -159,6 +159,9 @@ PostgreSQL backends (asyncpg, psycopg, psqlpy) provide the fullest feature set:
 - Full-text search via ``tsvector`` for memory entries.
 - ``UPSERT`` and ``RETURNING`` clauses for atomic operations.
 - ``append_event_and_update_state()`` executes as a single transaction.
+- ``fillfactor``, ``autovacuum_vacuum_scale_factor``, and
+  ``autovacuum_analyze_scale_factor`` tune the generated tables. The existing
+  ``fillfactor=80`` default is preserved.
 
 **Recommended for production deployments.**
 
@@ -172,6 +175,8 @@ compatible with the PostgreSQL wire protocol.
 - Full FTS support for memory search.
 - Distributed transactions for session and event atomicity.
 - Horizontal scalability for high-throughput agent deployments.
+- Optional table locality, hash-sharded indexes, storing indexes, and memory
+  trigram indexes through the CockroachDB ADK configuration keys.
 
 MySQL Family
 ------------
@@ -182,6 +187,8 @@ support:
 - JSON column storage for session state and event records.
 - Full-text search on ``InnoDB`` tables for memory entries.
 - Transactional writes for ``append_event_and_update_state()``.
+- Per-table DDL suffixes for session, event, app-state, user-state, and memory
+  tables through the corresponding ``*_table_options`` keys.
 
 SQLite
 ------
@@ -328,5 +335,19 @@ All backends are configured through ``extension_config["adk"]``:
            }
        },
    )
+
+Adapter-specific storage tuning uses that same ``adk`` mapping. SQLSpec
+validates the keys against the selected adapter and raises
+``ImproperConfigurationError`` for unknown or unsupported options. This makes
+configuration mistakes visible at store construction instead of silently
+falling back to backend defaults.
+
+The backend detail sections above describe the available controls where they
+matter: PostgreSQL table fillfactor and autovacuum settings; CockroachDB
+locality, hash-sharded indexes, and storing indexes; MySQL/MariaDB per-table
+options; SQLite PRAGMA and FTS controls; Oracle compression, partitioning,
+In-Memory, and per-table options; and Spanner sharding, retention, and
+table/index options. Oracle's deployment-dependent behavior is documented in
+:ref:`oracledb-extension-storage-options`.
 
 See :doc:`adapters` for adapter-specific configuration patterns.

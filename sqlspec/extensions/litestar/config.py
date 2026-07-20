@@ -1,5 +1,7 @@
 """Configuration types for Litestar session store extension."""
 
+from typing import Any, Literal
+
 from typing_extensions import NotRequired, TypedDict
 
 __all__ = ("LitestarConfig",)
@@ -61,3 +63,36 @@ class LitestarConfig(TypedDict):
     Passed verbatim to the index definition for adapters that support index
     OPTIONS/clauses. Ignored by adapters that do not support index options.
     """
+
+    partitioning: NotRequired[dict[str, Any]]
+    """Configure adapter-specific session-table partitioning where supported."""
+
+    partition_expiration_days: NotRequired[int]
+    """Set BigQuery partition expiration in days."""
+
+    require_partition_filter: NotRequired[bool]
+    """Require partition filters for BigQuery session queries."""
+
+    enable_hash_sharded_indexes: NotRequired[bool]
+    """Enable CockroachDB hash-sharded session indexes."""
+
+    hash_shard_bucket_count: NotRequired[int]
+    """Set the CockroachDB hash-shard bucket count."""
+
+    ttl_expiration_expression: NotRequired[Literal[False, "expires_at"]]
+    """Enable CockroachDB row-level TTL using the session ``expires_at`` column."""
+
+    fillfactor: NotRequired[int]
+    """Set PostgreSQL-family session-table fillfactor. Default: 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Set the PostgreSQL-family autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Set the PostgreSQL-family autovacuum analyze scale factor."""
+
+    pragma_profile: NotRequired[bool]
+    """Apply the SQLite extension-store PRAGMA profile. Default: False."""
+
+    pragma_overrides: NotRequired[dict[str, str | int | bool]]
+    """Apply validated SQLite PRAGMA overrides after the optional profile."""

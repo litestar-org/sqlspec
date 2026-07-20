@@ -1,8 +1,9 @@
 """AioSQLite session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.aiosqlite.config import _apply_extension_pragmas, _extension_pragma_statements
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 if TYPE_CHECKING:
@@ -29,7 +30,11 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         config: AiosqliteConfig instance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_pragma_statements",)
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "pragma_overrides",
+        "pragma_profile",
+    })
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize AioSQLite session store.
@@ -38,6 +43,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             config: AiosqliteConfig instance.
         """
         super().__init__(config)
+        self._pragma_statements = _extension_pragma_statements(config, "litestar")
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -46,9 +52,14 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
+            await _apply_extension_pragmas(driver.connection, self._pragma_statements)
             await driver.execute_script(sql)
         self._log_table_created()
         await self.reconcile_schema(assume_existing=True)
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Apply configured SQLite PRAGMAs before migration DDL generation."""
+        await _apply_extension_pragmas(driver.connection, self._pragma_statements)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.

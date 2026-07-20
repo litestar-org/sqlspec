@@ -395,6 +395,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Return polling defaults for Oracle table-backed event queues."""
 
         return EventRuntimeHints(select_for_update=True, skip_locked=True)
+
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
         config = dict(self.connection_config)
@@ -456,7 +457,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
-
 
 
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -593,6 +593,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Return polling defaults for Oracle table-backed event queues."""
 
         return EventRuntimeHints(select_for_update=True, skip_locked=True)
+
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
@@ -654,7 +655,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             await self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
-
 
 
 def _resolve_connection_major(cache: "OracleVersionCache", connection: Any) -> "int | None":

@@ -115,12 +115,6 @@ class OraclePipelineDriver(Protocol):
     def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
-
-
-
-
-
-
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
 # on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
 # core.apply_driver_features and read at the dispatch_execute call sites below.

@@ -718,9 +718,9 @@ def test_settings_property() -> None:
 
     config = SqliteConfig(
         connection_config={"database": ":memory:"},
-        extension_config={"events": {"queue_table": "custom", "custom_key": "custom_value"}},
+        extension_config={"events": {"queue_table": "custom", "retention_seconds": 3600}},
     )
     store = FixtureStore(config)
 
     assert store.settings["queue_table"] == "custom"
-    assert store.settings["custom_key"] == "custom_value"
+    assert store.settings["retention_seconds"] == 3600

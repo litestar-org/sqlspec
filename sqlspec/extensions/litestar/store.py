@@ -3,8 +3,9 @@
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger
@@ -49,6 +50,25 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
 
     __slots__ = ("_config", "_table_name")
 
+    extension_config_options: ClassVar[frozenset[str]] = frozenset({
+        "auto_trace_headers",
+        "commit_mode",
+        "connection_key",
+        "correlation_header",
+        "correlation_headers",
+        "create_schema",
+        "disable_di",
+        "enable_correlation_middleware",
+        "enable_sqlcommenter_middleware",
+        "extra_commit_statuses",
+        "extra_rollback_statuses",
+        "manage_schema",
+        "pool_key",
+        "run_migrations",
+        "session_key",
+        "session_table",
+    })
+
     def __init__(self, config: ConfigT) -> None:
         """Initialize the session store.
 
@@ -56,6 +76,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
             config: SQLSpec database configuration.
         """
         self._config = config
+        self._validate_extension_config()
         self._table_name = self._table_name_from_config()
         self._ensure_table_name(self._table_name)
 
@@ -203,6 +224,19 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
                 return default_name
             return str(session_table)
         return default_name
+
+    def _validate_extension_config(self) -> None:
+        """Reject Litestar options that this adapter store cannot honor."""
+        if not has_extension_config(self._config):
+            return
+        extension_config = cast("dict[str, dict[str, Any]]", self._config.extension_config)
+        settings = extension_config.get("litestar", {})
+        unsupported = sorted(set(settings).difference(type(self).extension_config_options))
+        if unsupported:
+            adapter = type(self).__module__.split(".")[2]
+            keys = ", ".join(repr(key) for key in unsupported)
+            msg = f"Unsupported Litestar configuration key(s) for {adapter}: {keys}"
+            raise ImproperConfigurationError(msg)
 
     def _schema_management_flags(self) -> "tuple[bool, bool]":
         """Return automatic-management and missing-table creation flags."""

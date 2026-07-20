@@ -32,14 +32,6 @@ class MysqlConnectorSyncEventQueueStore(BaseEventQueueStore[MysqlConnectorSyncCo
         return _mysql_index_existence_target(self)
 
 
-
-
-
-
-
-
-
-
 class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsyncConfig]):
     """Queue DDL for mysql-connector async configs.
 

@@ -51,14 +51,6 @@ class SqliteADKConfig(ADKConfig):
     """Optional FTS5 detail mode used when ``memory_use_fts`` is enabled."""
 
 
-
-
-
-
-
-
-
-
 class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
     """SQLite ADK store using synchronous SQLite driver.
 

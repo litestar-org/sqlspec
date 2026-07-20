@@ -1,8 +1,9 @@
 """Base classes for adapter-specific event queue stores."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
 from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
 
@@ -33,10 +34,25 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     __slots__ = ("_config", "_extension_settings", "_table_name")
 
+    extension_config_options: ClassVar[frozenset[str]] = frozenset({
+        "backend",
+        "create_schema",
+        "event_poll_interval",
+        "lease_seconds",
+        "manage_schema",
+        "poll_interval",
+        "queue_table",
+        "retention_seconds",
+        "run_migrations",
+        "select_for_update",
+        "skip_locked",
+    })
+
     def __init__(self, config: ConfigT) -> None:
         self._config = config
         extension_config = cast("dict[str, Any]", config.extension_config)
         self._extension_settings = cast("dict[str, Any]", extension_config.get("events", {}))
+        self._validate_extension_config()
         table_name = self._extension_settings.get("queue_table", "sqlspec_event_queue")
         self._table_name = normalize_queue_table_name(str(table_name))
 
@@ -89,6 +105,15 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         statement_config = getattr(self._config, "statement_config", None)
         dialect = getattr(statement_config, "dialect", None)
         return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=dialect)
+
+    def _validate_extension_config(self) -> None:
+        """Reject events options that this adapter store cannot honor."""
+        unsupported = sorted(set(self._extension_settings).difference(type(self).extension_config_options))
+        if unsupported:
+            adapter = type(self).__module__.split(".")[2]
+            keys = ", ".join(repr(key) for key in unsupported)
+            msg = f"Unsupported events configuration key(s) for {adapter}: {keys}"
+            raise ImproperConfigurationError(msg)
 
     def _schema_management_flags(self) -> "tuple[bool, bool]":
         """Return automatic-management and missing-table creation flags."""

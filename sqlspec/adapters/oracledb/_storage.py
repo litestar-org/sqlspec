@@ -110,9 +110,7 @@ def _oracle_table_feature_report(
 
     partitioning = settings.get("partitioning")
     if isinstance(partitioning, Mapping):
-        partition_clause = _oracle_partition_clause(
-            partitioning, table_kind, hash_partition_key, range_partition_key
-        )
+        partition_clause = _oracle_partition_clause(partitioning, table_kind, hash_partition_key, range_partition_key)
         if partition_clause:
             _apply_or_degrade(
                 clauses,
@@ -142,12 +140,7 @@ def _cached_storage_capabilities(config: Any) -> "tuple[OracleStorageCapabilitie
 
 
 def _unsupported_capabilities() -> OracleStorageCapabilities:
-    return {
-        "advanced_compression": False,
-        "basic_compression": False,
-        "in_memory": False,
-        "partitioning": False,
-    }
+    return {"advanced_compression": False, "basic_compression": False, "in_memory": False, "partitioning": False}
 
 
 def _assumed_storage_capabilities() -> OracleStorageCapabilities:

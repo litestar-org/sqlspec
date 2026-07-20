@@ -217,9 +217,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 _log_schema_current(driver, self.version_table)
                 return
             if self._should_echo():
-                _console.print(
-                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]"
-                )
+                _console.print(f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]")
             for column_name in added_columns:
                 _log_column_added(driver, self.version_table, column_name)
             if self._should_echo():
@@ -442,9 +440,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_schema_current(driver, self.version_table)
                 return
             if self._should_echo():
-                _console.print(
-                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]"
-                )
+                _console.print(f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]")
             for column_name in added_columns:
                 _log_column_added(driver, self.version_table, column_name)
             if self._should_echo():

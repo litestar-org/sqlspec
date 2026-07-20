@@ -42,7 +42,7 @@ _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2 = (
     "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
     "            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
     "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
-    "        ) WITH (fillfactor = 80);\n"
+    "        ){8};\n"
     "\n"
     "        CREATE INDEX IF NOT EXISTS idx_{2}_app_user\n"
     "            ON {3}(app_name, user_id);\n"
@@ -65,7 +65,7 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
     "            event_data JSONB NOT NULL{1},\n"
     "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE\n"
-    "        ) WITH (fillfactor = 80);\n"
+    "        ){7};\n"
     "\n"
     "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
     "            ON {4}(session_id, timestamp ASC){5};\n"
@@ -79,7 +79,7 @@ _ADK_APP_STATES_TABLE_DDL_TEMPLATE = (
     "            app_name VARCHAR(128) PRIMARY KEY,\n"
     "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
     "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
-    "        ) WITH (fillfactor = 80);\n"
+    "        ){1};\n"
     "        "
 )
 
@@ -91,7 +91,7 @@ _ADK_USER_STATES_TABLE_DDL_TEMPLATE = (
     "            state JSONB NOT NULL DEFAULT '{{}}'::jsonb,\n"
     "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
     "            PRIMARY KEY (app_name, user_id)\n"
-    "        ) WITH (fillfactor = 80);\n"
+    "        ){1};\n"
     "        "
 )
 
@@ -160,6 +160,15 @@ class PsycopgADKConfig(ADKConfig):
 
     enable_covering_indexes: NotRequired[bool]
     """Add PostgreSQL INCLUDE columns to ADK event replay indexes."""
+
+    fillfactor: NotRequired[int]
+    """Table fillfactor. Defaults to 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Optional event-table autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Optional event-table autovacuum analyze scale factor."""
 
 
 class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
@@ -590,6 +599,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             self._session_table,
             self._session_table,
             self._session_table,
+            _postgres_table_options(_adk_config(self._config)),
         )
 
     async def _events_table_ddl(self) -> str:
@@ -606,13 +616,18 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             self._events_table,
             covering_columns,
             generated_indexes,
+            _postgres_table_options(adk_config, include_autovacuum=True),
         )
 
     async def _app_states_table_ddl(self) -> str:
-        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table)
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(
+            self._app_state_table, _postgres_table_options(_adk_config(self._config))
+        )
 
     async def _user_states_table_ddl(self) -> str:
-        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table)
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(
+            self._user_state_table, _postgres_table_options(_adk_config(self._config))
+        )
 
     async def _metadata_table_ddl(self) -> str:
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
@@ -1048,6 +1063,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             self._session_table,
             self._session_table,
             self._session_table,
+            _postgres_table_options(_adk_config(self._config)),
         )
 
     def _events_table_ddl(self) -> str:
@@ -1064,13 +1080,18 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             self._events_table,
             covering_columns,
             generated_indexes,
+            _postgres_table_options(adk_config, include_autovacuum=True),
         )
 
     def _app_states_table_ddl(self) -> str:
-        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table)
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(
+            self._app_state_table, _postgres_table_options(_adk_config(self._config))
+        )
 
     def _user_states_table_ddl(self) -> str:
-        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table)
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(
+            self._user_state_table, _postgres_table_options(_adk_config(self._config))
+        )
 
     def _metadata_table_ddl(self) -> str:
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
@@ -1532,6 +1553,33 @@ def _adk_config(config: Any) -> PsycopgADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("PsycopgADKConfig", adk_config)
+
+
+def _postgres_table_options(adk_config: PsycopgADKConfig, *, include_autovacuum: bool = False) -> str:
+    options = [_postgres_fillfactor_option(adk_config)]
+    if include_autovacuum:
+        options.extend(_postgres_autovacuum_options(adk_config))
+    return f" WITH ({', '.join(options)})"
+
+
+def _postgres_fillfactor_option(adk_config: PsycopgADKConfig) -> str:
+    value = adk_config.get("fillfactor", 80)
+    if not isinstance(value, int) or isinstance(value, bool) or value not in range(10, 101):
+        msg = "extension_config['adk']['fillfactor'] must be an integer from 10 to 100"
+        raise ValueError(msg)
+    return f"fillfactor = {value}"
+
+
+def _postgres_autovacuum_options(adk_config: PsycopgADKConfig) -> "list[str]":
+    options: list[str] = []
+    for key in ("autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor"):
+        value = adk_config.get(key)
+        if value is not None:
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                msg = f"extension_config['adk']['{key}'] must be a number from 0 to 1"
+                raise ValueError(msg)
+            options.append(f"{key} = {float(value):g}")
+    return options
 
 
 def _postgres_event_ddl_options(adk_config: PsycopgADKConfig, events_table: str) -> "tuple[str, str, str]":

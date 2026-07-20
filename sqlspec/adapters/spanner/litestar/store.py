@@ -32,6 +32,11 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
     """Spanner-backed Litestar session store using sync driver wrapped as async."""
 
     __slots__ = ("_index_options", "_shard_count", "_table_options")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "index_options",
+        "shard_count",
+        "table_options",
+    })
 
     def __init__(self, config: "SpannerSyncConfig") -> None:
         super().__init__(config)

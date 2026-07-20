@@ -665,7 +665,7 @@ def test_base_store_settings_property() -> None:
 
     config = SqliteConfig(
         connection_config={"database": ":memory:"},
-        extension_config={"events": {"queue_table": "my_queue", "custom_setting": "value"}},
+        extension_config={"events": {"queue_table": "my_queue", "retention_seconds": 3600}},
     )
 
     class FixtureStore(BaseEventQueueStoreBase):
@@ -674,7 +674,7 @@ def test_base_store_settings_property() -> None:
 
     store = FixtureStore(config)
     assert store.settings.get("queue_table") == "my_queue"
-    assert store.settings.get("custom_setting") == "value"
+    assert store.settings.get("retention_seconds") == 3600
 
 
 def test_base_store_default_table_name() -> None:
@@ -806,12 +806,12 @@ def test_duckdb_store_settings_property() -> None:
 
     config = DuckDBConfig(
         connection_config={"database": ":memory:"},
-        extension_config={"events": {"queue_table": "my_queue", "custom_key": "custom_value"}},
+        extension_config={"events": {"queue_table": "my_queue", "retention_seconds": 3600}},
     )
     store = DuckDBEventQueueStore(config)
 
     assert store.settings.get("queue_table") == "my_queue"
-    assert store.settings.get("custom_key") == "custom_value"
+    assert store.settings.get("retention_seconds") == 3600
 
 
 def test_duckdb_store_schema_qualified_table() -> None:

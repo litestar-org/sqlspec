@@ -1,7 +1,7 @@
 """BigQuery session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -32,7 +32,12 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         config: BigQueryConfig instance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_partition_expiration_days", "_partitioning", "_require_partition_filter")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "partition_expiration_days",
+        "partitioning",
+        "require_partition_filter",
+    })
 
     def __init__(self, config: "BigQueryConfig") -> None:
         """Initialize BigQuery session store.
@@ -41,6 +46,12 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             config: BigQueryConfig instance.
         """
         super().__init__(config)
+        settings = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._partitioning = bool(settings.get("partitioning", False))
+        self._partition_expiration_days = _positive_int_or_none(
+            settings.get("partition_expiration_days"), "partition_expiration_days"
+        )
+        self._require_partition_filter = bool(settings.get("require_partition_filter", False))
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -120,6 +131,12 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         Returns:
             SQL statement to create the sessions table with clustering.
         """
+        partition_clause, options_clause = _bigquery_partition_clauses(
+            "expires_at",
+            enabled=self._partitioning or self._partition_expiration_days is not None or self._require_partition_filter,
+            expiration_days=self._partition_expiration_days,
+            require_filter=self._require_partition_filter,
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id STRING NOT NULL,
@@ -127,7 +144,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             expires_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
         )
-        CLUSTER BY session_id
+        {partition_clause}CLUSTER BY session_id{options_clause}
         """
 
     def _drop_table_sql(self) -> "list[str]":
@@ -291,3 +308,26 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+
+def _positive_int_or_none(value: object, key: str) -> "int | None":
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"extension_config['litestar']['{key}'] must be a positive integer"
+        raise ValueError(msg)
+    return value
+
+
+def _bigquery_partition_clauses(
+    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
+) -> "tuple[str, str]":
+    if not enabled:
+        return "", ""
+    options: list[str] = []
+    if require_filter:
+        options.append("require_partition_filter = TRUE")
+    if expiration_days is not None:
+        options.append(f"partition_expiration_days = {expiration_days}")
+    options_clause = f"\n        OPTIONS({', '.join(options)})" if options else ""
+    return f"PARTITION BY DATE({column})\n        ", options_clause

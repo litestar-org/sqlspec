@@ -45,14 +45,6 @@ class AiosqliteADKConfig(ADKConfig):
     """Optional FTS5 detail mode used when ``memory_use_fts`` is enabled."""
 
 
-
-
-
-
-
-
-
-
 class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
     """Aiosqlite ADK store using asynchronous SQLite driver.
 

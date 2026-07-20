@@ -117,24 +117,6 @@ class OracleStorageCapabilities(TypedDict):
     partitioning: bool
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class OracleVersionInfo(VersionInfo):
     """Oracle database version information."""
 
@@ -230,8 +212,6 @@ class OracleVersionCache:
         self.storage_capabilities_reason = None
         self.storage_capabilities_resolved = False
         self.version = None
-
-
 
 
 def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
@@ -574,6 +554,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
     ) -> "OracleVersionInfo | None":
@@ -632,7 +613,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
 
         self._log_version_detected(type(self).dialect, version_info)
         return version_info
-
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -972,6 +952,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
     ) -> "OracleVersionInfo | None":

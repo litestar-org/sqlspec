@@ -5,11 +5,13 @@ import inspect
 from datetime import datetime, timezone
 from typing import Any, cast, get_args, get_origin
 
+import pytest
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.adk import BigQueryADKConfig, BigQueryADKRetentionConfig, BigQueryADKStore
 from sqlspec.config import ADKConfig, ExtensionConfigs
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore
 
 
@@ -84,13 +86,10 @@ def test_bigquery_adk_store_reads_flat_extension_config_not_driver_features() ->
     assert store._require_partition_filter is True
 
 
-def test_bigquery_adk_store_ignores_legacy_nested_bigquery_config() -> None:
-    """Legacy nested ADK bigquery blocks do not drive the current config shape."""
-
-    store = _make_store({"bigquery": {"session_lookup_window_days": 7, "require_partition_filter": True}})
-
-    assert store._lookup_window_days == 30
-    assert store._require_partition_filter is False
+def test_bigquery_adk_store_rejects_legacy_nested_bigquery_config() -> None:
+    """Legacy nested ADK BigQuery blocks are rejected instead of silently ignored."""
+    with pytest.raises(ImproperConfigurationError, match="bigquery"):
+        _make_store({"bigquery": {"session_lookup_window_days": 7, "require_partition_filter": True}})
 
 
 def test_bigquery_adk_store_derives_event_partition_expiration_from_retention() -> None:

@@ -38,12 +38,6 @@ __all__ = ("OracleAsyncEventQueueStore", "OracleSyncEventQueueStore")
 logger = get_logger("sqlspec.adapters.oracledb.events.store")
 
 
-
-
-
-
-
-
 class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
     """Oracle sync event queue store with auto-detected JSON storage.
 
@@ -57,6 +51,16 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
     """
 
     __slots__ = ("_in_memory", "_json_storage_override")
+    extension_config_options = BaseEventQueueStore.extension_config_options | frozenset({
+        "aq_queue",
+        "aq_visibility",
+        "aq_wait_seconds",
+        "compression",
+        "in_memory",
+        "json_storage",
+        "partitioning",
+        "table_options",
+    })
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle sync event queue store."""
@@ -167,6 +171,16 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
     """
 
     __slots__ = ("_in_memory", "_json_storage_override")
+    extension_config_options = BaseEventQueueStore.extension_config_options | frozenset({
+        "aq_queue",
+        "aq_visibility",
+        "aq_wait_seconds",
+        "compression",
+        "in_memory",
+        "json_storage",
+        "partitioning",
+        "table_options",
+    })
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle async event queue store."""
