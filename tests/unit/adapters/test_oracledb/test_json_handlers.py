@@ -116,7 +116,7 @@ def test_input_handler_routes_dict_to_db_type_json_on_21c_plus() -> None:
 
 
 def test_input_handler_routes_dict_to_db_type_blob_on_19c() -> None:
-    """Dict bound on Oracle 19c-20c should use DB_TYPE_BLOB with OSON-encoding inconverter."""
+    """Dict bound on Oracle 19c-20c should use DB_TYPE_BLOB with textual-JSON inconverter."""
     import oracledb
 
     cursor = _mock_cursor_with_major(19)
@@ -129,11 +129,25 @@ def test_input_handler_routes_dict_to_db_type_blob_on_19c() -> None:
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=3, inconverter=json_converter_in_blob)
 
 
-def test_input_handler_routes_dict_to_db_type_clob_on_12c() -> None:
-    """Dict bound on Oracle 12c-18c should use DB_TYPE_CLOB with string-encoding inconverter."""
+def test_input_handler_routes_dict_to_db_type_blob_on_12c() -> None:
+    """Dict bound on Oracle 12c uses DB_TYPE_BLOB: textual JSON in an IS JSON BLOB is valid from 12.1.0.2."""
     import oracledb
 
     cursor = _mock_cursor_with_major(12)
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+
+    result = json_input_type_handler(cursor, {"foo": "bar"}, 2)
+
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=2, inconverter=json_converter_in_blob)
+
+
+def test_input_handler_routes_dict_to_db_type_clob_pre_12c() -> None:
+    """Dict bound on Oracle 11g (no IS JSON constraint) should use DB_TYPE_CLOB."""
+    import oracledb
+
+    cursor = _mock_cursor_with_major(11)
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
 

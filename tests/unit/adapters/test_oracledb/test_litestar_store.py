@@ -4,6 +4,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleSyncStore
 
 
@@ -62,6 +63,21 @@ class _FakeOracleConfig:
         return _FakeConnectionContext(self.connection)
 
 
+def _storage_config(settings: "dict[str, Any]") -> Any:
+    config = cast("Any", _FakeOracleConfig(_FakeConnection(_FakeCursor())))
+    config.extension_config = {"litestar": {"session_table": "oracle_sessions", **settings}}
+    cache = OracleVersionCache()
+    cache.storage_capabilities = {
+        "advanced_compression": True,
+        "basic_compression": True,
+        "in_memory": True,
+        "partitioning": True,
+    }
+    cache.storage_capabilities_resolved = True
+    config._oracle_version_cache = cache
+    return config
+
+
 def test_oracle_sync_store_set_calculates_expiry_from_database_clock() -> None:
     """set should bind TTL seconds and let Oracle derive expires_at from SYSTIMESTAMP."""
     cursor = _FakeCursor()
@@ -89,3 +105,20 @@ def test_oracle_sync_store_expires_in_uses_database_clock() -> None:
     sql, parameters = cursor.executed[0]
     assert "SELECT expires_at, SYSTIMESTAMP" in sql
     assert parameters == {"session_id": "session-1"}
+
+
+def test_oracle_litestar_store_interval_partition_on_expires_at() -> None:
+    """Litestar DDL applies gated compression, partitioning, and table options."""
+    config = _storage_config({
+        "compression": {"enabled": True, "algorithm": "basic"},
+        "partitioning": {"strategy": "range", "interval": "month"},
+        "table_options": "TABLESPACE session_data",
+    })
+    store = OracleSyncStore(config)
+
+    sql = store._table_ddl()
+
+    assert "ROW STORE COMPRESS BASIC" in sql
+    assert "TABLESPACE session_data" in sql
+    assert "PARTITION BY RANGE (expires_at)" in sql
+    assert "NUMTOYMINTERVAL(1, ''MONTH'')" in sql

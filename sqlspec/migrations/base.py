@@ -9,7 +9,7 @@ from mypy_extensions import mypyc_attr
 from rich.console import Console
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.builder import AlterTable, CreateTable, Delete, Insert, Select, Update, sql
+from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
@@ -94,6 +94,43 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         self.version_table = self._qualify_version_table(bare_name, resolved_schema)
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
 
+    def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
+        """Set output policy for tracker console/logging behavior."""
+        self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
+
+    @abstractmethod
+    def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
+        """Create the migration tracking table if it doesn't exist.
+
+        Implementations should also check for and add any missing columns
+        to support schema migrations from older versions.
+        """
+        ...
+
+    @abstractmethod
+    def get_current_version(self, driver: DriverT) -> "str | None | Awaitable[str | None]":
+        """Get the latest applied migration version."""
+        ...
+
+    @abstractmethod
+    def get_applied_migrations(
+        self, driver: DriverT
+    ) -> "list[AppliedMigrationRecord] | Awaitable[list[AppliedMigrationRecord]]":
+        """Get all applied migrations in order."""
+        ...
+
+    @abstractmethod
+    def record_migration(
+        self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
+    ) -> "None | Awaitable[None]":
+        """Record a successfully applied migration."""
+        ...
+
+    @abstractmethod
+    def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
+        """Remove a migration record."""
+        ...
+
     @staticmethod
     def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
         """Split a ``schema.table`` value into (table, schema)."""
@@ -114,10 +151,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         if self.version_table_schema:
             builder.in_schema(self.version_table_schema)
         return builder
-
-    def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
-        """Set output policy for tracker console/logging behavior."""
-        self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
 
     def _should_echo(self) -> bool:
         """Return True when console output should be emitted."""
@@ -357,71 +390,6 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         existing_lower = {col.lower() for col in existing_columns}
         return target_columns - existing_lower
 
-    @abstractmethod
-    def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
-        """Create the migration tracking table if it doesn't exist.
-
-        Implementations should also check for and add any missing columns
-        to support schema migrations from older versions.
-        """
-        ...
-
-    @abstractmethod
-    def get_current_version(self, driver: DriverT) -> "str | None | Awaitable[str | None]":
-        """Get the latest applied migration version."""
-        ...
-
-    @abstractmethod
-    def get_applied_migrations(
-        self, driver: DriverT
-    ) -> "list[AppliedMigrationRecord] | Awaitable[list[AppliedMigrationRecord]]":
-        """Get all applied migrations in order."""
-        ...
-
-    @abstractmethod
-    def record_migration(
-        self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
-    ) -> "None | Awaitable[None]":
-        """Record a successfully applied migration."""
-        ...
-
-    @abstractmethod
-    def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
-        """Remove a migration record."""
-        ...
-
-    def _build_add_column_statement(self, column_name: str) -> "AlterTable | None":
-        """Return an ALTER TABLE builder that adds ``column_name``.
-
-        Args:
-            column_name: Name of the tracking-table column to add (lowercase).
-
-        Returns:
-            SQL builder for the ALTER TABLE, or None when the column is unknown.
-        """
-        target_create = self._tracking_table_ddl()
-        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
-        if not column_def:
-            return None
-        return sql.alter_table(self.version_table).add_column(
-            name=column_def.name, dtype=column_def.dtype, default=column_def.default, not_null=column_def.not_null
-        )
-
-    def _add_column_statements(self, missing_columns: "set[str]") -> "list[tuple[str, AlterTable]]":
-        """Build all missing-column statements from one target-DDL snapshot."""
-        target_columns = {column.name.lower(): column for column in self._tracking_table_ddl().columns}
-        statements: list[tuple[str, AlterTable]] = []
-        for column_name in sorted(missing_columns):
-            column = target_columns.get(column_name)
-            if column is not None:
-                statements.append((
-                    column_name,
-                    sql.alter_table(self.version_table).add_column(
-                        name=column.name, dtype=column.dtype, default=column.default, not_null=column.not_null
-                    ),
-                ))
-        return statements
-
     def _derive_version_type(self, version: str) -> str:
         """Return the version-format type ('sequential' or 'timestamp') for a version."""
         return parse_version(version).type.value
@@ -468,6 +436,61 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
         self._last_command_error: Exception | None = None
         self._last_command_metrics: dict[str, float] | None = None
+
+    def init_directory(self, directory: str, package: bool = True) -> None:
+        """Initialize migration directory structure.
+
+        Args:
+            directory: Directory to initialize migrations in.
+            package: Whether to create __init__.py file.
+        """
+        console = Console()
+
+        migrations_dir = Path(directory)
+        migrations_dir.mkdir(parents=True, exist_ok=True)
+
+        if package:
+            init = migrations_dir / "__init__.py"
+            init.write_text(self._get_init_init_content())
+
+        readme = migrations_dir / "README.md"
+        readme.write_text(self._get_init_readme_content())
+
+        use_logger, echo, summary_only = self._resolve_output_policy(False, None, None)
+        if echo and not use_logger:
+            console.print(f"[green]Initialized migrations in {directory}[/]")
+        elif use_logger and not summary_only:
+            logger.info("Initialized migrations in %s", directory)
+
+    @abstractmethod
+    def init(self, directory: str, package: bool = True) -> "None | Awaitable[None]":
+        """Initialize migration directory structure."""
+        ...
+
+    @abstractmethod
+    def current(self, verbose: bool = False) -> "str | None | Awaitable[str | None]":
+        """Show current migration version."""
+        ...
+
+    @abstractmethod
+    def upgrade(self, revision: str = "head") -> "None | Awaitable[None]":
+        """Upgrade to a target revision."""
+        ...
+
+    @abstractmethod
+    def downgrade(self, revision: str = "-1") -> "None | Awaitable[None]":
+        """Downgrade to a target revision."""
+        ...
+
+    @abstractmethod
+    def stamp(self, revision: str) -> "None | Awaitable[None]":
+        """Mark database as being at a specific revision without running migrations."""
+        ...
+
+    @abstractmethod
+    def revision(self, message: str, file_type: str | None = None) -> "None | Awaitable[None]":
+        """Create a new migration file."""
+        ...
 
     def _get_migration_config(self) -> "dict[str, Any]":
         """Return migration config as a plain dictionary."""
@@ -628,31 +651,6 @@ out-of-order migrations gracefully.
         return """Migrations.
 """
 
-    def init_directory(self, directory: str, package: bool = True) -> None:
-        """Initialize migration directory structure.
-
-        Args:
-            directory: Directory to initialize migrations in.
-            package: Whether to create __init__.py file.
-        """
-        console = Console()
-
-        migrations_dir = Path(directory)
-        migrations_dir.mkdir(parents=True, exist_ok=True)
-
-        if package:
-            init = migrations_dir / "__init__.py"
-            init.write_text(self._get_init_init_content())
-
-        readme = migrations_dir / "README.md"
-        readme.write_text(self._get_init_readme_content())
-
-        use_logger, echo, summary_only = self._resolve_output_policy(False, None, None)
-        if echo and not use_logger:
-            console.print(f"[green]Initialized migrations in {directory}[/]")
-        elif use_logger and not summary_only:
-            logger.info("Initialized migrations in %s", directory)
-
     def _record_command_metric(self, name: str, value: float) -> None:
         """Accumulate per-command metrics for decorator flushing."""
 
@@ -732,33 +730,3 @@ out-of-order migrations gracefully.
         resolved_echo = self._resolve_echo(echo)
         resolved_summary_only = self._resolve_summary_only(summary_only)
         return resolved_use_logger, resolved_echo, resolved_summary_only
-
-    @abstractmethod
-    def init(self, directory: str, package: bool = True) -> "None | Awaitable[None]":
-        """Initialize migration directory structure."""
-        ...
-
-    @abstractmethod
-    def current(self, verbose: bool = False) -> "str | None | Awaitable[str | None]":
-        """Show current migration version."""
-        ...
-
-    @abstractmethod
-    def upgrade(self, revision: str = "head") -> "None | Awaitable[None]":
-        """Upgrade to a target revision."""
-        ...
-
-    @abstractmethod
-    def downgrade(self, revision: str = "-1") -> "None | Awaitable[None]":
-        """Downgrade to a target revision."""
-        ...
-
-    @abstractmethod
-    def stamp(self, revision: str) -> "None | Awaitable[None]":
-        """Mark database as being at a specific revision without running migrations."""
-        ...
-
-    @abstractmethod
-    def revision(self, message: str, file_type: str | None = None) -> "None | Awaitable[None]":
-        """Create a new migration file."""
-        ...

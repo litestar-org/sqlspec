@@ -1,7 +1,7 @@
 """CockroachDB session store for Litestar integration using asyncpg."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
@@ -16,33 +16,24 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
     """CockroachDB session store using asyncpg driver."""
 
     __slots__ = ()
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "enable_hash_sharded_indexes",
+        "hash_shard_bucket_count",
+        "ttl_expiration_expression",
+    })
 
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
         super().__init__(config)
 
-    def _table_ddl(self) -> str:
-        """Get CockroachDB CREATE TABLE SQL with optimized schema."""
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id TEXT PRIMARY KEY,
-            data BYTEA NOT NULL,
-            expires_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
-
     async def create_table(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = f"""
@@ -140,3 +131,40 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+    def _table_ddl(self) -> str:
+        """Get CockroachDB CREATE TABLE SQL with optimized schema."""
+        settings = cast("dict[str, Any]", self._config.extension_config.get("litestar", {}))
+        table_options, hash_clause = _cockroach_storage_clauses(settings)
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id TEXT PRIMARY KEY,
+            data BYTEA NOT NULL,
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ){table_options};
+
+        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        ON {self._table_name}(expires_at){hash_clause} WHERE expires_at IS NOT NULL;
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+
+
+def _cockroach_storage_clauses(settings: "dict[str, Any]") -> "tuple[str, str]":
+    ttl = settings.get("ttl_expiration_expression", False)
+    if ttl not in {False, None, True, "expires_at"}:
+        msg = "extension_config['litestar']['ttl_expiration_expression'] must be true, false, or 'expires_at'"
+        raise ValueError(msg)
+    table_options = " WITH (ttl_expiration_expression = 'expires_at')" if ttl else ""
+    if not settings.get("enable_hash_sharded_indexes", False):
+        return table_options, ""
+    bucket_count = settings.get("hash_shard_bucket_count")
+    if bucket_count is None:
+        return table_options, " USING HASH"
+    if not isinstance(bucket_count, int) or isinstance(bucket_count, bool) or bucket_count <= 0:
+        msg = "extension_config['litestar']['hash_shard_bucket_count'] must be a positive integer"
+        raise ValueError(msg)
+    return table_options, f" USING HASH WITH (bucket_count = {bucket_count})"

@@ -2,10 +2,11 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, reset_drop_sql
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -94,6 +95,12 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         """Return the owner ID column name only (or None if not configured)."""
         return self._owner_id_column_name
 
+    @property
+    def create_schema_enabled(self) -> bool:
+        """Return whether adapter-level table creation should run."""
+        manage_schema, create_schema = self._schema_management_flags()
+        return manage_schema and create_schema
+
     def _store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
         """Extract ADK memory configuration from config.extension_config.
 
@@ -101,6 +108,19 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
             Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
         """
         return _adk_memory_store_config(self._config)
+
+    def _schema_management_flags(self) -> "tuple[bool, bool]":
+        """Return automatic-management and missing-table creation flags."""
+        extension_config = cast("dict[str, Any]", self._config.extension_config)
+        settings = cast("dict[str, Any]", extension_config.get("adk", {}))
+        return bool(settings.get("manage_schema", True)), bool(settings.get("create_schema", True))
+
+    def _schema_target(self, ddl: "str | list[str]") -> SchemaTarget:
+        """Build a target from the canonical memory table DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        script = ddl if isinstance(ddl, str) else ";\n".join(ddl)
+        return SchemaTarget.from_ddl(self._memory_table, script, dialect=dialect)
 
     def _reset_drop_memory_table_sql(self) -> "list[str]":
         """Return memory drops needed before recreating the clean-break schema."""
@@ -166,14 +186,35 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
     async def ensure_tables(self) -> None:
         """Create tables when enabled and emit a standardized log entry."""
 
         if not self._enabled:
             self._log_memory_table_skipped()
             return
-        await self.create_tables()
+        if self.create_schema_enabled:
+            await self.create_tables()
+        await self.reconcile_schema(assume_existing=self.create_schema_enabled)
         self._log_memory_table_created()
+
+    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive memory-table changes from canonical adapter DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        target = self._schema_target(await self._memory_table_ddl())
+        session_context = self._config.provide_session()
+        async with cast("Any", session_context) as driver:
+            await ensure_schema_async(
+                driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+            )
 
     @abstractmethod
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
@@ -290,14 +331,34 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
+
     def ensure_tables(self) -> None:
         """Create tables when enabled and emit a standardized log entry."""
 
         if not self._enabled:
             self._log_memory_table_skipped()
             return
-        self.create_tables()
+        if self.create_schema_enabled:
+            self.create_tables()
+        self.reconcile_schema(assume_existing=self.create_schema_enabled)
         self._log_memory_table_created()
+
+    def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive memory-table changes from canonical adapter DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        target = self._schema_target(self._memory_table_ddl())
+        with cast("Any", self._config.provide_session()) as driver:
+            ensure_schema_sync(
+                driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+            )
 
     @abstractmethod
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:

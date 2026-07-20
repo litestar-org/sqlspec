@@ -23,6 +23,7 @@ from sqlspec.adapters.oracledb._typing import (
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
@@ -31,6 +32,7 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
@@ -273,7 +275,7 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
-    __slots__ = ("_pool_session_callback", "_user_connection_hook")
+    __slots__ = ("_oracle_version_cache", "_pool_session_callback", "_user_connection_hook")
 
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
@@ -316,6 +318,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             **kwargs: Additional keyword arguments.
         """
         connection_config = normalize_connection_config(connection_config)
+        self._oracle_version_cache = OracleVersionCache()
         self._pool_session_callback = cast(
             "Callable[[OracleSyncConnection, str], None] | None", connection_config.pop("session_callback", None)
         )
@@ -338,61 +341,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config=extension_config,
             **kwargs,
         )
-
-    def _create_pool(self) -> "OracleSyncConnectionPool":
-        """Create the actual connection pool."""
-        config = dict(self.connection_config)
-
-        config.pop("threaded", None)
-        config["session_callback"] = self._init_connection
-
-        return oracledb.create_pool(**config)
-
-    def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
-        """Initialize connection with type handlers and cached server metadata.
-
-        Registers vector, JSON, and UUID handlers. Vector and JSON handlers run
-        unconditionally — both gate any optional dependencies (NumPy in the
-        vector case) internally. UUID registration remains gated for
-        backwards compatibility with existing user configurations.
-
-        Caches ``connection._sqlspec_oracle_major`` so the JSON input handler
-        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, OSON-encoded
-        ``DB_TYPE_BLOB`` on 19c-20c, JSON-string ``DB_TYPE_CLOB`` on 12c-18c)
-        without re-querying server metadata on every bind. Caches
-        ``connection._sqlspec_vector_return_format`` so the vector output
-        handler can dispatch to ``numpy`` / ``list`` / ``array`` without
-        re-reading driver-feature defaults on every fetch.
-
-        Args:
-            connection: Oracle connection to initialize.
-            tag: Connection tag for session state.
-        """
-        register_numpy_handlers(connection)
-
-        register_json_handlers(connection)
-
-        if self.driver_features.get("enable_uuid_binary", False):
-            register_uuid_handlers(connection)
-
-        # Stash detected major version on the connection so the JSON input handler
-        # can pick the right binding path without per-bind metadata queries.
-        setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
-        # Stash the vector-read format so the VECTOR output handler can
-        # dispatch without re-reading driver-feature defaults on every fetch.
-        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
-
-        if self._pool_session_callback is not None:
-            self._pool_session_callback(connection, tag)
-
-        if self._user_connection_hook is not None:
-            self._user_connection_hook(connection, tag)
-
-    def _close_pool(self) -> None:
-        """Close the actual connection pool."""
-        if self.connection_instance:
-            self.connection_instance.close()
-            self.connection_instance = None
 
     def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
@@ -448,26 +396,67 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
         return EventRuntimeHints(select_for_update=True, skip_locked=True)
 
+    def _create_pool(self) -> "OracleSyncConnectionPool":
+        """Create the actual connection pool."""
+        config = dict(self.connection_config)
 
-def _extract_oracle_major(connection: Any) -> "int | None":
-    """Read the major version digit from ``connection.version``.
+        config.pop("threaded", None)
+        config["session_callback"] = self._init_connection
 
-    Used by ``_init_connection`` to cache server major on the connection so the
-    JSON input handler can route bind paths without per-bind metadata queries.
-    Returns ``None`` when the version string is missing or unparsable; callers
-    treat ``None`` as "assume 21c+ (modern default)".
-    """
-    try:
-        version_str = connection.version
-    except AttributeError:
-        return None
-    if not version_str:
-        return None
-    head = version_str.split(".", 1)[0]
-    try:
-        return int(head)
-    except ValueError:
-        return None
+        return oracledb.create_pool(**config)
+
+    def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
+        """Initialize connection with type handlers and cached server metadata.
+
+        Registers vector, JSON, and UUID handlers. Vector and JSON handlers run
+        unconditionally — both gate any optional dependencies (NumPy in the
+        vector case) internally. UUID registration remains gated for
+        backwards compatibility with existing user configurations.
+
+        Caches ``connection._sqlspec_oracle_major`` so the JSON input handler
+        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, OSON-encoded
+        ``DB_TYPE_BLOB`` on 19c-20c, JSON-string ``DB_TYPE_CLOB`` on 12c-18c)
+        without re-querying server metadata on every bind. Caches
+        ``connection._sqlspec_vector_return_format`` so the vector output
+        handler can dispatch to ``numpy`` / ``list`` / ``array`` without
+        re-reading driver-feature defaults on every fetch.
+
+        Args:
+            connection: Oracle connection to initialize.
+            tag: Connection tag for session state.
+        """
+        register_numpy_handlers(connection)
+
+        register_json_handlers(connection)
+
+        if self.driver_features.get("enable_uuid_binary", False):
+            register_uuid_handlers(connection)
+
+        # Stash detected major version on the connection so the JSON input handler
+        # can pick the right binding path without per-bind metadata queries.
+        setattr(connection, "_sqlspec_oracle_major", _resolve_connection_major(self._oracle_version_cache, connection))
+        # Stash the vector-read format so the VECTOR output handler can
+        # dispatch without re-reading driver-feature defaults on every fetch.
+        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
+
+        if self._pool_session_callback is not None:
+            self._pool_session_callback(connection, tag)
+
+        if self._user_connection_hook is not None:
+            self._user_connection_hook(connection, tag)
+
+    def _prepare_driver(self, driver: "OracleSyncDriver") -> "OracleSyncDriver":
+        """Attach the pool-scoped version cache alongside the observability runtime."""
+        driver = super()._prepare_driver(driver)
+        driver._oracle_version_cache = self._oracle_version_cache
+        return driver
+
+    def _close_pool(self) -> None:
+        """Close the actual connection pool."""
+        if self.connection_instance:
+            self.connection_instance.close()
+            self.connection_instance = None
+        self._oracle_version_cache.reset()
 
 
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -484,7 +473,7 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections."""
 
-    __slots__ = ("_pool_session_callback", "_user_connection_hook")
+    __slots__ = ("_oracle_version_cache", "_pool_session_callback", "_user_connection_hook")
 
     connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
@@ -529,6 +518,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             **kwargs: Additional keyword arguments.
         """
         connection_config = normalize_connection_config(connection_config)
+        self._oracle_version_cache = OracleVersionCache()
         self._pool_session_callback = cast(
             "Callable[[OracleAsyncConnection, str], Any] | None", connection_config.pop("session_callback", None)
         )
@@ -552,61 +542,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config=extension_config,
             **kwargs,
         )
-
-    async def _create_pool(self) -> "OracleAsyncConnectionPool":
-        """Create the actual async connection pool."""
-        config = dict(self.connection_config)
-
-        config.pop("threaded", None)
-        config["session_callback"] = self._init_connection
-
-        return oracledb.create_pool_async(**config)
-
-    async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
-        """Initialize async connection with type handlers and cached server metadata.
-
-        Registers vector, JSON, and UUID handlers. Vector and JSON registration
-        is unconditional — both gate any optional dependencies (NumPy in the
-        vector case) internally. Caches ``connection._sqlspec_oracle_major`` so
-        the JSON input handler can pick the right binding path on every bind
-        without round-tripping server metadata. Caches
-        ``connection._sqlspec_vector_return_format`` so the vector output
-        handler dispatches to the user-selected return type without re-reading
-        driver-feature defaults on every fetch.
-
-        Args:
-            connection: Oracle async connection to initialize.
-            tag: Connection tag for session state.
-        """
-        register_numpy_handlers(connection)
-
-        register_json_handlers(connection)
-
-        if self.driver_features.get("enable_uuid_binary", False):
-            register_uuid_handlers(connection)
-
-        # Stash detected major version on the connection so the JSON input handler
-        # can pick the right binding path without per-bind metadata queries.
-        setattr(connection, "_sqlspec_oracle_major", _extract_oracle_major(connection))
-        # Stash the vector-read format so the VECTOR output handler can
-        # dispatch without re-reading driver-feature defaults on every fetch.
-        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
-
-        if self._pool_session_callback is not None:
-            session_callback_result = self._pool_session_callback(connection, tag)
-            if isawaitable(session_callback_result):
-                await session_callback_result
-
-        if self._user_connection_hook is not None:
-            hook_result = self._user_connection_hook(connection, tag)
-            if isawaitable(hook_result):
-                await hook_result
-
-    async def _close_pool(self) -> None:
-        """Close the actual async connection pool."""
-        if self.connection_instance:
-            await self.connection_instance.close()
-            self.connection_instance = None
 
     async def create_connection(self) -> OracleAsyncConnection:
         """Create a single async connection (not from pool).
@@ -658,3 +593,86 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Return polling defaults for Oracle table-backed event queues."""
 
         return EventRuntimeHints(select_for_update=True, skip_locked=True)
+
+    async def _create_pool(self) -> "OracleAsyncConnectionPool":
+        """Create the actual async connection pool."""
+        config = dict(self.connection_config)
+
+        config.pop("threaded", None)
+        config["session_callback"] = self._init_connection
+
+        return oracledb.create_pool_async(**config)
+
+    async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
+        """Initialize async connection with type handlers and cached server metadata.
+
+        Registers vector, JSON, and UUID handlers. Vector and JSON registration
+        is unconditional — both gate any optional dependencies (NumPy in the
+        vector case) internally. Caches ``connection._sqlspec_oracle_major`` so
+        the JSON input handler can pick the right binding path on every bind
+        without round-tripping server metadata. Caches
+        ``connection._sqlspec_vector_return_format`` so the vector output
+        handler dispatches to the user-selected return type without re-reading
+        driver-feature defaults on every fetch.
+
+        Args:
+            connection: Oracle async connection to initialize.
+            tag: Connection tag for session state.
+        """
+        register_numpy_handlers(connection)
+
+        register_json_handlers(connection)
+
+        if self.driver_features.get("enable_uuid_binary", False):
+            register_uuid_handlers(connection)
+
+        # Stash detected major version on the connection so the JSON input handler
+        # can pick the right binding path without per-bind metadata queries.
+        setattr(connection, "_sqlspec_oracle_major", _resolve_connection_major(self._oracle_version_cache, connection))
+        # Stash the vector-read format so the VECTOR output handler can
+        # dispatch without re-reading driver-feature defaults on every fetch.
+        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
+
+        if self._pool_session_callback is not None:
+            session_callback_result = self._pool_session_callback(connection, tag)
+            if isawaitable(session_callback_result):
+                await session_callback_result
+
+        if self._user_connection_hook is not None:
+            hook_result = self._user_connection_hook(connection, tag)
+            if isawaitable(hook_result):
+                await hook_result
+
+    def _prepare_driver(self, driver: "OracleAsyncDriver") -> "OracleAsyncDriver":
+        """Attach the pool-scoped version cache alongside the observability runtime."""
+        driver = super()._prepare_driver(driver)
+        driver._oracle_version_cache = self._oracle_version_cache
+        return driver
+
+    async def _close_pool(self) -> None:
+        """Close the actual async connection pool."""
+        if self.connection_instance:
+            await self.connection_instance.close()
+            self.connection_instance = None
+        self._oracle_version_cache.reset()
+
+
+def _resolve_connection_major(cache: "OracleVersionCache", connection: Any) -> "int | None":
+    """Resolve the Oracle server major for connection-setup type handlers.
+
+    Prefers the pool-scoped version cache once a driver has resolved it through
+    the data-dictionary path. Before that, the major is parsed from
+    ``connection.version`` — a connection attribute populated at connect time, so
+    no query is issued — using the same version parser the data dictionary uses.
+    Returns ``None`` when unavailable; callers treat ``None`` as "assume 21c+".
+    """
+    if cache.resolved and cache.version is not None:
+        return cache.version.major
+    try:
+        version_str = connection.version
+    except AttributeError:
+        return None
+    if not version_str:
+        return None
+    components = parse_oracle_version_components(str(version_str))
+    return components[0] if components is not None else None

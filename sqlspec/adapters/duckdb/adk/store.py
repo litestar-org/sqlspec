@@ -109,6 +109,10 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def create_session(
@@ -372,14 +376,6 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
         """
 
-    def _metadata_seed_sql(self) -> str:
-        """Get DuckDB SQL for seeding the schema metadata row."""
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT(key) DO NOTHING
-        """
-
     def _drop_app_states_table_sql(self) -> str:
         """Get DuckDB DROP TABLE SQL for app-scoped state."""
         return f"DROP TABLE IF EXISTS {self._app_state_table}"
@@ -414,7 +410,6 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(self._app_states_table_ddl())
             conn.execute(self._user_states_table_ddl())
             conn.execute(self._metadata_table_ddl())
-            conn.execute(self._metadata_seed_sql())
             conn.commit()
 
     def _sync_sessions_table_ddl(self) -> str:
@@ -889,6 +884,10 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:

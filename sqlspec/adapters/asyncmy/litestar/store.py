@@ -1,8 +1,9 @@
 """AsyncMy session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 
@@ -32,7 +33,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         config: AsyncmyConfig instance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_index_options", "_table_options")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({"index_options", "table_options"})
 
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy session store.
@@ -41,41 +43,20 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             config: AsyncmyConfig instance.
         """
         super().__init__(config)
-
-    def _table_ddl(self) -> str:
-        """Get MySQL CREATE TABLE SQL with optimized schema.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id VARCHAR(255) PRIMARY KEY,
-            data LONGBLOB NOT NULL,
-            expires_at DATETIME(6),
-            created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
-            updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._table_name}_expires_at (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        """Get MySQL/MariaDB DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop indexes and table.
-        """
-        return [
-            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
-            f"DROP TABLE IF EXISTS {self._table_name}",
-        ]
+        litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._index_options: str = _mysql_index_options(litestar_config)
+        self._table_options: str = _mysql_table_options(litestar_config)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -250,3 +231,62 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+    def _table_ddl(self) -> str:
+        """Get MySQL CREATE TABLE SQL with optimized schema.
+
+        Returns:
+            SQL statement to create the sessions table with proper indexes.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id VARCHAR(255) PRIMARY KEY,
+            data LONGBLOB NOT NULL,
+            expires_at DATETIME(6),
+            created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+            updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+            INDEX idx_{self._table_name}_expires_at (expires_at){self._index_options}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get MySQL/MariaDB DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [
+            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
+            f"DROP TABLE IF EXISTS {self._table_name}",
+        ]
+
+
+def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``table_options`` config value for DDL interpolation.
+
+    Args:
+        litestar_config: The ``extension_config["litestar"]`` mapping.
+
+    Returns:
+        A leading-space-prefixed options string, or an empty string when unset.
+    """
+    value = litestar_config.get("table_options")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        msg = "extension_config['litestar']['table_options'] must be a string"
+        raise ImproperConfigurationError(msg)
+    value = value.strip()
+    return f" {value}" if value else ""
+
+
+def _mysql_index_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``index_options`` config value for inline index DDL."""
+    value = litestar_config.get("index_options")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        msg = "extension_config['litestar']['index_options'] must be a string"
+        raise ImproperConfigurationError(msg)
+    value = value.strip()
+    return f" {value}" if value else ""

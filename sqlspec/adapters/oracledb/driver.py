@@ -42,7 +42,11 @@ from sqlspec.adapters.oracledb.core import (
     supports_df_batches,
     supports_direct_path_load,
 )
-from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
+from sqlspec.adapters.oracledb.data_dictionary import (
+    OracledbAsyncDataDictionary,
+    OracledbSyncDataDictionary,
+    OracleVersionCache,
+)
 from sqlspec.core import (
     SQL,
     StackResult,
@@ -76,7 +80,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.stack import StackOperation
-    from sqlspec.data_dictionary import VersionInfo
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, SchemaT, StatementParameters
@@ -112,34 +115,6 @@ class OraclePipelineDriver(Protocol):
     def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
-def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
-    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
-    if not parts:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    if len(parts) == 1:
-        return connection.username, parts[0]
-    return ".".join(parts[:-1]), parts[-1]
-
-
-def _row_has_async_readable(row: Any) -> bool:
-    if isinstance(row, dict):
-        return any(is_async_readable(value) for value in row.values())
-    try:
-        values = row if isinstance(row, (list, tuple)) else tuple(row)
-    except TypeError:
-        values = (row,)
-    return any(is_async_readable(value) for value in values)
-
-
-def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":
-    if "fetch_lobs" not in fetch_kwargs or "fetch_lobs" not in str(exc):
-        return None
-    retry_kwargs = dict(fetch_kwargs)
-    retry_kwargs.pop("fetch_lobs", None)
-    return retry_kwargs
-
-
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
 # on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
 # core.apply_driver_features and read at the dispatch_execute call sites below.
@@ -147,15 +122,6 @@ def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, obj
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: int = 26
-
-
-class _CompiledStackOperation(NamedTuple):
-    statement: SQL
-    sql: str
-    parameters: Any
-    method: str
-    returns_rows: bool
-    summary: str
 
 
 class OraclePipelineMixin:
@@ -182,7 +148,7 @@ class OraclePipelineMixin:
             hashed_operations=hash_stack_operations(stack),
         )
 
-    def _prepare_pipeline_operation(self, operation: "StackOperation") -> _CompiledStackOperation:
+    def _prepare_pipeline_operation(self, operation: "StackOperation") -> "_CompiledStackOperation":
         driver = cast("OraclePipelineDriver", self)
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
         statement_config = kwargs.pop("statement_config", None)
@@ -224,7 +190,7 @@ class OraclePipelineMixin:
             summary=summary,
         )
 
-    def _add_pipeline_operation(self, pipeline: Any, operation: _CompiledStackOperation) -> None:
+    def _add_pipeline_operation(self, pipeline: Any, operation: "_CompiledStackOperation") -> None:
         parameters = operation.parameters or []
         if operation.method == "execute":
             if operation.returns_rows:
@@ -344,7 +310,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     __slots__ = (
         "_data_dictionary",
-        "_oracle_version",
+        "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
@@ -367,7 +333,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._data_dictionary: OracledbSyncDataDictionary | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
-        self._oracle_version: VersionInfo | None = None
+        self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
@@ -872,13 +838,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    def _detect_oracle_version(self) -> "VersionInfo | None":
-        if self._oracle_version is not None:
-            return self._oracle_version
-        version = self.data_dictionary.get_version(self)
-        self._oracle_version = version
-        return version
-
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
 
@@ -1003,7 +962,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
     __slots__ = (
         "_data_dictionary",
-        "_oracle_version",
+        "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
@@ -1026,7 +985,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._data_dictionary: OracledbAsyncDataDictionary | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
-        self._oracle_version: VersionInfo | None = None
+        self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
@@ -1547,13 +1506,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    async def _detect_oracle_version(self) -> "VersionInfo | None":
-        if self._oracle_version is not None:
-            return self._oracle_version
-        version = await self.data_dictionary.get_version(self)
-        self._oracle_version = version
-        return version
-
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
 
@@ -1681,7 +1633,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._pipeline_support_reason = "thin_mode_required"
             return False
 
-        version_info = await self._detect_oracle_version()
+        version_info = await self.data_dictionary.get_version(self)
         if version_info and version_info.major >= PIPELINE_MIN_DATABASE_MAJOR:
             self._pipeline_support = True
             self._pipeline_support_reason = None
@@ -1693,3 +1645,40 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
 
 register_driver_profile("oracledb", driver_profile)
+
+
+class _CompiledStackOperation(NamedTuple):
+    statement: SQL
+    sql: str
+    parameters: Any
+    method: str
+    returns_rows: bool
+    summary: str
+
+
+def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    if len(parts) == 1:
+        return connection.username, parts[0]
+    return ".".join(parts[:-1]), parts[-1]
+
+
+def _row_has_async_readable(row: Any) -> bool:
+    if isinstance(row, dict):
+        return any(is_async_readable(value) for value in row.values())
+    try:
+        values = row if isinstance(row, (list, tuple)) else tuple(row)
+    except TypeError:
+        values = (row,)
+    return any(is_async_readable(value) for value in values)
+
+
+def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":
+    if "fetch_lobs" not in fetch_kwargs or "fetch_lobs" not in str(exc):
+        return None
+    retry_kwargs = dict(fetch_kwargs)
+    retry_kwargs.pop("fetch_lobs", None)
+    return retry_kwargs

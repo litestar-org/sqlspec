@@ -93,24 +93,6 @@ DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
 }
 
 
-class _DriverFeatureHookWrapper:
-    __slots__ = ("_callback", "_context_key", "_expects_argument")
-
-    def __init__(self, callback: "Callable[..., Any]", context_key: "str | None", expects_argument: bool) -> None:
-        self._callback = callback
-        self._context_key = context_key
-        self._expects_argument = expects_argument
-
-    def __call__(self, context: "dict[str, Any]") -> None:
-        if not self._expects_argument:
-            self._callback()
-            return
-        if self._context_key is None:
-            self._callback(context)
-            return
-        self._callback(context.get(self._context_key))
-
-
 class LifecycleConfig(TypedDict):
     """Lifecycle hooks for database adapters.
 
@@ -285,6 +267,12 @@ class LitestarConfig(TypedDict):
     correlation_header: NotRequired[str]
     """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``"""
 
+    correlation_headers: NotRequired[tuple[str, ...] | list[str]]
+    """Additional HTTP headers to read as correlation ID fallbacks."""
+
+    auto_trace_headers: NotRequired[bool]
+    """Read standard trace context headers as correlation ID fallbacks. Default: True."""
+
     extra_commit_statuses: NotRequired[set[int]]
     """Additional HTTP status codes that trigger commit. Default: set()"""
 
@@ -305,6 +293,60 @@ class LitestarConfig(TypedDict):
     Set to ``False`` to explicitly disable middleware registration even when
     SQLCommenter is enabled on the driver config.
     """
+
+    manage_schema: NotRequired[bool]
+    """Apply additive session-table reconciliation. Default: True."""
+
+    create_schema: NotRequired[bool]
+    """Create a missing session table during managed reconciliation. Default: True."""
+
+    run_migrations: NotRequired[bool]
+    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
+
+    in_memory: NotRequired[bool]
+    """Enable Oracle Database In-Memory storage when licensed and available."""
+
+    shard_count: NotRequired[int]
+    """Set the Spanner session-table hash shard count."""
+
+    table_options: NotRequired[str]
+    """Set adapter-specific session-table options where supported."""
+
+    index_options: NotRequired[str]
+    """Set adapter-specific session expiry-index options where supported."""
+
+    partitioning: NotRequired[dict[str, Any]]
+    """Configure adapter-specific session-table partitioning where supported."""
+
+    partition_expiration_days: NotRequired[int]
+    """Set BigQuery partition expiration in days."""
+
+    require_partition_filter: NotRequired[bool]
+    """Require partition filters for BigQuery session queries."""
+
+    enable_hash_sharded_indexes: NotRequired[bool]
+    """Enable CockroachDB hash-sharded session indexes."""
+
+    hash_shard_bucket_count: NotRequired[int]
+    """Set the CockroachDB hash-shard bucket count."""
+
+    ttl_expiration_expression: NotRequired[Literal[False, "expires_at"]]
+    """Enable CockroachDB row-level TTL using the session ``expires_at`` column."""
+
+    fillfactor: NotRequired[int]
+    """Set PostgreSQL-family session-table fillfactor. Default: 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Set the PostgreSQL-family autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Set the PostgreSQL-family autovacuum analyze scale factor."""
+
+    pragma_profile: NotRequired[bool]
+    """Apply the SQLite extension-store PRAGMA profile. Default: False."""
+
+    pragma_overrides: NotRequired[dict[str, str | int | bool]]
+    """Apply validated SQLite PRAGMA overrides after the optional profile."""
 
 
 class StarletteConfig(TypedDict):
@@ -434,6 +476,15 @@ class ADKConfig(TypedDict):
         3. Selective features (sessions OR memory, not both)
     """
 
+    manage_schema: NotRequired[bool]
+    """Apply additive target-schema reconciliation. Default: True."""
+
+    create_schema: NotRequired[bool]
+    """Create missing ADK tables during managed reconciliation. Default: True."""
+
+    run_migrations: NotRequired[bool]
+    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
+
     enable_sessions: NotRequired[bool]
     """Enable session store at runtime. Default: True.
 
@@ -540,6 +591,15 @@ class EventsConfig(TypedDict):
     Use in ``extension_config["events"]``.
     """
 
+    manage_schema: NotRequired[bool]
+    """Apply additive target-schema reconciliation. Default: True."""
+
+    create_schema: NotRequired[bool]
+    """Create the queue table during managed reconciliation. Default: True."""
+
+    run_migrations: NotRequired[bool]
+    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
+
     backend: NotRequired[Literal["notify", "notify_queue", "poll_queue", "aq", "txeventq"]]
     """Backend implementation. PostgreSQL adapters default to 'notify', others to 'poll_queue'.
 
@@ -572,12 +632,35 @@ class EventsConfig(TypedDict):
     """Use SKIP LOCKED for non-blocking event claims. Defaults to False."""
 
     in_memory: NotRequired[bool]
-    """
-    Enable Oracle INMEMORY clause for the queue table. Ignored by other adapters. Defaults to False.
+    """Enable Oracle INMEMORY storage for the queue table when available.
 
-    Note: To skip events migrations,
-    use ``migration_config={"exclude_extensions": ["events"]}``.
+    Note: To skip events migrations, use
+    ``migration_config={"exclude_extensions": ["events"]}``.
     """
+
+    partitioning: NotRequired[dict[str, Any]]
+    """Configure adapter-specific queue-table partitioning where supported."""
+
+    partition_expiration_days: NotRequired[int]
+    """Set BigQuery queue partition expiration in days."""
+
+    require_partition_filter: NotRequired[bool]
+    """Require partition filters for BigQuery queue queries."""
+
+    fillfactor: NotRequired[int]
+    """Set PostgreSQL-family queue-table fillfactor."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Set the PostgreSQL-family queue-table autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Set the PostgreSQL-family queue-table autovacuum analyze scale factor."""
+
+    pragma_profile: NotRequired[bool]
+    """Apply the SQLite extension-store PRAGMA profile. Default: False."""
+
+    pragma_overrides: NotRequired[dict[str, str | int | bool]]
+    """Apply validated SQLite PRAGMA overrides after the optional profile."""
 
 
 class OpenTelemetryConfig(TypedDict):
@@ -755,192 +838,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         self._storage_capabilities = None
 
-    def _has_initialized_attribute(self, attribute_name: str) -> bool:
-        """Return whether a slot-backed attribute has been initialized."""
-        try:
-            object.__getattribute__(self, attribute_name)
-        except AttributeError:
-            return False
-        return True
-
-    def _migration_components_ready(self) -> bool:
-        """Return whether migration helpers have already been initialized."""
-        return self._has_initialized_attribute("_migration_loader") and self._has_initialized_attribute(
-            "_migration_commands"
-        )
-
-    def _ensure_extension_migrations(self) -> None:
-        """Auto-include extension migrations when extension_config has them configured.
-
-        Extensions with migration support are automatically included in
-        ``migration_config["include_extensions"]`` based on their settings:
-
-        - **litestar**: Only when ``session_table`` is set (for session storage)
-        - **adk**: When any adk settings are present
-        - **events**: When any events settings are present
-
-        Use ``exclude_extensions`` to opt out of auto-inclusion.
-        """
-        extension_settings = cast("dict[str, Any]", self.extension_config)
-        migration_config = cast("dict[str, Any]", self.migration_config)
-
-        exclude_extensions = migration_config.get("exclude_extensions", [])
-        if isinstance(exclude_extensions, tuple):
-            exclude_extensions = list(exclude_extensions)  # pyright: ignore
-
-        extensions_to_add: list[str] = []
-
-        litestar_settings = extension_settings.get("litestar")
-        if (
-            litestar_settings is not None
-            and "session_table" in litestar_settings
-            and "litestar" not in exclude_extensions
-        ):
-            extensions_to_add.append("litestar")
-
-        adk_settings = extension_settings.get("adk")
-        if adk_settings is not None and "adk" not in exclude_extensions:
-            from sqlspec.extensions.adk._config_utils import _ensure_adk_store_registration
-
-            _ensure_adk_store_registration(self)
-            extensions_to_add.append("adk")
-
-        events_settings = extension_settings.get("events")
-        if events_settings is not None and "events" not in exclude_extensions:
-            extensions_to_add.append("events")
-
-        if not extensions_to_add:
-            return
-
-        include_extensions = migration_config.get("include_extensions")
-        if include_extensions is None:
-            include_list: list[str] = []
-            migration_config["include_extensions"] = include_list
-        elif isinstance(include_extensions, tuple):
-            include_list = list(include_extensions)  # pyright: ignore
-            migration_config["include_extensions"] = include_list
-        else:
-            include_list = cast("list[str]", include_extensions)
-
-        for ext in extensions_to_add:
-            if ext not in include_list:
-                include_list.append(ext)
-
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return default event runtime hints for this configuration."""
 
         return EventRuntimeHints()
-
-    def _build_storage_capabilities(self) -> "StorageCapabilities":
-        arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import
-        parquet_dependency_needed = self.supports_native_parquet_export or self.supports_native_parquet_import
-
-        pyarrow_dependency_ready = (
-            self._dependency_available(ensure_pyarrow)
-            if (arrow_dependency_needed or parquet_dependency_needed)
-            else False
-        )
-        arrow_dependency_ready = pyarrow_dependency_ready if arrow_dependency_needed else False
-        parquet_dependency_ready = pyarrow_dependency_ready if parquet_dependency_needed else False
-
-        capabilities: StorageCapabilities = {
-            "arrow_export_enabled": bool(self.supports_native_arrow_export and arrow_dependency_ready),
-            "arrow_import_enabled": bool(self.supports_native_arrow_import and arrow_dependency_ready),
-            "parquet_export_enabled": bool(self.supports_native_parquet_export and parquet_dependency_ready),
-            "parquet_import_enabled": bool(self.supports_native_parquet_import and parquet_dependency_ready),
-            "requires_staging_for_load": self.requires_staging_for_load,
-            "staging_protocols": list(self.staging_protocols),
-            "partition_strategies": list(self.storage_partition_strategies),
-        }
-        if self.default_storage_profile is not None:
-            capabilities["default_storage_profile"] = self.default_storage_profile
-        return capabilities
-
-    def _init_observability(self, observability_config: "ObservabilityConfig | None" = None) -> None:
-        """Initialize observability attributes for the configuration."""
-
-        self.observability_config = observability_config
-        self._observability_runtime = None
-
-    def _configure_observability_extensions(self) -> None:
-        """Apply extension_config hooks (otel/prometheus) to ObservabilityConfig."""
-
-        config_map = cast("dict[str, Any]", self.extension_config)
-        if not config_map:
-            return
-        updated = self.observability_config
-
-        otel_config = cast("OpenTelemetryConfig | None", config_map.get("otel"))
-        if otel_config and otel_config.get("enabled", True):
-            from sqlspec.extensions import otel as otel_extension
-
-            updated = otel_extension.enable_tracing(
-                base_config=updated,
-                resource_attributes=otel_config.get("resource_attributes"),
-                tracer_provider=otel_config.get("tracer_provider"),
-                tracer_provider_factory=otel_config.get("tracer_provider_factory"),
-                enable_spans=otel_config.get("enable_spans", True),
-            )
-
-        prom_config = cast("PrometheusConfig | None", config_map.get("prometheus"))
-        if prom_config and prom_config.get("enabled", True):
-            from sqlspec.extensions import prometheus as prometheus_extension
-
-            label_names = tuple(prom_config.get("label_names", ("driver", "operation")))
-            duration_buckets = prom_config.get("duration_buckets")
-            if duration_buckets is not None:
-                duration_buckets = tuple(duration_buckets)
-
-            updated = prometheus_extension.enable_metrics(
-                base_config=updated,
-                namespace=prom_config.get("namespace", "sqlspec"),
-                subsystem=prom_config.get("subsystem", "driver"),
-                registry=prom_config.get("registry"),
-                label_names=label_names,
-                duration_buckets=duration_buckets,
-            )
-
-        if updated is not self.observability_config:
-            self.observability_config = updated
-
-    def _attach_lifecycle_hooks(self) -> None:
-        lifecycle_hooks: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
-
-        for hook_name, context_key in DRIVER_FEATURE_LIFECYCLE_HOOKS.items():
-            callback = self.driver_features.pop(hook_name, None)
-            if callback is None:
-                continue
-            callbacks = callback if isinstance(callback, (list, tuple)) else (callback,)  # pyright: ignore
-            wrapped_callbacks = [self._adapt_lifecycle_hook(cb, context_key) for cb in callbacks]  # pyright: ignore
-            lifecycle_hooks.setdefault(hook_name, []).extend(wrapped_callbacks)
-
-        if not lifecycle_hooks:
-            return
-
-        lifecycle_config = cast("LifecycleConfig", lifecycle_hooks)
-        override = ObservabilityConfig(lifecycle=lifecycle_config)
-        if self.observability_config is None:
-            self.observability_config = override
-        else:
-            self.observability_config = ObservabilityConfig.merge(self.observability_config, override)
-
-    @staticmethod
-    def _adapt_lifecycle_hook(
-        callback: Callable[..., Any], context_key: str | None
-    ) -> Callable[[dict[str, Any]], None]:
-        try:
-            hook_signature: Signature = signature(callback)
-        except (TypeError, ValueError):  # pragma: no cover
-            hook_signature = Signature()
-
-        positional_params = [
-            param
-            for param in hook_signature.parameters.values()
-            if param.kind in {param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD} and param.default is param.empty
-        ]
-        expects_argument = bool(positional_params)
-
-        return _DriverFeatureHookWrapper(callback, context_key, expects_argument)
 
     def attach_observability(self, registry_config: "ObservabilityConfig | None") -> None:
         """Attach merged observability runtime composed from registry and adapter overrides."""
@@ -958,20 +859,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = "ObservabilityRuntime was not set by attach_observability; this is a bug"
             raise RuntimeError(msg)
         return self._observability_runtime
-
-    def _prepare_driver(self, driver: DriverT) -> DriverT:
-        """Attach observability runtime to driver instances before returning them."""
-
-        driver.attach_observability(self.get_observability_runtime())
-        return driver
-
-    @staticmethod
-    def _dependency_available(checker: "Callable[[], None]") -> bool:
-        try:
-            checker()
-        except MissingDependencyError:
-            return False
-        return True
 
     @abstractmethod
     def create_connection(self) -> "ConnectionT | Awaitable[ConnectionT]":
@@ -1021,36 +908,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             Dictionary mapping type names to objects.
         """
         return {}
-
-    def _initialize_migration_components(self) -> None:
-        """Initialize migration loader and migration command helpers."""
-        runtime = self.get_observability_runtime()
-        self._migration_loader = SQLFileLoader(runtime=runtime)
-        self._migration_commands = create_migration_commands(self)  # pyright: ignore
-
-    def _ensure_migration_loader(self) -> "SQLFileLoader":
-        """Get the migration SQL loader and auto-load files if needed.
-
-        Returns:
-            SQLFileLoader instance for migration files.
-        """
-        migration_config = self.migration_config or {}
-        script_location = migration_config.get("script_location", "migrations")
-
-        migration_path = Path(script_location)
-        if migration_path.exists() and not self._migration_loader.list_files():
-            self._migration_loader.load_sql(migration_path)
-            logger.debug("Auto-loaded migration SQL files from %s", migration_path)
-
-        return self._migration_loader
-
-    def _ensure_migration_commands(self) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
-        """Get the migration commands instance.
-
-        Returns:
-            MigrationCommands instance for this config.
-        """
-        return self._migration_commands
 
     def get_migration_loader(self) -> "SQLFileLoader":
         """Get the SQL loader for migration files.
@@ -1192,6 +1049,232 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             yes: Skip confirmation prompt. Defaults to False.
         """
         raise NotImplementedError
+
+    def _has_initialized_attribute(self, attribute_name: str) -> bool:
+        """Return whether a slot-backed attribute has been initialized."""
+        try:
+            object.__getattribute__(self, attribute_name)
+        except AttributeError:
+            return False
+        return True
+
+    def _migration_components_ready(self) -> bool:
+        """Return whether migration helpers have already been initialized."""
+        return self._has_initialized_attribute("_migration_loader") and self._has_initialized_attribute(
+            "_migration_commands"
+        )
+
+    def _ensure_extension_migrations(self) -> None:
+        """Auto-include extension migrations when extension_config has them configured.
+
+        Extensions with migration support are automatically included in
+        ``migration_config["include_extensions"]`` based on their settings:
+
+        - **litestar**: Only when ``session_table`` is set (for session storage)
+        - **adk**: When any adk settings are present
+        - **events**: When any events settings are present
+
+        Use ``exclude_extensions`` to opt out of auto-inclusion.
+        """
+        extension_settings = cast("dict[str, Any]", self.extension_config)
+        migration_config = cast("dict[str, Any]", self.migration_config)
+
+        exclude_extensions = migration_config.get("exclude_extensions", [])
+        if isinstance(exclude_extensions, tuple):
+            exclude_extensions = list(exclude_extensions)  # pyright: ignore
+
+        extensions_to_add: list[str] = []
+
+        litestar_settings = extension_settings.get("litestar")
+        if (
+            litestar_settings is not None
+            and "session_table" in litestar_settings
+            and "litestar" not in exclude_extensions
+        ):
+            extensions_to_add.append("litestar")
+
+        adk_settings = extension_settings.get("adk")
+        if adk_settings is not None and "adk" not in exclude_extensions:
+            from sqlspec.extensions.adk._config_utils import _ensure_adk_store_registration
+
+            _ensure_adk_store_registration(self)
+            extensions_to_add.append("adk")
+
+        events_settings = extension_settings.get("events")
+        if events_settings is not None and "events" not in exclude_extensions:
+            extensions_to_add.append("events")
+
+        if not extensions_to_add:
+            return
+
+        include_extensions = migration_config.get("include_extensions")
+        if include_extensions is None:
+            include_list: list[str] = []
+            migration_config["include_extensions"] = include_list
+        elif isinstance(include_extensions, tuple):
+            include_list = list(include_extensions)  # pyright: ignore
+            migration_config["include_extensions"] = include_list
+        else:
+            include_list = cast("list[str]", include_extensions)
+
+        for ext in extensions_to_add:
+            if ext not in include_list:
+                include_list.append(ext)
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import
+        parquet_dependency_needed = self.supports_native_parquet_export or self.supports_native_parquet_import
+
+        pyarrow_dependency_ready = (
+            self._dependency_available(ensure_pyarrow)
+            if (arrow_dependency_needed or parquet_dependency_needed)
+            else False
+        )
+        arrow_dependency_ready = pyarrow_dependency_ready if arrow_dependency_needed else False
+        parquet_dependency_ready = pyarrow_dependency_ready if parquet_dependency_needed else False
+
+        capabilities: StorageCapabilities = {
+            "arrow_export_enabled": bool(self.supports_native_arrow_export and arrow_dependency_ready),
+            "arrow_import_enabled": bool(self.supports_native_arrow_import and arrow_dependency_ready),
+            "parquet_export_enabled": bool(self.supports_native_parquet_export and parquet_dependency_ready),
+            "parquet_import_enabled": bool(self.supports_native_parquet_import and parquet_dependency_ready),
+            "requires_staging_for_load": self.requires_staging_for_load,
+            "staging_protocols": list(self.staging_protocols),
+            "partition_strategies": list(self.storage_partition_strategies),
+        }
+        if self.default_storage_profile is not None:
+            capabilities["default_storage_profile"] = self.default_storage_profile
+        return capabilities
+
+    def _init_observability(self, observability_config: "ObservabilityConfig | None" = None) -> None:
+        """Initialize observability attributes for the configuration."""
+
+        self.observability_config = observability_config
+        self._observability_runtime = None
+
+    def _configure_observability_extensions(self) -> None:
+        """Apply extension_config hooks (otel/prometheus) to ObservabilityConfig."""
+
+        config_map = cast("dict[str, Any]", self.extension_config)
+        if not config_map:
+            return
+        updated = self.observability_config
+
+        otel_config = cast("OpenTelemetryConfig | None", config_map.get("otel"))
+        if otel_config and otel_config.get("enabled", True):
+            from sqlspec.extensions import otel as otel_extension
+
+            updated = otel_extension.enable_tracing(
+                base_config=updated,
+                resource_attributes=otel_config.get("resource_attributes"),
+                tracer_provider=otel_config.get("tracer_provider"),
+                tracer_provider_factory=otel_config.get("tracer_provider_factory"),
+                enable_spans=otel_config.get("enable_spans", True),
+            )
+
+        prom_config = cast("PrometheusConfig | None", config_map.get("prometheus"))
+        if prom_config and prom_config.get("enabled", True):
+            from sqlspec.extensions import prometheus as prometheus_extension
+
+            label_names = tuple(prom_config.get("label_names", ("driver", "operation")))
+            duration_buckets = prom_config.get("duration_buckets")
+            if duration_buckets is not None:
+                duration_buckets = tuple(duration_buckets)
+
+            updated = prometheus_extension.enable_metrics(
+                base_config=updated,
+                namespace=prom_config.get("namespace", "sqlspec"),
+                subsystem=prom_config.get("subsystem", "driver"),
+                registry=prom_config.get("registry"),
+                label_names=label_names,
+                duration_buckets=duration_buckets,
+            )
+
+        if updated is not self.observability_config:
+            self.observability_config = updated
+
+    def _attach_lifecycle_hooks(self) -> None:
+        lifecycle_hooks: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
+
+        for hook_name, context_key in DRIVER_FEATURE_LIFECYCLE_HOOKS.items():
+            callback = self.driver_features.pop(hook_name, None)
+            if callback is None:
+                continue
+            callbacks = callback if isinstance(callback, (list, tuple)) else (callback,)  # pyright: ignore
+            wrapped_callbacks = [self._adapt_lifecycle_hook(cb, context_key) for cb in callbacks]  # pyright: ignore
+            lifecycle_hooks.setdefault(hook_name, []).extend(wrapped_callbacks)
+
+        if not lifecycle_hooks:
+            return
+
+        lifecycle_config = cast("LifecycleConfig", lifecycle_hooks)
+        override = ObservabilityConfig(lifecycle=lifecycle_config)
+        if self.observability_config is None:
+            self.observability_config = override
+        else:
+            self.observability_config = ObservabilityConfig.merge(self.observability_config, override)
+
+    @staticmethod
+    def _adapt_lifecycle_hook(
+        callback: Callable[..., Any], context_key: str | None
+    ) -> Callable[[dict[str, Any]], None]:
+        try:
+            hook_signature: Signature = signature(callback)
+        except (TypeError, ValueError):  # pragma: no cover
+            hook_signature = Signature()
+
+        positional_params = [
+            param
+            for param in hook_signature.parameters.values()
+            if param.kind in {param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD} and param.default is param.empty
+        ]
+        expects_argument = bool(positional_params)
+
+        return _DriverFeatureHookWrapper(callback, context_key, expects_argument)
+
+    def _prepare_driver(self, driver: DriverT) -> DriverT:
+        """Attach observability runtime to driver instances before returning them."""
+
+        driver.attach_observability(self.get_observability_runtime())
+        return driver
+
+    @staticmethod
+    def _dependency_available(checker: "Callable[[], None]") -> bool:
+        try:
+            checker()
+        except MissingDependencyError:
+            return False
+        return True
+
+    def _initialize_migration_components(self) -> None:
+        """Initialize migration loader and migration command helpers."""
+        runtime = self.get_observability_runtime()
+        self._migration_loader = SQLFileLoader(runtime=runtime)
+        self._migration_commands = create_migration_commands(self)  # pyright: ignore
+
+    def _ensure_migration_loader(self) -> "SQLFileLoader":
+        """Get the migration SQL loader and auto-load files if needed.
+
+        Returns:
+            SQLFileLoader instance for migration files.
+        """
+        migration_config = self.migration_config or {}
+        script_location = migration_config.get("script_location", "migrations")
+
+        migration_path = Path(script_location)
+        if migration_path.exists() and not self._migration_loader.list_files():
+            self._migration_loader.load_sql(migration_path)
+            logger.debug("Auto-loaded migration SQL files from %s", migration_path)
+
+        return self._migration_loader
+
+    def _ensure_migration_commands(self) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
+        """Get the migration commands instance.
+
+        Returns:
+            MigrationCommands instance for this config.
+        """
+        return self._migration_commands
 
     def _reject_unexpected_kwargs(self, kwargs: "dict[str, Any]") -> None:
         """Raise ``TypeError`` when construction receives unrecognized keyword arguments."""
@@ -1681,3 +1764,21 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
     async def _close_pool(self) -> None:
         """Actual async pool destruction implementation."""
         raise NotImplementedError
+
+
+class _DriverFeatureHookWrapper:
+    __slots__ = ("_callback", "_context_key", "_expects_argument")
+
+    def __init__(self, callback: "Callable[..., Any]", context_key: "str | None", expects_argument: bool) -> None:
+        self._callback = callback
+        self._context_key = context_key
+        self._expects_argument = expects_argument
+
+    def __call__(self, context: "dict[str, Any]") -> None:
+        if not self._expects_argument:
+            self._callback()
+            return
+        if self._context_key is None:
+            self._callback(context)
+            return
+        self._callback(context.get(self._context_key))

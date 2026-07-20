@@ -3,8 +3,8 @@
 MySQL requires:
     - JSON type for payload/metadata (5.7.8+)
     - DATETIME(6) for microsecond precision timestamps
-    - Procedural SQL for conditional index creation (no IF NOT EXISTS for indexes)
-    - Information schema queries for existence checks
+    - A plain ``ALTER TABLE ... ADD INDEX`` gated by a data-dictionary index
+      check at migration time (MySQL lacks ``CREATE INDEX IF NOT EXISTS``)
 """
 
 from typing import Final
@@ -18,11 +18,12 @@ SCHEMA_QUALIFIED_SEGMENTS: Final[int] = 2
 
 
 class AsyncmyEventQueueStore(BaseEventQueueStore[AsyncmyConfig]):
-    """MySQL-specific event queue store with conditional DDL.
+    """MySQL-specific event queue store.
 
-    Generates DDL optimized for MySQL 5.7.8+ using native JSON type.
-    Index creation uses procedural SQL to check for existing indexes
-    since MySQL does not support IF NOT EXISTS for indexes.
+    Generates DDL optimized for MySQL 5.7.8+ using native JSON type. Index
+    creation emits a plain ``ADD INDEX`` statement; the migration gates it on a
+    ``data_dictionary.get_indexes`` check since MySQL has no idempotent
+    ``CREATE INDEX IF NOT EXISTS``.
 
     Args:
         config: AsyncmyConfig with extension_config["events"] settings.
@@ -51,26 +52,21 @@ class AsyncmyEventQueueStore(BaseEventQueueStore[AsyncmyConfig]):
         return "CURRENT_TIMESTAMP(6)"
 
     def _index_ddl(self) -> str | None:
-        """Build MySQL conditional index creation SQL.
+        """Build the plain MySQL ``ADD INDEX`` statement for the queue table.
 
-        MySQL does not support IF NOT EXISTS for CREATE INDEX, so this method
-        generates procedural SQL that checks information_schema.statistics
-        before attempting to create the index.
+        MySQL lacks an idempotent ``CREATE INDEX IF NOT EXISTS``. The migration
+        consults ``driver.data_dictionary.get_indexes`` and only issues this
+        statement when the index is absent, so the emitted DDL carries no
+        existence probe.
 
         Returns:
-            Procedural SQL script for conditional index creation.
+            ``ALTER TABLE ... ADD INDEX`` statement for the queue index.
         """
-        table_name = self.table_name
-        segments = table_name.split(".", 1)
+        return f"ALTER TABLE {self.table_name} ADD INDEX {self._index_name()} (channel, status, available_at)"
 
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        """Return the ``(schema, table)`` target for the data-dictionary index check."""
+        segments = self.table_name.split(".", 1)
         if len(segments) == SCHEMA_QUALIFIED_SEGMENTS:
-            schema = segments[0]
-            table = segments[1]
-            schema_selector = f"'{schema}'"
-        else:
-            table = segments[0]
-            schema_selector = "DATABASE()"
-
-        index_name = self._index_name()
-
-        return f"SET @sqlspec_events_idx_exists := (SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = {schema_selector} AND table_name = '{table}' AND index_name = '{index_name}');SET @sqlspec_events_idx_stmt := IF(@sqlspec_events_idx_exists = 0, 'ALTER TABLE {table_name} ADD INDEX {index_name} (channel, status, available_at)', 'SELECT 1');PREPARE sqlspec_events_stmt FROM @sqlspec_events_idx_stmt;EXECUTE sqlspec_events_stmt;DEALLOCATE PREPARE sqlspec_events_stmt;"
+            return segments[0], segments[1]
+        return None, segments[0]

@@ -19,12 +19,36 @@ from sqlspec.adapters.oracledb.adk import (
     OracleSyncADKStore,
 )
 from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
+from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, OracleVersionInfo
 from sqlspec.config import ADKConfig
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
     config = MagicMock()
     config.extension_config = {"adk": adk_config}
+    cache = OracleVersionCache()
+    cache.storage_capabilities = {
+        "advanced_compression": True,
+        "basic_compression": True,
+        "in_memory": True,
+        "partitioning": True,
+    }
+    cache.storage_capabilities_resolved = True
+    config._oracle_version_cache = cache
+    return config
+
+
+def _config_for_storage(storage_type: JSONStorageType) -> MagicMock:
+    version = {
+        JSONStorageType.JSON_NATIVE: OracleVersionInfo(21, 3, 0, compatible="21.0.0"),
+        JSONStorageType.BLOB_JSON: OracleVersionInfo(19, 0, 0, compatible="19.0.0"),
+        JSONStorageType.BLOB_PLAIN: OracleVersionInfo(11, 2, 0, compatible="11.2.0"),
+    }[storage_type]
+    config = MagicMock()
+    cache = OracleVersionCache()
+    cache.resolved = True
+    cache.version = version
+    config._oracle_version_cache = cache
     return config
 
 
@@ -116,7 +140,7 @@ def test_oracle_event_data_column_ddl_prefers_blob_over_clob() -> None:
 
 async def test_oracle_async_adk_store_serialize_event_data_uses_blob_for_non_native() -> None:
     store = OracleAsyncADKStore.__new__(OracleAsyncADKStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON  # type: ignore[attr-defined]
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)  # type: ignore[attr-defined]
 
     result = await store._serialize_event_data({"value": 1})  # type: ignore[attr-defined]
 
@@ -126,7 +150,7 @@ async def test_oracle_async_adk_store_serialize_event_data_uses_blob_for_non_nat
 
 def test_oracle_sync_adk_store_serialize_event_data_uses_blob_for_non_native() -> None:
     store = OracleSyncADKStore.__new__(OracleSyncADKStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON  # type: ignore[attr-defined]
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)  # type: ignore[attr-defined]
 
     result = store._serialize_event_data({"value": 1})  # type: ignore[attr-defined]
 
@@ -163,6 +187,28 @@ def test_oracle_adk_events_table_applies_hash_partitioning_and_table_options() -
     assert "PARTITION BY HASH (session_id) PARTITIONS 32" in sql
 
 
+def test_oracle_adk_state_tables_honor_partition_and_table_options() -> None:
+    config = _mock_config({
+        "app_state_table_options": "TABLESPACE app_state_data",
+        "user_state_table_options": "TABLESPACE user_state_data",
+        "partitioning": {
+            "strategy": "hash",
+            "partition_count": 8,
+            "app_state_partition_key": "app_name",
+            "user_state_partition_key": "user_id",
+        },
+    })
+
+    for store in (OracleAsyncADKStore(config), OracleSyncADKStore(config)):
+        app_sql = store._app_states_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+        user_sql = store._user_states_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+
+        assert "TABLESPACE app_state_data" in app_sql
+        assert "PARTITION BY HASH (app_name) PARTITIONS 8" in app_sql
+        assert "TABLESPACE user_state_data" in user_sql
+        assert "PARTITION BY HASH (user_id) PARTITIONS 8" in user_sql
+
+
 def test_oracle_adk_memory_table_applies_memory_specific_partition_key_and_compression() -> None:
     config = _mock_config({
         "compression": {"enabled": True, "algorithm": "oltp"},
@@ -194,7 +240,7 @@ def test_oracle_adk_sync_memory_table_uses_same_lifecycle_clauses() -> None:
 
 async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields() -> None:
     store = OracleAsyncADKMemoryStore.__new__(OracleAsyncADKMemoryStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     row = (
         "memory-1",
@@ -231,7 +277,7 @@ async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields(
 
 def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> None:
     store = OracleSyncADKMemoryStore.__new__(OracleSyncADKMemoryStore)  # type: ignore[call-arg]
-    store._json_storage_type = JSONStorageType.BLOB_JSON
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     row = (
         "memory-2",
@@ -252,3 +298,47 @@ def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> No
     assert records[0]["content_json"] == {"text": "sync"}
     assert records[0]["metadata_json"] == {"source": "unit"}
     assert records[0]["content_text"] == "sync"
+
+
+def _sync_store_with_driver() -> "tuple[Any, MagicMock, MagicMock]":
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    store = OracleSyncADKStore(config)
+    driver = MagicMock()
+    config.provide_session.return_value.__enter__.return_value = driver
+    config.provide_session.return_value.__exit__.return_value = False
+    return store, driver, config
+
+
+def test_oracle_adk_create_tables_checks_existence() -> None:
+    """create_tables consults get_tables and issues no CREATE TABLE when present."""
+
+    store, driver, _ = _sync_store_with_driver()
+    present = [
+        store._session_table,
+        store._events_table,
+        store._app_state_table,
+        store._user_state_table,
+        store._metadata_table,
+    ]
+    driver.data_dictionary.get_tables.return_value = [{"table_name": name.upper()} for name in present]
+
+    store.create_tables()
+
+    driver.data_dictionary.get_tables.assert_called_once()
+    executed = [str(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert all("CREATE TABLE" not in sql.upper() for sql in executed)
+
+
+def test_oracle_adk_create_tables_creates_absent_tables() -> None:
+    """create_tables still issues CREATE TABLE for tables the dictionary omits."""
+
+    store, driver, _ = _sync_store_with_driver()
+    driver.data_dictionary.get_tables.return_value = []
+
+    store.create_tables()
+
+    driver.data_dictionary.get_tables.assert_called_once()
+    executed = " ".join(str(call.args[0]) for call in driver.execute_script.call_args_list)
+    assert "CREATE TABLE" in executed.upper()
+    assert "SQLCODE != -955" not in executed

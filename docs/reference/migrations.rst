@@ -43,6 +43,19 @@ Trackers
    :members:
    :show-inheritance:
 
+Schema Reconciliation
+=====================
+
+.. autoclass:: sqlspec.migrations.SchemaTarget
+   :members:
+
+.. autoclass:: sqlspec.migrations.SchemaEnsureResult
+   :members:
+
+.. autofunction:: sqlspec.migrations.ensure_schema_sync
+
+.. autofunction:: sqlspec.migrations.ensure_schema_async
+
 Loaders
 =======
 

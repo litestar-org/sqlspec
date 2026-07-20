@@ -7,7 +7,7 @@ SELECT
     column_default
 FROM information_schema.columns
 WHERE table_name = :table_name
-  AND (:schema_name IS NULL OR table_schema = :schema_name)
+  AND (CAST(:schema_name AS STRING) IS NULL OR table_schema = :schema_name)
 ORDER BY ordinal_position;
 
 -- name: columns_by_schema
@@ -19,5 +19,5 @@ SELECT
     is_nullable,
     column_default
 FROM information_schema.columns
-WHERE (:schema_name IS NULL OR table_schema = :schema_name)
+WHERE (CAST(:schema_name AS STRING) IS NULL OR table_schema = :schema_name)
 ORDER BY table_name, ordinal_position;

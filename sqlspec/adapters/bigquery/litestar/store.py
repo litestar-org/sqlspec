@@ -1,7 +1,7 @@
 """BigQuery session store for Litestar integration."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -32,7 +32,12 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         config: BigQueryConfig instance.
     """
 
-    __slots__ = ()
+    __slots__ = ("_partition_expiration_days", "_partitioning", "_require_partition_filter")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "partition_expiration_days",
+        "partitioning",
+        "require_partition_filter",
+    })
 
     def __init__(self, config: "BigQueryConfig") -> None:
         """Initialize BigQuery session store.
@@ -41,6 +46,84 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             config: BigQueryConfig instance.
         """
         super().__init__(config)
+        settings = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._partitioning = bool(settings.get("partitioning", False))
+        self._partition_expiration_days = _positive_int_or_none(
+            settings.get("partition_expiration_days"), "partition_expiration_days"
+        )
+        self._require_partition_filter = bool(settings.get("require_partition_filter", False))
+
+    async def create_table(self) -> None:
+        """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Get a session value by key.
+
+        Args:
+            key: Session ID to retrieve.
+            renew_for: If given, renew the expiry time for this duration.
+
+        Returns:
+            Session data as bytes if found and not expired, None otherwise.
+        """
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Store a session value.
+
+        Args:
+            key: Session ID.
+            value: Session data.
+            expires_in: Time until expiration.
+        """
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key.
+
+        Args:
+            key: Session ID to delete.
+        """
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        """Delete all sessions from the store."""
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        """Check if a session key exists and is not expired.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            True if the session exists and is not expired.
+        """
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Get the time in seconds until the session expires.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            Seconds until expiration, or None if no expiry or key doesn't exist.
+        """
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        """Delete all expired sessions.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        return await async_(self._delete_expired)()
 
     def _table_ddl(self) -> str:
         """Get BigQuery CREATE TABLE SQL with optimized schema.
@@ -48,6 +131,12 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         Returns:
             SQL statement to create the sessions table with clustering.
         """
+        partition_clause, options_clause = _bigquery_partition_clauses(
+            "expires_at",
+            enabled=self._partitioning or self._partition_expiration_days is not None or self._require_partition_filter,
+            expiration_days=self._partition_expiration_days,
+            require_filter=self._require_partition_filter,
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id STRING NOT NULL,
@@ -55,7 +144,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             expires_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
         )
-        CLUSTER BY session_id
+        {partition_clause}CLUSTER BY session_id{options_clause}
         """
 
     def _drop_table_sql(self) -> "list[str]":
@@ -103,10 +192,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             driver.execute_script(sql)
         self._log_table_created()
 
-    async def create_table(self) -> None:
-        """Create the session table if it doesn't exist."""
-        await async_(self._create_table)()
-
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
         sql = f"""
@@ -137,18 +222,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
             return bytes(data) if data is not None else None
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key.
-
-        Args:
-            key: Session ID to retrieve.
-            renew_for: If given, renew the expiry time for this duration.
-
-        Returns:
-            Session data as bytes if found and not expired, None otherwise.
-        """
-        return await async_(self._get)(key, renew_for)
-
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
@@ -169,30 +242,12 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         with self._config.provide_session() as driver:
             driver.execute(sql, {"session_id": key, "data": data, "expires_at": expires_at_ts})
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value.
-
-        Args:
-            key: Session ID.
-            value: Session data.
-            expires_in: Time until expiration.
-        """
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
 
         with self._config.provide_session() as driver:
             driver.execute(sql, {"session_id": key})
-
-    async def delete(self, key: str) -> None:
-        """Delete a session by key.
-
-        Args:
-            key: Session ID to delete.
-        """
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
@@ -201,10 +256,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         with self._config.provide_session() as driver:
             driver.execute(sql)
         self._log_delete_all()
-
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
@@ -218,17 +269,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         with self._config.provide_session() as driver:
             result = driver.select_one(sql, {"session_id": key})
             return result is not None
-
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            True if the session exists and is not expired.
-        """
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
@@ -258,17 +298,6 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             delta = expires_at_dt - now
             return int(delta.total_seconds())
 
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            Seconds until expiration, or None if no expiry or key doesn't exist.
-        """
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP()"
@@ -280,10 +309,25 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
                 self._log_delete_expired(count)
             return count
 
-    async def delete_expired(self) -> int:
-        """Delete all expired sessions.
 
-        Returns:
-            Number of sessions deleted.
-        """
-        return await async_(self._delete_expired)()
+def _positive_int_or_none(value: object, key: str) -> "int | None":
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"extension_config['litestar']['{key}'] must be a positive integer"
+        raise ValueError(msg)
+    return value
+
+
+def _bigquery_partition_clauses(
+    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
+) -> "tuple[str, str]":
+    if not enabled:
+        return "", ""
+    options: list[str] = []
+    if require_filter:
+        options.append("require_partition_filter = TRUE")
+    if expiration_days is not None:
+        options.append(f"partition_expiration_days = {expiration_days}")
+    options_clause = f"\n        OPTIONS({', '.join(options)})" if options else ""
+    return f"PARTITION BY DATE({column})\n        ", options_clause

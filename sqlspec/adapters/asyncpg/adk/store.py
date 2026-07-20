@@ -33,6 +33,15 @@ class AsyncpgADKConfig(ADKConfig):
     enable_covering_indexes: NotRequired[bool]
     """Add PostgreSQL INCLUDE columns to ADK event replay indexes."""
 
+    fillfactor: NotRequired[int]
+    """Table fillfactor. Defaults to 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Optional event-table autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Optional event-table autovacuum analyze scale factor."""
+
 
 class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     """PostgreSQL ADK store using asyncpg driver.
@@ -61,13 +70,16 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         super().__init__(config)
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._sessions_table_ddl())
             await driver.execute_script(await self._events_table_ddl())
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -402,6 +414,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
+        table_options = _postgres_table_options(_adk_config(self._config))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -410,7 +423,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
+        ){table_options};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
             ON {self._session_table}(app_name, user_id);
@@ -425,6 +438,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
+        table_options = _postgres_table_options(adk_config, include_autovacuum=True)
         generated_columns = ""
         generated_indexes = ""
         if adk_config.get("enable_event_generated_columns", False):
@@ -452,7 +466,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
+        ){table_options};
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC){covering_columns};
@@ -460,15 +474,17 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
     async def _app_states_table_ddl(self) -> str:
+        table_options = _postgres_table_options(_adk_config(self._config))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
+        ){table_options};
         """
 
     async def _user_states_table_ddl(self) -> str:
+        table_options = _postgres_table_options(_adk_config(self._config))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -476,7 +492,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (app_name, user_id)
-        ) WITH (fillfactor = 80);
+        ){table_options};
         """
 
     async def _metadata_table_ddl(self) -> str:
@@ -485,13 +501,6 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             key VARCHAR(128) PRIMARY KEY,
             value VARCHAR(512) NOT NULL
         );
-        """
-
-    async def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
         """
 
     def _drop_app_states_table_sql(self) -> str:
@@ -534,45 +543,11 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
     def __init__(self, config: "AsyncpgConfig") -> None:
         super().__init__(config)
 
-    async def _memory_table_ddl(self) -> str:
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMPTZ NOT NULL,
-            content_json JSONB NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
-        """
-
-    def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
-
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
@@ -707,6 +682,44 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         except (IndexError, ValueError):
             return 0
 
+    async def _memory_table_ddl(self) -> str:
+        owner_id_line = ""
+        if self._owner_id_column_ddl:
+            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+
+        fts_index = ""
+        if self._use_fts:
+            fts_index = f"""
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
+            """
+
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id VARCHAR(128) PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_line},
+            timestamp TIMESTAMPTZ NOT NULL,
+            content_json JSONB NOT NULL,
+            content_text TEXT NOT NULL,
+            metadata_json JSONB,
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
+            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+            ON {self._memory_table}(session_id);
+        {fts_index}
+        """
+
+    def _drop_memory_table_sql(self) -> "list[str]":
+        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
 
 def _adk_config(config: Any) -> AsyncpgADKConfig:
     """Return asyncpg ADK extension settings from ``extension_config["adk"]``."""
@@ -718,3 +731,30 @@ def _adk_config(config: Any) -> AsyncpgADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("AsyncpgADKConfig", adk_config)
+
+
+def _postgres_table_options(adk_config: AsyncpgADKConfig, *, include_autovacuum: bool = False) -> str:
+    options = [_postgres_fillfactor_option(adk_config)]
+    if include_autovacuum:
+        options.extend(_postgres_autovacuum_options(adk_config))
+    return f" WITH ({', '.join(options)})"
+
+
+def _postgres_fillfactor_option(adk_config: AsyncpgADKConfig) -> str:
+    value = adk_config.get("fillfactor", 80)
+    if not isinstance(value, int) or isinstance(value, bool) or value not in range(10, 101):
+        msg = "extension_config['adk']['fillfactor'] must be an integer from 10 to 100"
+        raise ValueError(msg)
+    return f"fillfactor = {value}"
+
+
+def _postgres_autovacuum_options(adk_config: AsyncpgADKConfig) -> "list[str]":
+    options: list[str] = []
+    for key in ("autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor"):
+        value = adk_config.get(key)
+        if value is not None:
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                msg = f"extension_config['adk']['{key}'] must be a number from 0 to 1"
+                raise ValueError(msg)
+            options.append(f"{key} = {float(value):g}")
+    return options

@@ -5,7 +5,7 @@ from typing import Any, NoReturn, Protocol, cast
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import import_string
 
 __all__ = (
@@ -62,7 +62,9 @@ class _ADKConfigSource(Protocol):
 def _adk_config_from_extension(config: _ADKConfigSource) -> dict[str, Any]:
     """Return a mutable copy of the ADK extension config."""
 
-    return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
+    adk_config = dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
+    _validate_adk_extension_config(config, adk_config)
+    return adk_config
 
 
 def _adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfig:
@@ -191,6 +193,29 @@ def _ensure_adk_store_registration(config: Any) -> None:
     _adk_adapter_store_class(config, "ADKStore")
     if _adk_memory_migration_enabled(config):
         _adk_adapter_store_class(config, "ADKMemoryStore")
+
+
+def _validate_adk_extension_config(config: _ADKConfigSource, settings: dict[str, Any]) -> None:
+    """Reject ADK options that the selected adapter cannot honor."""
+    from sqlspec.config import ADKConfig
+
+    config_module = type(config).__module__
+    if not config_module.startswith("sqlspec.adapters."):
+        return
+    adapter_name = config_module.split(".")[2]
+    store_module = importlib.import_module(f"sqlspec.adapters.{adapter_name}.adk.store")
+    accepted = set(ADKConfig.__required_keys__) | set(ADKConfig.__optional_keys__)
+    for exported_name in getattr(store_module, "__all__", ()):
+        if not exported_name.endswith("ADKConfig"):
+            continue
+        config_type = getattr(store_module, exported_name)
+        accepted.update(getattr(config_type, "__required_keys__", ()))
+        accepted.update(getattr(config_type, "__optional_keys__", ()))
+    unsupported = sorted(set(settings).difference(accepted))
+    if unsupported:
+        keys = ", ".join(repr(key) for key in unsupported)
+        msg = f"Unsupported ADK configuration key(s) for {adapter_name}: {keys}"
+        raise ImproperConfigurationError(msg)
 
 
 def _raise_unsupported_config(config_type: str) -> NoReturn:

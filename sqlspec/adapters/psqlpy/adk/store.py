@@ -38,6 +38,15 @@ class PsqlpyADKConfig(ADKConfig):
     enable_covering_indexes: NotRequired[bool]
     """Add PostgreSQL INCLUDE columns to ADK event replay indexes."""
 
+    fillfactor: NotRequired[int]
+    """Table fillfactor. Defaults to 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Optional event-table autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Optional event-table autovacuum analyze scale factor."""
+
 
 class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     """PostgreSQL ADK store using Psqlpy driver.
@@ -66,13 +75,16 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         super().__init__(config)
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._sessions_table_ddl())
             await driver.execute_script(await self._events_table_ddl())
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -447,6 +459,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
+        table_options = _postgres_table_options(_adk_config(self._config))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -455,7 +468,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
+        ){table_options};
 
         CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
             ON {self._session_table}(app_name, user_id);
@@ -470,6 +483,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
+        table_options = _postgres_table_options(adk_config, include_autovacuum=True)
         generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
             adk_config, self._events_table
         )
@@ -482,7 +496,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             event_data JSONB NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        ) WITH (fillfactor = 80);
+        ){table_options};
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC){covering_columns};
@@ -490,15 +504,17 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
     async def _app_states_table_ddl(self) -> str:
+        table_options = _postgres_table_options(_adk_config(self._config))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
+        ){table_options};
         """
 
     async def _user_states_table_ddl(self) -> str:
+        table_options = _postgres_table_options(_adk_config(self._config))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -506,7 +522,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             state JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (app_name, user_id)
-        ) WITH (fillfactor = 80);
+        ){table_options};
         """
 
     async def _metadata_table_ddl(self) -> str:
@@ -515,13 +531,6 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             key VARCHAR(128) PRIMARY KEY,
             value VARCHAR(512) NOT NULL
         );
-        """
-
-    async def _metadata_seed_sql(self) -> str:
-        return f"""
-        INSERT INTO {self._metadata_table} (key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT (key) DO NOTHING
         """
 
     def _drop_app_states_table_sql(self) -> str:
@@ -554,6 +563,10 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
@@ -852,6 +865,33 @@ def _adk_config(config: Any) -> PsqlpyADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("PsqlpyADKConfig", adk_config)
+
+
+def _postgres_table_options(adk_config: PsqlpyADKConfig, *, include_autovacuum: bool = False) -> str:
+    options = [_postgres_fillfactor_option(adk_config)]
+    if include_autovacuum:
+        options.extend(_postgres_autovacuum_options(adk_config))
+    return f" WITH ({', '.join(options)})"
+
+
+def _postgres_fillfactor_option(adk_config: PsqlpyADKConfig) -> str:
+    value = adk_config.get("fillfactor", 80)
+    if not isinstance(value, int) or isinstance(value, bool) or value not in range(10, 101):
+        msg = "extension_config['adk']['fillfactor'] must be an integer from 10 to 100"
+        raise ValueError(msg)
+    return f"fillfactor = {value}"
+
+
+def _postgres_autovacuum_options(adk_config: PsqlpyADKConfig) -> "list[str]":
+    options: list[str] = []
+    for key in ("autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor"):
+        value = adk_config.get(key)
+        if value is not None:
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                msg = f"extension_config['adk']['{key}'] must be a number from 0 to 1"
+                raise ValueError(msg)
+            options.append(f"{key} = {float(value):g}")
+    return options
 
 
 def _postgres_event_ddl_options(adk_config: PsqlpyADKConfig, events_table: str) -> "tuple[str, str, str]":

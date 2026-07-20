@@ -29,9 +29,20 @@ Unreleased
 * Standardized event transport configuration on ``notify``, ``notify_queue``,
   ``poll_queue``, ``aq``, and ``txeventq``. Retired transport names now raise
   an explicit configuration error with the canonical replacement.
+* Extension storage keys that a selected ADK, Litestar, or Events backend
+  cannot honor now raise an explicit configuration error instead of being
+  silently ignored.
 
 **Added:**
 
+* New sync and async schema checks can create missing tables and add columns.
+  Use ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
+* Oracle ADK, durable event, and Litestar session tables now share opt-in
+  compression, partitioning, In-Memory, and table-option configuration.
+* BigQuery session and queue partition options, CockroachDB session hash
+  sharding and row-level TTL, PostgreSQL table/autovacuum tuning, and opt-in
+  SQLite extension PRAGMA profiles are now available across the applicable
+  Litestar, Events, and ADK stores.
 * Added sync and async event-channel ``publish_many()`` APIs. Batch-capable
   implementations preserve input order and publish a grouped call in one
   transaction; custom backends retain an ordered single-event fallback.
@@ -40,6 +51,12 @@ Unreleased
 
 **Changed:**
 
+* ADK, Litestar session, and durable event stores now derive additive schema
+  currency from their canonical DDL. ADK no longer seeds or bumps a
+  ``schema_version`` row for additive changes.
+* Oracle extension-table optimizations are capability-gated through the
+  pool-scoped data dictionary and degrade to structured warnings when an
+  option is unavailable.
 * PostgreSQL listeners now hold one dedicated long-lived connection while
   publishers use short pooled sessions. Native PostgreSQL batch publication
   reuses one publisher transaction per grouped call.

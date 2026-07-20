@@ -28,7 +28,36 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         config: BigQueryConfig with extension_config["events"] settings.
     """
 
-    __slots__ = ()
+    __slots__ = ("_partition_expiration_days", "_partitioning", "_require_partition_filter")
+    extension_config_options = BaseEventQueueStore.extension_config_options | frozenset({
+        "partition_expiration_days",
+        "partitioning",
+        "require_partition_filter",
+    })
+
+    def __init__(self, config: BigQueryConfig) -> None:
+        super().__init__(config)
+        self._partitioning = bool(self.settings.get("partitioning", False))
+        self._partition_expiration_days = _positive_int_or_none(
+            self.settings.get("partition_expiration_days"), "partition_expiration_days"
+        )
+        self._require_partition_filter = bool(self.settings.get("require_partition_filter", False))
+
+    def create_statements(self) -> "list[str]":
+        """Return DDL statement for table creation.
+
+        Returns:
+            List containing single CREATE TABLE statement.
+        """
+        return [self._table_ddl()]
+
+    def drop_statements(self) -> "list[str]":
+        """Return DDL statement for table deletion.
+
+        Returns:
+            List containing single DROP TABLE statement.
+        """
+        return [f"DROP TABLE IF EXISTS {self.table_name}"]
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return BigQuery-specific column types.
@@ -53,7 +82,13 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
     def _table_clause(self) -> str:
         """Return BigQuery CLUSTER BY clause for query optimization."""
-        return " CLUSTER BY channel, status, available_at"
+        partition_clause, options_clause = _bigquery_partition_clauses(
+            "available_at",
+            enabled=self._partitioning or self._partition_expiration_days is not None or self._require_partition_filter,
+            expiration_days=self._partition_expiration_days,
+            require_filter=self._require_partition_filter,
+        )
+        return f"{partition_clause} CLUSTER BY channel, status, available_at{options_clause}"
 
     def _table_ddl(self) -> str:
         """Build BigQuery CREATE TABLE with CLUSTER BY optimization.
@@ -80,18 +115,25 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
         """
         return None
 
-    def create_statements(self) -> "list[str]":
-        """Return DDL statement for table creation.
 
-        Returns:
-            List containing single CREATE TABLE statement.
-        """
-        return [self._table_ddl()]
+def _positive_int_or_none(value: object, key: str) -> "int | None":
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"extension_config['events']['{key}'] must be a positive integer"
+        raise ValueError(msg)
+    return value
 
-    def drop_statements(self) -> "list[str]":
-        """Return DDL statement for table deletion.
 
-        Returns:
-            List containing single DROP TABLE statement.
-        """
-        return [f"DROP TABLE IF EXISTS {self.table_name}"]
+def _bigquery_partition_clauses(
+    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
+) -> "tuple[str, str]":
+    if not enabled:
+        return "", ""
+    options: list[str] = []
+    if require_filter:
+        options.append("require_partition_filter = TRUE")
+    if expiration_days is not None:
+        options.append(f"partition_expiration_days = {expiration_days}")
+    options_clause = f" OPTIONS({', '.join(options)})" if options else ""
+    return f" PARTITION BY DATE({column})", options_clause

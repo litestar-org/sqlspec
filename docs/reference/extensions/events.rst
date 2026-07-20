@@ -204,6 +204,54 @@ The durable table queue is available for SQL Server through ``arrow_odbc`` when
 configured with Microsoft ODBC Driver 18. It uses SQL Server ``DATETIME2(6)``
 timestamps and ``NVARCHAR`` payload columns.
 
+Durable queue migrations reconcile missing tables and additive columns from the
+adapter store's canonical DDL. Set ``events.manage_schema=False`` when an
+external migration system owns the queue schema. Set
+``events.create_schema=False`` to avoid creating an absent queue table. Column
+renames, drops, and type changes still require an explicit migration.
+
+Queue table storage options
+---------------------------
+
+Put durable queue tuning under ``extension_config["events"]``. SQLSpec
+validates the mapping against the selected adapter; an unknown key or an option
+that the backend cannot honor raises ``ImproperConfigurationError``.
+
+* PostgreSQL (``asyncpg``, ``psycopg``, and ``psqlpy``) accepts
+  ``fillfactor``, ``autovacuum_vacuum_scale_factor``, and
+  ``autovacuum_analyze_scale_factor``. These queue-table settings are opt-in.
+* BigQuery accepts ``partitioning``, ``partition_expiration_days``, and
+  ``require_partition_filter`` for ``available_at`` partitioning. Existing
+  channel and status clustering is preserved.
+* SQLite and AioSQLite accept ``pragma_profile`` and ``pragma_overrides``.
+  PRAGMAs run once during schema preparation rather than on every queue
+  operation.
+* Oracle Database accepts ``compression``, ``partitioning``, ``in_memory``,
+  and ``table_options``. See :ref:`oracledb-extension-storage-options` for how
+  SQLSpec handles optional database capabilities.
+
+CockroachDB deliberately does not expose its session-table row TTL for durable
+queues. Queue acknowledgement and retention have different semantics, so
+session-only TTL keys are rejected rather than translated to destructive queue
+DDL. Other adapters use their existing queue-table defaults and reject these
+backend-specific storage keys.
+
+For example, configure a PostgreSQL queue for a write-heavy workload:
+
+.. code-block:: python
+
+   config = AsyncpgConfig(
+       connection_config={"dsn": "postgresql://localhost/app"},
+       extension_config={
+           "events": {
+               "backend": "notify_queue",
+               "fillfactor": 70,
+               "autovacuum_vacuum_scale_factor": 0.05,
+               "autovacuum_analyze_scale_factor": 0.02,
+           }
+       },
+   )
+
 .. autoclass:: sqlspec.extensions.events.AsyncTableEventQueue
    :members:
    :show-inheritance:

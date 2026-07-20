@@ -1,18 +1,23 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
-from collections.abc import Mapping
 from decimal import Decimal
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import oracledb
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
+from sqlspec.adapters.oracledb._storage import (
+    _oracle_table_feature_report,
+    _resolve_oracle_storage_capabilities_async,
+    _resolve_oracle_storage_capabilities_sync,
+    _validate_oracle_identifier,
+)
 from sqlspec.adapters.oracledb.data_dictionary import (
-    OracledbAsyncDataDictionary,
-    OracledbSyncDataDictionary,
+    JSONStorageType,
     OracleVersionInfo,
+    _storage_type_from_version,
+    storage_type_from_version,
 )
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
@@ -43,26 +48,6 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.oracledb.adk.store")
 
 ORACLE_TABLE_NOT_FOUND_ERROR: Final = 942
-ORACLE_MIN_JSON_NATIVE_VERSION: Final = 21
-ORACLE_MIN_JSON_NATIVE_COMPATIBLE: Final = 20
-ORACLE_MIN_JSON_BLOB_VERSION: Final = 12
-ORACLE_DEFAULT_HASH_PARTITIONS: Final = 16
-ORACLE_MIN_HASH_PARTITIONS: Final = 2
-ORACLE_RANGE_INTERVALS: Final[dict[str, str]] = {
-    "day": "NUMTODSINTERVAL(1, 'DAY')",
-    "week": "NUMTODSINTERVAL(7, 'DAY')",
-    "month": "NUMTOYMINTERVAL(1, 'MONTH')",
-    "year": "NUMTOYMINTERVAL(1, 'YEAR')",
-}
-ORACLE_COMPRESSION_CLAUSES: Final[dict[str, str]] = {
-    "basic": "ROW STORE COMPRESS BASIC",
-    "oltp": "ROW STORE COMPRESS ADVANCED",
-    "advanced": "ROW STORE COMPRESS ADVANCED",
-    "query_low": "COLUMN STORE COMPRESS FOR QUERY LOW",
-    "query_high": "COLUMN STORE COMPRESS FOR QUERY HIGH",
-    "archive_low": "COLUMN STORE COMPRESS FOR ARCHIVE LOW",
-    "archive_high": "COLUMN STORE COMPRESS FOR ARCHIVE HIGH",
-}
 ORACLE_DUPLICATE_KEY_ERROR: Final = 1
 ORACLE_DEFAULT_SESSION_TABLE: Final = "adk_session"
 ORACLE_DEFAULT_EVENTS_TABLE: Final = "adk_event"
@@ -79,27 +64,10 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
     "                key VARCHAR2(128) PRIMARY KEY,\n"
     "                value VARCHAR2(512) NOT NULL\n"
     "            )';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
 
-_ADK_METADATA_SEED_SQL_TEMPLATE = (
-    "\n"
-    "        BEGIN\n"
-    "            INSERT INTO {0} (key, value)\n"
-    "            SELECT 'schema_version', '1'\n"
-    "            FROM DUAL\n"
-    "            WHERE NOT EXISTS (\n"
-    "                SELECT 1 FROM {1} WHERE key = 'schema_version'\n"
-    "            );\n"
-    "        END;\n"
-    "        "
-)
 
 _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE = ", {0}"
 
@@ -114,31 +82,16 @@ _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
     "                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{2}\n"
     "            ){3}';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user\n"
     "                ON {5}(app_name, user_id)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_update_time\n"
     "                ON {7}(update_time DESC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -155,41 +108,21 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                CONSTRAINT fk_{2}_session FOREIGN KEY (session_id)\n"
     "                    REFERENCES {3}(id) ON DELETE CASCADE\n"
     "            ){4}';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{5}_session\n"
     "                ON {6}(session_id, timestamp ASC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{7}_invocation\n"
     "                ON {8}(invocation_id)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{9}_timestamp\n"
     "                ON {10}(timestamp ASC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -201,12 +134,7 @@ _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                app_name VARCHAR2(128) PRIMARY KEY,\n"
     "                {1},\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
-    "            )';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
+    "            ){2}';\n"
     "        END;\n"
     "        "
 )
@@ -220,12 +148,7 @@ _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                {1},\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                PRIMARY KEY (app_name, user_id)\n"
-    "            )';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
+    "            ){2}';\n"
     "        END;\n"
     "        "
 )
@@ -237,11 +160,6 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{0}_fts\n"
     "                ON {1}(content_text) INDEXTYPE IS CTXSYS.CONTEXT';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "            "
 )
@@ -261,31 +179,16 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                content_text CLOB NOT NULL,\n"
     "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
     "            ){3}';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user_time\n"
     "                ON {5}(app_name, user_id, timestamp DESC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_session\n"
     "                ON {7}(session_id)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        {8}\n"
     "        "
@@ -296,14 +199,6 @@ _ADK_JSON_COLUMN_DDL_TEMPLATE = "{0} JSON NOT NULL"
 _ADK_JSON_COLUMN_DDL_TEMPLATE_2 = "{0} BLOB CHECK ({1} IS JSON) NOT NULL"
 
 _ADK_JSON_COLUMN_DDL_TEMPLATE_3 = "{0} BLOB NOT NULL"
-
-
-class JSONStorageType(str, Enum):
-    """JSON storage type based on Oracle version."""
-
-    JSON_NATIVE = "json"
-    BLOB_JSON = "blob_json"
-    BLOB_PLAIN = "blob_plain"
 
 
 class OracleADKCompressionConfig(TypedDict):
@@ -385,10 +280,6 @@ def coerce_decimal_values(value: Any) -> Any:
     return _coerce_decimal_values(value)
 
 
-def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
-    return _storage_type_from_version(version_info)
-
-
 class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     """Oracle async ADK store using oracledb async driver.
 
@@ -414,7 +305,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Configuration is read from config.extension_config["adk"]
     """
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle ADK store.
@@ -431,31 +322,43 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         super().__init__(config)
         _configure_oracle_adk_session_tables(self, config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
 
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist.
+        """Create the ADK tables that the data dictionary reports as missing.
 
         Notes:
             Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
+            Consults ``data_dictionary.get_tables`` so existing tables are left
+            untouched instead of relying on an ORA-955 swallow.
         """
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         storage_type = await self._detect_json_storage_type()
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
-
-            await driver.execute_script(self._events_table_ddl_for_type(storage_type))
-            await driver.execute_script(self._app_states_table_ddl_for_type(storage_type))
-            await driver.execute_script(self._user_states_table_ddl_for_type(storage_type))
-            await driver.execute_script(await self._metadata_table_ddl())
-            await driver.execute_script(await self._metadata_seed_sql())
+            await _resolve_oracle_storage_capabilities_async(driver)
+            existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._session_table) not in existing:
+                await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._events_table) not in existing:
+                await driver.execute_script(self._events_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._app_state_table) not in existing:
+                await driver.execute_script(self._app_states_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._user_state_table) not in existing:
+                await driver.execute_script(self._user_states_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._metadata_table) not in existing:
+                await driver.execute_script(await self._metadata_table_ddl())
             await driver.commit()
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1038,45 +941,28 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
-    async def _metadata_seed_sql(self) -> str:
-        """Get Oracle SQL to seed the ADK schema-version metadata row."""
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
-
     async def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
+        """Resolve the JSON storage type from the pool-scoped Oracle version.
 
-        Returns:
-            Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
+        - Oracle 21c+ with compatible >= 20: native JSON type
+        - Oracle 12c+: BLOB with IS JSON constraint
+        - Oracle 11g and earlier: plain BLOB
         """
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = await self._get_version_info()
-        self._json_storage_type = _storage_type_from_version(version_info)
-        return self._json_storage_type
+        return _storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using Oracle data dictionary."""
-
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        """Return the pool-scoped Oracle version through the data dictionary."""
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         async with self._config.provide_session() as driver:
-            dictionary = OracledbAsyncDataDictionary()
-            self._oracle_version_info = await dictionary.get_version(driver)
+            version_info = await driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     async def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
         """Serialize state dictionary to appropriate format based on storage type.
@@ -1180,7 +1066,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             if self._owner_id_column_ddl
             else ""
         )
-        table_clauses = _oracle_table_feature_clauses(
+        table_clauses = _adk_table_feature_clause(
             self._config,
             "session",
             in_memory=self._in_memory,
@@ -1212,7 +1098,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             SQL statement to create adk_event table.
         """
         event_data_col = _event_data_column_ddl(storage_type)
-        table_clauses = _oracle_table_feature_clauses(
+        table_clauses = _adk_table_feature_clause(
             self._config,
             "events",
             in_memory=self._in_memory,
@@ -1237,14 +1123,28 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _adk_table_feature_clause(
+            self._config,
+            "app_state",
+            in_memory=self._in_memory,
+            hash_partition_key="app_name",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column)
+        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column, table_clauses)
 
     def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _adk_table_feature_clause(
+            self._config,
+            "user_state",
+            in_memory=self._in_memory,
+            hash_partition_key="user_id",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column)
+        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column, table_clauses)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"""
@@ -1374,7 +1274,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Configuration is read from config.extension_config["adk"]
     """
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle synchronous ADK store.
@@ -1391,34 +1291,43 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
         super().__init__(config)
         _configure_oracle_adk_session_tables(self, config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
 
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        """Create both sessions and events tables if they don't exist.
+        """Create the ADK tables that the data dictionary reports as missing.
 
         Notes:
             Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
+            Consults ``data_dictionary.get_tables`` so existing tables are left
+            untouched instead of relying on an ORA-955 swallow.
         """
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         storage_type = self._detect_json_storage_type()
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
         with self._config.provide_session() as driver:
-            sessions_sql = SQL(self._sessions_table_ddl_for_type(storage_type))
-            driver.execute_script(sessions_sql)
-
-            events_sql = SQL(self._events_table_ddl_for_type(storage_type))
-            driver.execute_script(events_sql)
-            driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
-            driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
-            driver.execute_script(SQL(self._metadata_table_ddl()))
-            driver.execute_script(SQL(self._metadata_seed_sql()))
+            _resolve_oracle_storage_capabilities_sync(driver)
+            existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._session_table) not in existing:
+                driver.execute_script(SQL(self._sessions_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._events_table) not in existing:
+                driver.execute_script(SQL(self._events_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._app_state_table) not in existing:
+                driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._user_state_table) not in existing:
+                driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._metadata_table) not in existing:
+                driver.execute_script(SQL(self._metadata_table_ddl()))
             driver.commit()
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        _resolve_oracle_storage_capabilities_sync(driver)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -2005,45 +1914,28 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Get Oracle CREATE TABLE SQL for ADK internal metadata."""
         return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table)
 
-    def _metadata_seed_sql(self) -> str:
-        """Get Oracle SQL to seed the ADK schema-version metadata row."""
-        return _ADK_METADATA_SEED_SQL_TEMPLATE.format(self._metadata_table, self._metadata_table)
-
     def _detect_json_storage_type(self) -> JSONStorageType:
-        """Detect the appropriate JSON storage type based on Oracle version.
+        """Resolve the JSON storage type from the pool-scoped Oracle version.
 
-        Returns:
-            Appropriate JSONStorageType for this Oracle version.
-
-        Notes:
-            Queries product_component_version to determine Oracle version.
-            - Oracle 21c+ with compatible >= 20: Native JSON type
-            - Oracle 12c+: BLOB with IS JSON constraint
-            - Oracle 11g and earlier: plain BLOB
-
-            Result is cached in self._json_storage_type.
+        - Oracle 21c+ with compatible >= 20: native JSON type
+        - Oracle 12c+: BLOB with IS JSON constraint
+        - Oracle 11g and earlier: plain BLOB
         """
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = self._get_version_info()
-        self._json_storage_type = _storage_type_from_version(version_info)
-        return self._json_storage_type
+        return _storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        """Return cached Oracle version info using Oracle data dictionary."""
-
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        """Return the pool-scoped Oracle version through the data dictionary."""
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         with self._config.provide_session() as driver:
-            dictionary = OracledbSyncDataDictionary()
-            self._oracle_version_info = dictionary.get_version(driver)
+            version_info = driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
         """Serialize state dictionary to appropriate format based on storage type.
@@ -2143,7 +2035,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             if self._owner_id_column_ddl
             else ""
         )
-        table_clauses = _oracle_table_feature_clauses(
+        table_clauses = _adk_table_feature_clause(
             self._config,
             "session",
             in_memory=self._in_memory,
@@ -2175,7 +2067,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             SQL statement to create adk_event table.
         """
         event_data_col = _event_data_column_ddl(storage_type)
-        table_clauses = _oracle_table_feature_clauses(
+        table_clauses = _adk_table_feature_clause(
             self._config,
             "events",
             in_memory=self._in_memory,
@@ -2200,14 +2092,28 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for app-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _adk_table_feature_clause(
+            self._config,
+            "app_state",
+            in_memory=self._in_memory,
+            hash_partition_key="app_name",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column)
+        return _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._app_state_table, state_column, table_clauses)
 
     def _user_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
         """Get Oracle CREATE TABLE SQL for user-scoped state with specified storage type."""
         state_column = _json_column_ddl("state", storage_type)
+        table_clauses = _adk_table_feature_clause(
+            self._config,
+            "user_state",
+            in_memory=self._in_memory,
+            hash_partition_key="user_id",
+            range_partition_key="update_time",
+        )
 
-        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column)
+        return _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._user_state_table, state_column, table_clauses)
 
     def _drop_app_states_table_sql(self) -> str:
         return f"""
@@ -2315,21 +2221,30 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     """Oracle ADK memory store using async oracledb driver."""
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         super().__init__(config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._memory_table_ddl())
+            await _resolve_oracle_storage_capabilities_async(driver)
+            existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._memory_table) not in existing:
+                await driver.execute_script(await self._memory_table_ddl())
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2417,25 +2332,20 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     async def _detect_json_storage_type(self) -> "JSONStorageType":
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = await self._get_version_info()
-        self._json_storage_type = storage_type_from_version(version_info)
-        return self._json_storage_type
+        return storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         async with self._config.provide_session() as driver:
-            dictionary = OracledbAsyncDataDictionary()
-            self._oracle_version_info = await dictionary.get_version(driver)
+            version_info = await driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     async def _serialize_json_field(self, value: Any) -> "str | bytes | None":
         if value is None:
@@ -2481,7 +2391,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             if self._owner_id_column_ddl
             else ""
         )
-        table_clauses = _oracle_table_feature_clauses(
+        table_clauses = _adk_table_feature_clause(
             self._config,
             "memory",
             in_memory=self._in_memory,
@@ -2623,22 +2533,31 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
     """Oracle ADK memory store using sync oracledb driver."""
 
-    __slots__ = ("_in_memory", "_json_storage_type", "_oracle_version_info")
+    __slots__ = ("_in_memory",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
-        self._json_storage_type: JSONStorageType | None = None
-        self._oracle_version_info: OracleVersionInfo | None = None
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
+        """Create the memory table when the data dictionary reports it missing."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._memory_table_ddl())
+            _resolve_oracle_storage_capabilities_sync(driver)
+            existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._memory_table) not in existing:
+                driver.execute_script(self._memory_table_ddl())
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
+        _resolve_oracle_storage_capabilities_sync(driver)
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -2730,25 +2649,20 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def _detect_json_storage_type(self) -> "JSONStorageType":
-        if self._json_storage_type is not None:
-            return self._json_storage_type
-
-        version_info = self._get_version_info()
-        self._json_storage_type = storage_type_from_version(version_info)
-        return self._json_storage_type
+        return storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        if self._oracle_version_info is not None:
-            return self._oracle_version_info
+        cache = self._config._oracle_version_cache
+        if cache.resolved:
+            return cache.version
 
         with self._config.provide_session() as driver:
-            dictionary = OracledbSyncDataDictionary()
-            self._oracle_version_info = dictionary.get_version(driver)
+            version_info = driver.data_dictionary.get_version(driver)
 
-        if self._oracle_version_info is None:
+        if version_info is None:
             logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
 
-        return self._oracle_version_info
+        return version_info
 
     def _serialize_json_field(self, value: Any) -> "str | bytes | None":
         if value is None:
@@ -2794,7 +2708,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             if self._owner_id_column_ddl
             else ""
         )
-        table_clauses = _oracle_table_feature_clauses(
+        table_clauses = _adk_table_feature_clause(
             self._config,
             "memory",
             in_memory=self._in_memory,
@@ -2980,25 +2894,6 @@ def _coerce_decimal_values(value: Any) -> Any:
     return value
 
 
-def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
-    """Determine JSON storage type based on Oracle version metadata."""
-
-    if version_info and version_info.supports_native_json():
-        logger.debug("Detected Oracle %s with compatible >= 20, using JSON_NATIVE", version_info)
-        return JSONStorageType.JSON_NATIVE
-
-    if version_info and version_info.supports_json_blob():
-        logger.debug("Detected Oracle %s, using BLOB_JSON (recommended)", version_info)
-        return JSONStorageType.BLOB_JSON
-
-    if version_info:
-        logger.debug("Detected Oracle %s (pre-12c), using BLOB_PLAIN", version_info)
-        return JSONStorageType.BLOB_PLAIN
-
-    logger.warning("Oracle version could not be detected; defaulting to BLOB_JSON storage")
-    return JSONStorageType.BLOB_JSON
-
-
 def _oracle_text_value(value: Any) -> str:
     """Normalize Oracle VARCHAR2 values back to Python strings.
 
@@ -3037,6 +2932,16 @@ def _json_column_ddl(column_name: str, storage_type: JSONStorageType) -> str:
     return _ADK_JSON_COLUMN_DDL_TEMPLATE_3.format(column_name)
 
 
+def _bare_table_name(name: str) -> str:
+    """Return the case-folded, schema-stripped table name for membership checks."""
+    return name.rsplit(".", 1)[-1].casefold()
+
+
+def _existing_table_names(rows: "list[Any]") -> "set[str]":
+    """Collapse ``data_dictionary.get_tables`` rows into a case-folded name set."""
+    return {str(row.get("table_name", "")).rsplit(".", 1)[-1].casefold() for row in rows}
+
+
 def _adk_config(config: Any) -> OracleADKConfig:
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):
@@ -3047,99 +2952,19 @@ def _adk_config(config: Any) -> OracleADKConfig:
     return {}
 
 
-def _validate_oracle_identifier(value: str, label: str) -> str:
-    if not value or not (value[0].isalpha() or value[0] == "_"):
-        msg = f"Invalid Oracle {label}: {value!r}"
-        raise ValueError(msg)
-    if any(not (char.isalnum() or char == "_") for char in value):
-        msg = f"Invalid Oracle {label}: {value!r}"
-        raise ValueError(msg)
-    return value
-
-
-def _oracle_compression_clause(adk_config: Mapping[str, Any]) -> str:
-    compression = adk_config.get("compression")
-    if not isinstance(compression, dict) or not compression.get("enabled"):
-        return ""
-
-    algorithm = str(compression.get("algorithm") or "advanced").lower()
-    try:
-        return ORACLE_COMPRESSION_CLAUSES[algorithm]
-    except KeyError as exc:
-        supported = ", ".join(sorted(ORACLE_COMPRESSION_CLAUSES))
-        msg = f"Unsupported Oracle ADK compression algorithm {algorithm!r}. Supported values: {supported}"
-        raise ValueError(msg) from exc
-
-
-def _oracle_hash_partition_clause(partitioning: dict[str, Any], partition_key: str) -> str:
-    partition_count = partitioning.get(
-        "partition_count", partitioning.get("partitions", ORACLE_DEFAULT_HASH_PARTITIONS)
-    )
-    if not isinstance(partition_count, int) or partition_count < ORACLE_MIN_HASH_PARTITIONS:
-        msg = "Oracle ADK hash partitioning requires partition_count >= 2"
-        raise ValueError(msg)
-    return f"PARTITION BY HASH ({partition_key}) PARTITIONS {partition_count}"
-
-
-def _oracle_range_partition_clause(partitioning: dict[str, Any], partition_key: str) -> str:
-    interval = str(partitioning.get("interval") or "month").lower()
-    interval_sql = ORACLE_RANGE_INTERVALS.get(interval)
-    if interval_sql is None:
-        supported = ", ".join(sorted(ORACLE_RANGE_INTERVALS))
-        msg = f"Unsupported Oracle ADK range partition interval {interval!r}. Supported values: {supported}"
-        raise ValueError(msg)
-
-    initial_less_than = str(partitioning.get("initial_less_than") or "TIMESTAMP '2000-01-01 00:00:00'")
-    return f"PARTITION BY RANGE ({partition_key}) INTERVAL ({interval_sql}) (PARTITION p_initial VALUES LESS THAN ({initial_less_than}))"
-
-
-def _oracle_partition_clause(
-    adk_config: Mapping[str, Any], table_kind: str, hash_partition_key: str, range_partition_key: str
-) -> str:
-    partitioning = adk_config.get("partitioning")
-    if not isinstance(partitioning, dict):
-        return ""
-
-    strategy = str(partitioning.get("strategy") or "").lower()
-    if not strategy:
-        return ""
-
-    table_key = partitioning.get(f"{table_kind}_partition_key")
-    configured_key = table_key if table_key is not None else partitioning.get("partition_key")
-    if strategy == "hash":
-        partition_key = _validate_oracle_identifier(str(configured_key or hash_partition_key), "partition key")
-        return _oracle_hash_partition_clause(partitioning, partition_key)
-    if strategy == "range":
-        partition_key = _validate_oracle_identifier(str(configured_key or range_partition_key), "partition key")
-        return _oracle_range_partition_clause(partitioning, partition_key)
-
-    msg = f"Unsupported Oracle ADK partitioning strategy {strategy!r}. Supported values: hash, range"
-    raise ValueError(msg)
-
-
-def _oracle_table_options_clause(adk_config: Mapping[str, Any], table_kind: str) -> str:
-    option_key = "events_table_options" if table_kind == "events" else f"{table_kind}_table_options"
-    options = adk_config.get(option_key)
-    return str(options).strip() if options else ""
-
-
-def _oracle_table_feature_clauses(
+def _adk_table_feature_clause(
     config: Any, table_kind: str, *, in_memory: bool, hash_partition_key: str, range_partition_key: str
 ) -> str:
-    adk_config = _adk_config(config)
-    clauses = [
-        clause
-        for clause in (
-            _oracle_compression_clause(adk_config),
-            "INMEMORY PRIORITY HIGH" if in_memory else "",
-            _oracle_table_options_clause(adk_config, table_kind),
-            _oracle_partition_clause(adk_config, table_kind, hash_partition_key, range_partition_key),
-        )
-        if clause
-    ]
-    if not clauses:
-        return ""
-    return " " + " ".join(clauses).replace("'", "''")
+    report = _oracle_table_feature_report(
+        config,
+        "adk",
+        _adk_config(config),
+        table_kind,
+        in_memory=in_memory,
+        hash_partition_key=hash_partition_key,
+        range_partition_key=range_partition_key,
+    )
+    return report["clause"]
 
 
 async def _read_lob_async(data: Any) -> Any:

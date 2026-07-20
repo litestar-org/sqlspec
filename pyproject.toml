@@ -266,6 +266,7 @@ include = [
   "sqlspec/adapters/oracledb/_json_handlers.py",   # Native JSON inputtypehandler / outputtypehandler chain
   "sqlspec/adapters/oracledb/_uuid_handlers.py",   # UUID ↔ RAW(16) inputtypehandler / outputtypehandler chain
   "sqlspec/adapters/oracledb/_vector_handlers.py", # DB_TYPE_VECTOR inputtypehandler / outputtypehandler dispatch
+  "sqlspec/adapters/oracledb/_storage.py",         # Pure extension-table storage capability and DDL gates
   "sqlspec/utils/text.py",                         # Text utilities
   "sqlspec/utils/sync_tools.py",                   # Synchronous utility functions
   "sqlspec/utils/env.py",                          # Environment variable parsing utilities

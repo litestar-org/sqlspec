@@ -666,7 +666,7 @@ def raw_sqlite_read_heavy() -> None:
 def sqlspec_sqlite_initialization() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
 
@@ -674,7 +674,7 @@ def sqlspec_sqlite_initialization() -> None:
 def sqlspec_sqlite_write_heavy() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             # Use execute_many for bulk inserts
@@ -685,7 +685,7 @@ def sqlspec_sqlite_write_heavy() -> None:
 def sqlspec_sqlite_read_heavy() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
@@ -765,9 +765,8 @@ def raw_duckdb_initialization() -> None:
     if duckdb is None:
         return
     # DuckDB needs to create the file itself - use temp name then delete
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()  # Delete so DuckDB can create fresh
     try:
         conn = duckdb.connect(str(tmp_path))
@@ -782,9 +781,8 @@ def raw_duckdb_write_heavy() -> None:
     duckdb = _get_duckdb()
     if duckdb is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         conn = duckdb.connect(str(tmp_path))
@@ -801,9 +799,8 @@ def raw_duckdb_read_heavy() -> None:
     duckdb = _get_duckdb()
     if duckdb is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         conn = duckdb.connect(str(tmp_path))
@@ -823,9 +820,8 @@ def raw_duckdb_iterative_inserts() -> None:
     duckdb = _get_duckdb()
     if duckdb is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         conn = duckdb.connect(str(tmp_path))
@@ -843,9 +839,8 @@ def raw_duckdb_repeated_queries() -> None:
     duckdb = _get_duckdb()
     if duckdb is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         conn = duckdb.connect(str(tmp_path))
@@ -861,9 +856,8 @@ def raw_duckdb_repeated_queries() -> None:
 
 
 def sqlspec_duckdb_initialization() -> None:
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         spec = SQLSpec()
@@ -876,9 +870,8 @@ def sqlspec_duckdb_initialization() -> None:
 
 
 def sqlspec_duckdb_write_heavy() -> None:
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         spec = SQLSpec()
@@ -893,9 +886,8 @@ def sqlspec_duckdb_write_heavy() -> None:
 
 
 def sqlspec_duckdb_read_heavy() -> None:
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         spec = SQLSpec()
@@ -913,9 +905,8 @@ def sqlspec_duckdb_read_heavy() -> None:
 
 def sqlspec_duckdb_iterative_inserts() -> None:
     """Individual inserts in a loop - shows per-call overhead."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         spec = SQLSpec()
@@ -931,9 +922,8 @@ def sqlspec_duckdb_iterative_inserts() -> None:
 
 def sqlspec_duckdb_repeated_queries() -> None:
     """Repeated single-row queries - tests query cache effectiveness."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         spec = SQLSpec()
@@ -967,9 +957,8 @@ def raw_duckdb_bulk() -> None:
 
 def sqlspec_duckdb_bulk() -> None:
     """Insert a batch of rows through SQLSpec's DuckDB bulk path."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     config = DuckDBConfig(connection_config={"database": str(tmp_path)})
     try:
@@ -1065,11 +1054,11 @@ def raw_adbc_rows() -> None:
 
 def sqlspec_adbc_rows() -> None:
     """Fetch rows through SQLSpec's ADBC Arrow-backed path."""
-    AdbcConfig = _get_adbc_config()  # noqa: N806
+    adbc_config_type = _get_adbc_config()
     config_values = _adbc_benchmark_connection_config()
-    if AdbcConfig is None or config_values is None:
+    if adbc_config_type is None or config_values is None:
         _benchmark_unavailable()
-    config = AdbcConfig(connection_config=config_values)
+    config = adbc_config_type(connection_config=config_values)
     try:
         with config.provide_session() as session:
             session.execute(ADBC_ROWS_CREATE)
@@ -1150,12 +1139,12 @@ def raw_mysqlconnector_json_rows() -> None:
 
 def sqlspec_mysqlconnector_json_rows() -> None:
     """Fetch JSON rows through SQLSpec's MySQL connector path."""
-    Config = _get_mysql_connector_config()  # noqa: N806
+    config_type = _get_mysql_connector_config()
     connection_config = _mysql_benchmark_connection_config()
-    if Config is None or connection_config is None:
+    if config_type is None or connection_config is None:
         _benchmark_unavailable()
     pool_config = {**connection_config, "pool_size": 1}
-    config = Config(connection_config=pool_config, driver_features={"json_deserializer": json.loads})
+    config = config_type(connection_config=pool_config, driver_features={"json_deserializer": json.loads})
     try:
         with config.provide_session() as session:
             session.execute(MYSQL_JSON_CREATE)
@@ -1234,7 +1223,7 @@ def sqlspec_spanner_strings() -> None:
 def _get_duckdb_engine() -> tuple[Any, Any]:
     """Import SQLAlchemy with duckdb_engine lazily."""
     try:
-        import duckdb_engine  # noqa: F401
+        importlib.import_module("duckdb_engine")
         from sqlalchemy import create_engine, text
     except ImportError:
         return None, None
@@ -1246,9 +1235,8 @@ def sqlalchemy_duckdb_initialization() -> None:
     create_engine, text = _get_duckdb_engine()
     if create_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         engine = create_engine(f"duckdb:///{tmp_path}")
@@ -1264,9 +1252,8 @@ def sqlalchemy_duckdb_write_heavy() -> None:
     create_engine, text = _get_duckdb_engine()
     if create_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         engine = create_engine(f"duckdb:///{tmp_path}")
@@ -1284,9 +1271,8 @@ def sqlalchemy_duckdb_read_heavy() -> None:
     create_engine, text = _get_duckdb_engine()
     if create_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         engine = create_engine(f"duckdb:///{tmp_path}")
@@ -1308,9 +1294,8 @@ def sqlalchemy_duckdb_iterative_inserts() -> None:
     create_engine, text = _get_duckdb_engine()
     if create_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         engine = create_engine(f"duckdb:///{tmp_path}")
@@ -1329,9 +1314,8 @@ def sqlalchemy_duckdb_repeated_queries() -> None:
     create_engine, text = _get_duckdb_engine()
     if create_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     tmp_path.unlink()
     try:
         engine = create_engine(f"duckdb:///{tmp_path}")
@@ -1369,7 +1353,7 @@ def sqlspec_sqlite_iterative_inserts() -> None:
     """Individual inserts in a loop - shows per-call overhead."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             for i in range(ROWS_TO_INSERT):
@@ -1417,7 +1401,7 @@ def sqlspec_sqlite_repeated_queries() -> None:
     """Repeated single-row queries - tests query cache effectiveness."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
@@ -1491,9 +1475,8 @@ async def raw_aiosqlite_initialization() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
@@ -1507,9 +1490,8 @@ async def raw_aiosqlite_write_heavy() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
@@ -1525,9 +1507,8 @@ async def raw_aiosqlite_read_heavy() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
@@ -1546,9 +1527,8 @@ async def raw_aiosqlite_iterative_inserts() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
@@ -1564,9 +1544,8 @@ async def raw_aiosqlite_repeated_queries() -> None:
     aiosqlite = _get_aiosqlite()
     if aiosqlite is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         async with aiosqlite.connect(str(tmp_path)) as conn:
             await conn.execute(CREATE_TEST_TABLE)
@@ -1582,16 +1561,15 @@ async def raw_aiosqlite_repeated_queries() -> None:
 
 
 async def sqlspec_aiosqlite_initialization() -> None:
-    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
-    if AiosqliteConfig is None:
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
         return
     # Use delete=False so we control when the file is deleted (after pool close)
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -1604,15 +1582,14 @@ async def sqlspec_aiosqlite_initialization() -> None:
 
 
 async def sqlspec_aiosqlite_write_heavy() -> None:
-    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
-    if AiosqliteConfig is None:
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -1626,15 +1603,14 @@ async def sqlspec_aiosqlite_write_heavy() -> None:
 
 
 async def sqlspec_aiosqlite_read_heavy() -> None:
-    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
-    if AiosqliteConfig is None:
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -1650,15 +1626,14 @@ async def sqlspec_aiosqlite_read_heavy() -> None:
 
 
 async def sqlspec_aiosqlite_iterative_inserts() -> None:
-    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
-    if AiosqliteConfig is None:
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -1672,15 +1647,14 @@ async def sqlspec_aiosqlite_iterative_inserts() -> None:
 
 
 async def sqlspec_aiosqlite_repeated_queries() -> None:
-    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
-    if AiosqliteConfig is None:
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         spec = SQLSpec()
-        config = AiosqliteConfig(database=str(tmp_path), pool_size=POOL_SIZE)
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
@@ -1707,11 +1681,11 @@ async def raw_aiosqlite_worker_hops() -> None:
 
 
 async def sqlspec_aiosqlite_worker_hops() -> None:
-    AiosqliteConfig = _get_aiosqlite_config()  # noqa: N806
-    if AiosqliteConfig is None:
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
         return
     spec = SQLSpec()
-    config = AiosqliteConfig(database=":memory:", pool_size=1)
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": 1})
     try:
         async with spec.provide_session(config) as session:
             for i in range(ROWS_TO_INSERT):
@@ -1728,9 +1702,8 @@ async def sqlalchemy_aiosqlite_initialization() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
@@ -1746,9 +1719,8 @@ async def sqlalchemy_aiosqlite_write_heavy() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
@@ -1766,9 +1738,8 @@ async def sqlalchemy_aiosqlite_read_heavy() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
@@ -1789,9 +1760,8 @@ async def sqlalchemy_aiosqlite_iterative_inserts() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
@@ -1809,9 +1779,8 @@ async def sqlalchemy_aiosqlite_repeated_queries() -> None:
     create_async_engine, text = _get_async_sqlalchemy()
     if create_async_engine is None:
         return
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}")
         async with engine.connect() as conn:
@@ -1952,11 +1921,11 @@ async def raw_asyncpg_repeated_queries() -> None:
 
 
 async def sqlspec_asyncpg_initialization() -> None:
-    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
-    if AsyncpgConfig is None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    config = asyncpg_config_type(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -1966,11 +1935,11 @@ async def sqlspec_asyncpg_initialization() -> None:
 
 
 async def sqlspec_asyncpg_write_heavy() -> None:
-    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
-    if AsyncpgConfig is None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    config = asyncpg_config_type(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -1982,11 +1951,11 @@ async def sqlspec_asyncpg_write_heavy() -> None:
 
 
 async def sqlspec_asyncpg_read_heavy() -> None:
-    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
-    if AsyncpgConfig is None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    config = asyncpg_config_type(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             rows = await session.fetch(SELECT_TEST_VALUES)
@@ -1996,11 +1965,11 @@ async def sqlspec_asyncpg_read_heavy() -> None:
 
 
 async def sqlspec_asyncpg_iterative_inserts() -> None:
-    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
-    if AsyncpgConfig is None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    config = asyncpg_config_type(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -2012,11 +1981,11 @@ async def sqlspec_asyncpg_iterative_inserts() -> None:
 
 
 async def sqlspec_asyncpg_repeated_queries() -> None:
-    AsyncpgConfig = _get_asyncpg_config()  # noqa: N806
-    if AsyncpgConfig is None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
         _benchmark_unavailable()
     spec = SQLSpec()
-    config = AsyncpgConfig(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
+    config = asyncpg_config_type(connection_config={"dsn": _postgres_benchmark_dsn(), "min_size": 1, "max_size": 1})
     try:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
@@ -2476,7 +2445,7 @@ def sqlspec_sqlite_dict_key_transform() -> None:
     """SELECT 10K rows with 10 columns, then transform keys to camelCase (sqlspec)."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_WIDE_TABLE)
             data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
@@ -2513,7 +2482,7 @@ def sqlspec_sqlite_schema_mapping() -> None:
     """SELECT 10K rows and map to TypedDict using schema_type= parameter."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_WIDE_TABLE)
             data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
@@ -2567,7 +2536,7 @@ def sqlspec_sqlite_complex_parameters() -> None:
     """INSERT rows with complex parameter types: UUID, datetime, JSON (sqlspec)."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_COMPLEX_TABLE)
             data: Sequence[tuple[str, str, str]] = [_generate_complex_row(i) for i in range(ROWS_TO_INSERT)]
@@ -2598,7 +2567,7 @@ def sqlspec_sqlite_thin_path_stress() -> None:
     stress_count = ROWS_TO_INSERT * 10
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         spec = SQLSpec()
-        config = SqliteConfig(database=tmp.name)
+        config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
             for i in range(stress_count):

@@ -25,7 +25,11 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""

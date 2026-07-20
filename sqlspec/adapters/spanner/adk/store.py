@@ -83,6 +83,10 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def create_session(
@@ -658,8 +662,6 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
         if ddl_statements:
             database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
-            if self._metadata_table not in existing_tables:
-                self._run_write([(self._metadata_seed_sql(), {}, {})])
 
     def _sessions_table_ddl(self) -> str:
         owner_line = ""
@@ -730,12 +732,6 @@ CREATE TABLE {self._metadata_table} (
 ) PRIMARY KEY (key)
 """
 
-    def _metadata_seed_sql(self) -> str:
-        return f"""
-INSERT INTO {self._metadata_table} (key, value)
-VALUES ('schema_version', '1')
-"""
-
     def _expiration_index_ddl(self) -> "list[str]":
         options = f" OPTIONS ({self._expires_index_options})" if self._expires_index_options else ""
         return [
@@ -779,6 +775,10 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:

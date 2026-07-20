@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -121,6 +122,12 @@ class _ADKStoreCommon(Generic[ConfigT]):
         """Return the owner ID column name only (or None if not configured)."""
         return self._owner_id_column_name
 
+    @property
+    def create_schema_enabled(self) -> bool:
+        """Return whether adapter-level table creation should run."""
+        manage_schema, create_schema = self._schema_management_flags()
+        return manage_schema and create_schema
+
     def _reset_drop_tables_sql(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""
         statements = list(self._drop_tables_sql())
@@ -135,6 +142,12 @@ class _ADKStoreCommon(Generic[ConfigT]):
             Dict with ADK table names and optionally owner_id_column.
         """
         return dict(_adk_session_store_config(self._config))
+
+    def _schema_management_flags(self) -> "tuple[bool, bool]":
+        """Return automatic-management and missing-table creation flags."""
+        extension_config = cast("dict[str, Any]", self._config.extension_config)
+        settings = cast("dict[str, Any]", extension_config.get("adk", {}))
+        return bool(settings.get("manage_schema", True)), bool(settings.get("create_schema", True))
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
         """Calculate expiration timestamp from expires_in.
@@ -240,6 +253,9 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     async def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -482,10 +498,42 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
+    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK table changes from canonical adapter DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl_targets = (
+            (self._session_table, await self._sessions_table_ddl()),
+            (self._events_table, await self._events_table_ddl()),
+            (self._app_state_table, await self._app_states_table_ddl()),
+            (self._user_state_table, await self._user_states_table_ddl()),
+            (self._metadata_table, await self._metadata_table_ddl()),
+        )
+        targets = [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
+        session_context = self._config.provide_session()
+        if hasattr(session_context, "__aenter__"):
+            async with cast("Any", session_context) as driver:
+                await ensure_schema_async(
+                    driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+                )
+            return
+        await async_(_reconcile_adk_schema_sync)(
+            self._config, targets, create_schema=create_schema, assume_existing=assume_existing
+        )
+
     async def ensure_tables(self) -> None:
         """Create tables and emit a standardized log entry."""
 
-        await self.create_tables()
+        if self.create_schema_enabled:
+            await self.create_tables()
+        await self.reconcile_schema(assume_existing=self.create_schema_enabled)
         self._log_tables_created()
 
     async def drop_tables(self) -> None:
@@ -563,15 +611,6 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def _metadata_seed_sql(self) -> str:
-        """Get the SQL statement that seeds the ADK schema-version metadata row.
-
-        Returns:
-            SQL statement that records ``schema_version = 1``.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def _drop_app_states_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the app-scoped state table.
 
@@ -630,6 +669,9 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def create_tables(self) -> None:
         """Create the sessions and events tables if they don't exist."""
         raise NotImplementedError
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
 
     @abstractmethod
     def create_session(
@@ -732,10 +774,33 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Set a value in the ADK internal metadata table."""
         raise NotImplementedError
 
+    def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK table changes from canonical adapter DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl_targets = (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+        targets = [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
+        _reconcile_adk_schema_sync(self._config, targets, create_schema=create_schema, assume_existing=assume_existing)
+
     def ensure_tables(self) -> None:
         """Create tables and emit a standardized log entry."""
 
-        self.create_tables()
+        if self.create_schema_enabled:
+            self.create_tables()
+        self.reconcile_schema(assume_existing=self.create_schema_enabled)
         self._log_tables_created()
 
     def drop_tables(self) -> None:
@@ -779,11 +844,6 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _metadata_seed_sql(self) -> str:
-        """Get the SQL statement that seeds the ADK schema-version metadata row."""
-        raise NotImplementedError
-
-    @abstractmethod
     def _drop_app_states_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement for the app-scoped state table."""
         raise NotImplementedError
@@ -812,3 +872,13 @@ def _run_lifecycle_sync(config: Any, statements: "list[str]") -> None:
         commit = getattr(driver, "commit", None)
         if callable(commit):
             commit()
+
+
+def _reconcile_adk_schema_sync(
+    config: Any, targets: "list[SchemaTarget]", *, create_schema: bool, assume_existing: bool
+) -> None:
+    """Run additive reconciliation for a synchronous ADK store."""
+    with cast("Any", config.provide_session()) as driver:
+        ensure_schema_sync(
+            driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+        )

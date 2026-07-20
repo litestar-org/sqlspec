@@ -1,9 +1,11 @@
 """Base classes for adapter-specific event queue stores."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
+from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -32,10 +34,25 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     __slots__ = ("_config", "_extension_settings", "_table_name")
 
+    extension_config_options: ClassVar[frozenset[str]] = frozenset({
+        "backend",
+        "create_schema",
+        "event_poll_interval",
+        "lease_seconds",
+        "manage_schema",
+        "poll_interval",
+        "queue_table",
+        "retention_seconds",
+        "run_migrations",
+        "select_for_update",
+        "skip_locked",
+    })
+
     def __init__(self, config: ConfigT) -> None:
         self._config = config
         extension_config = cast("dict[str, Any]", config.extension_config)
         self._extension_settings = cast("dict[str, Any]", extension_config.get("events", {}))
+        self._validate_extension_config()
         table_name = self._extension_settings.get("queue_table", "sqlspec_event_queue")
         self._table_name = normalize_queue_table_name(str(table_name))
 
@@ -60,6 +77,47 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def drop_statements(self) -> "list[str]":
         """Return statements required to drop queue artifacts."""
         return [self._wrap_drop_statement(f"DROP TABLE {self.table_name}")]
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
+    def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
+        """Apply additive queue-table changes with a synchronous driver."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return ensure_schema_sync(driver, [], manage_schema=False)
+        return ensure_schema_sync(driver, [self._schema_target()], manage_schema=True, create_schema=create_schema)
+
+    async def reconcile_schema_async(self, driver: Any) -> SchemaEnsureResult:
+        """Apply additive queue-table changes with an asynchronous driver."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return await ensure_schema_async(driver, [], manage_schema=False)
+        return await ensure_schema_async(
+            driver, [self._schema_target()], manage_schema=True, create_schema=create_schema
+        )
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build a schema target from the canonical queue table DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=dialect)
+
+    def _validate_extension_config(self) -> None:
+        """Reject events options that this adapter store cannot honor."""
+        unsupported = sorted(set(self._extension_settings).difference(type(self).extension_config_options))
+        if unsupported:
+            adapter = type(self).__module__.split(".")[2]
+            keys = ", ".join(repr(key) for key in unsupported)
+            msg = f"Unsupported events configuration key(s) for {adapter}: {keys}"
+            raise ImproperConfigurationError(msg)
+
+    def _schema_management_flags(self) -> "tuple[bool, bool]":
+        """Return automatic-management and missing-table creation flags."""
+        return bool(self.settings.get("manage_schema", True)), bool(self.settings.get("create_schema", True))
 
     def _string_type(self, length: int) -> str:
         """Return string type syntax for the given length.
@@ -143,6 +201,17 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def _index_name(self) -> str:
         """Return the index name for the queue table."""
         return f"idx_{self.table_name.replace('.', '_')}_channel_status"
+
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        """Return the ``(schema, table)`` target for a data-dictionary index check.
+
+        Adapters whose index DDL is self-idempotent (``CREATE INDEX IF NOT
+        EXISTS``) return ``None``: no external existence check is needed. Adapters
+        whose dialect lacks an idempotent index DDL (MySQL) return the schema and
+        table so the migration can consult ``driver.data_dictionary.get_indexes``
+        and skip the ``ADD INDEX`` statement when the index already exists.
+        """
+        return None
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
         """Wrap CREATE statement with IF NOT EXISTS.

@@ -16,12 +16,10 @@ def test_set_uses_run_in_transaction() -> None:
     mock_db = _mock_database()
 
     config = MagicMock()
-    config.extension_config = {"litestar": {"table_name": "sess"}}
+    config.extension_config = {"litestar": {"session_table": "sess"}}
     config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    store._table_name = "sess"  # type: ignore[attr-defined]
-
     store._set("s1", b"data", None)  # pyright: ignore
 
     mock_db.run_in_transaction.assert_called_once()
@@ -32,12 +30,10 @@ def test_delete_uses_run_in_transaction() -> None:
     mock_db = _mock_database()
 
     config = MagicMock()
-    config.extension_config = {"litestar": {"table_name": "sess"}}
+    config.extension_config = {"litestar": {"session_table": "sess"}}
     config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    store._table_name = "sess"  # type: ignore[attr-defined]
-
     store._delete("s1")  # pyright: ignore
 
     mock_db.run_in_transaction.assert_called_once()
@@ -48,12 +44,10 @@ def test_delete_all_uses_run_in_transaction() -> None:
     mock_db = _mock_database()
 
     config = MagicMock()
-    config.extension_config = {"litestar": {"table_name": "sess"}}
+    config.extension_config = {"litestar": {"session_table": "sess"}}
     config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    store._table_name = "sess"  # type: ignore[attr-defined]
-
     store._delete_all()  # pyright: ignore
 
     mock_db.run_in_transaction.assert_called_once()
@@ -64,12 +58,10 @@ def test_delete_expired_uses_run_in_transaction() -> None:
     mock_db = _mock_database()
 
     config = MagicMock()
-    config.extension_config = {"litestar": {"table_name": "sess"}}
+    config.extension_config = {"litestar": {"session_table": "sess"}}
     config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    store._table_name = "sess"  # type: ignore[attr-defined]
-
     store._delete_expired()  # pyright: ignore
 
     mock_db.run_in_transaction.assert_called_once()
@@ -93,12 +85,10 @@ def test_get_uses_snapshot_session() -> None:
     cm = _context_manager_yielding(driver)
 
     config = MagicMock()
-    config.extension_config = {"litestar": {"table_name": "sess"}}
+    config.extension_config = {"litestar": {"session_table": "sess"}}
     config.provide_session.return_value = cm
 
     store = SpannerSyncStore(config)
-    store._table_name = "sess"  # type: ignore[attr-defined]
-
     result = store._get("s1")  # pyright: ignore
 
     config.provide_session.assert_called_once_with()
@@ -112,12 +102,10 @@ def test_exists_uses_snapshot_session() -> None:
     cm = _context_manager_yielding(driver)
 
     config = MagicMock()
-    config.extension_config = {"litestar": {"table_name": "sess"}}
+    config.extension_config = {"litestar": {"session_table": "sess"}}
     config.provide_session.return_value = cm
 
     store = SpannerSyncStore(config)
-    store._table_name = "sess"  # type: ignore[attr-defined]
-
     result = store._exists("s1")  # pyright: ignore
 
     config.provide_session.assert_called_once_with()

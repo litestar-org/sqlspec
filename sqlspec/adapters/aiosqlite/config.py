@@ -1,6 +1,7 @@
 """Aiosqlite database configuration."""
 
 import re
+from collections.abc import Mapping
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
@@ -29,7 +30,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -182,66 +183,12 @@ _RUNTIME_FEATURE_KEYS = (
     "text_factory",
     "trace_callback",
 )
-
-
-def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
-    rendered: list[tuple[str, str]] = []
-    for pragma_name, pragma_value in pragmas.items():
-        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
-            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
-            raise ImproperConfigurationError(msg)
-        if isinstance(pragma_value, bool):
-            rendered_value = "1" if pragma_value else "0"
-        elif isinstance(pragma_value, int):
-            rendered_value = str(pragma_value)
-        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
-            rendered_value = pragma_value
-        else:
-            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
-            raise ImproperConfigurationError(msg)
-        rendered.append((pragma_name, rendered_value))
-    return rendered
-
-
-def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
-    for entry in entries:
-        for required_key in required_keys:
-            if required_key not in entry:
-                msg = f"driver_features['{feature_name}'] entry is missing required key {required_key!r}"
-                raise ImproperConfigurationError(msg)
-
-
-def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
-    runtime_setup: dict[str, Any] = {}
-    for key in _RUNTIME_FEATURE_KEYS:
-        if key in features:
-            runtime_setup[key] = features.pop(key)
-    if not runtime_setup:
-        return None
-
-    if "pragmas" in runtime_setup:
-        runtime_setup["pragmas"] = _render_pragmas(runtime_setup["pragmas"])
-
-    row_factory = runtime_setup.get("row_factory")
-    if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):
-        msg = f"driver_features['row_factory'] must be 'row', 'dict', 'tuple', or a callable; got {row_factory!r}"
-        raise ImproperConfigurationError(msg)
-    if isinstance(row_factory, str) and row_factory not in _ROW_FACTORY_LITERALS:
-        msg = f"driver_features['row_factory'] must be 'row', 'dict', 'tuple', or a callable; got {row_factory!r}"
-        raise ImproperConfigurationError(msg)
-
-    _validate_entries(runtime_setup.get("custom_functions", ()), ("name", "narg", "func"), "custom_functions")
-    _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
-    _validate_entries(
-        runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
-    )
-
-    interval = runtime_setup.get("progress_handler_interval")
-    if interval is not None and (not isinstance(interval, int) or isinstance(interval, bool) or interval < 1):
-        msg = f"driver_features['progress_handler_interval'] must be a positive int; got {interval!r}"
-        raise ImproperConfigurationError(msg)
-
-    return runtime_setup
+_EXTENSION_PRAGMA_PROFILE = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA cache_size = -64000",
+    "PRAGMA mmap_size = 30000000",
+    "PRAGMA journal_size_limit = 67108864",
+)
 
 
 class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
@@ -374,6 +321,56 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             **kwargs,
         )
 
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for AiosqliteConfig types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "AiosqliteAggregateConfig": AiosqliteAggregateConfig,
+            "AiosqliteCollationConfig": AiosqliteCollationConfig,
+            "AiosqliteConnectionContext": AiosqliteConnectionContext,
+            "AiosqliteConnection": AiosqliteConnection,
+            "AiosqliteConnectionFactory": AiosqliteConnectionFactory,
+            "AiosqliteConnectionParams": AiosqliteConnectionParams,
+            "AiosqliteConnectionPool": AiosqliteConnectionPool,
+            "AiosqliteCursor": AiosqliteCursor,
+            "AiosqliteDriver": AiosqliteDriver,
+            "AiosqliteDriverFeatures": AiosqliteDriverFeatures,
+            "AiosqliteExceptionHandler": AiosqliteExceptionHandler,
+            "AiosqliteFunctionConfig": AiosqliteFunctionConfig,
+            "AiosqlitePoolParams": AiosqlitePoolParams,
+            "AiosqliteSessionContext": AiosqliteSessionContext,
+            "Literal": Literal,
+            "PathLike": PathLike,
+        })
+        return namespace
+
+    async def create_connection(self) -> "AiosqliteConnection":
+        """Create a single async connection from the pool.
+
+        Returns:
+            An aiosqlite connection instance.
+        """
+        pool = self.connection_instance
+        if pool is None:
+            pool = await self.create_pool()
+            self.connection_instance = pool
+        pool_connection = await pool.acquire()
+        return pool_connection.connection
+
+    async def provide_pool(self) -> AiosqliteConnectionPool:
+        """Provide async pool instance.
+
+        Returns:
+            The async connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
+
     async def _create_pool(self) -> AiosqliteConnectionPool:
         """Create the connection pool instance.
 
@@ -427,58 +424,97 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             json_deserializer=self.driver_features.get("json_deserializer"),
         )
 
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for AiosqliteConfig types.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "AiosqliteAggregateConfig": AiosqliteAggregateConfig,
-            "AiosqliteCollationConfig": AiosqliteCollationConfig,
-            "AiosqliteConnectionContext": AiosqliteConnectionContext,
-            "AiosqliteConnection": AiosqliteConnection,
-            "AiosqliteConnectionFactory": AiosqliteConnectionFactory,
-            "AiosqliteConnectionParams": AiosqliteConnectionParams,
-            "AiosqliteConnectionPool": AiosqliteConnectionPool,
-            "AiosqliteCursor": AiosqliteCursor,
-            "AiosqliteDriver": AiosqliteDriver,
-            "AiosqliteDriverFeatures": AiosqliteDriverFeatures,
-            "AiosqliteExceptionHandler": AiosqliteExceptionHandler,
-            "AiosqliteFunctionConfig": AiosqliteFunctionConfig,
-            "AiosqlitePoolParams": AiosqlitePoolParams,
-            "AiosqliteSessionContext": AiosqliteSessionContext,
-            "Literal": Literal,
-            "PathLike": PathLike,
-        })
-        return namespace
-
-    async def create_connection(self) -> "AiosqliteConnection":
-        """Create a single async connection from the pool.
-
-        Returns:
-            An aiosqlite connection instance.
-        """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        pool_connection = await pool.acquire()
-        return pool_connection.connection
-
-    async def provide_pool(self) -> AiosqliteConnectionPool:
-        """Provide async pool instance.
-
-        Returns:
-            The async connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = await self.create_pool()
-        return self.connection_instance
-
     async def _close_pool(self) -> None:
         """Close the connection pool."""
         if self.connection_instance and not self.connection_instance.is_closed:
             await self.connection_instance.close()
             self.connection_instance = None
+
+
+def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+    extension_config = cast("dict[str, Any]", config.extension_config)
+    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
+    profile = settings.get("pragma_profile", False)
+    if not isinstance(profile, bool):
+        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
+        raise ImproperConfigurationError(msg)
+    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
+    overrides = settings.get("pragma_overrides")
+    if overrides is None:
+        return tuple(statements)
+    if not isinstance(overrides, Mapping):
+        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in _render_pragmas(overrides))
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace(
+            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
+        )
+        raise ImproperConfigurationError(msg) from exc
+    return tuple(statements)
+
+
+async def _apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+    for statement in statements:
+        await connection.execute(statement)
+
+
+def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+    rendered: list[tuple[str, str]] = []
+    for pragma_name, pragma_value in pragmas.items():
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(pragma_value, bool):
+            rendered_value = "1" if pragma_value else "0"
+        elif isinstance(pragma_value, int):
+            rendered_value = str(pragma_value)
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+            rendered_value = pragma_value
+        else:
+            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
+            raise ImproperConfigurationError(msg)
+        rendered.append((pragma_name, rendered_value))
+    return rendered
+
+
+def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
+    for entry in entries:
+        for required_key in required_keys:
+            if required_key not in entry:
+                msg = f"driver_features['{feature_name}'] entry is missing required key {required_key!r}"
+                raise ImproperConfigurationError(msg)
+
+
+def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
+    runtime_setup: dict[str, Any] = {}
+    for key in _RUNTIME_FEATURE_KEYS:
+        if key in features:
+            runtime_setup[key] = features.pop(key)
+    if not runtime_setup:
+        return None
+
+    if "pragmas" in runtime_setup:
+        runtime_setup["pragmas"] = _render_pragmas(runtime_setup["pragmas"])
+
+    row_factory = runtime_setup.get("row_factory")
+    if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):
+        msg = f"driver_features['row_factory'] must be 'row', 'dict', 'tuple', or a callable; got {row_factory!r}"
+        raise ImproperConfigurationError(msg)
+    if isinstance(row_factory, str) and row_factory not in _ROW_FACTORY_LITERALS:
+        msg = f"driver_features['row_factory'] must be 'row', 'dict', 'tuple', or a callable; got {row_factory!r}"
+        raise ImproperConfigurationError(msg)
+
+    _validate_entries(runtime_setup.get("custom_functions", ()), ("name", "narg", "func"), "custom_functions")
+    _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
+    _validate_entries(
+        runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
+    )
+
+    interval = runtime_setup.get("progress_handler_interval")
+    if interval is not None and (not isinstance(interval, int) or isinstance(interval, bool) or interval < 1):
+        msg = f"driver_features['progress_handler_interval'] must be a positive int; got {interval!r}"
+        raise ImproperConfigurationError(msg)
+
+    return runtime_setup

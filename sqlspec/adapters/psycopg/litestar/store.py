@@ -4,7 +4,7 @@ Provides both async and sync PostgreSQL session stores using psycopg3.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from psycopg.rows import dict_row
 
@@ -34,6 +34,11 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
     """
 
     __slots__ = ()
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "autovacuum_analyze_scale_factor",
+        "autovacuum_vacuum_scale_factor",
+        "fillfactor",
+    })
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
         """Initialize Psycopg async session store.
@@ -43,45 +48,17 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         """
         super().__init__(config)
 
-    def _table_ddl(self) -> str:
-        """Get PostgreSQL CREATE TABLE SQL with optimized schema.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id TEXT PRIMARY KEY,
-            data BYTEA NOT NULL,
-            expires_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-
-        ALTER TABLE {self._table_name} SET (
-            autovacuum_vacuum_scale_factor = 0.05,
-            autovacuum_analyze_scale_factor = 0.02
-        );
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        """Get PostgreSQL DROP TABLE SQL statements.
-
-        Returns:
-            List of SQL statements to drop indexes and table.
-        """
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
             await driver.commit()
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -239,6 +216,39 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
                 self._log_delete_expired(count)
             return count
 
+    def _table_ddl(self) -> str:
+        """Get PostgreSQL CREATE TABLE SQL with optimized schema.
+
+        Returns:
+            SQL statement to create the sessions table with proper indexes.
+        """
+        fillfactor, vacuum_scale, analyze_scale = _postgres_litestar_tuning(self._config)
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id TEXT PRIMARY KEY,
+            data BYTEA NOT NULL,
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) WITH (fillfactor = {fillfactor});
+
+        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+
+        ALTER TABLE {self._table_name} SET (
+            autovacuum_vacuum_scale_factor = {vacuum_scale:g},
+            autovacuum_analyze_scale_factor = {analyze_scale:g}
+        );
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get PostgreSQL DROP TABLE SQL statements.
+
+        Returns:
+            List of SQL statements to drop indexes and table.
+        """
+        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+
 
 class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
     """PostgreSQL session store using Psycopg sync driver.
@@ -258,6 +268,11 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
     """
 
     __slots__ = ()
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "autovacuum_analyze_scale_factor",
+        "autovacuum_vacuum_scale_factor",
+        "fillfactor",
+    })
 
     def __init__(self, config: "PsycopgSyncConfig") -> None:
         """Initialize Psycopg sync session store.
@@ -267,12 +282,85 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
         super().__init__(config)
 
+    async def create_table(self) -> None:
+        """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Get a session value by key.
+
+        Args:
+            key: Session ID to retrieve.
+            renew_for: If given, renew the expiry time for this duration.
+
+        Returns:
+            Session data as bytes if found and not expired, None otherwise.
+        """
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Store a session value.
+
+        Args:
+            key: Session ID.
+            value: Session data.
+            expires_in: Time until expiration.
+        """
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key.
+
+        Args:
+            key: Session ID to delete.
+        """
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        """Delete all sessions from the store."""
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        """Check if a session key exists and is not expired.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            True if the session exists and is not expired.
+        """
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Get the time in seconds until the session expires.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            Seconds until expiration, or None if no expiry or key doesn't exist.
+        """
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        """Delete all expired sessions.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        return await async_(self._delete_expired)()
+
     def _table_ddl(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
 
         Returns:
             SQL statement to create the sessions table with proper indexes.
         """
+        fillfactor, vacuum_scale, analyze_scale = _postgres_litestar_tuning(self._config)
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -280,14 +368,14 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             expires_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = 80);
+        ) WITH (fillfactor = {fillfactor});
 
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
 
         ALTER TABLE {self._table_name} SET (
-            autovacuum_vacuum_scale_factor = 0.05,
-            autovacuum_analyze_scale_factor = 0.02
+            autovacuum_vacuum_scale_factor = {vacuum_scale:g},
+            autovacuum_analyze_scale_factor = {analyze_scale:g}
         );
         """
 
@@ -306,10 +394,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             driver.execute_script(sql)
             driver.commit()
         self._log_table_created()
-
-    async def create_table(self) -> None:
-        """Create the session table if it doesn't exist."""
-        await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
@@ -340,18 +424,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
             return bytes(row["data"])
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key.
-
-        Args:
-            key: Session ID to retrieve.
-            renew_for: If given, renew the expiry time for this duration.
-
-        Returns:
-            Session data as bytes if found and not expired, None otherwise.
-        """
-        return await async_(self._get)(key, renew_for)
-
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
@@ -371,16 +443,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             conn.execute(sql.encode(), (key, data, expires_at))
             conn.commit()
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value.
-
-        Args:
-            key: Session ID.
-            value: Session data.
-            expires_in: Time until expiration.
-        """
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
@@ -388,14 +450,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn:
             conn.execute(sql.encode(), (key,))
             conn.commit()
-
-    async def delete(self, key: str) -> None:
-        """Delete a session by key.
-
-        Args:
-            key: Session ID to delete.
-        """
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
@@ -405,10 +459,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             conn.execute(sql.encode())
             conn.commit()
         self._log_delete_all()
-
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
@@ -422,17 +472,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             cur.execute(sql.encode(), (key,))
             result = cur.fetchone()
             return result is not None
-
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            True if the session exists and is not expired.
-        """
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
@@ -458,17 +497,6 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             delta = expires_at - now
             return int(delta.total_seconds())
 
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            Seconds until expiration, or None if no expiry or key doesn't exist.
-        """
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
@@ -481,10 +509,18 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
                 self._log_delete_expired(count)
             return count
 
-    async def delete_expired(self) -> int:
-        """Delete all expired sessions.
 
-        Returns:
-            Number of sessions deleted.
-        """
-        return await async_(self._delete_expired)()
+def _postgres_litestar_tuning(config: Any) -> "tuple[int, float, float]":
+    settings = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+    fillfactor = settings.get("fillfactor", 80)
+    if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
+        msg = "extension_config['litestar']['fillfactor'] must be an integer from 10 to 100"
+        raise ValueError(msg)
+    scales: list[float] = []
+    for key, default in (("autovacuum_vacuum_scale_factor", 0.05), ("autovacuum_analyze_scale_factor", 0.02)):
+        value = settings.get(key, default)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+            msg = f"extension_config['litestar']['{key}'] must be a number from 0 to 1"
+            raise ValueError(msg)
+        scales.append(float(value))
+    return fillfactor, scales[0], scales[1]

@@ -42,6 +42,78 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         """
         super().__init__(config)
 
+    async def create_table(self) -> None:
+        """Create the session table if it doesn't exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Get a session value by key.
+
+        Args:
+            key: Session ID to retrieve.
+            renew_for: If given, renew the expiry time for this duration.
+
+        Returns:
+            Session data as bytes if found and not expired, None otherwise.
+        """
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Store a session value.
+
+        Args:
+            key: Session ID.
+            value: Session data.
+            expires_in: Time until expiration.
+        """
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key.
+
+        Args:
+            key: Session ID to delete.
+        """
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        """Delete all sessions from the store."""
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        """Check if a session key exists and is not expired.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            True if the session exists and is not expired.
+        """
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Get the time in seconds until the session expires.
+
+        Args:
+            key: Session ID to check.
+
+        Returns:
+            Seconds until expiration, or None if no expiry or key doesn't exist.
+        """
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        """Delete all expired sessions.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        return await async_(self._delete_expired)()
+
     def _table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL.
 
@@ -108,10 +180,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             driver.execute_script(sql)
         self._log_table_created()
 
-    async def create_table(self) -> None:
-        """Create the session table if it doesn't exist."""
-        await async_(self._create_table)()
-
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get."""
         sql = f"""
@@ -143,18 +211,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
             return bytes(data)
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key.
-
-        Args:
-            key: Session ID to retrieve.
-            renew_for: If given, renew the expiry time for this duration.
-
-        Returns:
-            Session data as bytes if found and not expired, None otherwise.
-        """
-        return await async_(self._get)(key, renew_for)
-
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
@@ -175,16 +231,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             conn.execute(sql, (key, data, expires_at_str))
             conn.commit()
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value.
-
-        Args:
-            key: Session ID.
-            value: Session data.
-            expires_in: Time until expiration.
-        """
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
@@ -192,14 +238,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         with self._config.provide_connection() as conn:
             conn.execute(sql, (key,))
             conn.commit()
-
-    async def delete(self, key: str) -> None:
-        """Delete a session by key.
-
-        Args:
-            key: Session ID to delete.
-        """
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
@@ -209,10 +247,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             conn.execute(sql)
             conn.commit()
         self._log_delete_all()
-
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
@@ -226,17 +260,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             cursor = conn.execute(sql, (key,))
             result = cursor.fetchone()
             return result is not None
-
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            True if the session exists and is not expired.
-        """
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
@@ -266,17 +289,6 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             delta = expires_at - now
             return int(delta.total_seconds())
 
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            Seconds until expiration, or None if no expiry or key doesn't exist.
-        """
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
@@ -288,11 +300,3 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             if row_count > 0:
                 self._log_delete_expired(row_count)
             return row_count
-
-    async def delete_expired(self) -> int:
-        """Delete all expired sessions.
-
-        Returns:
-            Number of sessions deleted.
-        """
-        return await async_(self._delete_expired)()

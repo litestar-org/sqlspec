@@ -87,6 +87,10 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def create_tables(self) -> None:
         """Create the BigQuery ADK tables if they do not exist."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
         self._create_tables()
 
     def create_session(
@@ -551,14 +555,6 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         CLUSTER BY key
         """
 
-    def _metadata_seed_sql(self) -> str:
-        return f"""
-        MERGE {self._qualified(self._metadata_table)} target
-        USING (SELECT 'schema_version' AS key, '1' AS value) source
-        ON target.key = source.key
-        WHEN NOT MATCHED THEN INSERT (key, value) VALUES (source.key, source.value)
-        """
-
     def _drop_app_states_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {self._qualified(self._app_state_table)}"
 
@@ -584,7 +580,6 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             self._app_states_table_ddl(),
             self._user_states_table_ddl(),
             self._metadata_table_ddl(),
-            self._metadata_seed_sql(),
         ):
             self._run_query(statement)
 

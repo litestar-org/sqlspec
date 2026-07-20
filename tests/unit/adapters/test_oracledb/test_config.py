@@ -44,7 +44,6 @@ def _stub_sync_connection_setup(monkeypatch: pytest.MonkeyPatch, calls: list[str
     monkeypatch.setattr(oracle_config_module, "register_numpy_handlers", lambda _connection: calls.append("numpy"))
     monkeypatch.setattr(oracle_config_module, "register_json_handlers", lambda _connection: calls.append("json"))
     monkeypatch.setattr(oracle_config_module, "register_uuid_handlers", lambda _connection: calls.append("uuid"))
-    monkeypatch.setattr(oracle_config_module, "_extract_oracle_major", lambda _connection: 23)
 
 
 def test_oracle_connection_params_expose_current_driver_options() -> None:

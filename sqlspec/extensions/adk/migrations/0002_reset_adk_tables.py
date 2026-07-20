@@ -37,12 +37,14 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
 
     store_class = _get_store_class(context)
     store_instance = store_class(config=context.config)
+    await _prepare_schema(store_instance, context)
 
     statements: list[str] = []
 
     memory_store_class = _get_memory_store_class(context)
     if memory_store_class is not None:
         memory_store = memory_store_class(config=context.config)
+        await _prepare_schema(memory_store, context)
         statements.extend(memory_store._reset_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
         log_with_context(logger, logging.DEBUG, "adk.migration.reset.memory.drop", table_name=memory_store.memory_table)
 
@@ -54,7 +56,6 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
         await _resolve_sql(store_instance._app_states_table_ddl()),  # pyright: ignore[reportPrivateUsage]
         await _resolve_sql(store_instance._user_states_table_ddl()),  # pyright: ignore[reportPrivateUsage]
         await _resolve_sql(store_instance._metadata_table_ddl()),  # pyright: ignore[reportPrivateUsage]
-        await _resolve_sql(store_instance._metadata_seed_sql()),  # pyright: ignore[reportPrivateUsage]
     ])
 
     if _is_memory_enabled(context) and memory_store_class is not None:
@@ -107,6 +108,19 @@ async def _resolve_sql(value: "str | Awaitable[str]") -> str:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def _prepare_schema(
+    store: "BaseAsyncADKStore | BaseSyncADKStore | BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore",
+    context: "MigrationContext",
+) -> None:
+    driver = getattr(context, "driver", None)
+    if driver is None:
+        return
+    if getattr(context, "is_async_driver", False):
+        await cast("BaseAsyncADKStore | BaseAsyncADKMemoryStore", store).prepare_schema_async(driver)
+        return
+    cast("BaseSyncADKStore | BaseSyncADKMemoryStore", store).prepare_schema_sync(driver)
 
 
 def _get_memory_store_class(

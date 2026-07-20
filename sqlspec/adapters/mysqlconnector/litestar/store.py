@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
@@ -21,34 +22,24 @@ MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
     """MySQL/MariaDB session store using mysql-connector async driver."""
 
-    __slots__ = ()
+    __slots__ = ("_index_options", "_table_options")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({"index_options", "table_options"})
 
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
-
-    def _table_ddl(self) -> str:
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._table_name} (
-            session_id VARCHAR(255) PRIMARY KEY,
-            data LONGBLOB NOT NULL,
-            expires_at DATETIME(6),
-            created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
-            updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._table_name}_expires_at (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-
-    def _drop_table_sql(self) -> "list[str]":
-        return [
-            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
-            f"DROP TABLE IF EXISTS {self._table_name}",
-        ]
+        litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._index_options: str = _mysql_index_options(litestar_config)
+        self._table_options: str = _mysql_table_options(litestar_config)
 
     async def create_table(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await driver.execute_script(sql)
         self._log_table_created()
+        await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         import mysql.connector
@@ -214,14 +205,64 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                 self._log_delete_expired(count)
             return count
 
+    def _table_ddl(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._table_name} (
+            session_id VARCHAR(255) PRIMARY KEY,
+            data LONGBLOB NOT NULL,
+            expires_at DATETIME(6),
+            created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+            updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+            INDEX idx_{self._table_name}_expires_at (expires_at){self._index_options}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
+        """
+
+    def _drop_table_sql(self) -> "list[str]":
+        return [
+            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
+            f"DROP TABLE IF EXISTS {self._table_name}",
+        ]
+
 
 class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB session store using mysql-connector sync driver."""
 
-    __slots__ = ()
+    __slots__ = ("_index_options", "_table_options")
+    extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({"index_options", "table_options"})
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
+        litestar_config = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+        self._index_options: str = _mysql_index_options(litestar_config)
+        self._table_options: str = _mysql_table_options(litestar_config)
+
+    async def create_table(self) -> None:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await async_(self._create_table)()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        return await async_(self._get)(key, renew_for)
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        await async_(self._set)(key, value, expires_in)
+
+    async def delete(self, key: str) -> None:
+        await async_(self._delete)(key)
+
+    async def delete_all(self) -> None:
+        await async_(self._delete_all)()
+
+    async def exists(self, key: str) -> bool:
+        return await async_(self._exists)(key)
+
+    async def expires_in(self, key: str) -> "int | None":
+        return await async_(self._expires_in)(key)
+
+    async def delete_expired(self) -> int:
+        return await async_(self._delete_expired)()
 
     def _table_ddl(self) -> str:
         return f"""
@@ -231,8 +272,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             expires_at DATETIME(6),
             created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._table_name}_expires_at (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            INDEX idx_{self._table_name}_expires_at (expires_at){self._index_options}
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
         """
 
     def _drop_table_sql(self) -> "list[str]":
@@ -247,9 +288,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             driver.execute_script(sql)
             driver.commit()
         self._log_table_created()
-
-    async def create_table(self) -> None:
-        await async_(self._create_table)()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         import mysql.connector
@@ -297,9 +335,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 return None
             raise
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        return await async_(self._get)(key, renew_for)
-
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
@@ -322,9 +357,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        await async_(self._set)(key, value, expires_in)
-
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
@@ -335,9 +367,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             finally:
                 cursor.close()
             conn.commit()
-
-    async def delete(self, key: str) -> None:
-        await async_(self._delete)(key)
 
     def _delete_all(self) -> None:
         import mysql.connector
@@ -358,9 +387,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
             raise
-
-    async def delete_all(self) -> None:
-        await async_(self._delete_all)()
 
     def _exists(self, key: str) -> bool:
         import mysql.connector
@@ -384,9 +410,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise
-
-    async def exists(self, key: str) -> bool:
-        return await async_(self._exists)(key)
 
     def _expires_in(self, key: str) -> "int | None":
         sql = f"""
@@ -415,9 +438,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             delta = expires_at_utc - now
             return int(delta.total_seconds())
 
-    async def expires_in(self, key: str) -> "int | None":
-        return await async_(self._expires_in)(key)
-
     def _delete_expired(self) -> int:
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
@@ -433,5 +453,33 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 self._log_delete_expired(count)
             return count
 
-    async def delete_expired(self) -> int:
-        return await async_(self._delete_expired)()
+
+def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``table_options`` config value for DDL interpolation.
+
+    Args:
+        litestar_config: The ``extension_config["litestar"]`` mapping.
+
+    Returns:
+        A leading-space-prefixed options string, or an empty string when unset.
+    """
+    value = litestar_config.get("table_options")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        msg = "extension_config['litestar']['table_options'] must be a string"
+        raise ImproperConfigurationError(msg)
+    value = value.strip()
+    return f" {value}" if value else ""
+
+
+def _mysql_index_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``index_options`` config value for inline index DDL."""
+    value = litestar_config.get("index_options")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        msg = "extension_config['litestar']['index_options'] must be a string"
+        raise ImproperConfigurationError(msg)
+    value = value.strip()
+    return f" {value}" if value else ""

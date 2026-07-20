@@ -5,7 +5,7 @@ WITH fk_constraints AS (
         constraint_name,
         unique_constraint_name
     FROM information_schema.referential_constraints
-    WHERE (:schema_name IS NULL OR constraint_schema = :schema_name)
+    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
 ),
 fk_columns AS (
     SELECT
@@ -15,7 +15,7 @@ fk_columns AS (
         ordinal_position,
         table_schema
     FROM information_schema.key_column_usage
-    WHERE (:schema_name IS NULL OR constraint_schema = :schema_name)
+    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
 )
 SELECT
     fk.table_name,
@@ -31,7 +31,7 @@ JOIN fk_constraints rc
 JOIN fk_columns pk
   ON pk.constraint_name = rc.unique_constraint_name
   AND pk.ordinal_position = fk.ordinal_position
-WHERE (:table_name IS NULL OR fk.table_name = :table_name)
+WHERE (CAST(:table_name AS STRING) IS NULL OR fk.table_name = :table_name)
 ORDER BY fk.table_name, fk.ordinal_position;
 
 -- name: foreign_keys_by_schema
@@ -41,7 +41,7 @@ WITH fk_constraints AS (
         constraint_name,
         unique_constraint_name
     FROM information_schema.referential_constraints
-    WHERE (:schema_name IS NULL OR constraint_schema = :schema_name)
+    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
 ),
 fk_columns AS (
     SELECT
@@ -51,7 +51,7 @@ fk_columns AS (
         ordinal_position,
         table_schema
     FROM information_schema.key_column_usage
-    WHERE (:schema_name IS NULL OR constraint_schema = :schema_name)
+    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
 )
 SELECT
     fk.table_name,
