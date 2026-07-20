@@ -267,3 +267,47 @@ def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> No
     assert records[0]["content_json"] == {"text": "sync"}
     assert records[0]["metadata_json"] == {"source": "unit"}
     assert records[0]["content_text"] == "sync"
+
+
+def _sync_store_with_driver() -> "tuple[Any, MagicMock, MagicMock]":
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    store = OracleSyncADKStore(config)
+    driver = MagicMock()
+    config.provide_session.return_value.__enter__.return_value = driver
+    config.provide_session.return_value.__exit__.return_value = False
+    return store, driver, config
+
+
+def test_oracle_adk_create_tables_checks_existence() -> None:
+    """create_tables consults get_tables and issues no CREATE TABLE when present."""
+
+    store, driver, _ = _sync_store_with_driver()
+    present = [
+        store._session_table,
+        store._events_table,
+        store._app_state_table,
+        store._user_state_table,
+        store._metadata_table,
+    ]
+    driver.data_dictionary.get_tables.return_value = [{"table_name": name.upper()} for name in present]
+
+    store.create_tables()
+
+    driver.data_dictionary.get_tables.assert_called_once()
+    executed = [str(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert all("CREATE TABLE" not in sql.upper() for sql in executed)
+
+
+def test_oracle_adk_create_tables_creates_absent_tables() -> None:
+    """create_tables still issues CREATE TABLE for tables the dictionary omits."""
+
+    store, driver, _ = _sync_store_with_driver()
+    driver.data_dictionary.get_tables.return_value = []
+
+    store.create_tables()
+
+    driver.data_dictionary.get_tables.assert_called_once()
+    executed = " ".join(str(call.args[0]) for call in driver.execute_script.call_args_list)
+    assert "CREATE TABLE" in executed.upper()
+    assert "SQLCODE != -955" not in executed

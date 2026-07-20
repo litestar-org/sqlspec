@@ -144,6 +144,17 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         """Return the index name for the queue table."""
         return f"idx_{self.table_name.replace('.', '_')}_channel_status"
 
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        """Return the ``(schema, table)`` target for a data-dictionary index check.
+
+        Adapters whose index DDL is self-idempotent (``CREATE INDEX IF NOT
+        EXISTS``) return ``None``: no external existence check is needed. Adapters
+        whose dialect lacks an idempotent index DDL (MySQL) return the schema and
+        table so the migration can consult ``driver.data_dictionary.get_indexes``
+        and skip the ``ADD INDEX`` statement when the index already exists.
+        """
+        return None
+
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
         """Wrap CREATE statement with IF NOT EXISTS.
 

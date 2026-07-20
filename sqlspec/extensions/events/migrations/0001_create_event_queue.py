@@ -1,7 +1,8 @@
 """Create the SQLSpec events queue tables."""
 
+import inspect
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -15,13 +16,41 @@ __all__ = ("down", "up")
 
 logger = get_logger("sqlspec.events.migrations.queue")
 
+_STATEMENTS_WITH_INDEX: Final = 2
+
 
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
     """Return SQL statements that provision the queue table and indexes."""
 
     store = _load_store(context)
     statements = store.create_statements()
+    statements = await _drop_present_index(store, context, statements)
     log_with_context(logger, logging.DEBUG, "events.migration.create.prepared", table_name=store.table_name)
+    return statements
+
+
+async def _drop_present_index(
+    store: "BaseEventQueueStore[Any]", context: "MigrationContext | None", statements: "list[str]"
+) -> "list[str]":
+    """Drop the trailing index statement when the queue index already exists.
+
+    Adapters whose index DDL is not self-idempotent (MySQL) opt in through
+    ``_index_existence_target``. The check routes through the driver's data
+    dictionary rather than an embedded existence probe.
+    """
+
+    target = store._index_existence_target()
+    driver = context.driver if context is not None else None
+    if target is None or driver is None or len(statements) < _STATEMENTS_WITH_INDEX:
+        return statements
+
+    schema, table = target
+    result = driver.data_dictionary.get_indexes(driver, table=table, schema=schema)
+    if inspect.isawaitable(result):
+        result = await result
+    existing = {str(row.get("index_name", "")).casefold() for row in result}
+    if store._index_name().casefold() in existing:
+        return statements[:-1]
     return statements
 
 

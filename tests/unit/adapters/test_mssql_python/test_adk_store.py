@@ -74,7 +74,7 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
     assert "DEFAULT NEWSEQUENTIALID()" in sessions_sql
     assert "state NVARCHAR(MAX) NOT NULL" in sessions_sql
     assert "DATETIME2(6)" in sessions_sql
-    assert "sys.indexes" in sessions_sql
+    assert "sys.indexes" not in sessions_sql
     assert "ON DELETE CASCADE" in events_sql
     assert "event_data NVARCHAR(MAX) NOT NULL" in events_sql
     assert "MERGE INTO [dbo].[adk_internal_metadata]" in metadata_sql

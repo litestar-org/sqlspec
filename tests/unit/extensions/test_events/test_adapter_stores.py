@@ -31,8 +31,8 @@ def test_asyncmy_store_column_types() -> None:
     assert timestamp_type == "DATETIME(6)"
 
 
-def test_asyncmy_store_index_sql_dynamic_check() -> None:
-    """Asyncmy index SQL includes dynamic existence check."""
+def test_asyncmy_store_index_sql_has_no_information_schema_probe() -> None:
+    """Asyncmy index SQL is a plain ADD INDEX with no embedded existence probe."""
     pytest.importorskip("asyncmy")
     from sqlspec.adapters.asyncmy import AsyncmyConfig
     from sqlspec.adapters.asyncmy.events.store import AsyncmyEventQueueStore
@@ -42,13 +42,16 @@ def test_asyncmy_store_index_sql_dynamic_check() -> None:
     index_sql = store._index_ddl()
 
     assert index_sql is not None
-    assert "information_schema.statistics" in index_sql.lower()
-    assert "PREPARE" in index_sql.upper()
-    assert "EXECUTE" in index_sql.upper()
+    lowered = index_sql.lower()
+    assert "information_schema" not in lowered
+    assert "prepare" not in lowered
+    assert "set @" not in lowered
+    assert "ADD INDEX" in index_sql
+    assert f"'{store._index_name()}'" not in index_sql
 
 
-def test_asyncmy_store_schema_qualified_index() -> None:
-    """Schema-qualified tables use explicit schema in index check."""
+def test_asyncmy_store_schema_qualified_index_target() -> None:
+    """Schema-qualified tables split into (schema, table) for the DD check."""
     pytest.importorskip("asyncmy")
     from sqlspec.adapters.asyncmy import AsyncmyConfig
     from sqlspec.adapters.asyncmy.events.store import AsyncmyEventQueueStore
@@ -58,22 +61,21 @@ def test_asyncmy_store_schema_qualified_index() -> None:
         extension_config={"events": {"queue_table": "myschema.events"}},
     )
     store = AsyncmyEventQueueStore(config)
-    index_sql = store._index_ddl()
-    assert index_sql is not None
-    assert "'myschema'" in index_sql
+
+    assert store._index_existence_target() == ("myschema", "events")
+    assert "ALTER TABLE myschema.events ADD INDEX" in (store._index_ddl() or "")
 
 
-def test_asyncmy_store_unqualified_table_uses_database() -> None:
-    """Unqualified tables use DATABASE() for schema detection."""
+def test_asyncmy_store_unqualified_table_target() -> None:
+    """Unqualified tables report a None schema for the DD check."""
     pytest.importorskip("asyncmy")
     from sqlspec.adapters.asyncmy import AsyncmyConfig
     from sqlspec.adapters.asyncmy.events.store import AsyncmyEventQueueStore
 
     config = AsyncmyConfig(connection_config={"host": "localhost", "database": "test"})
     store = AsyncmyEventQueueStore(config)
-    index_sql = store._index_ddl()
-    assert index_sql is not None
-    assert "DATABASE()" in index_sql
+
+    assert store._index_existence_target() == (None, "sqlspec_event_queue")
 
 
 def test_bigquery_store_column_types() -> None:

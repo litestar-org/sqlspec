@@ -76,11 +76,6 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
     "                key VARCHAR2(128) PRIMARY KEY,\n"
     "                value VARCHAR2(512) NOT NULL\n"
     "            )';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -111,31 +106,16 @@ _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
     "                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{2}\n"
     "            ){3}';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user\n"
     "                ON {5}(app_name, user_id)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_update_time\n"
     "                ON {7}(update_time DESC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -152,41 +132,21 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                CONSTRAINT fk_{2}_session FOREIGN KEY (session_id)\n"
     "                    REFERENCES {3}(id) ON DELETE CASCADE\n"
     "            ){4}';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{5}_session\n"
     "                ON {6}(session_id, timestamp ASC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{7}_invocation\n"
     "                ON {8}(invocation_id)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{9}_timestamp\n"
     "                ON {10}(timestamp ASC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -199,11 +159,6 @@ _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                {1},\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
     "            )';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -218,11 +173,6 @@ _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                PRIMARY KEY (app_name, user_id)\n"
     "            )';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -234,11 +184,6 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{0}_fts\n"
     "                ON {1}(content_text) INDEXTYPE IS CTXSYS.CONTEXT';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "            "
 )
@@ -258,31 +203,16 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                content_text CLOB NOT NULL,\n"
     "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
     "            ){3}';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user_time\n"
     "                ON {5}(app_name, user_id, timestamp DESC)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_session\n"
     "                ON {7}(session_id)';\n"
-    "        EXCEPTION\n"
-    "            WHEN OTHERS THEN\n"
-    "                IF SQLCODE != -955 THEN\n"
-    "                    RAISE;\n"
-    "                END IF;\n"
     "        END;\n"
     "        {8}\n"
     "        "
@@ -421,22 +351,28 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     async def create_tables(self) -> None:
-        """Create both sessions and events tables if they don't exist.
+        """Create the ADK tables that the data dictionary reports as missing.
 
         Notes:
             Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
+            Consults ``data_dictionary.get_tables`` so existing tables are left
+            untouched instead of relying on an ORA-955 swallow.
         """
         storage_type = await self._detect_json_storage_type()
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
-
-            await driver.execute_script(self._events_table_ddl_for_type(storage_type))
-            await driver.execute_script(self._app_states_table_ddl_for_type(storage_type))
-            await driver.execute_script(self._user_states_table_ddl_for_type(storage_type))
-            await driver.execute_script(await self._metadata_table_ddl())
+            existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._session_table) not in existing:
+                await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._events_table) not in existing:
+                await driver.execute_script(self._events_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._app_state_table) not in existing:
+                await driver.execute_script(self._app_states_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._user_state_table) not in existing:
+                await driver.execute_script(self._user_states_table_ddl_for_type(storage_type))
+            if _bare_table_name(self._metadata_table) not in existing:
+                await driver.execute_script(await self._metadata_table_ddl())
             await driver.execute_script(await self._metadata_seed_sql())
             await driver.commit()
 
@@ -1366,25 +1302,28 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        """Create both sessions and events tables if they don't exist.
+        """Create the ADK tables that the data dictionary reports as missing.
 
         Notes:
             Detects Oracle version to determine optimal JSON storage type.
-            Uses version-appropriate table schema.
+            Consults ``data_dictionary.get_tables`` so existing tables are left
+            untouched instead of relying on an ORA-955 swallow.
         """
         storage_type = self._detect_json_storage_type()
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
         with self._config.provide_session() as driver:
-            sessions_sql = SQL(self._sessions_table_ddl_for_type(storage_type))
-            driver.execute_script(sessions_sql)
-
-            events_sql = SQL(self._events_table_ddl_for_type(storage_type))
-            driver.execute_script(events_sql)
-            driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
-            driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
-            driver.execute_script(SQL(self._metadata_table_ddl()))
+            existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._session_table) not in existing:
+                driver.execute_script(SQL(self._sessions_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._events_table) not in existing:
+                driver.execute_script(SQL(self._events_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._app_state_table) not in existing:
+                driver.execute_script(SQL(self._app_states_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._user_state_table) not in existing:
+                driver.execute_script(SQL(self._user_states_table_ddl_for_type(storage_type)))
+            if _bare_table_name(self._metadata_table) not in existing:
+                driver.execute_script(SQL(self._metadata_table_ddl()))
             driver.execute_script(SQL(self._metadata_seed_sql()))
             driver.commit()
 
@@ -2282,7 +2221,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return
 
         async with self._config.provide_session() as driver:
-            await driver.execute_script(await self._memory_table_ddl())
+            existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._memory_table) not in existing:
+                await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2579,12 +2520,14 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         self._in_memory = bool(adk_config.get("in_memory", False))
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
+        """Create the memory table when the data dictionary reports it missing."""
         if not self._enabled:
             return
 
         with self._config.provide_session() as driver:
-            driver.execute_script(self._memory_table_ddl())
+            existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
+            if _bare_table_name(self._memory_table) not in existing:
+                driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -2957,6 +2900,16 @@ def _json_column_ddl(column_name: str, storage_type: JSONStorageType) -> str:
     if storage_type == JSONStorageType.BLOB_JSON:
         return _ADK_JSON_COLUMN_DDL_TEMPLATE_2.format(column_name, column_name)
     return _ADK_JSON_COLUMN_DDL_TEMPLATE_3.format(column_name)
+
+
+def _bare_table_name(name: str) -> str:
+    """Return the case-folded, schema-stripped table name for membership checks."""
+    return name.rsplit(".", 1)[-1].casefold()
+
+
+def _existing_table_names(rows: "list[Any]") -> "set[str]":
+    """Collapse ``data_dictionary.get_tables`` rows into a case-folded name set."""
+    return {str(row.get("table_name", "")).rsplit(".", 1)[-1].casefold() for row in rows}
 
 
 def _adk_config(config: Any) -> OracleADKConfig:

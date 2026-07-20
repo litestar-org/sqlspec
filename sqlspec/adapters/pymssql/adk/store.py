@@ -29,15 +29,7 @@ MSSQL_SCHEMA: Final[str] = "dbo"
 MSSQL_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
 JSON_FALLBACK_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 JSON_NATIVE_COLUMN_TYPE: Final[str] = "JSON"
-
-
-class _UnavailablePymssqlError(Exception):
-    """Fallback pymssql exception base when pymssql is unavailable."""
-
-
-MSSQL_ERROR: Final[type[BaseException]] = cast(
-    "type[BaseException]", getattr(PYMSSQL_MODULE, "Error", _UnavailablePymssqlError)
-)
+MSSQL_ERROR: Final[type[BaseException]] = cast("type[BaseException]", getattr(PYMSSQL_MODULE, "Error", Exception))
 
 
 class PymssqlADKConfig(ADKConfig):
@@ -61,13 +53,19 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         self._json_column_type: str | None = None
 
     def create_tables(self) -> None:
-        """Create all ADK session tables if they do not exist."""
+        """Create ADK tables (idempotent T-SQL) and DD-gated indexes."""
         with self._config.provide_session() as driver:
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
+            existing_indexes = _casefold_names(
+                driver.data_dictionary.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name"
+            )
+            for index_name, index_table, columns in self._index_specs():
+                if _bare_name(index_name) not in existing_indexes:
+                    driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.execute_script(self._metadata_seed_sql())
             driver.commit()
 
@@ -304,6 +302,10 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         """Set an ADK metadata value."""
         self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
+    def _index_specs(self) -> "list[tuple[str, str, str]]":
+        """Return ``(index_name, table, columns)`` specs for session and event indexes."""
+        return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
+
     def _sessions_table_ddl(self) -> str:
         """Return T-SQL DDL for the ADK session table."""
         return _sessions_table_ddl(self._session_table, self._json_column_type_sync(), self._owner_id_column_ddl)
@@ -404,15 +406,17 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         super().__init__(config)
 
     def create_tables(self) -> None:
-        """Create memory tables if they don't exist."""
+        """Create the memory table (idempotent T-SQL) and DD-gated indexes."""
         if not self._enabled:
             return
-        statements = self._memory_table_ddl()
-        if isinstance(statements, str):
-            statements = [statements]
         with self._config.provide_session() as driver:
-            for statement in statements:
-                driver.execute_script(statement)
+            driver.execute_script(self._memory_table_ddl())
+            existing_indexes = _casefold_names(
+                driver.data_dictionary.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name"
+            )
+            for index_name, index_table, columns in self._memory_index_specs():
+                if _bare_name(index_name) not in existing_indexes:
+                    driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
@@ -491,10 +495,9 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
             commit=True,
         )
 
-    def _memory_table_ddl(self) -> "str | list[str]":
+    def _memory_table_ddl(self) -> str:
         owner_line = f",\n            {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        return [
-            f"""
+        return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(self._memory_table)}'
     AND schema_id = SCHEMA_ID(N'dbo'))
 BEGIN
@@ -515,10 +518,14 @@ BEGIN
         CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (event_id)
     );
 END;
-""",
-            _create_index_sql(self._memory_table, f"idx_{self._memory_table}_scope", "app_name, user_id"),
-            _create_index_sql(self._memory_table, f"idx_{self._memory_table}_session", "session_id"),
-            _create_index_sql(self._memory_table, f"idx_{self._memory_table}_timestamp", "timestamp DESC"),
+"""
+
+    def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
+        """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
+        return [
+            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, user_id"),
+            (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
+            (f"idx_{self._memory_table}_timestamp", self._memory_table, "timestamp DESC"),
         ]
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -578,9 +585,14 @@ BEGIN
         CONSTRAINT {_constraint_ref("uq", table, "id")} UNIQUE (id)
     );
 END;
-{_create_index_sql(table, f"idx_{table}_app_user", "app_name, user_id")}
-{_create_index_sql(table, f"idx_{table}_update_time", "update_time DESC")}
 """
+
+
+def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    return [
+        (f"idx_{table}_app_user", table, "app_name, user_id"),
+        (f"idx_{table}_update_time", table, "update_time DESC"),
+    ]
 
 
 def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> str:
@@ -602,11 +614,16 @@ BEGIN
             REFERENCES {_table_ref(session_table)}(id) ON DELETE CASCADE
     );
 END;
-{_create_index_sql(table, f"idx_{table}_scope", "app_name, user_id, session_id, timestamp ASC")}
-{_create_index_sql(table, f"idx_{table}_session", "session_id, timestamp ASC")}
-{_create_index_sql(table, f"idx_{table}_invocation", "invocation_id")}
-{_create_index_sql(table, f"idx_{table}_timestamp", "timestamp ASC")}
 """
+
+
+def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    return [
+        (f"idx_{table}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
+        (f"idx_{table}_session", table, "session_id, timestamp ASC"),
+        (f"idx_{table}_invocation", table, "invocation_id"),
+        (f"idx_{table}_timestamp", table, "timestamp ASC"),
+    ]
 
 
 def _app_states_table_ddl(table: str, json_column_type: str) -> str:
@@ -652,16 +669,17 @@ END;
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
-    return f"""
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes
-    WHERE name = N'{_escape_sql_literal(index_name)}'
-      AND object_id = OBJECT_ID(N'{_escape_sql_literal(MSSQL_SCHEMA)}.{_escape_sql_literal(table)}')
-)
-BEGIN
-    CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns});
-END;
-"""
+    return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
+
+
+def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
+    """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
+    return {str(row.get(key, "")).rsplit(".", 1)[-1].casefold() for row in rows}
+
+
+def _bare_name(name: str) -> str:
+    """Return the case-folded, schema-stripped object name for membership checks."""
+    return name.rsplit(".", 1)[-1].casefold()
 
 
 def _insert_event_sql(table: str) -> str:

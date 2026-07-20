@@ -39,13 +39,24 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
     __slots__ = ()
 
     def create_tables(self) -> None:
-        """Create all ADK session tables if they do not exist."""
+        """Create the ADK tables and indexes the data dictionary reports as missing."""
         with self._config.provide_session() as driver:
-            driver.execute(self._sessions_table_ddl())
-            driver.execute(self._events_table_ddl())
-            driver.execute(self._app_states_table_ddl())
-            driver.execute(self._user_states_table_ddl())
-            driver.execute(self._metadata_table_ddl())
+            dd = driver.data_dictionary
+            existing_tables = _casefold_names(dd.get_tables(driver, schema=MSSQL_SCHEMA), "table_name")
+            existing_indexes = _casefold_names(dd.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name")
+            table_ddls = (
+                (self._session_table, self._sessions_table_ddl()),
+                (self._events_table, self._events_table_ddl()),
+                (self._app_state_table, self._app_states_table_ddl()),
+                (self._user_state_table, self._user_states_table_ddl()),
+                (self._metadata_table, self._metadata_table_ddl()),
+            )
+            for table, ddl in table_ddls:
+                if _bare_name(table) not in existing_tables:
+                    driver.execute(ddl)
+            for index_name, index_table, columns in self._index_specs():
+                if _bare_name(index_name) not in existing_indexes:
+                    driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.execute(self._metadata_seed_sql())
             driver.commit()
 
@@ -297,6 +308,10 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         """Set an ADK metadata value."""
         self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
+    def _index_specs(self) -> "list[tuple[str, str, str]]":
+        """Return ``(index_name, table, columns)`` specs for session and event indexes."""
+        return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
+
     def _sessions_table_ddl(self) -> str:
         """Return T-SQL DDL for the ADK session table."""
         return _sessions_table_ddl(self._session_table, self._owner_id_column_ddl)
@@ -382,12 +397,18 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
     __slots__ = ()
 
     def create_tables(self) -> None:
-        """Create the memory table if memory storage is enabled."""
+        """Create the memory table and indexes the data dictionary reports as missing."""
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
-            for statement in self._memory_table_ddl():
-                driver.execute(statement)
+            dd = driver.data_dictionary
+            existing_tables = _casefold_names(dd.get_tables(driver, schema=MSSQL_SCHEMA), "table_name")
+            existing_indexes = _casefold_names(dd.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name")
+            if _bare_name(self._memory_table) not in existing_tables:
+                driver.execute(self._memory_table_ddl())
+            for index_name, index_table, columns in self._memory_index_specs():
+                if _bare_name(index_name) not in existing_indexes:
+                    driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
 
     def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
@@ -477,37 +498,31 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         )
         return count
 
-    def _memory_table_ddl(self) -> "list[str]":
+    def _memory_table_ddl(self) -> str:
         owner_line = f",\n        {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        return [
-            f"""
-IF NOT EXISTS (
-    SELECT 1 FROM sys.tables
-    WHERE name = N'{_escape_sql_literal(self._memory_table)}'
-      AND schema_id = SCHEMA_ID(N'dbo')
+        return f"""
+CREATE TABLE {_table_ref(self._memory_table)} (
+    id NVARCHAR(128) NOT NULL,
+    session_id NVARCHAR(128) NOT NULL,
+    app_name NVARCHAR(128) NOT NULL,
+    user_id NVARCHAR(128) NOT NULL,
+    event_id NVARCHAR(128) NOT NULL,
+    author NVARCHAR(256) NULL,
+    timestamp DATETIME2(6) NOT NULL,
+    content_json NVARCHAR(MAX) NOT NULL,
+    content_text NVARCHAR(MAX) NOT NULL,
+    metadata_json NVARCHAR(MAX) NULL,
+    inserted_at DATETIME2(6) NOT NULL{owner_line},
+    CONSTRAINT {_constraint_ref("pk", self._memory_table, "id")} PRIMARY KEY (id),
+    CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (event_id)
 )
-BEGIN
-    CREATE TABLE {_table_ref(self._memory_table)} (
-        id NVARCHAR(128) NOT NULL,
-        session_id NVARCHAR(128) NOT NULL,
-        app_name NVARCHAR(128) NOT NULL,
-        user_id NVARCHAR(128) NOT NULL,
-        event_id NVARCHAR(128) NOT NULL,
-        author NVARCHAR(256) NULL,
-        timestamp DATETIME2(6) NOT NULL,
-        content_json NVARCHAR(MAX) NOT NULL,
-        content_text NVARCHAR(MAX) NOT NULL,
-        metadata_json NVARCHAR(MAX) NULL,
-        inserted_at DATETIME2(6) NOT NULL{owner_line},
-        CONSTRAINT {_constraint_ref("pk", self._memory_table, "id")} PRIMARY KEY (id),
-        CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (event_id)
-    );
-END;
-""",
-            _create_index_sql(
-                self._memory_table, f"idx_{self._memory_table}_app_user_time", "app_name, user_id, timestamp DESC"
-            ),
-            _create_index_sql(self._memory_table, f"idx_{self._memory_table}_session", "session_id"),
+"""
+
+    def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
+        """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
+        return [
+            (f"idx_{self._memory_table}_app_user_time", self._memory_table, "app_name, user_id, timestamp DESC"),
+            (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
         ]
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -541,104 +556,100 @@ def _session_select_sql(table: str) -> str:
 def _sessions_table_ddl(table: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f",\n        {owner_id_column_ddl}" if owner_id_column_ddl else ""
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
-BEGIN
-    CREATE TABLE {_table_ref(table)} (
-        row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT {_constraint_ref("df", table, "row_id")} DEFAULT NEWSEQUENTIALID(),
-        id NVARCHAR(128) NOT NULL,
-        app_name NVARCHAR(128) NOT NULL,
-        user_id NVARCHAR(128) NOT NULL{owner_line},
-        state {JSON_COLUMN_TYPE} NOT NULL,
-        create_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "create_time")} DEFAULT SYSUTCDATETIME(),
-        update_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "update_time")} DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT {_constraint_ref("pk", table, "row_id")} PRIMARY KEY (row_id),
-        CONSTRAINT {_constraint_ref("uq", table, "id")} UNIQUE (id)
-    );
-END;
-{_create_index_sql(table, f"idx_{table}_app_user", "app_name, user_id")}
-{_create_index_sql(table, f"idx_{table}_update_time", "update_time DESC")}
+CREATE TABLE {_table_ref(table)} (
+    row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT {_constraint_ref("df", table, "row_id")} DEFAULT NEWSEQUENTIALID(),
+    id NVARCHAR(128) NOT NULL,
+    app_name NVARCHAR(128) NOT NULL,
+    user_id NVARCHAR(128) NOT NULL{owner_line},
+    state {JSON_COLUMN_TYPE} NOT NULL,
+    create_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "create_time")} DEFAULT SYSUTCDATETIME(),
+    update_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "update_time")} DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT {_constraint_ref("pk", table, "row_id")} PRIMARY KEY (row_id),
+    CONSTRAINT {_constraint_ref("uq", table, "id")} UNIQUE (id)
+)
 """
+
+
+def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    return [
+        (f"idx_{table}_app_user", table, "app_name, user_id"),
+        (f"idx_{table}_update_time", table, "update_time DESC"),
+    ]
 
 
 def _events_table_ddl(table: str, session_table: str) -> str:
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
-BEGIN
-    CREATE TABLE {_table_ref(table)} (
-        row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT {_constraint_ref("df", table, "row_id")} DEFAULT NEWSEQUENTIALID(),
-        id NVARCHAR(128) NOT NULL,
-        app_name NVARCHAR(128) NOT NULL,
-        user_id NVARCHAR(128) NOT NULL,
-        session_id NVARCHAR(128) NOT NULL,
-        invocation_id NVARCHAR(256) NOT NULL,
-        timestamp DATETIME2(6) NOT NULL,
-        event_data {JSON_COLUMN_TYPE} NOT NULL,
-        CONSTRAINT {_constraint_ref("pk", table, "row_id")} PRIMARY KEY (row_id),
-        CONSTRAINT {_constraint_ref("uq", table, "id")} UNIQUE (id),
-        CONSTRAINT {_constraint_ref("fk", table, "session")} FOREIGN KEY (session_id)
-            REFERENCES {_table_ref(session_table)}(id) ON DELETE CASCADE
-    );
-END;
-{_create_index_sql(table, f"idx_{table}_scope", "app_name, user_id, session_id, timestamp ASC")}
-{_create_index_sql(table, f"idx_{table}_session", "session_id, timestamp ASC")}
-{_create_index_sql(table, f"idx_{table}_invocation", "invocation_id")}
-{_create_index_sql(table, f"idx_{table}_timestamp", "timestamp ASC")}
+CREATE TABLE {_table_ref(table)} (
+    row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT {_constraint_ref("df", table, "row_id")} DEFAULT NEWSEQUENTIALID(),
+    id NVARCHAR(128) NOT NULL,
+    app_name NVARCHAR(128) NOT NULL,
+    user_id NVARCHAR(128) NOT NULL,
+    session_id NVARCHAR(128) NOT NULL,
+    invocation_id NVARCHAR(256) NOT NULL,
+    timestamp DATETIME2(6) NOT NULL,
+    event_data {JSON_COLUMN_TYPE} NOT NULL,
+    CONSTRAINT {_constraint_ref("pk", table, "row_id")} PRIMARY KEY (row_id),
+    CONSTRAINT {_constraint_ref("uq", table, "id")} UNIQUE (id),
+    CONSTRAINT {_constraint_ref("fk", table, "session")} FOREIGN KEY (session_id)
+        REFERENCES {_table_ref(session_table)}(id) ON DELETE CASCADE
+)
 """
+
+
+def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    return [
+        (f"idx_{table}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
+        (f"idx_{table}_session", table, "session_id, timestamp ASC"),
+        (f"idx_{table}_invocation", table, "invocation_id"),
+        (f"idx_{table}_timestamp", table, "timestamp ASC"),
+    ]
 
 
 def _app_states_table_ddl(table: str) -> str:
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
-BEGIN
-    CREATE TABLE {_table_ref(table)} (
-        app_name NVARCHAR(128) NOT NULL,
-        state {JSON_COLUMN_TYPE} NOT NULL,
-        update_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "update_time")} DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT {_constraint_ref("pk", table, "app_name")} PRIMARY KEY (app_name)
-    );
-END;
+CREATE TABLE {_table_ref(table)} (
+    app_name NVARCHAR(128) NOT NULL,
+    state {JSON_COLUMN_TYPE} NOT NULL,
+    update_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "update_time")} DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT {_constraint_ref("pk", table, "app_name")} PRIMARY KEY (app_name)
+)
 """
 
 
 def _user_states_table_ddl(table: str) -> str:
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
-BEGIN
-    CREATE TABLE {_table_ref(table)} (
-        app_name NVARCHAR(128) NOT NULL,
-        user_id NVARCHAR(128) NOT NULL,
-        state {JSON_COLUMN_TYPE} NOT NULL,
-        update_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "update_time")} DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT {_constraint_ref("pk", table, "app_user")} PRIMARY KEY (app_name, user_id)
-    );
-END;
+CREATE TABLE {_table_ref(table)} (
+    app_name NVARCHAR(128) NOT NULL,
+    user_id NVARCHAR(128) NOT NULL,
+    state {JSON_COLUMN_TYPE} NOT NULL,
+    update_time DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", table, "update_time")} DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT {_constraint_ref("pk", table, "app_user")} PRIMARY KEY (app_name, user_id)
+)
 """
 
 
 def _metadata_table_ddl(table: str) -> str:
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
-BEGIN
-    CREATE TABLE {_table_ref(table)} (
-        [key] NVARCHAR(128) NOT NULL,
-        value NVARCHAR(512) NOT NULL,
-        CONSTRAINT {_constraint_ref("pk", table, "key")} PRIMARY KEY ([key])
-    );
-END;
+CREATE TABLE {_table_ref(table)} (
+    [key] NVARCHAR(128) NOT NULL,
+    value NVARCHAR(512) NOT NULL,
+    CONSTRAINT {_constraint_ref("pk", table, "key")} PRIMARY KEY ([key])
+)
 """
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
-    return f"""
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes
-    WHERE name = N'{_escape_sql_literal(index_name)}'
-      AND object_id = OBJECT_ID(N'{_escape_sql_literal(MSSQL_SCHEMA)}.{_escape_sql_literal(table)}')
-)
-BEGIN
-    CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns});
-END;
-"""
+    return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
+
+
+def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
+    """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
+    return {str(row.get(key, "")).rsplit(".", 1)[-1].casefold() for row in rows}
+
+
+def _bare_name(name: str) -> str:
+    """Return the case-folded, schema-stripped object name for membership checks."""
+    return name.rsplit(".", 1)[-1].casefold()
 
 
 def _insert_event_sql(table: str) -> str:
@@ -856,10 +867,6 @@ def _table_ref(table: str) -> str:
 
 def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return _quote_identifier(f"{prefix}_{table}_{suffix}")
-
-
-def _escape_sql_literal(value: str) -> str:
-    return value.replace("'", "''")
 
 
 def _raise_session_not_found(session_id: str) -> None:

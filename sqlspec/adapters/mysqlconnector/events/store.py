@@ -28,6 +28,9 @@ class MysqlConnectorSyncEventQueueStore(BaseEventQueueStore[MysqlConnectorSyncCo
     def _index_ddl(self) -> str | None:
         return _mysql_index_ddl(self)
 
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        return _mysql_index_existence_target(self)
+
 
 def _mysql_column_types() -> "tuple[str, str, str]":
     """Return MySQL-specific column types for the event queue."""
@@ -40,31 +43,28 @@ def _mysql_timestamp_default() -> str:
 
 
 def _mysql_index_ddl(store: Any) -> str | None:
-    """Return MySQL-specific index DDL that checks for existing indexes.
+    """Return the plain MySQL ``ADD INDEX`` statement for the queue table.
 
-    MySQL doesn't support CREATE INDEX IF NOT EXISTS, so we use a workaround
-    with information_schema to check if the index already exists.
+    MySQL lacks an idempotent ``CREATE INDEX IF NOT EXISTS``. The migration
+    consults ``driver.data_dictionary.get_indexes`` and only issues this
+    statement when the index is absent, so the emitted DDL carries no existence
+    probe.
 
     Args:
         store: Event queue store instance with table_name and _index_name().
 
     Returns:
-        MySQL-specific index creation SQL using prepared statements.
+        ``ALTER TABLE ... ADD INDEX`` statement for the queue index.
     """
-    table_name: str = store.table_name
-    segments = table_name.split(".", 1)
+    return f"ALTER TABLE {store.table_name} ADD INDEX {store._index_name()} (channel, status, available_at)"
 
+
+def _mysql_index_existence_target(store: Any) -> "tuple[str | None, str] | None":
+    """Return the ``(schema, table)`` target for the data-dictionary index check."""
+    segments = store.table_name.split(".", 1)
     if len(segments) == SCHEMA_QUALIFIED_SEGMENTS:
-        schema = segments[0]
-        table = segments[1]
-        schema_selector = f"'{schema}'"
-    else:
-        table = segments[0]
-        schema_selector = "DATABASE()"
-
-    index_name: str = store._index_name()
-
-    return f"SET @sqlspec_events_idx_exists := (SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = {schema_selector} AND table_name = '{table}' AND index_name = '{index_name}');SET @sqlspec_events_idx_stmt := IF(@sqlspec_events_idx_exists = 0, 'ALTER TABLE {table_name} ADD INDEX {index_name} (channel, status, available_at)', 'SELECT 1');PREPARE sqlspec_events_stmt FROM @sqlspec_events_idx_stmt;EXECUTE sqlspec_events_stmt;DEALLOCATE PREPARE sqlspec_events_stmt;"
+        return segments[0], segments[1]
+    return None, segments[0]
 
 
 class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsyncConfig]):
@@ -84,3 +84,6 @@ class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsync
 
     def _index_ddl(self) -> str | None:
         return _mysql_index_ddl(self)
+
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        return _mysql_index_existence_target(self)
