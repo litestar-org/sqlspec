@@ -29,16 +29,16 @@ async def test_store_delete(spanner_store: SpannerSyncStore) -> None:
 
 
 async def test_store_renew(spanner_store: SpannerSyncStore) -> None:
-    await spanner_store.set("renew", b"r", expires_in=1)
-    await asyncio.sleep(0.5)
-    await spanner_store.get("renew", renew_for=1)
-    await asyncio.sleep(0.7)
+    await spanner_store.set("renew", b"r", expires_in=2)
+    await asyncio.sleep(1)
+    await spanner_store.get("renew", renew_for=4)
+    await asyncio.sleep(1.5)
     assert await spanner_store.get("renew") == b"r"
 
 
 async def test_delete_expired_returns_count(spanner_store: SpannerSyncStore) -> None:
-    await spanner_store.set("exp1", b"x", expires_in=1)
-    await spanner_store.set("exp2", b"x", expires_in=1)
-    await asyncio.sleep(1.1)
+    await spanner_store.set("exp1", b"x", expires_in=2)
+    await spanner_store.set("exp2", b"x", expires_in=2)
+    await asyncio.sleep(2.5)
     deleted = await spanner_store.delete_expired()
     assert deleted >= 2
