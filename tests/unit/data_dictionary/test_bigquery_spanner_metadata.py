@@ -132,6 +132,17 @@ def test_spanner_mode_does_not_reuse_googlesql_for_postgresql() -> None:
     )
 
 
+def test_spanner_nullable_schema_queries_cast_bind_as_string() -> None:
+    """Spanner must not infer a nullable schema bind as both INT64 and STRING."""
+    dictionary = SpannerDataDictionary()
+
+    for query_name in ("tables_by_schema", "columns_by_schema", "indexes_by_schema", "foreign_keys_by_schema"):
+        query_text = dictionary.get_query_text(query_name)
+
+        assert "CAST(:schema_name AS STRING) IS NULL" in query_text
+        assert ":schema_name IS NULL" not in query_text
+
+
 def test_spanner_get_ddl_uses_admin_api_capability() -> None:
     """Spanner native DDL is modeled as Admin API metadata, not SQL text."""
     driver = _FakeSpannerDriver()

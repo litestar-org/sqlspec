@@ -18,8 +18,8 @@ LEFT JOIN INFORMATION_SCHEMA.INDEX_COLUMNS AS ic
   AND i.TABLE_SCHEMA = ic.TABLE_SCHEMA
   AND i.TABLE_NAME = ic.TABLE_NAME
   AND i.INDEX_NAME = ic.INDEX_NAME
-WHERE (:schema_name IS NULL OR i.TABLE_SCHEMA = :schema_name)
-  AND (:table_name IS NULL OR i.TABLE_NAME = :table_name)
+WHERE (CAST(:schema_name AS STRING) IS NULL OR i.TABLE_SCHEMA = :schema_name)
+  AND (CAST(:table_name AS STRING) IS NULL OR i.TABLE_NAME = :table_name)
 GROUP BY
     i.TABLE_CATALOG,
     i.TABLE_SCHEMA,
