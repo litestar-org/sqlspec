@@ -115,32 +115,10 @@ class OraclePipelineDriver(Protocol):
     def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
-def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
-    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
-    if not parts:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    if len(parts) == 1:
-        return connection.username, parts[0]
-    return ".".join(parts[:-1]), parts[-1]
 
 
-def _row_has_async_readable(row: Any) -> bool:
-    if isinstance(row, dict):
-        return any(is_async_readable(value) for value in row.values())
-    try:
-        values = row if isinstance(row, (list, tuple)) else tuple(row)
-    except TypeError:
-        values = (row,)
-    return any(is_async_readable(value) for value in values)
 
 
-def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":
-    if "fetch_lobs" not in fetch_kwargs or "fetch_lobs" not in str(exc):
-        return None
-    retry_kwargs = dict(fetch_kwargs)
-    retry_kwargs.pop("fetch_lobs", None)
-    return retry_kwargs
 
 
 # Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
@@ -150,15 +128,6 @@ def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, obj
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 PIPELINE_MIN_DATABASE_MAJOR: int = 26
-
-
-class _CompiledStackOperation(NamedTuple):
-    statement: SQL
-    sql: str
-    parameters: Any
-    method: str
-    returns_rows: bool
-    summary: str
 
 
 class OraclePipelineMixin:
@@ -185,7 +154,7 @@ class OraclePipelineMixin:
             hashed_operations=hash_stack_operations(stack),
         )
 
-    def _prepare_pipeline_operation(self, operation: "StackOperation") -> _CompiledStackOperation:
+    def _prepare_pipeline_operation(self, operation: "StackOperation") -> "_CompiledStackOperation":
         driver = cast("OraclePipelineDriver", self)
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
         statement_config = kwargs.pop("statement_config", None)
@@ -227,7 +196,7 @@ class OraclePipelineMixin:
             summary=summary,
         )
 
-    def _add_pipeline_operation(self, pipeline: Any, operation: _CompiledStackOperation) -> None:
+    def _add_pipeline_operation(self, pipeline: Any, operation: "_CompiledStackOperation") -> None:
         parameters = operation.parameters or []
         if operation.method == "execute":
             if operation.returns_rows:
@@ -1682,3 +1651,40 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
 
 register_driver_profile("oracledb", driver_profile)
+
+
+class _CompiledStackOperation(NamedTuple):
+    statement: SQL
+    sql: str
+    parameters: Any
+    method: str
+    returns_rows: bool
+    summary: str
+
+
+def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    if len(parts) == 1:
+        return connection.username, parts[0]
+    return ".".join(parts[:-1]), parts[-1]
+
+
+def _row_has_async_readable(row: Any) -> bool:
+    if isinstance(row, dict):
+        return any(is_async_readable(value) for value in row.values())
+    try:
+        values = row if isinstance(row, (list, tuple)) else tuple(row)
+    except TypeError:
+        values = (row,)
+    return any(is_async_readable(value) for value in values)
+
+
+def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":
+    if "fetch_lobs" not in fetch_kwargs or "fetch_lobs" not in str(exc):
+        return None
+    retry_kwargs = dict(fetch_kwargs)
+    retry_kwargs.pop("fetch_lobs", None)
+    return retry_kwargs

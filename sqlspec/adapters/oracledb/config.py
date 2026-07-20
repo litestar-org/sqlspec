@@ -342,6 +342,59 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             **kwargs,
         )
 
+    def create_connection(self) -> "OracleSyncConnection":
+        """Create a single connection (not from pool).
+
+        Returns:
+            An Oracle Connection instance.
+        """
+        if self.connection_instance is None:
+            self.connection_instance = self.create_pool()
+        return self.connection_instance.acquire()
+
+    def provide_pool(self) -> "OracleSyncConnectionPool":
+        """Provide pool instance.
+
+        Returns:
+            The connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = self.create_pool()
+        return self.connection_instance
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for OracleDB types.
+
+        Provides OracleDB-specific types for Litestar framework recognition.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleAsyncCursor": OracleAsyncCursor,
+            "OracleAsyncDriver": OracleAsyncDriver,
+            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleConnectionParams": OracleConnectionParams,
+            "OracleDriverFeatures": OracleDriverFeatures,
+            "OraclePoolParams": OraclePoolParams,
+            "OracleSyncConnectionContext": OracleSyncConnectionContext,
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleSyncDriver": OracleSyncDriver,
+            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
+            "OracleSyncSessionContext": OracleSyncSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for Oracle table-backed event queues."""
+
+        return EventRuntimeHints(select_for_update=True, skip_locked=True)
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
         config = dict(self.connection_config)
@@ -404,80 +457,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.connection_instance = None
         self._oracle_version_cache.reset()
 
-    def create_connection(self) -> "OracleSyncConnection":
-        """Create a single connection (not from pool).
-
-        Returns:
-            An Oracle Connection instance.
-        """
-        if self.connection_instance is None:
-            self.connection_instance = self.create_pool()
-        return self.connection_instance.acquire()
-
-    def provide_pool(self) -> "OracleSyncConnectionPool":
-        """Provide pool instance.
-
-        Returns:
-            The connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = self.create_pool()
-        return self.connection_instance
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for OracleDB types.
-
-        Provides OracleDB-specific types for Litestar framework recognition.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleAsyncCursor": OracleAsyncCursor,
-            "OracleAsyncDriver": OracleAsyncDriver,
-            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
-            "OracleConnectionParams": OracleConnectionParams,
-            "OracleDriverFeatures": OracleDriverFeatures,
-            "OraclePoolParams": OraclePoolParams,
-            "OracleSyncConnectionContext": OracleSyncConnectionContext,
-            "OracleSyncConnection": OracleSyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
-            "OracleSyncDriver": OracleSyncDriver,
-            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
-            "OracleSyncSessionContext": OracleSyncSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for Oracle table-backed event queues."""
-
-        return EventRuntimeHints(select_for_update=True, skip_locked=True)
-
-
-def _resolve_connection_major(cache: "OracleVersionCache", connection: Any) -> "int | None":
-    """Resolve the Oracle server major for connection-setup type handlers.
-
-    Prefers the pool-scoped version cache once a driver has resolved it through
-    the data-dictionary path. Before that, the major is parsed from
-    ``connection.version`` — a connection attribute populated at connect time, so
-    no query is issued — using the same version parser the data dictionary uses.
-    Returns ``None`` when unavailable; callers treat ``None`` as "assume 21c+".
-    """
-    if cache.resolved and cache.version is not None:
-        return cache.version.major
-    try:
-        version_str = connection.version
-    except AttributeError:
-        return None
-    if not version_str:
-        return None
-    components = parse_oracle_version_components(str(version_str))
-    return components[0] if components is not None else None
 
 
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -564,6 +543,56 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             **kwargs,
         )
 
+    async def create_connection(self) -> OracleAsyncConnection:
+        """Create a single async connection (not from pool).
+
+        Returns:
+            An Oracle AsyncConnection instance.
+        """
+        if self.connection_instance is None:
+            self.connection_instance = await self.create_pool()
+        return cast("OracleAsyncConnection", await self.connection_instance.acquire())
+
+    async def provide_pool(self) -> "OracleAsyncConnectionPool":
+        """Provide async pool instance.
+
+        Returns:
+            The async connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for OracleAsyncConfig types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "OracleAsyncConnectionContext": OracleAsyncConnectionContext,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleAsyncCursor": OracleAsyncCursor,
+            "OracleAsyncDriver": OracleAsyncDriver,
+            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleAsyncSessionContext": OracleAsyncSessionContext,
+            "OracleConnectionParams": OracleConnectionParams,
+            "OracleDriverFeatures": OracleDriverFeatures,
+            "OraclePoolParams": OraclePoolParams,
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleSyncDriver": OracleSyncDriver,
+            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for Oracle table-backed event queues."""
+
+        return EventRuntimeHints(select_for_update=True, skip_locked=True)
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
@@ -626,53 +655,24 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self.connection_instance = None
         self._oracle_version_cache.reset()
 
-    async def create_connection(self) -> OracleAsyncConnection:
-        """Create a single async connection (not from pool).
 
-        Returns:
-            An Oracle AsyncConnection instance.
-        """
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        return cast("OracleAsyncConnection", await self.connection_instance.acquire())
 
-    async def provide_pool(self) -> "OracleAsyncConnectionPool":
-        """Provide async pool instance.
+def _resolve_connection_major(cache: "OracleVersionCache", connection: Any) -> "int | None":
+    """Resolve the Oracle server major for connection-setup type handlers.
 
-        Returns:
-            The async connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = await self.create_pool()
-        return self.connection_instance
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for OracleAsyncConfig types.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "OracleAsyncConnectionContext": OracleAsyncConnectionContext,
-            "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleAsyncCursor": OracleAsyncCursor,
-            "OracleAsyncDriver": OracleAsyncDriver,
-            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
-            "OracleAsyncSessionContext": OracleAsyncSessionContext,
-            "OracleConnectionParams": OracleConnectionParams,
-            "OracleDriverFeatures": OracleDriverFeatures,
-            "OraclePoolParams": OraclePoolParams,
-            "OracleSyncConnection": OracleSyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
-            "OracleSyncDriver": OracleSyncDriver,
-            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for Oracle table-backed event queues."""
-
-        return EventRuntimeHints(select_for_update=True, skip_locked=True)
+    Prefers the pool-scoped version cache once a driver has resolved it through
+    the data-dictionary path. Before that, the major is parsed from
+    ``connection.version`` — a connection attribute populated at connect time, so
+    no query is issued — using the same version parser the data dictionary uses.
+    Returns ``None`` when unavailable; callers treat ``None`` as "assume 21c+".
+    """
+    if cache.resolved and cache.version is not None:
+        return cache.version.major
+    try:
+        version_str = connection.version
+    except AttributeError:
+        return None
+    if not version_str:
+        return None
+    components = parse_oracle_version_components(str(version_str))
+    return components[0] if components is not None else None

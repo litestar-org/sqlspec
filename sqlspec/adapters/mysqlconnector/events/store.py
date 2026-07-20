@@ -32,6 +32,36 @@ class MysqlConnectorSyncEventQueueStore(BaseEventQueueStore[MysqlConnectorSyncCo
         return _mysql_index_existence_target(self)
 
 
+
+
+
+
+
+
+
+
+class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsyncConfig]):
+    """Queue DDL for mysql-connector async configs.
+
+    MySQL uses JSON for efficient JSON storage and DATETIME(6) for
+    microsecond precision timestamps.
+    """
+
+    __slots__ = ()
+
+    def _column_types(self) -> "tuple[str, str, str]":
+        return _mysql_column_types()
+
+    def _timestamp_default(self) -> str:
+        return _mysql_timestamp_default()
+
+    def _index_ddl(self) -> str | None:
+        return _mysql_index_ddl(self)
+
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        return _mysql_index_existence_target(self)
+
+
 def _mysql_column_types() -> "tuple[str, str, str]":
     """Return MySQL-specific column types for the event queue."""
     return "JSON", "JSON", "DATETIME(6)"
@@ -65,25 +95,3 @@ def _mysql_index_existence_target(store: Any) -> "tuple[str | None, str] | None"
     if len(segments) == SCHEMA_QUALIFIED_SEGMENTS:
         return segments[0], segments[1]
     return None, segments[0]
-
-
-class MysqlConnectorAsyncEventQueueStore(BaseEventQueueStore[MysqlConnectorAsyncConfig]):
-    """Queue DDL for mysql-connector async configs.
-
-    MySQL uses JSON for efficient JSON storage and DATETIME(6) for
-    microsecond precision timestamps.
-    """
-
-    __slots__ = ()
-
-    def _column_types(self) -> "tuple[str, str, str]":
-        return _mysql_column_types()
-
-    def _timestamp_default(self) -> str:
-        return _mysql_timestamp_default()
-
-    def _index_ddl(self) -> str | None:
-        return _mysql_index_ddl(self)
-
-    def _index_existence_target(self) -> "tuple[str | None, str] | None":
-        return _mysql_index_existence_target(self)

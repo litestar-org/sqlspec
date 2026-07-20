@@ -21,42 +21,12 @@ __all__ = ("OracleAsyncStore", "OracleSyncStore")
 ORACLE_SMALL_BLOB_LIMIT = 32000
 
 
-def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "int | None":
-    """Convert a session TTL value to whole seconds for Oracle interval binds."""
-    if expires_in is None:
-        return None
-
-    expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else int(expires_in)
-    if expires_in_seconds <= 0:
-        return None
-    return expires_in_seconds
 
 
-def _coerce_bytes_payload(value: object) -> bytes:
-    """Coerce a payload into bytes for session storage."""
-    if value is None:
-        return b""
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, str):
-        return value.encode("utf-8")
-    return str(value).encode("utf-8")
 
 
-async def _read_blob_async(value: object) -> bytes:
-    """Read LOB values from async connections into bytes."""
-    if is_async_readable(value):
-        return _coerce_bytes_payload(await value.read())
-    if is_readable(value):
-        return _coerce_bytes_payload(value.read())
-    return _coerce_bytes_payload(value)
 
 
-def _read_blob_sync(value: object) -> bytes:
-    """Read LOB values from sync connections into bytes."""
-    if is_readable(value):
-        return _coerce_bytes_payload(value.read())
-    return _coerce_bytes_payload(value)
 
 
 class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
@@ -758,6 +728,44 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+
+def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "int | None":
+    """Convert a session TTL value to whole seconds for Oracle interval binds."""
+    if expires_in is None:
+        return None
+
+    expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else int(expires_in)
+    if expires_in_seconds <= 0:
+        return None
+    return expires_in_seconds
+
+
+def _coerce_bytes_payload(value: object) -> bytes:
+    """Coerce a payload into bytes for session storage."""
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    return str(value).encode("utf-8")
+
+
+async def _read_blob_async(value: object) -> bytes:
+    """Read LOB values from async connections into bytes."""
+    if is_async_readable(value):
+        return _coerce_bytes_payload(await value.read())
+    if is_readable(value):
+        return _coerce_bytes_payload(value.read())
+    return _coerce_bytes_payload(value)
+
+
+def _read_blob_sync(value: object) -> bytes:
+    """Read LOB values from sync connections into bytes."""
+    if is_readable(value):
+        return _coerce_bytes_payload(value.read())
+    return _coerce_bytes_payload(value)
 
 
 def _litestar_table_feature_clause(config: Any, in_memory: bool) -> str:

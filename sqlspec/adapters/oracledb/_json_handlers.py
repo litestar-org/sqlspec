@@ -95,6 +95,55 @@ def json_converter_out_oson(connection: "Connection | AsyncConnection", value: "
     return connection.decode_oson(value)
 
 
+def json_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler entry point."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def json_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler entry point."""
+    return _output_type_handler(cursor, metadata)
+
+
+def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
+    """Register JSON type handlers on an Oracle connection.
+
+    Chains to any existing handlers via ``chain_input_handler`` / ``chain_output_handler``
+    so vector / UUID handlers continue to fire for non-JSON values.
+    """
+    try:
+        existing_input = connection.inputtypehandler
+    except AttributeError:
+        existing_input = None
+    try:
+        existing_output = connection.outputtypehandler
+    except AttributeError:
+        existing_output = None
+
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
+
+
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``.
+
+    Returns a ``functools.partial`` of a module-level function rather than a class
+    instance: python-oracledb selects its calling convention via
+    ``inspect.signature(handler)``, which succeeds for a partial of a (compiled)
+    function but raises ``ValueError`` for a compiled ``__call__`` object -- the
+    latter forces the legacy 6-argument call and breaks fetches.
+    """
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``.
+
+    See :func:`chain_input_handler` for why this returns a partial, not an instance.
+    """
+    return partial(_chained_output_handler, inner, fallback)
+
+
 def _is_json_payload(value: Any) -> bool:
     """Return True if the value should be claimed by the JSON input handler.
 
@@ -163,35 +212,6 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     return None
 
 
-def json_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-    """Public input type handler entry point."""
-    return _input_type_handler(cursor, value, arraysize)
-
-
-def json_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Public output type handler entry point."""
-    return _output_type_handler(cursor, metadata)
-
-
-def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
-    """Register JSON type handlers on an Oracle connection.
-
-    Chains to any existing handlers via ``chain_input_handler`` / ``chain_output_handler``
-    so vector / UUID handlers continue to fire for non-JSON values.
-    """
-    try:
-        existing_input = connection.inputtypehandler
-    except AttributeError:
-        existing_input = None
-    try:
-        existing_output = connection.outputtypehandler
-    except AttributeError:
-        existing_output = None
-
-    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
-    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
-
-
 def _chained_input_handler(
     inner: Any, fallback: "Any | None", cursor: "Cursor | AsyncCursor", value: Any, arraysize: int
 ) -> Any:
@@ -212,23 +232,3 @@ def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: "Cursor 
     if fallback is not None:
         return fallback(cursor, metadata)
     return None
-
-
-def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``.
-
-    Returns a ``functools.partial`` of a module-level function rather than a class
-    instance: python-oracledb selects its calling convention via
-    ``inspect.signature(handler)``, which succeeds for a partial of a (compiled)
-    function but raises ``ValueError`` for a compiled ``__call__`` object -- the
-    latter forces the legacy 6-argument call and breaks fetches.
-    """
-    return partial(_chained_input_handler, inner, fallback)
-
-
-def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an output type handler that chains ``inner`` to ``fallback``.
-
-    See :func:`chain_input_handler` for why this returns a partial, not an instance.
-    """
-    return partial(_chained_output_handler, inner, fallback)

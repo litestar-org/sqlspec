@@ -20,20 +20,6 @@ logger = get_logger("sqlspec.adapters.aiomysql.litestar.store")
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
-def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
-    """Format the litestar ``table_options`` config value for DDL interpolation.
-
-    Args:
-        litestar_config: The ``extension_config["litestar"]`` mapping.
-
-    Returns:
-        A leading-space-prefixed options string, or an empty string when unset.
-    """
-    value = litestar_config.get("table_options")
-    if not isinstance(value, str):
-        return ""
-    value = value.strip()
-    return f" {value}" if value else ""
 
 
 class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
@@ -290,3 +276,19 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
             f"DROP TABLE IF EXISTS {self._table_name}",
         ]
+
+
+def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``table_options`` config value for DDL interpolation.
+
+    Args:
+        litestar_config: The ``extension_config["litestar"]`` mapping.
+
+    Returns:
+        A leading-space-prefixed options string, or an empty string when unset.
+    """
+    value = litestar_config.get("table_options")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return f" {value}" if value else ""

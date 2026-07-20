@@ -117,184 +117,22 @@ class OracleStorageCapabilities(TypedDict):
     partitioning: bool
 
 
-def _oracle_quoted_name(owner: "str | None", object_name: str) -> str:
-    if owner is None:
-        return quote_identifier(object_name)
-    return f"{quote_identifier(owner)}.{quote_identifier(object_name)}"
 
 
-def _oracle_scope_capability(domain: str, *, include_privileged: bool) -> MetadataCapability:
-    if domain == "scope:user":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.NATIVE,
-            source=MetadataSource.CATALOG,
-            warnings=("USER_* views are limited to the current schema.",),
-        )
-    if domain == "scope:all":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.PARTIAL,
-            source=MetadataSource.CATALOG,
-            risks=(MetadataRisk.PRIVILEGED,),
-            warnings=(ORACLE_PARTIAL_VISIBILITY_WARNING,),
-        )
-    if domain in {"scope:dba", "scope:cdb"}:
-        support = MetadataSupport.SUPPORTED if include_privileged else MetadataSupport.UNSUPPORTED
-        return MetadataCapability(
-            domain=domain,
-            support=support,
-            fidelity=MetadataFidelity.NATIVE if include_privileged else MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.CATALOG,
-            risks=(MetadataRisk.PRIVILEGED,),
-            warnings=(ORACLE_PRIVILEGED_SCOPE_WARNING,),
-        )
-    return MetadataCapability.unsupported(domain)
 
 
-def _oracle_capability_for_domain(
-    domain: str,
-    *,
-    include_privileged: bool = False,
-    include_diagnostics: bool = False,
-    acknowledge_diagnostics_license: bool = False,
-) -> MetadataCapability:
-    if domain.startswith("scope:"):
-        return _oracle_scope_capability(domain, include_privileged=include_privileged)
-    if domain == "ddl":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.NATIVE,
-            source=MetadataSource.NATIVE_API,
-            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
-            warnings=ORACLE_DDL_WARNINGS,
-        )
-    if domain == "system":
-        diagnostics_enabled = include_diagnostics and acknowledge_diagnostics_license
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED if diagnostics_enabled else MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.NATIVE if diagnostics_enabled else MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.SYSTEM_VIEW,
-            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.LICENSE_GATED, MetadataRisk.REDACTED),
-            warnings=(ORACLE_DIAGNOSTICS_WARNING,),
-        )
-    risks: tuple[MetadataRisk, ...] = ()
-    warnings: tuple[str, ...] = ()
-    fidelity = MetadataFidelity.NATIVE
-    if domain in {"objects", "tables", "columns", "constraints", "indexes", "views", "materialized_views"}:
-        fidelity = MetadataFidelity.PARTIAL
-        warnings = (ORACLE_PARTIAL_VISIBILITY_WARNING,)
-    if domain in {"source", "comments", "grants"}:
-        risks = (MetadataRisk.REDACTED,)
-        warnings = ("Metadata can expose application source text, comments, grants, or security-sensitive details.",)
-    if domain in {"partitions", "lob_storage"}:
-        risks = (MetadataRisk.PRIVILEGED,)
-        warnings = ("Storage metadata can be partial when segment or tablespace privileges are missing.",)
-    return MetadataCapability(
-        domain=domain,
-        support=MetadataSupport.SUPPORTED,
-        fidelity=fidelity,
-        source=MetadataSource.CATALOG,
-        risks=risks,
-        warnings=warnings,
-    )
 
 
-def _oracle_capability_profile(
-    adapter: str,
-    domains: "Sequence[str] | None" = None,
-    *,
-    include_privileged: bool = False,
-    include_diagnostics: bool = False,
-    acknowledge_diagnostics_license: bool = False,
-) -> MetadataCapabilityProfile:
-    requested_domains = ORACLE_DEFAULT_CAPABILITY_DOMAINS if domains is None else tuple(domains)
-    capabilities = tuple(
-        _oracle_capability_for_domain(
-            domain,
-            include_privileged=include_privileged,
-            include_diagnostics=include_diagnostics,
-            acknowledge_diagnostics_license=acknowledge_diagnostics_license,
-        )
-        for domain in requested_domains
-    )
-    return MetadataCapabilityProfile(dialect="oracle", adapter=adapter, capabilities=capabilities)
 
 
-def _oracle_domain_metadata_result(domain: str, rows: "list[object]") -> MetadataResult:
-    capability = _oracle_capability_for_domain(domain)
-    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
 
 
-def _coerce_oracle_ddl_text(value: object) -> "str | None":
-    if value is None:
-        return None
-    read = getattr(value, "read", None)
-    if callable(read):
-        return str(read())
-    return str(value)
 
 
-def _oracle_ddl_metadata_result(
-    *, object_type: str, object_name: str, owner: "str | None", ddl_text: "str | None"
-) -> DDLResult:
-    identity = ObjectIdentity(
-        name=object_name,
-        object_type=object_type.lower(),
-        schema=owner,
-        dialect="oracle",
-        quoted_name=_oracle_quoted_name(owner, object_name),
-        source=MetadataSource.NATIVE_API,
-    )
-    if ddl_text is None:
-        return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=ORACLE_DDL_WARNINGS)
-    return DDLResult(
-        identity=identity,
-        status=MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.NATIVE,
-        source=MetadataSource.NATIVE_API,
-        ddl=ddl_text,
-        warnings=ORACLE_DDL_WARNINGS,
-    )
 
 
-def _oracle_system_metadata_capability(domain: str) -> SystemMetadataCapability:
-    normalized_domain = domain.lower()
-    if normalized_domain in ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS:
-        return SystemMetadataCapability(
-            normalized_domain,
-            MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.NATIVE,
-            source=MetadataSource.SYSTEM_VIEW,
-            warnings=("Diagnostics are disabled by default.",),
-        )
-    if normalized_domain not in ORACLE_SYSTEM_METADATA_DOMAINS:
-        return SystemMetadataCapability.unsupported(normalized_domain, source=MetadataSource.SYSTEM_VIEW)
-    return SystemMetadataCapability(
-        normalized_domain,
-        MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.NATIVE,
-        source=MetadataSource.SYSTEM_VIEW,
-        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.LICENSE_GATED, MetadataRisk.REDACTED),
-        required_privileges=("DBA_HIST access", "Oracle Diagnostics Pack entitlement"),
-        license_gate=ORACLE_DIAGNOSTICS_WARNING,
-        redaction_fields=ORACLE_SYSTEM_REDACTION_FIELDS,
-        warnings=(ORACLE_DIAGNOSTICS_WARNING,),
-    )
 
 
-def _oracle_system_metadata_request(
-    request: SystemMetadataRequest | str | None = None, **kwargs: Any
-) -> SystemMetadataRequest:
-    acknowledge_license = bool(kwargs.pop("acknowledge_license", False))
-    if acknowledge_license:
-        kwargs.setdefault("allow_license_gated_diagnostics", True)
-        kwargs.setdefault("include_performance", True)
-    return ensure_system_metadata_request(request, **kwargs)
 
 
 class OracleVersionInfo(VersionInfo):
@@ -394,15 +232,6 @@ class OracleVersionCache:
         self.version = None
 
 
-def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
-    """Determine the JSON storage rung for an Oracle version.
-
-    An undetectable version defaults to ``BLOB_JSON`` — the ``IS JSON`` BLOB rung
-    is valid on every 12c+ server, the overwhelmingly common case.
-    """
-    if version_info is None:
-        return JSONStorageType.BLOB_JSON
-    return JSONStorageType(resolve_oracle_json_storage(version_info.major, version_info.compatible_major))
 
 
 def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
@@ -1202,6 +1031,196 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         self._log_version_detected(type(self).dialect, version_info)
         return version_info
 
+
+def _oracle_quoted_name(owner: "str | None", object_name: str) -> str:
+    if owner is None:
+        return quote_identifier(object_name)
+    return f"{quote_identifier(owner)}.{quote_identifier(object_name)}"
+
+
+def _oracle_scope_capability(domain: str, *, include_privileged: bool) -> MetadataCapability:
+    if domain == "scope:user":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            warnings=("USER_* views are limited to the current schema.",),
+        )
+    if domain == "scope:all":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.CATALOG,
+            risks=(MetadataRisk.PRIVILEGED,),
+            warnings=(ORACLE_PARTIAL_VISIBILITY_WARNING,),
+        )
+    if domain in {"scope:dba", "scope:cdb"}:
+        support = MetadataSupport.SUPPORTED if include_privileged else MetadataSupport.UNSUPPORTED
+        return MetadataCapability(
+            domain=domain,
+            support=support,
+            fidelity=MetadataFidelity.NATIVE if include_privileged else MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.CATALOG,
+            risks=(MetadataRisk.PRIVILEGED,),
+            warnings=(ORACLE_PRIVILEGED_SCOPE_WARNING,),
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _oracle_capability_for_domain(
+    domain: str,
+    *,
+    include_privileged: bool = False,
+    include_diagnostics: bool = False,
+    acknowledge_diagnostics_license: bool = False,
+) -> MetadataCapability:
+    if domain.startswith("scope:"):
+        return _oracle_scope_capability(domain, include_privileged=include_privileged)
+    if domain == "ddl":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.NATIVE_API,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+            warnings=ORACLE_DDL_WARNINGS,
+        )
+    if domain == "system":
+        diagnostics_enabled = include_diagnostics and acknowledge_diagnostics_license
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED if diagnostics_enabled else MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.NATIVE if diagnostics_enabled else MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.LICENSE_GATED, MetadataRisk.REDACTED),
+            warnings=(ORACLE_DIAGNOSTICS_WARNING,),
+        )
+    risks: tuple[MetadataRisk, ...] = ()
+    warnings: tuple[str, ...] = ()
+    fidelity = MetadataFidelity.NATIVE
+    if domain in {"objects", "tables", "columns", "constraints", "indexes", "views", "materialized_views"}:
+        fidelity = MetadataFidelity.PARTIAL
+        warnings = (ORACLE_PARTIAL_VISIBILITY_WARNING,)
+    if domain in {"source", "comments", "grants"}:
+        risks = (MetadataRisk.REDACTED,)
+        warnings = ("Metadata can expose application source text, comments, grants, or security-sensitive details.",)
+    if domain in {"partitions", "lob_storage"}:
+        risks = (MetadataRisk.PRIVILEGED,)
+        warnings = ("Storage metadata can be partial when segment or tablespace privileges are missing.",)
+    return MetadataCapability(
+        domain=domain,
+        support=MetadataSupport.SUPPORTED,
+        fidelity=fidelity,
+        source=MetadataSource.CATALOG,
+        risks=risks,
+        warnings=warnings,
+    )
+
+
+def _oracle_capability_profile(
+    adapter: str,
+    domains: "Sequence[str] | None" = None,
+    *,
+    include_privileged: bool = False,
+    include_diagnostics: bool = False,
+    acknowledge_diagnostics_license: bool = False,
+) -> MetadataCapabilityProfile:
+    requested_domains = ORACLE_DEFAULT_CAPABILITY_DOMAINS if domains is None else tuple(domains)
+    capabilities = tuple(
+        _oracle_capability_for_domain(
+            domain,
+            include_privileged=include_privileged,
+            include_diagnostics=include_diagnostics,
+            acknowledge_diagnostics_license=acknowledge_diagnostics_license,
+        )
+        for domain in requested_domains
+    )
+    return MetadataCapabilityProfile(dialect="oracle", adapter=adapter, capabilities=capabilities)
+
+
+def _oracle_domain_metadata_result(domain: str, rows: "list[object]") -> MetadataResult:
+    capability = _oracle_capability_for_domain(domain)
+    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+def _coerce_oracle_ddl_text(value: object) -> "str | None":
+    if value is None:
+        return None
+    read = getattr(value, "read", None)
+    if callable(read):
+        return str(read())
+    return str(value)
+
+
+def _oracle_ddl_metadata_result(
+    *, object_type: str, object_name: str, owner: "str | None", ddl_text: "str | None"
+) -> DDLResult:
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type.lower(),
+        schema=owner,
+        dialect="oracle",
+        quoted_name=_oracle_quoted_name(owner, object_name),
+        source=MetadataSource.NATIVE_API,
+    )
+    if ddl_text is None:
+        return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=ORACLE_DDL_WARNINGS)
+    return DDLResult(
+        identity=identity,
+        status=MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.NATIVE_API,
+        ddl=ddl_text,
+        warnings=ORACLE_DDL_WARNINGS,
+    )
+
+
+def _oracle_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    normalized_domain = domain.lower()
+    if normalized_domain in ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS:
+        return SystemMetadataCapability(
+            normalized_domain,
+            MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.SYSTEM_VIEW,
+            warnings=("Diagnostics are disabled by default.",),
+        )
+    if normalized_domain not in ORACLE_SYSTEM_METADATA_DOMAINS:
+        return SystemMetadataCapability.unsupported(normalized_domain, source=MetadataSource.SYSTEM_VIEW)
+    return SystemMetadataCapability(
+        normalized_domain,
+        MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.SYSTEM_VIEW,
+        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.LICENSE_GATED, MetadataRisk.REDACTED),
+        required_privileges=("DBA_HIST access", "Oracle Diagnostics Pack entitlement"),
+        license_gate=ORACLE_DIAGNOSTICS_WARNING,
+        redaction_fields=ORACLE_SYSTEM_REDACTION_FIELDS,
+        warnings=(ORACLE_DIAGNOSTICS_WARNING,),
+    )
+
+
+def _oracle_system_metadata_request(
+    request: SystemMetadataRequest | str | None = None, **kwargs: Any
+) -> SystemMetadataRequest:
+    acknowledge_license = bool(kwargs.pop("acknowledge_license", False))
+    if acknowledge_license:
+        kwargs.setdefault("allow_license_gated_diagnostics", True)
+        kwargs.setdefault("include_performance", True)
+    return ensure_system_metadata_request(request, **kwargs)
+
+
+def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
+    """Determine the JSON storage rung for an Oracle version.
+
+    An undetectable version defaults to ``BLOB_JSON`` — the ``IS JSON`` BLOB rung
+    is valid on every 12c+ server, the overwhelmingly common case.
+    """
+    if version_info is None:
+        return JSONStorageType.BLOB_JSON
+    return JSONStorageType(resolve_oracle_json_storage(version_info.major, version_info.compatible_major))
 
 
 def _unsupported_storage_capabilities() -> OracleStorageCapabilities:

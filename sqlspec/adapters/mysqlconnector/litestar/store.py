@@ -18,20 +18,6 @@ logger = get_logger("sqlspec.adapters.mysqlconnector.litestar.store")
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
-def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
-    """Format the litestar ``table_options`` config value for DDL interpolation.
-
-    Args:
-        litestar_config: The ``extension_config["litestar"]`` mapping.
-
-    Returns:
-        A leading-space-prefixed options string, or an empty string when unset.
-    """
-    value = litestar_config.get("table_options")
-    if not isinstance(value, str):
-        return ""
-    value = value.strip()
-    return f" {value}" if value else ""
 
 
 class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
@@ -463,3 +449,19 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+
+def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:
+    """Format the litestar ``table_options`` config value for DDL interpolation.
+
+    Args:
+        litestar_config: The ``extension_config["litestar"]`` mapping.
+
+    Returns:
+        A leading-space-prefixed options string, or an empty string when unset.
+    """
+    value = litestar_config.get("table_options")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return f" {value}" if value else ""

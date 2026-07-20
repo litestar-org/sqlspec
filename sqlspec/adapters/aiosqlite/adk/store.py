@@ -45,58 +45,12 @@ class AiosqliteADKConfig(ADKConfig):
     """Optional FTS5 detail mode used when ``memory_use_fts`` is enabled."""
 
 
-def _adk_config(config: "AiosqliteConfig") -> "dict[str, Any]":
-    """Return the adapter-local ADK extension configuration."""
-
-    return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
 
 
-def _pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
-    """Return validated ADK PRAGMA overrides for aiosqlite stores."""
-
-    adk_config = _adk_config(config)
-    pragma_overrides = adk_config.get("pragma_overrides")
-    if pragma_overrides is None:
-        return []
-    if not isinstance(pragma_overrides, Mapping):
-        msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
-        raise ImproperConfigurationError(msg)
-    try:
-        return _render_pragmas(pragma_overrides)
-    except ImproperConfigurationError as exc:
-        msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
-        raise ImproperConfigurationError(msg) from exc
 
 
-def _fts_options(config: "AiosqliteConfig") -> "tuple[str, ...]":
-    """Return validated FTS5 options for aiosqlite memory DDL."""
-
-    adk_config = _adk_config(config)
-    options: list[str] = []
-
-    fts_tokenize = adk_config.get("fts_tokenize")
-    if fts_tokenize is not None:
-        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.match(fts_tokenize) is None:
-            msg = "extension_config['adk']['fts_tokenize'] must contain only safe FTS5 tokenizer characters"
-            raise ImproperConfigurationError(msg)
-        options.append(f"tokenize = '{fts_tokenize}'")
-
-    fts_detail = adk_config.get("fts_detail")
-    if fts_detail is not None:
-        if not isinstance(fts_detail, str) or fts_detail not in _FTS_DETAIL_VALUES:
-            msg = "extension_config['adk']['fts_detail'] must be 'full', 'column', or 'none'"
-            raise ImproperConfigurationError(msg)
-        options.append(f"detail = {fts_detail}")
-
-    return tuple(options)
 
 
-def _format_fts_options(options: "tuple[str, ...]") -> str:
-    """Format validated FTS5 options for a CREATE VIRTUAL TABLE statement."""
-
-    if not options:
-        return ""
-    return ",\n            " + ",\n            ".join(options)
 
 
 class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
@@ -1009,6 +963,60 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 f"DROP TRIGGER IF EXISTS {self._memory_table}_au",
             ])
         return statements
+
+
+def _adk_config(config: "AiosqliteConfig") -> "dict[str, Any]":
+    """Return the adapter-local ADK extension configuration."""
+
+    return dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
+
+
+def _pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
+    """Return validated ADK PRAGMA overrides for aiosqlite stores."""
+
+    adk_config = _adk_config(config)
+    pragma_overrides = adk_config.get("pragma_overrides")
+    if pragma_overrides is None:
+        return []
+    if not isinstance(pragma_overrides, Mapping):
+        msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        return _render_pragmas(pragma_overrides)
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
+        raise ImproperConfigurationError(msg) from exc
+
+
+def _fts_options(config: "AiosqliteConfig") -> "tuple[str, ...]":
+    """Return validated FTS5 options for aiosqlite memory DDL."""
+
+    adk_config = _adk_config(config)
+    options: list[str] = []
+
+    fts_tokenize = adk_config.get("fts_tokenize")
+    if fts_tokenize is not None:
+        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.match(fts_tokenize) is None:
+            msg = "extension_config['adk']['fts_tokenize'] must contain only safe FTS5 tokenizer characters"
+            raise ImproperConfigurationError(msg)
+        options.append(f"tokenize = '{fts_tokenize}'")
+
+    fts_detail = adk_config.get("fts_detail")
+    if fts_detail is not None:
+        if not isinstance(fts_detail, str) or fts_detail not in _FTS_DETAIL_VALUES:
+            msg = "extension_config['adk']['fts_detail'] must be 'full', 'column', or 'none'"
+            raise ImproperConfigurationError(msg)
+        options.append(f"detail = {fts_detail}")
+
+    return tuple(options)
+
+
+def _format_fts_options(options: "tuple[str, ...]") -> str:
+    """Format validated FTS5 options for a CREATE VIRTUAL TABLE statement."""
+
+    if not options:
+        return ""
+    return ",\n            " + ",\n            ".join(options)
 
 
 def _datetime_to_julian(dt: datetime) -> float:
