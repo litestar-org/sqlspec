@@ -1,5 +1,45 @@
 """Shared integration fixture definitions."""
 
-from tests.integration.fixtures.postgres import asyncpg_async_driver, asyncpg_config, asyncpg_connection_config
+from tests.integration.fixtures.postgres import (
+    adbc_postgres_config,
+    adbc_postgres_connection_config,
+    adbc_sync_driver,
+    asyncpg_async_driver,
+    asyncpg_config,
+    asyncpg_connection_config,
+    paradedb_config_adbc,
+    paradedb_config_asyncpg,
+    paradedb_config_psqlpy,
+    paradedb_config_psycopg,
+    pgvector_config_adbc,
+    pgvector_config_asyncpg,
+    pgvector_config_psqlpy,
+    pgvector_config_psycopg,
+    psqlpy_config,
+    psqlpy_driver,
+    psqlpy_session,
+    psycopg_async_config,
+    psycopg_sync_config,
+)
 
-__all__ = ("asyncpg_async_driver", "asyncpg_config", "asyncpg_connection_config")
+__all__ = (
+    "adbc_postgres_config",
+    "adbc_postgres_connection_config",
+    "adbc_sync_driver",
+    "asyncpg_async_driver",
+    "asyncpg_config",
+    "asyncpg_connection_config",
+    "paradedb_config_adbc",
+    "paradedb_config_asyncpg",
+    "paradedb_config_psqlpy",
+    "paradedb_config_psycopg",
+    "pgvector_config_adbc",
+    "pgvector_config_asyncpg",
+    "pgvector_config_psqlpy",
+    "pgvector_config_psycopg",
+    "psqlpy_config",
+    "psqlpy_driver",
+    "psqlpy_session",
+    "psycopg_async_config",
+    "psycopg_sync_config",
+)
