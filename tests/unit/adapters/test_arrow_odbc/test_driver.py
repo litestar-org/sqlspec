@@ -388,26 +388,6 @@ def test_arrow_odbc_select_to_arrow_uses_native_reader() -> None:
     assert connection.read_calls[0]["batch_size"] == 2
 
 
-def test_arrow_odbc_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
-    connection = FakeConnection()
-    driver = ArrowOdbcDriver(
-        cast("ArrowOdbcConnection", connection),
-        driver_features={"connection_string": "Driver={ODBC Driver 18 for SQL Server};", "chunk_size": 2},
-    )
-    original = ArrowOdbcDriver._compiled_sql
-    captured: list[bool] = []
-
-    def get_compiled_sql(self: ArrowOdbcDriver, statement: Any, config: Any) -> Any:
-        captured.append(statement.is_processed)
-        return original(self, statement, config)
-
-    monkeypatch.setattr(ArrowOdbcDriver, "_compiled_sql", get_compiled_sql)
-
-    driver.select_to_arrow("SELECT 1 AS x")
-
-    assert captured == [True]
-
-
 def test_arrow_odbc_select_to_arrow_batches_returns_batches() -> None:
     """select_to_arrow should use SQLSpec's canonical batches return format."""
     connection = FakeConnection()

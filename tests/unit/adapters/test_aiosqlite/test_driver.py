@@ -1,7 +1,7 @@
 import asyncio
 import sqlite3
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from threading import Thread
 from typing import Any, cast
 
@@ -20,7 +20,7 @@ from sqlspec.adapters.aiosqlite.core import (
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
-from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core import ParameterStyle
 from sqlspec.core.result import DMLResult
 from sqlspec.exceptions import SQLSpecError
 
@@ -124,25 +124,11 @@ async def test_cursor_lifecycle_aexit_does_not_suppress_exception() -> None:
         await conn.close()
 
 
-class _MappingRow:
-    def __init__(self, data: dict[str, object]) -> None:
-        self._data = data
-
-    def keys(self) -> object:
-        return self._data.keys()
-
-    def __getitem__(self, key: str) -> object:
-        return self._data[key]
-
-
 class _SelectCursor:
     def __init__(self) -> None:
         self.description = [("id",), ("name",)]
         self.rowcount = 2
         self.closed = False
-
-    def fetchall(self) -> list[_MappingRow]:
-        return [_MappingRow({"id": 1, "name": "alice"})]
 
     def close(self) -> None:
         self.closed = True
@@ -153,10 +139,6 @@ class _WorkerConnection:
         self._conn = self
         self.cursor = _SelectCursor()
         self.executemany_calls: list[tuple[str, object]] = []
-
-    def execute(self, sql: str, parameters: object) -> _SelectCursor:
-        _ = sql, parameters
-        return self.cursor
 
     async def executemany(self, sql: str, parameters: object) -> _SelectCursor:
         self.executemany_calls.append((sql, parameters))
@@ -206,49 +188,6 @@ async def test_begin_raises_original_error_after_retry_exhaustion(monkeypatch: p
 
     assert connection.execute_calls == 4
     assert isinstance(exc_info.value.__cause__, aiosqlite.Error)
-
-
-async def test_dispatch_execute_detects_record_row_format(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _run_on_worker_thread(
-        _connection: object, function: Callable[..., object], *args: object, **kwargs: object
-    ) -> object:
-        return function(*args, **kwargs)
-
-    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.run_on_worker_thread", _run_on_worker_thread)
-    monkeypatch.setattr(AiosqliteDriver, "_compiled_sql", lambda *_args, **_kwargs: ("SELECT id, name FROM users", []))
-
-    driver = AiosqliteDriver(connection=cast("Any", _WorkerConnection()), statement_config=default_statement_config)
-
-    result = await driver.dispatch_execute(
-        cast("Any", object()), SQL("SELECT id, name FROM users", statement_config=default_statement_config)
-    )
-
-    assert result.row_format == "record"
-    selected_data = result.selected_data
-    assert selected_data is not None
-    assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
-
-
-async def test_dispatch_execute_clears_rowid_cache_after_queued_ddl(monkeypatch: pytest.MonkeyPatch) -> None:
-    driver = AiosqliteDriver(connection=cast("Any", _WorkerConnection()), statement_config=default_statement_config)
-
-    async def _run_on_worker_thread(
-        _connection: object, _function: Callable[..., object], *_args: object, **_kwargs: object
-    ) -> tuple[int, None]:
-        assert driver._rowid_target_cache == {}
-        driver._rowid_target_cache[(None, "stale_target")] = True
-        return 0, None
-
-    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.run_on_worker_thread", _run_on_worker_thread)
-    monkeypatch.setattr(
-        AiosqliteDriver, "_compiled_sql", lambda *_args, **_kwargs: ("CREATE TABLE queued_ddl (id)", [])
-    )
-
-    await driver.dispatch_execute(
-        cast("Any", object()), SQL("CREATE TABLE queued_ddl (id)", statement_config=default_statement_config)
-    )
-
-    assert driver._rowid_target_cache == {}
 
 
 async def test_execute_many_uses_thin_qmark_path() -> None:

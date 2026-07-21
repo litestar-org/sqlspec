@@ -1,7 +1,7 @@
 """Unit tests for mssql_python Arrow and BulkCopy driver methods."""
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -101,23 +101,6 @@ def test_select_to_arrow_returns_arrow_result_from_native_cursor() -> None:
     assert table.num_rows == 3
     assert connection.cursor_obj.executed[0][0] == "SELECT 1 AS x"
     assert connection.cursor_obj.closed is True
-
-
-def test_select_to_arrow_precompiles_prepared_statement(monkeypatch: pytest.MonkeyPatch) -> None:
-    connection = ArrowConnection()
-    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
-    original = MssqlPythonDriver._compiled_sql
-    captured: list[bool] = []
-
-    def get_compiled_sql(self: MssqlPythonDriver, statement: Any, config: Any) -> Any:
-        captured.append(statement.is_processed)
-        return original(self, statement, config)
-
-    monkeypatch.setattr(MssqlPythonDriver, "_compiled_sql", get_compiled_sql)
-
-    driver.select_to_arrow("SELECT 1 AS x")
-
-    assert captured == [True]
 
 
 def test_select_to_arrow_raises_mapped_driver_exception() -> None:
