@@ -48,7 +48,20 @@ Logging
 Writing and running tests
 +++++++++++++++++++++++++
 
-.. todo:: Write this section
+Put behavior shared by adapters in the contract suite. Keep vendor-only cases
+in that adapter's test folder. Use unit tests for code that does not need a
+database. The `test placement guide
+<https://github.com/litestar-org/sqlspec/blob/main/tests/README.md>`_ explains
+where tests and fixtures belong. It also lists the checks to run.
+
+Run the smallest relevant test file first, then run the repository gates:
+
+.. code-block:: console
+
+   make lint
+   make type-check
+   make test
+   make coverage
 
 Mypyc and performance gates
 +++++++++++++++++++++++++++

@@ -69,9 +69,7 @@ def test_gap_handling_squash_succeeds_without_gap(
     assert len(plans[0].source_migrations) == 2
 
 
-def test_extension_migrations_squash_extension_migrations_preserves_prefix(
-    temp_migrations_dir: Path,
-) -> None:
+def test_extension_migrations_squash_extension_migrations_preserves_prefix(temp_migrations_dir: Path) -> None:
     """Test that extension migrations are handled correctly."""
     from sqlspec.migrations.validation import validate_extension_consistency
 
