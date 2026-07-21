@@ -128,18 +128,28 @@ async def test_psqlpy_large_result_sets(psqlpy_session: PsqlpyDriver) -> None:
 async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None:
     """Test PSQLPy transaction handling."""
 
-    await psqlpy_session.execute("BEGIN")
+    await psqlpy_session.begin()
 
-    await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES ($1)", ("transaction_test",))
-
-    result = await psqlpy_session.execute(
-        "SELECT COUNT(*) as count FROM test_table_psqlpy WHERE name = $1", ("transaction_test",)
+    rolled_back_insert = await psqlpy_session.execute(
+        "INSERT INTO test_table_psqlpy (name) VALUES ($1)", ("transaction_rollback",)
     )
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_data()[0]["count"] == 1
+    assert rolled_back_insert.rows_affected == 1
+    await psqlpy_session.rollback()
 
-    await psqlpy_session.execute("COMMIT")
+    rolled_back_result = await psqlpy_session.execute(
+        "SELECT COUNT(*) as count FROM test_table_psqlpy WHERE name = $1", ("transaction_rollback",)
+    )
+    assert isinstance(rolled_back_result, SQLResult)
+    assert rolled_back_result.data is not None
+    assert rolled_back_result.get_data()[0]["count"] == 0
+
+    await psqlpy_session.begin()
+    committed_insert = await psqlpy_session.execute(
+        "INSERT INTO test_table_psqlpy (name) VALUES ($1)", ("transaction_test",)
+    )
+    assert committed_insert.rows_affected == 1
+
+    await psqlpy_session.commit()
 
     committed_result = await psqlpy_session.execute(
         "SELECT name FROM test_table_psqlpy WHERE name = $1", ("transaction_test",)
