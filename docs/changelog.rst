@@ -49,6 +49,13 @@ v0.56.0
 * Optimized-expression cache keys now include complete schema table, column,
   and type information, preventing different same-sized schemas from sharing
   an incompatible optimized AST.
+* ``mssql_python`` transactions now use the driver's DBAPI transaction state,
+  persist committed work, roll back pending work, and restore the connection's
+  original autocommit mode. (`#642 <https://github.com/litestar-org/sqlspec/issues/642>`_)
+* ``psqlpy`` now reports exact affected-row counts for non-returning single-row
+  and multi-row ``INSERT``, ``UPDATE``, and ``DELETE`` statements while
+  preserving the existing ``RETURNING`` result path.
+  (`#645 <https://github.com/litestar-org/sqlspec/issues/645>`_)
 
 v0.55.0
 ------------------------------------------------------------------------------
