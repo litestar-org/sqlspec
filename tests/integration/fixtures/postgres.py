@@ -1,3 +1,5 @@
+"""Shared PostgreSQL-family integration fixtures."""
+
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -6,11 +8,12 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
+__all__ = ("asyncpg_async_driver", "asyncpg_config", "asyncpg_connection_config")
+
 
 @pytest.fixture(scope="session")
 def asyncpg_connection_config(postgres_service: "PostgresService") -> "dict[str, Any]":
     """Base pool configuration for AsyncPG tests."""
-
     return {
         "host": postgres_service.host,
         "port": postgres_service.port,
@@ -35,6 +38,5 @@ async def asyncpg_config(asyncpg_connection_config: "dict[str, Any]") -> "AsyncG
 @pytest.fixture
 async def asyncpg_async_driver(asyncpg_config: "AsyncpgConfig") -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG driver for integration tests."""
-
     async with asyncpg_config.provide_session() as session:
         yield session
