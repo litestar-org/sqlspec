@@ -42,7 +42,7 @@ __all__ = (
     "materialize_tuple_rows",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
@@ -108,6 +108,10 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
             return error_class(f"SQL Server error {error_number}: {description}. Original error: {error}")
         if logger is not None:
             logger.debug("Unmapped SQL Server error number: %s", error_number)
+
+    constraint_exception = _constraint_exception_from_message(error)
+    if constraint_exception is not None:
+        return constraint_exception
 
     exc_name = type(error).__name__
     if exc_name == "IntegrityError":
@@ -177,11 +181,6 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     return ";".join(parts) + ";", connect_kwargs
 
 
-def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
-    """Return custom type coercions for mssql-python."""
-    return {bool: _identity, int: _identity, float: _identity, bytes: _identity, **build_uuid_coercions(native=True)}
-
-
 def build_profile() -> "DriverParameterProfile":
     """Create the mssql-python driver parameter profile."""
     return DriverParameterProfile(
@@ -206,6 +205,26 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     return build_statement_config_from_profile(
         driver_profile, statement_overrides={"dialect": "tsql"}, json_serializer=json_serializer or to_json
     )
+
+
+def _constraint_exception_from_message(error: Exception) -> "SQLSpecError | None":
+    """Classify SQL Server constraint messages when a driver omits the native error number."""
+    message = str(error)
+    normalized = message.lower()
+    if "unique key constraint" in normalized or "duplicate key" in normalized:
+        return UniqueViolationError(f"SQL Server unique constraint violation. Original error: {message}")
+    if "cannot insert the value null" in normalized or "does not allow nulls" in normalized:
+        return NotNullViolationError(f"SQL Server not-null constraint violation. Original error: {message}")
+    if "check constraint" in normalized:
+        return CheckViolationError(f"SQL Server check constraint violation. Original error: {message}")
+    if "foreign key constraint" in normalized:
+        return ForeignKeyViolationError(f"SQL Server foreign key constraint violation. Original error: {message}")
+    return None
+
+
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for mssql-python."""
+    return {bool: _identity, int: _identity, float: _identity, bytes: _identity, **build_uuid_coercions(native=True)}
 
 
 def _parse_version() -> tuple[int, int, int]:

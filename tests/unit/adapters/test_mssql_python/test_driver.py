@@ -10,7 +10,7 @@ from sqlspec.core import StatementStack
 class DummyCursor:
     """Minimal cursor for driver dispatch tests."""
 
-    description = None
+    description: list[tuple[str]] | None = None
     rowcount = 1
 
     def __init__(self) -> None:
@@ -43,6 +43,16 @@ class DummyConnection:
         self.rollbacks += 1
 
 
+class _FakeRow:
+    """Model an iterable mssql-python row that is not a tuple subclass."""
+
+    def __init__(self, *values: Any) -> None:
+        self.values = values
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(self.values)
+
+
 def test_sync_driver_lazily_initializes_data_dictionary() -> None:
     """The sync driver should expose the MSSQL data dictionary."""
     driver = MssqlPythonDriver(cast("Any", DummyConnection()))
@@ -63,3 +73,17 @@ def test_sync_driver_execute_stack_uses_dbapi_transaction_fallback() -> None:
     assert connection.cursor_obj.executed == [("UPDATE queue SET state = ? WHERE id = ?", ["ready", 1])]
     assert connection.commits == 1
     assert connection.rollbacks == 0
+
+
+def test_collect_rows_materializes_mssql_python_rows_as_tuples() -> None:
+    """The cache-hit collection hook must retain the declared tuple row format."""
+    driver = MssqlPythonDriver(cast("Any", DummyConnection()))
+    cursor = DummyCursor()
+    cursor.description = [("id",), ("name",)]
+
+    rows, column_names, row_count = driver.collect_rows(cast("Any", cursor), [_FakeRow(1, "Ada")])
+
+    assert rows == [(1, "Ada")]
+    assert type(rows[0]) is tuple
+    assert column_names == ["id", "name"]
+    assert row_count == 1

@@ -20,7 +20,7 @@ from tests.integration.adapters._shared._schema import (
 
 RowCountPolicy = Literal["exact", "unavailable", "non_negative"]
 StreamChunkPolicy = Literal["bounded", "advisory"]
-InvalidSqlErrorPolicy = Literal["raises", "emulator_retries"]
+InvalidSqlErrorPolicy = Literal["parser", "database", "emulator_retries"]
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class DriverCase:
     supports_grouped_subquery: bool = True
     supports_stream_reopen_after_partial_iteration: bool = True
     stream_chunk_policy: StreamChunkPolicy = "bounded"
-    invalid_sql_error_policy: InvalidSqlErrorPolicy = "raises"
+    invalid_sql_error_policy: InvalidSqlErrorPolicy = "parser"
     unsupported_explain_reason: str | None = None
     config_factory_fixture: str | None = None
     deviations: tuple[str, ...] = ()
@@ -474,6 +474,7 @@ SYNC_DRIVER_CASES = (
         data_dictionary_schema_query_limit=2,
         data_dictionary_index_query_limit=2,
         supports_native_row_streaming=True,
+        invalid_sql_error_policy="database",
     ),
     DriverCase(
         id="pymssql-sync",
@@ -497,6 +498,7 @@ SYNC_DRIVER_CASES = (
         data_dictionary_schema_query_limit=2,
         data_dictionary_index_query_limit=2,
         supports_native_row_streaming=True,
+        invalid_sql_error_policy="database",
     ),
     DriverCase(
         id="bigquery-sync",

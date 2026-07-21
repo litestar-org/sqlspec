@@ -8,6 +8,7 @@ from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     ForeignKeyViolationError,
+    NotNullViolationError,
     UniqueViolationError,
 )
 
@@ -120,6 +121,27 @@ def test_create_mapped_exception_disambiguates_547_check_vs_foreign_key(
 
     assert isinstance(mapped, expected_type)
     assert expected_detail in str(mapped)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_type"),
+    [
+        ("Violation of UNIQUE KEY constraint. Cannot insert duplicate key", UniqueViolationError),
+        (
+            "Cannot insert the value NULL into column 'required_field'; column does not allow nulls",
+            NotNullViolationError,
+        ),
+        ("The INSERT statement conflicted with the CHECK constraint", CheckViolationError),
+        ("The INSERT statement conflicted with the FOREIGN KEY constraint", ForeignKeyViolationError),
+    ],
+)
+def test_create_mapped_exception_classifies_constraint_messages_without_error_numbers(
+    message: str, expected_type: type[Exception]
+) -> None:
+    """Constraint messages remain classifiable when the driver omits SQL Server error numbers."""
+    mapped = create_mapped_exception(MSSQL_PYTHON_MODULE.IntegrityError("23000", message))
+
+    assert isinstance(mapped, expected_type)
 
 
 def test_build_connection_config_requires_server_when_missing_connection_string() -> None:

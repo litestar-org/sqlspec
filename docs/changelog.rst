@@ -56,6 +56,12 @@ v0.56.0
   and multi-row ``INSERT``, ``UPDATE``, and ``DELETE`` statements while
   preserving the existing ``RETURNING`` result path.
   (`#645 <https://github.com/litestar-org/sqlspec/issues/645>`_)
+* ``mssql_python`` now materializes cached result rows as real tuples, matching
+  its declared result format. (`#630 <https://github.com/litestar-org/sqlspec/issues/630>`_)
+* ``mssql_python`` and ``pymssql`` now classify SQL Server constraint messages
+  even when the native driver omits or embeds the numeric error code, and
+  ``pymssql`` translates named pyformat input to its reliable positional
+  execution style.
 
 v0.55.0
 ------------------------------------------------------------------------------

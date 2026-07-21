@@ -477,7 +477,7 @@ def assert_sync_streaming_contract(driver: object, case: DriverCase) -> None:
                 next(partial_iterator)
         assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == count
 
-    if case.invalid_sql_error_policy == "raises":
+    if case.invalid_sql_error_policy != "emulator_retries":
         bad_stream = sync_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
         with pytest.raises(Exception):
             next(iter(bad_stream))
@@ -515,7 +515,7 @@ async def assert_async_streaming_contract(driver: object, case: DriverCase) -> N
                 await anext(partial_iterator)
         assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == count
 
-    if case.invalid_sql_error_policy == "raises":
+    if case.invalid_sql_error_policy != "emulator_retries":
         bad_stream = async_driver.select_stream(_STREAMING_MISSING_TABLE_SQL)
         with pytest.raises(Exception):
             await anext(aiter(bad_stream))
@@ -5718,9 +5718,13 @@ def assert_sync_script_error_contract(driver: object, case: DriverCase) -> None:
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    if case.invalid_sql_error_policy == "raises":
+    if case.invalid_sql_error_policy == "parser":
         with pytest.raises(SQLParsingError):
             sync_driver.execute(f"SELCT * FROM {table}")
+    elif case.invalid_sql_error_policy == "database":
+        with pytest.raises(SQLSpecError):
+            sync_driver.execute(f"SELCT * FROM {table}")
+    if case.invalid_sql_error_policy != "emulator_retries":
         with pytest.raises(SQLSpecError):
             sync_driver.execute("SELECT * FROM missing_contract_table")
 
@@ -5767,9 +5771,13 @@ async def assert_async_script_error_contract(driver: object, case: DriverCase) -
         ({"name": "script1", "value": 30}, {"name": "script2", "value": 20}),
     )
 
-    if case.invalid_sql_error_policy == "raises":
+    if case.invalid_sql_error_policy == "parser":
         with pytest.raises(SQLParsingError):
             await async_driver.execute(f"SELCT * FROM {table}")
+    elif case.invalid_sql_error_policy == "database":
+        with pytest.raises(SQLSpecError):
+            await async_driver.execute(f"SELCT * FROM {table}")
+    if case.invalid_sql_error_policy != "emulator_retries":
         with pytest.raises(SQLSpecError):
             await async_driver.execute("SELECT * FROM missing_contract_table")
 
@@ -6906,6 +6914,8 @@ def _assert_data_dictionary_feature_list(features: object) -> tuple[str, ...]:
 def _data_dictionary_schema_for_case(case: DriverCase) -> str:
     if case.dialect == "postgres":
         return "public"
+    if case.dialect == "tsql":
+        return "dbo"
     return ""
 
 
@@ -6930,7 +6940,7 @@ def _data_dictionary_topology_sql(case: DriverCase, users: str, orders: str, ite
             ) ENGINE=InnoDB;
             CREATE INDEX {index_name} ON {users}(name);
         """
-    if case.dialect not in {"postgres", "sqlite"}:
+    if case.dialect not in {"postgres", "sqlite", "tsql"}:
         msg = f"{case.id} has no topology DDL contract"
         raise ValueError(msg)
     return f"""

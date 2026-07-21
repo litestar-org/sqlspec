@@ -199,9 +199,8 @@ deliberately leaves **irreducible** per-adapter tests in place. Do not fold thes
 - Connection/pool plumbing **internals** (`create_pool`/`create_connection`, memory→URI conversion,
   pool sizing, read-only/PRAGMA settings) — the shared "data persists across pooled sessions"
   guarantee is contracted, but adapter-internal assertions stay local.
-- Extension/vector detection deferred to its own chapter (e.g. pgvector/paradedb "not enabled").
-- Deferred adapters (currently Spanner, whose read/write session split needs dedicated shared behavior) until their cases move from
-  `DEFERRED_DRIVER_CASES` to active rows.
+- Spanner remains registered in `DEFERRED_DRIVER_CASES` until the shared harness can model its separate admin-DDL and read/write
+  sessions without weakening the portable behavior checks.
 
 Current residual inventory:
 
