@@ -8,8 +8,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from google.api_core.client_options import ClientOptions
-from google.auth.credentials import AnonymousCredentials
 from pytest_databases.docker.bigquery import BigQueryService
 from pytest_databases.docker.cockroachdb import CockroachDBService
 from pytest_databases.docker.mssql import MSSQLService
@@ -129,6 +127,7 @@ from tests.integration.adapters.contracts._schema import (
     build_bigquery_contract_table,
 )
 from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
+from tests.integration.fixtures.bigquery import _bigquery_connection_config
 from tests.integration.fixtures.mssql import _arrow_odbc_connection_config
 from tests.integration.fixtures.mysql import _mysql_connection_config
 from tests.integration.fixtures.oracle import _oracle_pool_params
@@ -244,12 +243,7 @@ def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[
     the default dataset unset, and tables are referenced fully-qualified.
     """
     config = BigQueryConfig(
-        connection_config={
-            "project": bigquery_service.project,
-            "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
-            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        },
+        connection_config=_bigquery_connection_config(bigquery_service),
         driver_features={"job_result_timeout": 30.0, "job_retry_deadline": 0.0, "request_timeout": 15.0},
     )
     try:
@@ -1252,12 +1246,7 @@ def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..
     """Build fresh BigQuery configs for the connection-hook lifecycle contract (no pooling)."""
 
     def make(*, pooled: bool = False, driver_features: "BigQueryDriverFeatures | None" = None) -> BigQueryConfig:
-        connection_config: dict[str, Any] = {
-            "project": bigquery_service.project,
-            "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
-            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        }
+        connection_config = _bigquery_connection_config(bigquery_service)
         if driver_features is None:
             return BigQueryConfig(connection_config=connection_config)
         return BigQueryConfig(connection_config=connection_config, driver_features=driver_features)

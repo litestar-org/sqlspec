@@ -1,5 +1,11 @@
 """Shared integration fixture definitions."""
 
+from tests.integration.fixtures.bigquery import (
+    bigquery_config,
+    bigquery_session,
+    native_bigquery_service,
+    table_schema_prefix,
+)
 from tests.integration.fixtures.duckdb import duckdb_basic_config, duckdb_basic_session
 from tests.integration.fixtures.mssql import (
     arrow_odbc_mssql_config,
@@ -56,6 +62,13 @@ from tests.integration.fixtures.postgres import (
     psycopg_async_config,
     psycopg_sync_config,
 )
+from tests.integration.fixtures.spanner import (
+    spanner_config,
+    spanner_database,
+    spanner_read_session,
+    spanner_session,
+    spanner_write_session,
+)
 from tests.integration.fixtures.sqlite import (
     aiosqlite_config,
     aiosqlite_config_file,
@@ -87,6 +100,8 @@ __all__ = (
     "asyncpg_async_driver",
     "asyncpg_config",
     "asyncpg_connection_config",
+    "bigquery_config",
+    "bigquery_session",
     "duckdb_basic_config",
     "duckdb_basic_session",
     "mssql_python_config",
@@ -98,6 +113,7 @@ __all__ = (
     "mysqlconnector_sync_config",
     "mysqlconnector_sync_driver",
     "mysqlconnector_sync_transaction_config",
+    "native_bigquery_service",
     "oracle_aq_privileges",
     "oracle_async_config",
     "oracle_async_session",
@@ -123,10 +139,16 @@ __all__ = (
     "pymysql_config",
     "pymysql_driver",
     "pymysql_transaction_config",
+    "spanner_config",
+    "spanner_database",
+    "spanner_read_session",
+    "spanner_session",
+    "spanner_write_session",
     "sqlite_basic_session",
     "sqlite_config_regular_memory",
     "sqlite_config_shared_memory",
     "sqlite_driver",
     "sqlite_session",
     "sqlite_temp_file_config",
+    "table_schema_prefix",
 )

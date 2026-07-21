@@ -1,15 +1,11 @@
 import logging
 import sys
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any, TextIO, cast
+from typing import TYPE_CHECKING, TextIO, cast
 
 import pytest
-from google.api_core import exceptions as api_exceptions
-from google.cloud import spanner
-from pytest_databases.docker.spanner import SpannerService
 
-from sqlspec import SQLSpec
-from sqlspec.adapters.spanner import SpannerSyncConfig, SpannerSyncDriver
+from tests.integration.fixtures.spanner import drop_table_if_exists, run_ddl
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
@@ -61,86 +57,6 @@ def spanner_emulator_log_filter() -> Generator[None, None, None]:
     finally:
         sys.stdout = stdout
         sys.stderr = stderr
-
-
-@pytest.fixture(scope="session")
-def spanner_database(
-    spanner_service: SpannerService, spanner_connection: spanner.Client
-) -> "Generator[Database, None, None]":
-    """Ensure emulator instance and database exist, yield Database."""
-    instance = spanner_connection.instance(spanner_service.instance_name)  # type: ignore[no-untyped-call]
-    if not instance.exists():
-        config_name = f"{spanner_connection.project_name}/instanceConfigs/emulator-config"
-        instance = spanner_connection.instance(  # type: ignore[no-untyped-call]
-            spanner_service.instance_name, configuration_name=config_name
-        )
-        instance.create().result(300)
-
-    database = instance.database(spanner_service.database_name)
-    if not database.exists():
-        database.create().result(300)
-
-    yield database
-
-
-@pytest.fixture(scope="session")
-def spanner_config(
-    spanner_service: SpannerService, spanner_connection: spanner.Client, spanner_database: "Database"
-) -> "Generator[SpannerSyncConfig, None, None]":
-    """Create SpannerSyncConfig after ensuring database exists."""
-    api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
-    config = SpannerSyncConfig(
-        connection_config={
-            "project": spanner_service.project,
-            "instance_id": spanner_service.instance_name,
-            "database_id": spanner_service.database_name,
-            "credentials": spanner_service.credentials,
-            "client_options": {"api_endpoint": api_endpoint},
-            "size": 5,
-        }
-    )
-    try:
-        yield config
-    finally:
-        config.close_pool()
-
-
-@pytest.fixture
-def spanner_session(spanner_config: "SpannerSyncConfig") -> "Generator[SpannerSyncDriver, None, None]":
-    """Read-only session for SELECT operations."""
-    sql = SQLSpec()
-    c = sql.add_config(spanner_config)
-    with sql.provide_session(c) as session:
-        yield session
-
-
-@pytest.fixture
-def spanner_write_session(spanner_config: "SpannerSyncConfig") -> "Generator[SpannerSyncDriver, None, None]":
-    """Write-capable session for DML operations (INSERT/UPDATE/DELETE)."""
-    with spanner_config.provide_write_session() as session:
-        yield session
-
-
-@pytest.fixture
-def spanner_read_session(spanner_config: "SpannerSyncConfig") -> "Generator[SpannerSyncDriver, None, None]":
-    """Read-only session for SELECT operations."""
-    with spanner_config.provide_read_session() as session:
-        yield session
-
-
-def run_ddl(database: "Database", statements: "list[str]", timeout: int = 300) -> None:
-    """Execute DDL statements on Spanner database."""
-    database_any = cast("Any", database)
-    operation = database_any.update_ddl(statements)
-    operation.result(timeout)
-
-
-def drop_table_if_exists(database: "Database", table_name: str) -> None:
-    """Drop a table if it exists, ignoring errors."""
-    try:
-        run_ddl(database, [f"DROP TABLE {table_name}"])
-    except api_exceptions.GoogleAPICallError:
-        pass
 
 
 @pytest.fixture
