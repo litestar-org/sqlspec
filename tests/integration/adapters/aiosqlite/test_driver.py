@@ -34,8 +34,3 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: "AiosqliteD
     )
     temp_result = await aiosqlite_session.execute("SELECT * FROM temp_db.temp_table")
     assert temp_result.get_data() == [{"id": 1, "name": "temp"}]
-
-    try:
-        await aiosqlite_session.execute("DETACH DATABASE temp_db", statement_config=non_strict_config)
-    except Exception:
-        pass
