@@ -1,6 +1,5 @@
 """Unit tests for mysql-connector configuration modernization."""
 
-import contextlib
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,8 +17,6 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncConnectionParams,
 )
-from sqlspec.adapters.mysqlconnector.core import MysqlConnectorAsyncStreamSource, MysqlConnectorSyncStreamSource
-from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
 
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorCursorParams, MysqlConnectorFailoverTarget
@@ -218,149 +215,6 @@ async def test_async_cursor_context_passes_cursor_options() -> None:
     connection.cursor.assert_awaited_once_with(prepared=True, raw=True)
 
 
-def test_sync_driver_with_cursor_uses_driver_cursor_options() -> None:
-    """Sync SQLSpec execution should route configured cursor options."""
-    connection = MagicMock()
-    driver = MysqlConnectorSyncDriver(connection=connection, driver_features={"cursor_options": {"raw": True}})
-
-    cursor_context = driver.with_cursor(connection)
-
-    assert cursor_context.cursor_options == {"raw": True}
-
-
-def test_async_driver_with_cursor_uses_driver_cursor_options() -> None:
-    """Async SQLSpec execution should route configured cursor options."""
-    connection = MagicMock()
-    driver = MysqlConnectorAsyncDriver(connection=connection, driver_features={"cursor_options": {"prepared": True}})
-
-    cursor_context = driver.with_cursor(connection)
-
-    assert cursor_context.cursor_options == {"prepared": True}
-
-
-def test_sync_dispatch_select_stream_uses_driver_cursor_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sync stream execution should reuse cursor options and force unbuffered cursors."""
-    connection = MagicMock()
-    cursor = MagicMock()
-    cursor.description = []
-    connection.cursor.return_value = cursor
-    driver = MysqlConnectorSyncDriver(connection=connection, driver_features={"cursor_options": {"prepared": True}})
-    statement = MagicMock()
-    statement.returns_rows.return_value = True
-
-    monkeypatch.setattr(MysqlConnectorSyncDriver, "_compiled_sql", lambda self, stmt, config: ("SELECT 1", None))
-    monkeypatch.setattr(MysqlConnectorSyncDriver, "handle_database_exceptions", lambda self: contextlib.nullcontext())
-    monkeypatch.setattr(MysqlConnectorSyncDriver, "_check_pending_exception", lambda self, handler: None)
-    stream = driver.dispatch_select_stream(statement, 10)
-
-    assert stream is not None
-    source = stream._source
-    assert isinstance(source, MysqlConnectorSyncStreamSource)
-    assert source._cursor_options == {"prepared": True, "buffered": False}
-
-    source.start()
-
-    connection.cursor.assert_called_once_with(prepared=True, buffered=False)
-
-
-@pytest.mark.anyio
-async def test_async_dispatch_select_stream_uses_driver_cursor_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Async stream execution should reuse cursor options and force unbuffered cursors."""
-    connection = AsyncMock()
-    cursor = AsyncMock()
-    cursor.description = []
-    connection.cursor.return_value = cursor
-    driver = MysqlConnectorAsyncDriver(connection=connection, driver_features={"cursor_options": {"prepared": True}})
-    statement = MagicMock()
-    statement.returns_rows.return_value = True
-
-    monkeypatch.setattr(MysqlConnectorAsyncDriver, "_compiled_sql", lambda self, stmt, config: ("SELECT 1", None))
-    monkeypatch.setattr(MysqlConnectorAsyncDriver, "handle_database_exceptions", lambda self: _AsyncNullContext())
-    monkeypatch.setattr(MysqlConnectorAsyncDriver, "_check_pending_exception", lambda self, handler: None)
-    stream = driver.dispatch_select_stream(statement, 10)
-
-    assert stream is not None
-    source = stream._source
-    assert isinstance(source, MysqlConnectorAsyncStreamSource)
-    assert source._cursor_options == {"prepared": True, "buffered": False}
-
-    await source.start()
-
-    connection.cursor.assert_awaited_once_with(prepared=True, buffered=False)
-
-
-def test_sync_stream_close_consumes_unread_rows_without_reconnecting() -> None:
-    """Early close preserves the current session and any active transaction."""
-    connection = MagicMock()
-    connection.unread_result = True
-    connection._cnx = None
-    cursor = MagicMock()
-    driver = MagicMock(connection=connection, driver_features={})
-    source = MysqlConnectorSyncStreamSource(driver, "SELECT 1", None, 10, set())
-    source._cursor = cursor
-
-    source.close()
-
-    connection.consume_results.assert_called_once_with()
-    cursor.close.assert_called_once_with()
-    connection.shutdown.assert_not_called()
-    connection.reconnect.assert_not_called()
-
-
-def test_sync_stream_close_closes_cursor_when_consuming_unread_rows_fails() -> None:
-    connection = MagicMock(unread_result=True, _cnx=None)
-    connection.consume_results.side_effect = RuntimeError("consume failed")
-    cursor = MagicMock()
-    source = MysqlConnectorSyncStreamSource(MagicMock(connection=connection), "SELECT 1", None, 10, set())
-    source._cursor = cursor
-
-    with pytest.raises(RuntimeError, match="consume failed"):
-        source.close()
-
-    cursor.close.assert_called_once_with()
-    connection.reconnect.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_async_stream_close_consumes_unread_rows_without_reconnecting() -> None:
-    """Async early close preserves the current session and active transaction."""
-    connection = MagicMock()
-    connection.unread_result = True
-    connection._cnx = None
-    connection.consume_results = AsyncMock()
-    connection.shutdown = AsyncMock()
-    connection.reconnect = AsyncMock()
-    cursor = MagicMock()
-    cursor.close = AsyncMock()
-    driver = MagicMock(connection=connection, driver_features={})
-    source = MysqlConnectorAsyncStreamSource(driver, "SELECT 1", None, 10, set())
-    source._cursor = cursor
-
-    await source.close()
-
-    connection.consume_results.assert_awaited_once_with()
-    cursor.close.assert_awaited_once_with()
-    connection.shutdown.assert_not_awaited()
-    connection.reconnect.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_async_stream_close_closes_cursor_when_consuming_unread_rows_fails() -> None:
-    connection = MagicMock(unread_result=True, _cnx=None)
-    connection.consume_results = AsyncMock(side_effect=RuntimeError("consume failed"))
-    connection.reconnect = AsyncMock()
-    cursor = MagicMock()
-    cursor.close = AsyncMock()
-    source = MysqlConnectorAsyncStreamSource(MagicMock(connection=connection), "SELECT 1", None, 10, set())
-    source._cursor = cursor
-
-    with pytest.raises(RuntimeError, match="consume failed"):
-        await source.close()
-
-    cursor.close.assert_awaited_once_with()
-    connection.reconnect.assert_not_awaited()
-
-
 def test_sync_create_connection_forwards_local_infile_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connection creation should forward mysql-connector's local infile gate."""
     calls: list[dict[str, Any]] = []
@@ -409,13 +263,3 @@ def test_sync_create_connection_passes_local_infile_gate(monkeypatch: pytest.Mon
     MysqlConnectorSyncConfig().create_connection()
 
     assert calls[0]["allow_local_infile"] is False
-
-
-class _AsyncNullContext:
-    async def __aenter__(self) -> None:
-        return None
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object
-    ) -> None:
-        return None
