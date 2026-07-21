@@ -126,9 +126,7 @@ async def test_custom_function_visible_in_sql(runtime_config_factory: RuntimeCon
         await _close_config(config)
 
 
-async def test_custom_aggregate_visible_in_sql(
-    runtime_config_factory: RuntimeConfigFactory, tmp_path: Path
-) -> None:
+async def test_custom_aggregate_visible_in_sql(runtime_config_factory: RuntimeConfigFactory, tmp_path: Path) -> None:
     """Custom SQLite aggregates are callable from both drivers."""
     config = runtime_config_factory(
         connection_config={"database": tmp_path / "aggregate.db"},
@@ -150,9 +148,7 @@ async def test_custom_aggregate_visible_in_sql(
         await _close_config(config)
 
 
-async def test_custom_collation_orders_results(
-    runtime_config_factory: RuntimeConfigFactory, tmp_path: Path
-) -> None:
+async def test_custom_collation_orders_results(runtime_config_factory: RuntimeConfigFactory, tmp_path: Path) -> None:
     """Custom collations change ordering for both drivers."""
     config = runtime_config_factory(
         connection_config={"database": tmp_path / "collation.db"},
@@ -275,9 +271,7 @@ async def test_user_pragmas_override_optimizations(
         await _close_config(config)
 
 
-async def test_extension_loading_attempts_paths(
-    runtime_config_factory: RuntimeConfigFactory, tmp_path: Path
-) -> None:
+async def test_extension_loading_attempts_paths(runtime_config_factory: RuntimeConfigFactory, tmp_path: Path) -> None:
     """Configured extension paths are attempted by both drivers."""
     config = runtime_config_factory(driver_features={"extensions": [str(tmp_path / "missing_extension.so")]})
     try:

@@ -269,7 +269,9 @@ def contract_oracle_sync_driver(oracle_sync_config: OracleSyncConfig) -> Generat
 
 
 @pytest.fixture
-def contract_arrow_odbc_mssql_driver(arrow_odbc_mssql_config: ArrowOdbcConfig) -> Generator[ArrowOdbcDriver, None, None]:
+def contract_arrow_odbc_mssql_driver(
+    arrow_odbc_mssql_config: ArrowOdbcConfig,
+) -> Generator[ArrowOdbcDriver, None, None]:
     """Provide a fresh arrow-odbc driver backed by SQL Server."""
     with arrow_odbc_mssql_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -311,7 +313,9 @@ def contract_pymssql_driver(pymssql_config: PymssqlConfig) -> Generator[PymssqlD
 
 
 @pytest.fixture
-async def contract_oracle_async_driver(oracle_async_config: OracleAsyncConfig) -> "AsyncGenerator[OracleAsyncDriver, None]":
+async def contract_oracle_async_driver(
+    oracle_async_config: OracleAsyncConfig,
+) -> "AsyncGenerator[OracleAsyncDriver, None]":
     """Provide a fresh Oracle async driver for contract tests."""
     async with oracle_async_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -473,7 +477,9 @@ async def contract_psqlpy_driver(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[
 
 
 @pytest.fixture
-async def contract_psycopg_async_driver(psycopg_async_config: PsycopgAsyncConfig) -> AsyncGenerator[PsycopgAsyncDriver, None]:
+async def contract_psycopg_async_driver(
+    psycopg_async_config: PsycopgAsyncConfig,
+) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Provide a fresh psycopg async driver for contract tests."""
     async with psycopg_async_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
