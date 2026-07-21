@@ -77,30 +77,6 @@ _DATASET_TABLE_PARTS = 2
 _PROJECT_DATASET_TABLE_PARTS = 3
 
 
-def _close_bigquery_cursor(cursor: BigQueryCursor) -> None:
-    try:
-        if cursor.job is not None:
-            if cursor.job.state in {"PENDING", "RUNNING"}:
-                cursor.job.cancel()
-            cursor.job = None
-    except Exception:
-        logger.exception("Failed to cancel BigQuery job during cursor cleanup")
-
-
-def _resolve_storage_write_table_path(table: str, default_project: str) -> tuple[str, str, str]:
-    parts = split_qualified_identifier(table, quote_chars="`", allow_bracket_quotes=False)
-    if len(parts) == 1 and "." in parts[0]:
-        parts = tuple(part for part in parts[0].split(".") if part)
-    if len(parts) == _DATASET_TABLE_PARTS:
-        dataset, table_name = parts
-        return default_project, dataset, table_name
-    if len(parts) == _PROJECT_DATASET_TABLE_PARTS:
-        project, dataset, table_name = parts
-        return project, dataset, table_name
-    msg = f"Storage Write API requires a dataset-qualified table, got '{table}'"
-    raise StorageOperationFailedError(msg)
-
-
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling BigQuery API exceptions.
 
@@ -177,44 +153,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._request_timeout = self._resolve_request_timeout(features)
         self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
         self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
-
-    def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
-        timeout = features.get("request_timeout")
-        if timeout is None:
-            timeout = self._job_result_timeout
-        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
-            return float(timeout)
-        return DEFAULT_REQUEST_TIMEOUT
-
-    def _build_job_result_kwargs(self, features: dict[str, Any]) -> dict[str, Any]:
-        """Build QueryJob.result keyword arguments for SELECT fetches."""
-        job_result_kwargs: dict[str, Any] = {}
-        query_page_size = features.get("query_page_size")
-        if query_page_size is not None:
-            job_result_kwargs["page_size"] = query_page_size
-        query_max_results = features.get("query_max_results")
-        if query_max_results is not None:
-            job_result_kwargs["max_results"] = query_max_results
-        return job_result_kwargs
-
-    def _job_request_timeout(self) -> float:
-        return self._request_timeout
-
-    def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
-        return run_query_job(
-            connection,
-            sql,
-            parameters,
-            default_job_config=self._default_query_job_config,
-            job_config=None,
-            json_serializer=self._json_serializer,
-            retry=self._job_retry,
-            timeout=self._job_request_timeout(),
-            job_retry=self._job_retry,
-        )
-
-    def _job_result_kwargs(self) -> dict[str, Any]:
-        return dict(self._job_result_kwargs_defaults)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -541,17 +479,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         return arrow_result
 
-    def _bqstorage_client_or_none(self) -> "bigquery_storage.BigQueryReadClient | None":
-        ensure_client = getattr(self.connection, "_ensure_bqstorage_client", None)
-        if not callable(ensure_client):
-            return None
-        try:
-            client = ensure_client()
-        except Exception:
-            return None
-        else:
-            return cast("bigquery_storage.BigQueryReadClient | None", client)
-
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
     # ─────────────────────────────────────────────────────────────────────────────
@@ -641,41 +568,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload)
 
-    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
-        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
-        if BigQueryStorageWriteModule is None or BigQueryStorageWriteTypes is None:
-            msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion"
-            raise ImportError(msg)
-        types = BigQueryStorageWriteTypes
-
-        project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
-
-        credentials = getattr(self.connection, "_credentials", None)
-        client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
-        parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
-        write_stream = client.create_write_stream(
-            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
-        )
-        stream_name = write_stream.name
-
-        requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
-        if requests:
-            for response in client.append_rows(requests=iter(requests)):
-                if response.error.code:
-                    msg = f"Storage Write API append failed: {response.error.message}"
-                    raise StorageOperationFailedError(msg)
-        client.finalize_write_stream(name=stream_name)
-        commit = client.batch_commit_write_streams(
-            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
-        )
-        if getattr(commit, "stream_errors", None):
-            msg = f"Storage Write API commit failed: {commit.stream_errors}"
-            raise StorageOperationFailedError(msg)
-
-        telemetry_payload = self._ingest_telemetry(arrow_table, format_label="arrow-storage-write")
-        telemetry_payload["destination"] = table
-        return telemetry_payload
-
     def load_from_storage(
         self,
         table: str,
@@ -743,6 +635,90 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Resolve rowcount from BigQuery job for the direct execution path."""
         return build_dml_rowcount(cursor.job, 0) if cursor.job else 0
 
+    def _resolve_request_timeout(self, features: "dict[str, Any]") -> float:
+        timeout = features.get("request_timeout")
+        if timeout is None:
+            timeout = self._job_result_timeout
+        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+            return float(timeout)
+        return DEFAULT_REQUEST_TIMEOUT
+
+    def _build_job_result_kwargs(self, features: dict[str, Any]) -> dict[str, Any]:
+        """Build QueryJob.result keyword arguments for SELECT fetches."""
+        job_result_kwargs: dict[str, Any] = {}
+        query_page_size = features.get("query_page_size")
+        if query_page_size is not None:
+            job_result_kwargs["page_size"] = query_page_size
+        query_max_results = features.get("query_max_results")
+        if query_max_results is not None:
+            job_result_kwargs["max_results"] = query_max_results
+        return job_result_kwargs
+
+    def _job_request_timeout(self) -> float:
+        return self._request_timeout
+
+    def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
+        return run_query_job(
+            connection,
+            sql,
+            parameters,
+            default_job_config=self._default_query_job_config,
+            job_config=None,
+            json_serializer=self._json_serializer,
+            retry=self._job_retry,
+            timeout=self._job_request_timeout(),
+            job_retry=self._job_retry,
+        )
+
+    def _job_result_kwargs(self) -> dict[str, Any]:
+        return dict(self._job_result_kwargs_defaults)
+
+    def _bqstorage_client_or_none(self) -> "bigquery_storage.BigQueryReadClient | None":
+        ensure_client = getattr(self.connection, "_ensure_bqstorage_client", None)
+        if not callable(ensure_client):
+            return None
+        try:
+            client = ensure_client()
+        except Exception:
+            return None
+        else:
+            return cast("bigquery_storage.BigQueryReadClient | None", client)
+
+    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
+        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
+        if BigQueryStorageWriteModule is None or BigQueryStorageWriteTypes is None:
+            msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion"
+            raise ImportError(msg)
+        types = BigQueryStorageWriteTypes
+
+        project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
+
+        credentials = getattr(self.connection, "_credentials", None)
+        client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
+        parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
+        write_stream = client.create_write_stream(
+            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
+        )
+        stream_name = write_stream.name
+
+        requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
+        if requests:
+            for response in client.append_rows(requests=iter(requests)):
+                if response.error.code:
+                    msg = f"Storage Write API append failed: {response.error.message}"
+                    raise StorageOperationFailedError(msg)
+        client.finalize_write_stream(name=stream_name)
+        commit = client.batch_commit_write_streams(
+            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
+        )
+        if getattr(commit, "stream_errors", None):
+            msg = f"Storage Write API commit failed: {commit.stream_errors}"
+            raise StorageOperationFailedError(msg)
+
+        telemetry_payload = self._ingest_telemetry(arrow_table, format_label="arrow-storage-write")
+        telemetry_payload["destination"] = table
+        return telemetry_payload
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
@@ -752,6 +728,30 @@ class BigQueryDriver(SyncDriverAdapterBase):
             False - BigQuery has no transaction support.
         """
         return False
+
+
+def _close_bigquery_cursor(cursor: BigQueryCursor) -> None:
+    try:
+        if cursor.job is not None:
+            if cursor.job.state in {"PENDING", "RUNNING"}:
+                cursor.job.cancel()
+            cursor.job = None
+    except Exception:
+        logger.exception("Failed to cancel BigQuery job during cursor cleanup")
+
+
+def _resolve_storage_write_table_path(table: str, default_project: str) -> tuple[str, str, str]:
+    parts = split_qualified_identifier(table, quote_chars="`", allow_bracket_quotes=False)
+    if len(parts) == 1 and "." in parts[0]:
+        parts = tuple(part for part in parts[0].split(".") if part)
+    if len(parts) == _DATASET_TABLE_PARTS:
+        dataset, table_name = parts
+        return default_project, dataset, table_name
+    if len(parts) == _PROJECT_DATASET_TABLE_PARTS:
+        project, dataset, table_name = parts
+        return project, dataset, table_name
+    msg = f"Storage Write API requires a dataset-qualified table, got '{table}'"
+    raise StorageOperationFailedError(msg)
 
 
 register_driver_profile("bigquery", driver_profile)

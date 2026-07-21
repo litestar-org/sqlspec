@@ -135,110 +135,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
-    """Serialize JSON parameters according to the detected cast type."""
-
-    if value is None:
-        return None
-    jsonb_type = _JSONB_TYPE
-    if cast_type == "JSONB":
-        if jsonb_type is not None and isinstance(value, jsonb_type):
-            return value
-        if jsonb_type is not None:
-            if isinstance(value, dict):
-                return jsonb_type(value)
-            if isinstance(value, (list, tuple)):
-                return jsonb_type(list(value))
-    if isinstance(value, tuple):
-        return list(value)
-    if jsonb_type is not None and isinstance(value, jsonb_type):
-        return value
-    if isinstance(value, (dict, list, str)):
-        return value
-    try:
-        serialized_value = serializer(value)
-    except Exception as error:
-        msg = "Failed to serialize JSON parameter for psqlpy."
-        raise SQLSpecError(msg) from error
-    return serialized_value
-
-
-def _coerce_uuid_parameter(value: Any) -> Any:
-    """Convert UUID-compatible parameters to ``uuid.UUID`` instances."""
-
-    if isinstance(value, uuid.UUID):
-        return value
-    if isinstance(value, str):
-        try:
-            return uuid.UUID(value)
-        except ValueError as error:
-            msg = "Invalid UUID parameter for psqlpy."
-            raise SQLSpecError(msg) from error
-    return value
-
-
-def _coerce_timestamp_parameter(value: Any) -> Any:
-    """Convert ISO-formatted timestamp strings to ``datetime.datetime``."""
-
-    if isinstance(value, datetime.datetime):
-        return value
-    if isinstance(value, str):
-        normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
-        try:
-            return datetime.datetime.fromisoformat(normalized_value)
-        except ValueError as error:
-            msg = "Invalid ISO timestamp parameter for psqlpy."
-            raise SQLSpecError(msg) from error
-    return value
-
-
-def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
-    """Apply cast-aware coercion for psqlpy parameters."""
-
-    upper_cast = cast_type.upper()
-    if upper_cast in _JSON_CASTS:
-        return _coerce_json_parameter(value, upper_cast, serializer)
-    if upper_cast in _UUID_CASTS:
-        return _coerce_uuid_parameter(value)
-    if upper_cast in _TIMESTAMP_CASTS:
-        return _coerce_timestamp_parameter(value)
-    return value
-
-
-def _prepare_dict_parameter(value: "dict[str, Any]") -> "dict[str, Any]":
-    normalized = _DECIMAL_NORMALIZER(value)
-    return normalized if isinstance(normalized, dict) else value
-
-
-def _prepare_list_parameter(value: "list[Any]") -> "list[Any]":
-    return [_DECIMAL_NORMALIZER(item) for item in value]
-
-
-def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
-    return tuple(_DECIMAL_NORMALIZER(item) for item in value)
-
-
-driver_profile = build_profile()
-
-
-def _parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleConfig":
-    """Construct parameter configuration for psqlpy.
-
-    Args:
-        base_config: Base parameter configuration to extend.
-
-    Returns:
-        ParameterStyleConfig with updated type coercions.
-    """
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[dict] = _prepare_dict_parameter
-    updated_type_map[list] = _prepare_list_parameter
-    updated_type_map[tuple] = _prepare_tuple_parameter
-
-    return base_config.replace(type_coercion_map=updated_type_map)
-
-
 def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
@@ -251,9 +147,6 @@ def build_statement_config(
     )
     parameter_config = _parameter_config(base_config.parameter_config)
     return base_config.replace(parameter_config=parameter_config)
-
-
-default_statement_config = build_statement_config()
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
@@ -409,24 +302,6 @@ def coerce_numeric_for_write(value: Any) -> Any:
     return value
 
 
-def _escape_copy_text(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
-
-
-def _format_copy_value(value: Any) -> str:
-    if value is None:
-        return r"\N"
-    if isinstance(value, bool):
-        return "t" if value else "f"
-    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
-        return value.isoformat()
-    if isinstance(value, (list, tuple, dict)):
-        return to_json(value)
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("utf-8")
-    return str(coerce_numeric_for_write(value))
-
-
 def encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
     """Encode row tuples into a bytes payload compatible with binary_copy_to_table."""
 
@@ -471,28 +346,6 @@ def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
     return schema_name or None, table_name
 
 
-def _parse_psqlpy_command_tag(tag: str) -> int:
-    """Parse PostgreSQL command tag to extract rows affected.
-
-    Args:
-        tag: PostgreSQL command tag string.
-
-    Returns:
-        Number of rows affected, 0 if unable to parse.
-    """
-    if not tag:
-        return 0
-
-    match = PSQLPY_STATUS_REGEX.match(tag.strip())
-    if match:
-        command = match.group(1).upper()
-        if command == "INSERT" and match.group(3):
-            return int(match.group(3))
-        if command in {"UPDATE", "DELETE"} and match.group(3):
-            return int(match.group(3))
-    return 0
-
-
 def extract_rows_affected(result: Any) -> int:
     """Extract rows affected from psqlpy results."""
     try:
@@ -506,32 +359,6 @@ def extract_rows_affected(result: Any) -> int:
     except Exception as error:
         logger.debug("Failed to parse psqlpy command tag: %s", error)
     return 0
-
-
-@lru_cache(maxsize=_DML_COUNT_QUERY_CACHE_SIZE)
-def _dml_count_query(sql: str) -> str | None:
-    """Build a PostgreSQL query that returns an exact count for one DML statement."""
-    try:
-        expression = sqlglot.parse_one(sql, dialect="postgres")
-    except ParseError as error:
-        msg = f"Unable to build psqlpy DML row count query: {error}"
-        raise SQLSpecError(msg) from error
-
-    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)) or expression.args.get("returning"):
-        return None
-
-    used_aliases = {cte.alias_or_name for cte in expression.find_all(exp.CTE)}
-    cte_alias = _DML_COUNT_CTE_ALIAS
-    suffix = 1
-    while cte_alias in used_aliases:
-        cte_alias = f"{_DML_COUNT_CTE_ALIAS}_{suffix}"
-        suffix += 1
-
-    expression = expression.returning("1", dialect="postgres", copy=False)
-    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
-    count_query = exp.select(count_expression).from_(cte_alias, copy=False)
-    count_query.with_(cte_alias, as_=expression, copy=False)
-    return count_query.sql(dialect="postgres")
 
 
 def get_parameter_casts(statement: Any) -> "dict[int, str]":
@@ -548,18 +375,6 @@ def get_parameter_casts(statement: Any) -> "dict[int, str]":
     if processed_state is not None and processed_state is not Empty:
         return cast("dict[int, str]", getattr(processed_state, "parameter_casts", {}) or {})
     return {}
-
-
-def _type_coercion_dispatcher(type_map: "dict[type, Callable[[Any], Any]]") -> "TypeDispatcher[Callable[[Any], Any]]":
-    fallback_items = tuple(type_map.items())
-    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
-    if dispatcher is not None:
-        return dispatcher
-
-    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
-    dispatcher.register_all(fallback_items)
-    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
-    return dispatcher
 
 
 def prepare_parameters_with_casts(
@@ -587,23 +402,6 @@ def prepare_parameters_with_casts(
             result.append(prepared_value)
         return tuple(result) if isinstance(parameters, tuple) else result
     return parameters
-
-
-def _create_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
-    """Create a SQLSpec exception from a psqlpy error.
-
-    Args:
-        error: The original psqlpy exception
-        error_class: The SQLSpec exception class to instantiate
-        description: Human-readable description of the error type
-
-    Returns:
-        A new SQLSpec exception instance with the original as its cause
-    """
-    msg = f"PostgreSQL {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
@@ -689,6 +487,239 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     return f"INSERT INTO {format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
+def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> "list[list[Any]]":
+    """Normalize execute_many parameters for psqlpy.
+
+    Args:
+        parameters: Prepared parameter payload.
+        coerce_numeric: Whether numeric write coercion should be applied.
+
+    Returns:
+        Parameter payload normalized to ``list[list[Any]]``.
+    """
+    if not parameters:
+        return []
+
+    if (
+        isinstance(parameters, list)
+        and not coerce_numeric
+        and all(isinstance(param_set, list) for param_set in parameters)
+    ):
+        return cast("list[list[Any]]", parameters)
+
+    if isinstance(parameters, (list, tuple)):
+        formatted: list[list[Any]] = []
+        append = formatted.append
+        for param_set in parameters:
+            append(_format_execute_many_param_set(param_set, coerce_numeric=coerce_numeric))
+        return formatted
+
+    return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
+
+
+def coerce_records_for_execute_many(
+    records: "list[tuple[Any, ...]]", *, parse_json_text: bool = False
+) -> "list[list[Any]]":
+    formatted = format_execute_many_parameters(records, coerce_numeric=True)
+    return _coerce_json_text_rows(formatted) if parse_json_text else formatted
+
+
+def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+    """Serialize JSON parameters according to the detected cast type."""
+
+    if value is None:
+        return None
+    jsonb_type = _JSONB_TYPE
+    if cast_type == "JSONB":
+        if jsonb_type is not None and isinstance(value, jsonb_type):
+            return value
+        if jsonb_type is not None:
+            if isinstance(value, dict):
+                return jsonb_type(value)
+            if isinstance(value, (list, tuple)):
+                return jsonb_type(list(value))
+    if isinstance(value, tuple):
+        return list(value)
+    if jsonb_type is not None and isinstance(value, jsonb_type):
+        return value
+    if isinstance(value, (dict, list, str)):
+        return value
+    try:
+        serialized_value = serializer(value)
+    except Exception as error:
+        msg = "Failed to serialize JSON parameter for psqlpy."
+        raise SQLSpecError(msg) from error
+    return serialized_value
+
+
+def _coerce_uuid_parameter(value: Any) -> Any:
+    """Convert UUID-compatible parameters to ``uuid.UUID`` instances."""
+
+    if isinstance(value, uuid.UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return uuid.UUID(value)
+        except ValueError as error:
+            msg = "Invalid UUID parameter for psqlpy."
+            raise SQLSpecError(msg) from error
+    return value
+
+
+def _coerce_timestamp_parameter(value: Any) -> Any:
+    """Convert ISO-formatted timestamp strings to ``datetime.datetime``."""
+
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            return datetime.datetime.fromisoformat(normalized_value)
+        except ValueError as error:
+            msg = "Invalid ISO timestamp parameter for psqlpy."
+            raise SQLSpecError(msg) from error
+    return value
+
+
+def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
+    """Apply cast-aware coercion for psqlpy parameters."""
+
+    upper_cast = cast_type.upper()
+    if upper_cast in _JSON_CASTS:
+        return _coerce_json_parameter(value, upper_cast, serializer)
+    if upper_cast in _UUID_CASTS:
+        return _coerce_uuid_parameter(value)
+    if upper_cast in _TIMESTAMP_CASTS:
+        return _coerce_timestamp_parameter(value)
+    return value
+
+
+def _prepare_dict_parameter(value: "dict[str, Any]") -> "dict[str, Any]":
+    normalized = _DECIMAL_NORMALIZER(value)
+    return normalized if isinstance(normalized, dict) else value
+
+
+def _prepare_list_parameter(value: "list[Any]") -> "list[Any]":
+    return [_DECIMAL_NORMALIZER(item) for item in value]
+
+
+def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
+    return tuple(_DECIMAL_NORMALIZER(item) for item in value)
+
+
+def _parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleConfig":
+    """Construct parameter configuration for psqlpy.
+
+    Args:
+        base_config: Base parameter configuration to extend.
+
+    Returns:
+        ParameterStyleConfig with updated type coercions.
+    """
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[dict] = _prepare_dict_parameter
+    updated_type_map[list] = _prepare_list_parameter
+    updated_type_map[tuple] = _prepare_tuple_parameter
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+def _escape_copy_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _format_copy_value(value: Any) -> str:
+    if value is None:
+        return r"\N"
+    if isinstance(value, bool):
+        return "t" if value else "f"
+    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, (list, tuple, dict)):
+        return to_json(value)
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8")
+    return str(coerce_numeric_for_write(value))
+
+
+def _parse_psqlpy_command_tag(tag: str) -> int:
+    """Parse PostgreSQL command tag to extract rows affected.
+
+    Args:
+        tag: PostgreSQL command tag string.
+
+    Returns:
+        Number of rows affected, 0 if unable to parse.
+    """
+    if not tag:
+        return 0
+
+    match = PSQLPY_STATUS_REGEX.match(tag.strip())
+    if match:
+        command = match.group(1).upper()
+        if command == "INSERT" and match.group(3):
+            return int(match.group(3))
+        if command in {"UPDATE", "DELETE"} and match.group(3):
+            return int(match.group(3))
+    return 0
+
+
+@lru_cache(maxsize=_DML_COUNT_QUERY_CACHE_SIZE)
+def _dml_count_query(sql: str) -> str | None:
+    """Build a PostgreSQL query that returns an exact count for one DML statement."""
+    try:
+        expression = sqlglot.parse_one(sql, dialect="postgres")
+    except ParseError as error:
+        msg = f"Unable to build psqlpy DML row count query: {error}"
+        raise SQLSpecError(msg) from error
+
+    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)) or expression.args.get("returning"):
+        return None
+
+    used_aliases = {cte.alias_or_name for cte in expression.find_all(exp.CTE)}
+    cte_alias = _DML_COUNT_CTE_ALIAS
+    suffix = 1
+    while cte_alias in used_aliases:
+        cte_alias = f"{_DML_COUNT_CTE_ALIAS}_{suffix}"
+        suffix += 1
+
+    expression = expression.returning("1", dialect="postgres", copy=False)
+    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
+    count_query = exp.select(count_expression).from_(cte_alias, copy=False)
+    count_query.with_(cte_alias, as_=expression, copy=False)
+    return count_query.sql(dialect="postgres")
+
+
+def _type_coercion_dispatcher(type_map: "dict[type, Callable[[Any], Any]]") -> "TypeDispatcher[Callable[[Any], Any]]":
+    fallback_items = tuple(type_map.items())
+    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
+    if dispatcher is not None:
+        return dispatcher
+
+    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
+    dispatcher.register_all(fallback_items)
+    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    return dispatcher
+
+
+def _create_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create a SQLSpec exception from a psqlpy error.
+
+    Args:
+        error: The original psqlpy exception
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
+    msg = f"PostgreSQL {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
 def _sequence_needs_numeric_coercion(values: "list[Any] | tuple[Any, ...]") -> bool:
     """Return True when any value in a parameter sequence needs numeric coercion."""
     return any(isinstance(value, _NUMERIC_COERCE_TYPES) for value in values)
@@ -727,36 +758,6 @@ def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "
     return [param_set]
 
 
-def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> "list[list[Any]]":
-    """Normalize execute_many parameters for psqlpy.
-
-    Args:
-        parameters: Prepared parameter payload.
-        coerce_numeric: Whether numeric write coercion should be applied.
-
-    Returns:
-        Parameter payload normalized to ``list[list[Any]]``.
-    """
-    if not parameters:
-        return []
-
-    if (
-        isinstance(parameters, list)
-        and not coerce_numeric
-        and all(isinstance(param_set, list) for param_set in parameters)
-    ):
-        return cast("list[list[Any]]", parameters)
-
-    if isinstance(parameters, (list, tuple)):
-        formatted: list[list[Any]] = []
-        append = formatted.append
-        for param_set in parameters:
-            append(_format_execute_many_param_set(param_set, coerce_numeric=coerce_numeric))
-        return formatted
-
-    return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
-
-
 def _coerce_json_text_for_execute_many(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -791,8 +792,6 @@ def _coerce_json_text_rows(rows: "list[list[Any]]") -> "list[list[Any]]":
     return rows if coerced_rows is None else coerced_rows
 
 
-def coerce_records_for_execute_many(
-    records: "list[tuple[Any, ...]]", *, parse_json_text: bool = False
-) -> "list[list[Any]]":
-    formatted = format_execute_many_parameters(records, coerce_numeric=True)
-    return _coerce_json_text_rows(formatted) if parse_json_text else formatted
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

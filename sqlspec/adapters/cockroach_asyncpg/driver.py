@@ -95,6 +95,25 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         msg = "CockroachDB transaction retry limit exceeded"
         raise TransactionRetryError(msg) from last_error
 
+    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return await self._dispatch_execute_impl(cursor, statement)
+
+    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return await self._dispatch_execute_many_impl(cursor, statement)
+
+    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        return await self._dispatch_execute_script_impl(cursor, statement)
+
+    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":  # type: ignore[override]
+        return CockroachAsyncpgExceptionHandler()
+
+    @property
+    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":  # type: ignore[override]
+        if self._data_dictionary is None:
+            # Intentionally assign CockroachDB-specific data dictionary to parent slot
+            object.__setattr__(self, "_data_dictionary", CockroachAsyncpgDataDictionary())
+        return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
+
     async def _apply_follower_reads(self, cursor: "CockroachAsyncpgConnection") -> None:
         if not self.driver_features.get("enable_follower_reads", False):
             return
@@ -116,25 +135,6 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         self, cursor: "CockroachAsyncpgConnection", statement: SQL
     ) -> "ExecutionResult":
         return await AsyncpgDriver.dispatch_execute_script(self, cursor, statement)
-
-    async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        return await self._dispatch_execute_impl(cursor, statement)
-
-    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        return await self._dispatch_execute_many_impl(cursor, statement)
-
-    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        return await self._dispatch_execute_script_impl(cursor, statement)
-
-    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":  # type: ignore[override]
-        return CockroachAsyncpgExceptionHandler()
-
-    @property
-    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":  # type: ignore[override]
-        if self._data_dictionary is None:
-            # Intentionally assign CockroachDB-specific data dictionary to parent slot
-            object.__setattr__(self, "_data_dictionary", CockroachAsyncpgDataDictionary())
-        return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
 
 
 register_driver_profile("cockroach_asyncpg", driver_profile)

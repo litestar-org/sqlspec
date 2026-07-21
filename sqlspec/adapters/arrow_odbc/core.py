@@ -161,18 +161,6 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     return ";".join(parts) + ";", connect_kwargs
 
 
-def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
-    """Return custom type coercions for arrow-odbc."""
-    return {
-        bool: _identity,
-        int: _identity,
-        float: _identity,
-        str: _identity,
-        bytes: _identity,
-        **build_uuid_coercions(native=False),
-    }
-
-
 def build_profile() -> "DriverParameterProfile":
     """Create the arrow-odbc driver parameter profile."""
     return DriverParameterProfile(
@@ -197,6 +185,18 @@ def build_statement_config(*, dialect: str = "sqlite", json_serializer: "Any" = 
     return build_statement_config_from_profile(
         driver_profile, statement_overrides={"dialect": dialect}, json_serializer=json_serializer
     )
+
+
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for arrow-odbc."""
+    return {
+        bool: _identity,
+        int: _identity,
+        float: _identity,
+        str: _identity,
+        bytes: _identity,
+        **build_uuid_coercions(native=False),
+    }
 
 
 def _extract_error_number(error: Exception) -> "int | None":
@@ -225,4 +225,5 @@ def _format_connection_value(value: Any) -> str:
 
 
 driver_profile = build_profile()
+
 default_statement_config = build_statement_config()

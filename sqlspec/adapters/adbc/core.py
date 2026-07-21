@@ -665,9 +665,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-driver_profile: Final[DriverParameterProfile] = build_profile()
-
-
 def get_statement_config(detected_dialect: str) -> StatementConfig:
     """Create statement configuration for the specified dialect."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
@@ -1005,3 +1002,6 @@ def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
     config.pop("gizmosql_backend", None)
     if db_kwargs_dict:
         config["db_kwargs"] = db_kwargs_dict
+
+
+driver_profile: Final[DriverParameterProfile] = build_profile()

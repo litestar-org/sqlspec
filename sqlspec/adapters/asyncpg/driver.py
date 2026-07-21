@@ -294,94 +294,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
 
-    async def _execute_stack_native(
-        self, stack: "StatementStack", *, continue_on_error: bool
-    ) -> "tuple[StackResult, ...]":
-        results: list[StackResult] = []
-
-        transaction_cm = None
-        if not continue_on_error and not self._connection_in_transaction():
-            transaction_cm = self.connection.transaction()
-
-        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
-            if transaction_cm is not None:
-                async with transaction_cm:
-                    await self._run_stack_operations(stack, continue_on_error, observer, results)
-            else:
-                await self._run_stack_operations(stack, continue_on_error, observer, results)
-
-        return tuple(results)
-
-    async def _run_stack_operations(
-        self,
-        stack: "StatementStack",
-        continue_on_error: bool,
-        observer: "StackExecutionObserver",
-        results: "list[StackResult]",
-    ) -> None:
-        """Run operations for statement stack execution.
-
-        Extracted from _execute_stack_native to avoid closure compilation issues.
-        """
-        for index, operation in enumerate(stack.operations):
-            try:
-                normalized: NormalizedStackOperation | None = None
-                if operation.method == "execute":
-                    kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-                    statement_config = kwargs.pop("statement_config", None)
-                    config = statement_config or self.statement_config
-
-                    sql_statement = self.prepare_statement(
-                        operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-                    )
-                    if not sql_statement.is_script and not sql_statement.is_many:
-                        sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
-                        prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
-                        normalized = NormalizedStackOperation(
-                            operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
-                        )
-
-                if normalized is not None:
-                    stack_result = await self._execute_stack_operation_prepared(normalized)
-                else:
-                    result = await self._execute_stack_operation(operation)
-                    stack_result = StackResult(result=result)
-            except Exception as exc:
-                stack_error = StackExecutionError(
-                    index,
-                    describe_stack_statement(operation.statement),
-                    exc,
-                    adapter=type(self).__name__,
-                    mode="continue-on-error" if continue_on_error else "fail-fast",
-                )
-                if continue_on_error:
-                    await self._rollback_failed_stack()
-                    observer.record_operation_error(stack_error)
-                    results.append(StackResult.from_error(stack_error))
-                    continue
-                raise stack_error from exc
-
-            results.append(stack_result)
-            if continue_on_error:
-                await self._commit_stack_success()
-
-    async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
-        prepared = await self._get_prepared_statement(normalized.sql)
-        metadata = {"prepared_statement": True}
-
-        if normalized.statement.returns_rows():
-            rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True)
-            data, _ = collect_rows(rows)
-            sql_result = create_sql_result(
-                normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record"
-            )
-            return StackResult.from_sql_result(sql_result)
-
-        status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False)
-        rowcount = parse_status(status)
-        sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
-        return StackResult.from_sql_result(sql_result)
-
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
     # ─────────────────────────────────────────────────────────────────────────────
@@ -478,6 +390,94 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "AsyncpgConnection") -> int:
         """Resolve rowcount from asyncpg status for the direct execution path."""
         return parse_status(cursor)
+
+    async def _execute_stack_native(
+        self, stack: "StatementStack", *, continue_on_error: bool
+    ) -> "tuple[StackResult, ...]":
+        results: list[StackResult] = []
+
+        transaction_cm = None
+        if not continue_on_error and not self._connection_in_transaction():
+            transaction_cm = self.connection.transaction()
+
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
+            if transaction_cm is not None:
+                async with transaction_cm:
+                    await self._run_stack_operations(stack, continue_on_error, observer, results)
+            else:
+                await self._run_stack_operations(stack, continue_on_error, observer, results)
+
+        return tuple(results)
+
+    async def _run_stack_operations(
+        self,
+        stack: "StatementStack",
+        continue_on_error: bool,
+        observer: "StackExecutionObserver",
+        results: "list[StackResult]",
+    ) -> None:
+        """Run operations for statement stack execution.
+
+        Extracted from _execute_stack_native to avoid closure compilation issues.
+        """
+        for index, operation in enumerate(stack.operations):
+            try:
+                normalized: NormalizedStackOperation | None = None
+                if operation.method == "execute":
+                    kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+                    statement_config = kwargs.pop("statement_config", None)
+                    config = statement_config or self.statement_config
+
+                    sql_statement = self.prepare_statement(
+                        operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
+                    )
+                    if not sql_statement.is_script and not sql_statement.is_many:
+                        sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
+                        prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
+                        normalized = NormalizedStackOperation(
+                            operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
+                        )
+
+                if normalized is not None:
+                    stack_result = await self._execute_stack_operation_prepared(normalized)
+                else:
+                    result = await self._execute_stack_operation(operation)
+                    stack_result = StackResult(result=result)
+            except Exception as exc:
+                stack_error = StackExecutionError(
+                    index,
+                    describe_stack_statement(operation.statement),
+                    exc,
+                    adapter=type(self).__name__,
+                    mode="continue-on-error" if continue_on_error else "fail-fast",
+                )
+                if continue_on_error:
+                    await self._rollback_failed_stack()
+                    observer.record_operation_error(stack_error)
+                    results.append(StackResult.from_error(stack_error))
+                    continue
+                raise stack_error from exc
+
+            results.append(stack_result)
+            if continue_on_error:
+                await self._commit_stack_success()
+
+    async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
+        prepared = await self._get_prepared_statement(normalized.sql)
+        metadata = {"prepared_statement": True}
+
+        if normalized.statement.returns_rows():
+            rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True)
+            data, _ = collect_rows(rows)
+            sql_result = create_sql_result(
+                normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record"
+            )
+            return StackResult.from_sql_result(sql_result)
+
+        status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False)
+        rowcount = parse_status(status)
+        sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
+        return StackResult.from_sql_result(sql_result)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

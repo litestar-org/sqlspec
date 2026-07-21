@@ -43,10 +43,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 
-def _quote_mssql_table(table: str) -> str:
-    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
-
-
 __all__ = (
     "MssqlPythonBulkCopyResult",
     "MssqlPythonCursor",
@@ -427,6 +423,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except _MSSQL_ERROR as exc:
             msg = f"Failed to restore autocommit: {exc}"
             raise SQLSpecError(msg) from exc
+
+
+def _quote_mssql_table(table: str) -> str:
+    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:

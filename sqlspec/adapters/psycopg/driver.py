@@ -102,44 +102,6 @@ def pipeline_operation_failed(cursor: Any, statement: "SQL") -> bool:
     return isinstance(rowcount, int) and rowcount < 0
 
 
-def _attribute_pipeline_failure(
-    pending: "list[PipelineCursorEntry]", current: "PreparedStackOperation"
-) -> "PreparedStackOperation":
-    """Resolve which prepared operation owns an error raised while queueing pipeline commands.
-
-    Cursor execute calls in pipeline mode only queue commands, so an exception
-    raised there can belong to an earlier queued operation whose error result
-    was processed while the current command was being sent. The first queued
-    cursor that reports failure owns the error; when none does, the error is a
-    client-side failure belonging to the current operation.
-    """
-    for entry in pending:
-        if pipeline_operation_failed(entry.cursor, entry.prepared.statement):
-            return entry.prepared
-    return current
-
-
-def _stack_operation_error(
-    adapter: str, prepared: "PreparedStackOperation", cause: "Exception"
-) -> "StackExecutionError":
-    """Build a fail-fast StackExecutionError attributed to a specific pipeline operation."""
-    return StackExecutionError(
-        prepared.operation_index,
-        describe_stack_statement(prepared.operation.statement),
-        cause,
-        adapter=adapter,
-        mode="fail-fast",
-        native_pipeline=True,
-    )
-
-
-def _stack_pipeline_sync_error(adapter: str, cause: "Exception") -> "StackExecutionError":
-    """Build a fail-fast StackExecutionError for an unattributed pipeline sync failure."""
-    return StackExecutionError(
-        -1, "psycopg pipeline sync failed", cause, adapter=adapter, mode="fail-fast", native_pipeline=True
-    )
-
-
 class PsycopgPipelineMixin:
     """Shared helpers for psycopg sync/async pipeline execution."""
 
@@ -464,6 +426,109 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         return self._execute_stack_pipeline(stack, prepared_ops)
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow results to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into PostgreSQL using COPY."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            truncate_sql = build_truncate_command(table)
+            exc_handler = self.handle_database_exceptions()
+            with self.with_cursor(self.connection) as cursor, exc_handler:
+                cursor.execute(truncate_sql)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            copy_sql = build_copy_from_command(table, columns)
+            exc_handler = self.handle_database_exceptions()
+            with ExitStack() as stack:
+                stack.enter_context(exc_handler)
+                cursor = stack.enter_context(self.with_cursor(self.connection))
+                copy_ctx = stack.enter_context(cursor.copy(copy_sql))
+                for record in records:
+                    copy_ctx.write_row(record)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts into PostgreSQL via COPY."""
+
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @property
+    def data_dictionary(self) -> "PsycopgSyncDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = PsycopgSyncDataDictionary()
+        return self._data_dictionary
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect psycopg sync rows for the direct execution path."""
+        data = cast("list[Any] | None", fetched) or []
+        column_names = self._resolve_column_names(cursor.description)
+        return data, column_names, len(data)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from psycopg cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _execute_stack_pipeline(
         self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
@@ -558,99 +623,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return results
 
     # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def select_to_storage(
-        self,
-        statement: "SQL | str",
-        destination: "StorageDestination",
-        /,
-        *parameters: Any,
-        statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, object] | None" = None,
-        format_hint: "StorageFormat | None" = None,
-        telemetry: "StorageTelemetry | None" = None,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Execute a query and stream Arrow results to storage (sync)."""
-
-        self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_storage_result(
-            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
-        )
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_arrow(
-        self,
-        table: str,
-        source: "ArrowResult | Any",
-        *,
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        telemetry: "StorageTelemetry | None" = None,
-    ) -> "StorageBridgeJob":
-        """Load Arrow data into PostgreSQL using COPY."""
-
-        self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            truncate_sql = build_truncate_command(table)
-            exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                cursor.execute(truncate_sql)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            copy_sql = build_copy_from_command(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            with ExitStack() as stack:
-                stack.enter_context(exc_handler)
-                cursor = stack.enter_context(self.with_cursor(self.connection))
-                copy_ctx = stack.enter_context(cursor.copy(copy_sql))
-                for record in records:
-                    copy_ctx.write_row(record)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
-        telemetry_payload = self._ingest_telemetry(arrow_table)
-        telemetry_payload["destination"] = table
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts into PostgreSQL via COPY."""
-
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    @property
-    def data_dictionary(self) -> "PsycopgSyncDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = PsycopgSyncDataDictionary()
-        return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
 
@@ -659,16 +631,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if not description:
             return []
         return [col.name for col in description]
-
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        """Collect psycopg sync rows for the direct execution path."""
-        data = cast("list[Any] | None", fetched) or []
-        column_names = self._resolve_column_names(cursor.description)
-        return data, column_names, len(data)
-
-    def resolve_rowcount(self, cursor: Any) -> int:
-        """Resolve rowcount from psycopg cursor for the direct execution path."""
-        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -967,99 +929,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         return await self._execute_stack_pipeline(stack, prepared_ops)
 
-    async def _execute_stack_pipeline(
-        self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
-    ) -> "tuple[StackResult, ...]":
-        def _raise_pending_exception(exception_ctx: "PsycopgAsyncExceptionHandler") -> None:
-            if exception_ctx.pending_exception is not None:
-                stack_error = _stack_pipeline_sync_error(type(self).__name__, exception_ctx.pending_exception)
-                raise stack_error from exception_ctx.pending_exception
-
-        results: list[StackResult] = []
-        started_transaction = False
-
-        with StackExecutionObserver(self, stack, continue_on_error=False, native_pipeline=True):
-            try:
-                if not self._connection_in_transaction():
-                    await self.begin()
-                    started_transaction = True
-
-                exception_handlers = []
-                async with AsyncExitStack() as resource_stack:
-                    pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
-                    pending: list[PipelineCursorEntry] = []
-
-                    for prepared in prepared_ops:
-                        exception_ctx = self.handle_database_exceptions()
-                        exception_handlers.append(exception_ctx)
-                        await resource_stack.enter_async_context(exception_ctx)
-                        cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
-
-                        try:
-                            sql = cast("LiteralString | PsycopgSQL | PsycopgComposed", prepared.sql)  # type: ignore[redundant-cast]
-                            if prepared.parameters:
-                                await cursor.execute(sql, prepared.parameters)
-                            else:
-                                await cursor.execute(sql)
-                        except Exception as exc:
-                            owner = _attribute_pipeline_failure(pending, prepared)
-                            stack_error = StackExecutionError(
-                                owner.operation_index,
-                                describe_stack_statement(owner.operation.statement),
-                                exc,
-                                adapter=type(self).__name__,
-                                mode="fail-fast",
-                            )
-                            raise stack_error from exc
-
-                        pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
-
-                    sync_error: Exception | None = None
-                    try:
-                        await pipeline.sync()
-                    except Exception as exc:
-                        sync_error = exc
-
-                    results = await self._collect_pipeline_results(pending, sync_error)
-
-                for exception_ctx in exception_handlers:
-                    _raise_pending_exception(exception_ctx)
-
-                if started_transaction:
-                    await self.commit()
-            except Exception:
-                if started_transaction:
-                    try:
-                        await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover
-                        logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
-                raise
-
-        return tuple(results)
-
-    async def _collect_pipeline_results(
-        self, pending: "list[PipelineCursorEntry]", sync_error: "Exception | None"
-    ) -> "list[StackResult]":
-        """Drain synced pipeline cursors, attributing any failure to its operation index."""
-        results: list[StackResult] = []
-        for entry in pending:
-            statement = entry.prepared.statement
-            cursor = entry.cursor
-            if sync_error is not None and pipeline_operation_failed(cursor, statement):
-                raise _stack_operation_error(type(self).__name__, entry.prepared, sync_error) from sync_error
-            try:
-                execution_result = await build_async_pipeline_execution_result(
-                    statement, cursor, column_name_resolver=self._resolve_column_names
-                )
-            except Exception as exc:
-                raise _stack_operation_error(type(self).__name__, entry.prepared, exc) from exc
-            sql_result = self.build_statement_result(statement, execution_result)
-            results.append(StackResult.from_sql_result(sql_result))
-
-        if sync_error is not None:
-            raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
-        return results
-
     # ─────────────────────────────────────────────────────────────────────────────
     # STORAGE API METHODS
     # ─────────────────────────────────────────────────────────────────────────────
@@ -1155,16 +1024,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             self._data_dictionary = PsycopgAsyncDataDictionary()
         return self._data_dictionary
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE / INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def _resolve_column_names(self, description: Any) -> list[str]:
-        """Resolve psycopg column names for row materialization paths."""
-        if not description:
-            return []
-        return [col.name for col in description]
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg async rows for the direct execution path."""
         data = cast("list[Any] | None", fetched) or []
@@ -1175,9 +1034,150 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
+    async def _execute_stack_pipeline(
+        self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
+    ) -> "tuple[StackResult, ...]":
+        def _raise_pending_exception(exception_ctx: "PsycopgAsyncExceptionHandler") -> None:
+            if exception_ctx.pending_exception is not None:
+                stack_error = _stack_pipeline_sync_error(type(self).__name__, exception_ctx.pending_exception)
+                raise stack_error from exception_ctx.pending_exception
+
+        results: list[StackResult] = []
+        started_transaction = False
+
+        with StackExecutionObserver(self, stack, continue_on_error=False, native_pipeline=True):
+            try:
+                if not self._connection_in_transaction():
+                    await self.begin()
+                    started_transaction = True
+
+                exception_handlers = []
+                async with AsyncExitStack() as resource_stack:
+                    pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
+                    pending: list[PipelineCursorEntry] = []
+
+                    for prepared in prepared_ops:
+                        exception_ctx = self.handle_database_exceptions()
+                        exception_handlers.append(exception_ctx)
+                        await resource_stack.enter_async_context(exception_ctx)
+                        cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
+
+                        try:
+                            sql = cast("LiteralString | PsycopgSQL | PsycopgComposed", prepared.sql)  # type: ignore[redundant-cast]
+                            if prepared.parameters:
+                                await cursor.execute(sql, prepared.parameters)
+                            else:
+                                await cursor.execute(sql)
+                        except Exception as exc:
+                            owner = _attribute_pipeline_failure(pending, prepared)
+                            stack_error = StackExecutionError(
+                                owner.operation_index,
+                                describe_stack_statement(owner.operation.statement),
+                                exc,
+                                adapter=type(self).__name__,
+                                mode="fail-fast",
+                            )
+                            raise stack_error from exc
+
+                        pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
+
+                    sync_error: Exception | None = None
+                    try:
+                        await pipeline.sync()
+                    except Exception as exc:
+                        sync_error = exc
+
+                    results = await self._collect_pipeline_results(pending, sync_error)
+
+                for exception_ctx in exception_handlers:
+                    _raise_pending_exception(exception_ctx)
+
+                if started_transaction:
+                    await self.commit()
+            except Exception:
+                if started_transaction:
+                    try:
+                        await self.rollback()
+                    except Exception as rollback_error:  # pragma: no cover
+                        logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
+                raise
+
+        return tuple(results)
+
+    async def _collect_pipeline_results(
+        self, pending: "list[PipelineCursorEntry]", sync_error: "Exception | None"
+    ) -> "list[StackResult]":
+        """Drain synced pipeline cursors, attributing any failure to its operation index."""
+        results: list[StackResult] = []
+        for entry in pending:
+            statement = entry.prepared.statement
+            cursor = entry.cursor
+            if sync_error is not None and pipeline_operation_failed(cursor, statement):
+                raise _stack_operation_error(type(self).__name__, entry.prepared, sync_error) from sync_error
+            try:
+                execution_result = await build_async_pipeline_execution_result(
+                    statement, cursor, column_name_resolver=self._resolve_column_names
+                )
+            except Exception as exc:
+                raise _stack_operation_error(type(self).__name__, entry.prepared, exc) from exc
+            sql_result = self.build_statement_result(statement, execution_result)
+            results.append(StackResult.from_sql_result(sql_result))
+
+        if sync_error is not None:
+            raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
+        return results
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE / INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _resolve_column_names(self, description: Any) -> list[str]:
+        """Resolve psycopg column names for row materialization paths."""
+        if not description:
+            return []
+        return [col.name for col in description]
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
+
+
+def _attribute_pipeline_failure(
+    pending: "list[PipelineCursorEntry]", current: "PreparedStackOperation"
+) -> "PreparedStackOperation":
+    """Resolve which prepared operation owns an error raised while queueing pipeline commands.
+
+    Cursor execute calls in pipeline mode only queue commands, so an exception
+    raised there can belong to an earlier queued operation whose error result
+    was processed while the current command was being sent. The first queued
+    cursor that reports failure owns the error; when none does, the error is a
+    client-side failure belonging to the current operation.
+    """
+    for entry in pending:
+        if pipeline_operation_failed(entry.cursor, entry.prepared.statement):
+            return entry.prepared
+    return current
+
+
+def _stack_operation_error(
+    adapter: str, prepared: "PreparedStackOperation", cause: "Exception"
+) -> "StackExecutionError":
+    """Build a fail-fast StackExecutionError attributed to a specific pipeline operation."""
+    return StackExecutionError(
+        prepared.operation_index,
+        describe_stack_statement(prepared.operation.statement),
+        cause,
+        adapter=adapter,
+        mode="fail-fast",
+        native_pipeline=True,
+    )
+
+
+def _stack_pipeline_sync_error(adapter: str, cause: "Exception") -> "StackExecutionError":
+    """Build a fail-fast StackExecutionError for an unattributed pipeline sync failure."""
+    return StackExecutionError(
+        -1, "psycopg pipeline sync failed", cause, adapter=adapter, mode="fail-fast", native_pipeline=True
+    )
 
 
 register_driver_profile("psycopg", driver_profile)

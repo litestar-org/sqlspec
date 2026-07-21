@@ -253,13 +253,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-driver_profile = build_profile()
-
-
 def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
@@ -270,9 +263,6 @@ def build_statement_config(
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "mysql"}, json_serializer=serializer, json_deserializer=deserializer
     )
-
-
-default_statement_config = build_statement_config()
 
 
 def apply_driver_features(
@@ -290,17 +280,6 @@ def apply_driver_features(
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
-
-
-def _create_mysql_error(
-    error: Any, sqlstate: "str | None", code: "int | None", error_class: type[SQLSpecError], description: str
-) -> SQLSpecError:
-    """Create a MySQL error instance without raising it."""
-    code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
-    msg = f"MySQL {description} {code_str}: {error}" if code_str else f"MySQL {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
@@ -439,91 +418,6 @@ def detect_json_columns(
 
 
 # Keep private helpers in sync with sqlspec.adapters.asyncmy.core.
-def _deserialize_json_dict_rows(
-    column_names: "list[str]",
-    rows: "list[dict[str, Any]]",
-    json_indexes: "list[int]",
-    deserializer: "Callable[[Any], Any]",
-    *,
-    logger: Any | None = None,
-) -> "list[dict[str, Any]]":
-    """Apply JSON deserialization to dict rows (DictCursor path).
-
-    Args:
-        column_names: Ordered column names from the cursor description.
-        rows: Result rows represented as dictionaries.
-        json_indexes: Column indexes to deserialize.
-        deserializer: Callable used to decode JSON values.
-        logger: Optional logger for debug output.
-
-    Returns:
-        Rows with JSON columns decoded when possible.
-    """
-    if not rows or not column_names or not json_indexes:
-        return rows
-
-    target_columns = [column_names[index] for index in json_indexes if index < len(column_names)]
-    if not target_columns:
-        return rows
-
-    for row in rows:
-        for column in target_columns:
-            if column not in row:
-                continue
-            raw_value = row[column]
-            if raw_value is None:
-                continue
-            if isinstance(raw_value, bytearray):
-                raw_value = bytes(raw_value)
-            if not isinstance(raw_value, (str, bytes)):
-                continue
-            try:
-                row[column] = deserializer(raw_value)
-            except Exception:
-                if logger is not None:
-                    logger.debug("Failed to deserialize JSON column %s", column, exc_info=True)
-    return rows
-
-
-def _deserialize_json_tuple_rows(
-    rows: "list[Any]", json_indexes: "list[int]", deserializer: "Callable[[Any], Any]", *, logger: Any | None = None
-) -> "list[Any]":
-    """Apply JSON deserialization to tuple rows using index-based access.
-
-    Args:
-        rows: Result rows as tuples.
-        json_indexes: Column indexes to deserialize.
-        deserializer: Callable used to decode JSON values.
-        logger: Optional logger for debug output.
-
-    Returns:
-        Rows with JSON columns decoded when possible.
-    """
-    if not rows or not json_indexes:
-        return rows
-
-    result: list[Any] = []
-    for row in rows:
-        row_list = list(row)
-        mutated = False
-        for idx in json_indexes:
-            if idx >= len(row_list):
-                continue
-            raw_value = row_list[idx]
-            if raw_value is None:
-                continue
-            if isinstance(raw_value, bytearray):
-                raw_value = bytes(raw_value)
-            if not isinstance(raw_value, (str, bytes)):
-                continue
-            try:
-                row_list[idx] = deserializer(raw_value)
-                mutated = True
-            except Exception:
-                if logger is not None:
-                    logger.debug("Failed to deserialize JSON column index %d", idx, exc_info=True)
-        result.append(tuple(row_list) if mutated else row)
-    return result
 
 
 def collect_stream_rows(
@@ -622,3 +516,110 @@ def normalize_lastrowid(cursor: Any) -> int | None:
         return None
     last_id = cursor.lastrowid
     return last_id if isinstance(last_id, int) else None
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _create_mysql_error(
+    error: Any, sqlstate: "str | None", code: "int | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a MySQL error instance without raising it."""
+    code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
+    msg = f"MySQL {description} {code_str}: {error}" if code_str else f"MySQL {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+def _deserialize_json_dict_rows(
+    column_names: "list[str]",
+    rows: "list[dict[str, Any]]",
+    json_indexes: "list[int]",
+    deserializer: "Callable[[Any], Any]",
+    *,
+    logger: Any | None = None,
+) -> "list[dict[str, Any]]":
+    """Apply JSON deserialization to dict rows (DictCursor path).
+
+    Args:
+        column_names: Ordered column names from the cursor description.
+        rows: Result rows represented as dictionaries.
+        json_indexes: Column indexes to deserialize.
+        deserializer: Callable used to decode JSON values.
+        logger: Optional logger for debug output.
+
+    Returns:
+        Rows with JSON columns decoded when possible.
+    """
+    if not rows or not column_names or not json_indexes:
+        return rows
+
+    target_columns = [column_names[index] for index in json_indexes if index < len(column_names)]
+    if not target_columns:
+        return rows
+
+    for row in rows:
+        for column in target_columns:
+            if column not in row:
+                continue
+            raw_value = row[column]
+            if raw_value is None:
+                continue
+            if isinstance(raw_value, bytearray):
+                raw_value = bytes(raw_value)
+            if not isinstance(raw_value, (str, bytes)):
+                continue
+            try:
+                row[column] = deserializer(raw_value)
+            except Exception:
+                if logger is not None:
+                    logger.debug("Failed to deserialize JSON column %s", column, exc_info=True)
+    return rows
+
+
+def _deserialize_json_tuple_rows(
+    rows: "list[Any]", json_indexes: "list[int]", deserializer: "Callable[[Any], Any]", *, logger: Any | None = None
+) -> "list[Any]":
+    """Apply JSON deserialization to tuple rows using index-based access.
+
+    Args:
+        rows: Result rows as tuples.
+        json_indexes: Column indexes to deserialize.
+        deserializer: Callable used to decode JSON values.
+        logger: Optional logger for debug output.
+
+    Returns:
+        Rows with JSON columns decoded when possible.
+    """
+    if not rows or not json_indexes:
+        return rows
+
+    result: list[Any] = []
+    for row in rows:
+        row_list = list(row)
+        mutated = False
+        for idx in json_indexes:
+            if idx >= len(row_list):
+                continue
+            raw_value = row_list[idx]
+            if raw_value is None:
+                continue
+            if isinstance(raw_value, bytearray):
+                raw_value = bytes(raw_value)
+            if not isinstance(raw_value, (str, bytes)):
+                continue
+            try:
+                row_list[idx] = deserializer(raw_value)
+                mutated = True
+            except Exception:
+                if logger is not None:
+                    logger.debug("Failed to deserialize JSON column index %d", idx, exc_info=True)
+        result.append(tuple(row_list) if mutated else row)
+    return result
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

@@ -46,10 +46,6 @@ logger = get_logger("sqlspec.adapters.pymssql")
 pymssql = PYMSSQL_MODULE
 
 
-class _UnavailablePymssqlError(Exception):
-    """Fallback pymssql exception base when pymssql is unavailable."""
-
-
 class PymssqlExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling pymssql exceptions."""
 
@@ -239,6 +235,10 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         return False
+
+
+class _UnavailablePymssqlError(Exception):
+    """Fallback pymssql exception base when pymssql is unavailable."""
 
 
 def _pymssql_error_type() -> "type[BaseException]":

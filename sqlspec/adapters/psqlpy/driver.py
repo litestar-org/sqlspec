@@ -193,21 +193,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
-    ) -> "SQLResult":
-        """Execute cached psqlpy queries with cast-aware parameter preparation."""
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
-        direct_statement = self._cached_statement(
-            sql,
-            params,
-            cached,
-            cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
-            params_are_simple=True,
-            compiled_sql=cached.compiled_sql,
-        )
-        return await self._execute_cached_statement(direct_statement)
-
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT
     # ─────────────────────────────────────────────────────────────────────────────
@@ -459,6 +444,21 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "PsqlpyConnection") -> int:
         """Resolve rowcount from psqlpy result for the direct execution path."""
         return extract_rows_affected(cursor)
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
+    ) -> "SQLResult":
+        """Execute cached psqlpy queries with cast-aware parameter preparation."""
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
+        direct_statement = self._cached_statement(
+            sql,
+            params,
+            cached,
+            cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
+            params_are_simple=True,
+            compiled_sql=cached.compiled_sql,
+        )
+        return await self._execute_cached_statement(direct_statement)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

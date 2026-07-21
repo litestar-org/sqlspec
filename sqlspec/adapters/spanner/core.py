@@ -69,16 +69,10 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-driver_profile = build_profile()
-
-
 def build_statement_config() -> StatementConfig:
     """Construct the Spanner statement configuration."""
     profile = driver_profile
     return build_statement_config_from_profile(profile, statement_overrides={"dialect": "spanner"})
-
-
-default_statement_config = build_statement_config()
 
 
 def apply_driver_features(
@@ -146,21 +140,6 @@ def resolve_column_names(fields: "Sequence[Any] | None", cache: "dict[int, tuple
         cache.pop(next(iter(cache)))
     cache[cache_key] = (fields, column_names)
     return column_names
-
-
-def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
-    """Convert a native Spanner JSON cell using the configured deserializer."""
-    if isinstance(value, JsonObject):
-        json_value = cast("Any", value).serialize()
-    elif isinstance(value, str):
-        json_value = value
-    else:
-        return value
-
-    try:
-        return json_deserializer(json_value)
-    except (TypeError, ValueError):
-        return value
 
 
 def resolve_row_plan(
@@ -259,14 +238,6 @@ def create_arrow_data(
     return convert_dict_to_arrow(data, return_format=return_format)
 
 
-def _create_spanner_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
-    """Create a Spanner error instance without raising it."""
-    msg = f"Spanner {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
-
-
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map Spanner exceptions to SQLSpec exceptions.
 
@@ -319,3 +290,31 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_spanner_error(error, OperationalError, "service unavailable or rate limited")
 
     return _create_spanner_error(error, SQLSpecError, "error")
+
+
+def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
+    """Convert a native Spanner JSON cell using the configured deserializer."""
+    if isinstance(value, JsonObject):
+        json_value = cast("Any", value).serialize()
+    elif isinstance(value, str):
+        json_value = value
+    else:
+        return value
+
+    try:
+        return json_deserializer(json_value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _create_spanner_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
+    """Create a Spanner error instance without raising it."""
+    msg = f"Spanner {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

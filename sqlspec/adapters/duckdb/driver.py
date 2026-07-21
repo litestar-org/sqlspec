@@ -480,6 +480,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
         return data, column_names, len(data)
 
+    def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
+        """Resolve rowcount from DuckDB cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _execute_bulk_insert_many(self, expression: exp.Insert, prepared_parameters: Any) -> "DMLResult | None":
         """Execute a batch INSERT via Arrow registration when the payload is simple."""
         if not isinstance(prepared_parameters, list) or not prepared_parameters:
@@ -537,10 +541,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
             return pa.table({name: [row[index] for row in rows] for index, name in enumerate(column_names)})
 
         return None
-
-    def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
-        """Resolve rowcount from DuckDB cursor for the direct execution path."""
-        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
