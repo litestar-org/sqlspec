@@ -6,7 +6,7 @@ from pytest_databases.docker.mssql import MSSQLService
 from sqlspec.adapters.mssql_python import MssqlPythonConfig
 from tests.integration.fixtures.mssql import _mssql_python_connection_config
 
-pytestmark = [pytest.mark.mssql_python, pytest.mark.xdist_group("mssql_python")]
+pytestmark = [pytest.mark.mssql_python, pytest.mark.xdist_group("mssql")]
 
 _DROP_TABLE_SQL = "DROP TABLE IF EXISTS sqlspec_mssql_python_transactions"
 _CREATE_TABLE_SQL = "CREATE TABLE sqlspec_mssql_python_transactions (id INT PRIMARY KEY, value VARCHAR(50) NOT NULL)"
