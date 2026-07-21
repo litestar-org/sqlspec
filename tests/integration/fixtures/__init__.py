@@ -1,5 +1,6 @@
 """Shared integration fixture definitions."""
 
+from tests.integration.fixtures.duckdb import duckdb_basic_config, duckdb_basic_session
 from tests.integration.fixtures.mysql import (
     aiomysql_clean_driver,
     aiomysql_config,
@@ -40,6 +41,18 @@ from tests.integration.fixtures.postgres import (
     psycopg_async_config,
     psycopg_sync_config,
 )
+from tests.integration.fixtures.sqlite import (
+    aiosqlite_config,
+    aiosqlite_config_file,
+    aiosqlite_session,
+    aiosqlite_session_config,
+    sqlite_basic_session,
+    sqlite_config_regular_memory,
+    sqlite_config_shared_memory,
+    sqlite_driver,
+    sqlite_session,
+    sqlite_temp_file_config,
+)
 
 __all__ = (
     "adbc_postgres_config",
@@ -48,12 +61,18 @@ __all__ = (
     "aiomysql_clean_driver",
     "aiomysql_config",
     "aiomysql_driver",
+    "aiosqlite_config",
+    "aiosqlite_config_file",
+    "aiosqlite_session",
+    "aiosqlite_session_config",
     "asyncmy_clean_driver",
     "asyncmy_config",
     "asyncmy_driver",
     "asyncpg_async_driver",
     "asyncpg_config",
     "asyncpg_connection_config",
+    "duckdb_basic_config",
+    "duckdb_basic_session",
     "mysqlconnector_async_config",
     "mysqlconnector_async_driver",
     "mysqlconnector_clean_async_driver",
@@ -78,4 +97,10 @@ __all__ = (
     "pymysql_config",
     "pymysql_driver",
     "pymysql_transaction_config",
+    "sqlite_basic_session",
+    "sqlite_config_regular_memory",
+    "sqlite_config_shared_memory",
+    "sqlite_driver",
+    "sqlite_session",
+    "sqlite_temp_file_config",
 )

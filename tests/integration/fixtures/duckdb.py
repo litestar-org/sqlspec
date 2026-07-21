@@ -1,4 +1,4 @@
-"""Shared fixtures for DuckDB integration tests."""
+"""Shared DuckDB integration fixtures."""
 
 from collections.abc import Generator
 
@@ -6,11 +6,12 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 
+__all__ = ("duckdb_basic_config", "duckdb_basic_session")
+
 
 @pytest.fixture
-def duckdb_basic_config() -> Generator[DuckDBConfig, None, None]:
+def duckdb_basic_config() -> "Generator[DuckDBConfig, None, None]":
     """Provide an in-memory DuckDB configuration."""
-
     config = DuckDBConfig(connection_config={"database": ":memory:"})
     try:
         yield config
@@ -19,8 +20,7 @@ def duckdb_basic_config() -> Generator[DuckDBConfig, None, None]:
 
 
 @pytest.fixture
-def duckdb_basic_session(duckdb_basic_config: DuckDBConfig) -> Generator[DuckDBDriver, None, None]:
+def duckdb_basic_session(duckdb_basic_config: "DuckDBConfig") -> "Generator[DuckDBDriver, None, None]":
     """Yield a basic DuckDB session for tests requiring a clean database."""
-
     with duckdb_basic_config.provide_session() as session:
         yield session
