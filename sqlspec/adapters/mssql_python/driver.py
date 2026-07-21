@@ -138,7 +138,7 @@ class MssqlPythonStreamSource:
 class MssqlPythonDriver(SyncDriverAdapterBase):
     """mssql-python sync driver."""
 
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_transaction_active")
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "tsql"
 
     def __init__(
@@ -154,6 +154,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MssqlPythonSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._restore_autocommit = False
         self._transaction_active = False
 
     @property
@@ -207,12 +208,16 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self._transaction_active
 
     def begin(self) -> None:
+        if self._transaction_active:
+            return
         try:
-            with self.with_cursor(self.connection) as cursor:
-                cursor.execute("BEGIN TRANSACTION")
+            restore_autocommit = bool(self.connection.autocommit)
+            if restore_autocommit:
+                self.connection.autocommit = False
         except _MSSQL_ERROR as exc:
             msg = f"Failed to begin transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        self._restore_autocommit = restore_autocommit
         self._transaction_active = True
 
     def commit(self) -> None:
@@ -222,6 +227,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {exc}"
             raise SQLSpecError(msg) from exc
         self._transaction_active = False
+        self._restore_connection_autocommit()
 
     def rollback(self) -> None:
         try:
@@ -229,8 +235,19 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except _MSSQL_ERROR as exc:
             msg = f"Failed to rollback transaction: {exc}"
             raise SQLSpecError(msg) from exc
-        finally:
-            self._transaction_active = False
+        self._transaction_active = False
+        self._restore_connection_autocommit()
+
+    def _restore_connection_autocommit(self) -> None:
+        restore_autocommit = self._restore_autocommit
+        self._restore_autocommit = False
+        if not restore_autocommit:
+            return
+        try:
+            self.connection.autocommit = True
+        except _MSSQL_ERROR as exc:
+            msg = f"Failed to restore autocommit: {exc}"
+            raise SQLSpecError(msg) from exc
 
     def with_cursor(self, connection: "MssqlPythonConnection") -> "MssqlPythonCursor":
         return MssqlPythonCursor(connection)

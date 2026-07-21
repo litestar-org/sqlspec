@@ -31,6 +31,7 @@ class DummyConnection:
         self.cursor_obj = DummyCursor()
         self.commits = 0
         self.rollbacks = 0
+        self.autocommit = False
 
     def cursor(self) -> DummyCursor:
         return self.cursor_obj
@@ -50,8 +51,8 @@ def test_sync_driver_lazily_initializes_data_dictionary() -> None:
     assert driver.data_dictionary is driver.data_dictionary
 
 
-def test_sync_driver_execute_stack_uses_explicit_transaction_fallback() -> None:
-    """Stack execution should open an explicit BEGIN TRANSACTION and commit it."""
+def test_sync_driver_execute_stack_uses_dbapi_transaction_fallback() -> None:
+    """Stack execution should use and commit the DBAPI transaction."""
     connection = DummyConnection()
     driver = MssqlPythonDriver(cast("Any", connection))
     stack = StatementStack().push_execute("UPDATE queue SET state = ? WHERE id = ?", "ready", 1)
@@ -59,9 +60,6 @@ def test_sync_driver_execute_stack_uses_explicit_transaction_fallback() -> None:
     results = driver.execute_stack(stack)
 
     assert len(results) == 1
-    assert connection.cursor_obj.executed == [
-        ("BEGIN TRANSACTION", None),
-        ("UPDATE queue SET state = ? WHERE id = ?", ["ready", 1]),
-    ]
+    assert connection.cursor_obj.executed == [("UPDATE queue SET state = ? WHERE id = ?", ["ready", 1])]
     assert connection.commits == 1
     assert connection.rollbacks == 0

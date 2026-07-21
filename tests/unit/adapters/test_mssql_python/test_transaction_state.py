@@ -69,9 +69,7 @@ class FakeMssqlError(Exception):
     """Minimal mssql-python database error."""
 
 
-def test_mssql_python_sync_begin_uses_dbapi_transaction_and_tracks_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mssql_python_sync_begin_uses_dbapi_transaction_and_tracks_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Begin should track the DBAPI transaction without issuing transaction SQL."""
     monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     cursor = FakeCursor()
@@ -91,9 +89,7 @@ def test_mssql_python_sync_begin_uses_dbapi_transaction_and_tracks_state(
 
 
 @pytest.mark.parametrize("method_name", ["commit", "rollback"])
-def test_mssql_python_transaction_restores_autocommit(
-    method_name: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mssql_python_transaction_restores_autocommit(method_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Transactions entered from autocommit mode should restore that mode on completion."""
     monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection(autocommit=True)
