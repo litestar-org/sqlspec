@@ -33,7 +33,7 @@ pytest_plugins = [
     "pytest_databases.docker.gizmosql",
     "pytest_databases.docker.cockroachdb",
     "pytest_databases.docker.rustfs",
-    "tests.integration.fixtures.postgres",
+    "tests.integration.fixtures",
 ]
 
 pytestmark = pytest.mark.anyio

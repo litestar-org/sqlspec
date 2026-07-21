@@ -130,6 +130,7 @@ from tests.integration.adapters.contracts._schema import (
     build_bigquery_contract_table,
 )
 from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
+from tests.integration.fixtures.mysql import _mysql_connection_config
 from tests.integration.fixtures.postgres import (
     _adbc_postgres_uri,
     _asyncpg_pool_config,
@@ -347,18 +348,9 @@ async def contract_oracle_async_driver(oracle_23ai_service: OracleService) -> "A
 @pytest.fixture
 def contract_mysqlconnector_sync_driver(mysql_service: MySQLService) -> Generator[MysqlConnectorSyncDriver, None, None]:
     """Provide a fresh mysql-connector sync driver for contract tests."""
-    config = MysqlConnectorSyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "use_pure": True,
-            "pool_size": 5,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config.update({"use_pure": True, "pool_size": 5})
+    config = MysqlConnectorSyncConfig(connection_config=connection_config)
     try:
         with config.provide_session() as driver:
             driver.execute("SET sql_notes = 0")
@@ -378,16 +370,7 @@ def contract_mysqlconnector_sync_driver(mysql_service: MySQLService) -> Generato
 @pytest.fixture
 def contract_pymysql_driver(mysql_service: MySQLService) -> Generator[PyMysqlDriver, None, None]:
     """Provide a fresh PyMySQL driver for contract tests."""
-    config = PyMysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        }
-    )
+    config = PyMysqlConfig(connection_config=_mysql_connection_config(mysql_service))
     try:
         with config.provide_session() as driver:
             driver.execute("SET sql_notes = 0")
@@ -470,18 +453,9 @@ async def contract_aiosqlite_driver() -> AsyncGenerator[AiosqliteDriver, None]:
 @pytest.fixture
 async def contract_aiomysql_driver(mysql_service: MySQLService) -> AsyncGenerator[AiomysqlDriver, None]:
     """Provide a fresh aiomysql driver for contract tests."""
-    config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": True,
-            "minsize": 1,
-            "maxsize": 5,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service, database_key="db")
+    connection_config.update({"minsize": 1, "maxsize": 5})
+    config = AiomysqlConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
             await driver.execute("SET sql_notes = 0")
@@ -501,18 +475,9 @@ async def contract_aiomysql_driver(mysql_service: MySQLService) -> AsyncGenerato
 @pytest.fixture
 async def contract_asyncmy_driver(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
     """Provide a fresh AsyncMy driver for contract tests."""
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "minsize": 1,
-            "maxsize": 5,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config.update({"minsize": 1, "maxsize": 5})
+    config = AsyncmyConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
             await driver.execute("SET sql_notes = 0")
@@ -534,17 +499,9 @@ async def contract_mysqlconnector_async_driver(
     mysql_service: MySQLService,
 ) -> AsyncGenerator[MysqlConnectorAsyncDriver, None]:
     """Provide a fresh mysql-connector async driver for contract tests."""
-    config = MysqlConnectorAsyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "use_pure": True,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config["use_pure"] = True
+    config = MysqlConnectorAsyncConfig(connection_config=connection_config)
     async with config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -711,17 +668,6 @@ def events_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
         )
 
     return make
-
-
-def _mysql_connection_config(mysql_service: MySQLService, *, database_key: str = "database") -> dict[str, Any]:
-    return {
-        "host": mysql_service.host,
-        "port": mysql_service.port,
-        "user": mysql_service.user,
-        "password": mysql_service.password,
-        database_key: mysql_service.db,
-        "autocommit": True,
-    }
 
 
 @pytest.fixture
