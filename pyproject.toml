@@ -13,7 +13,7 @@ classifiers = [
 ]
 dependencies = [
   "typing-extensions",
-  "sqlglot>=30.0.0",
+  "sqlglot>=30.13.0",
   "mypy-extensions",
   "rich-click>=1.9.0",
   "tomli>=2.0.0; python_version < '3.11'",
@@ -51,7 +51,7 @@ fsspec = ["fsspec"]
 litestar = ["litestar>=2.22.0"]
 msgspec = ["msgspec"]
 mssql-python = ["mssql-python>=1.7"]
-mypyc = ["sqlglot[c]>=30.0.0"]
+mypyc = ["sqlglot[c]>=30.13.0"]
 mysql-connector = [
   "mysql-connector-python; python_version < '3.12'",
   "mysql-connector-python<9.7.0; python_version >= '3.12'",

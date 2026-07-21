@@ -250,6 +250,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
 
     # --- 1. SQL object construction ---
 
+    from sqlspec import sql
     from sqlspec.core.statement import SQL
 
     def bench_sql_construction_no_params() -> None:
@@ -285,6 +286,22 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
             bench_fn=bench_sql_construction_select,
             iterations=iterations,
             description="Time SQL('SELECT ... WHERE ...', param)",
+        )
+    )
+
+    builder_value = 0
+
+    def bench_builder_same_shape_varying_values() -> None:
+        nonlocal builder_value
+        builder_value += 1
+        sql.update("test").set(value=builder_value).where_eq("rowid", builder_value).to_statement()
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="QueryBuilder.to_statement() - same shape varying values",
+            bench_fn=bench_builder_same_shape_varying_values,
+            iterations=iterations,
+            description="Convert same-shape UPDATE builders while parameter values vary",
         )
     )
 

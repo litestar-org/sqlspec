@@ -3,7 +3,6 @@
 Provides abstract base classes and core functionality for SQL query builders.
 """
 
-import hashlib
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
@@ -30,10 +29,10 @@ from sqlspec.core import (
     StatementConfig,
     get_cache,
     get_cache_config,
-    hash_expression,
     hash_optimized_expression,
 )
 from sqlspec.core.filters import StatementFilter
+from sqlspec.core.hashing import _expression_cache_fingerprint
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
@@ -558,42 +557,24 @@ class QueryBuilder(ABC):
         Returns:
             A unique cache key representing the builder state and configuration
         """
-        dialect_name: str = self.dialect_name or "default"
-
         if self._expression is None:
             self._expression = self._create_base_expression()
-
-        expr_hash = str(hash_expression(self._expression)) if self._expression is not None else "None"
-
-        parameters_snapshot = sorted(self._parameters.items())
-        parameters_hash = hashlib.sha256(str(parameters_snapshot).encode()).hexdigest()[:8]
-
-        state_parts = [
-            f"expression_hash:{expr_hash}",
-            f"parameters_hash:{parameters_hash}",
-            f"ctes:{sorted(self._with_ctes.keys())}",
-            f"dialect:{dialect_name}",
-            f"schema_hash:{hashlib.sha256(str(self.schema).encode()).hexdigest()[:8]}",
-            f"optimization:{self.enable_optimization}",
-            f"optimize_joins:{self.optimize_joins}",
-            f"optimize_predicates:{self.optimize_predicates}",
-            f"simplify_expressions:{self.simplify_expressions}",
-        ]
-
-        if config:
-            config_parts = [
-                f"config_dialect:{config.dialect or 'default'}",
-                f"enable_parsing:{config.enable_parsing}",
-                f"enable_validation:{config.enable_validation}",
-                f"enable_transformations:{config.enable_transformations}",
-                f"enable_analysis:{config.enable_analysis}",
-                f"enable_caching:{config.enable_caching}",
-                f"param_style:{config.parameter_config.default_parameter_style.value}",
-            ]
-            state_parts.extend(config_parts)
-
-        state_string = "|".join(state_parts)
-        return f"builder:{hashlib.sha256(state_string.encode()).hexdigest()[:16]}"
+        final_expression = self._build_final_expression()
+        dialect = config.dialect if config is not None and config.dialect is not None else self.dialect_name
+        settings = {
+            "enable_optimization": self.enable_optimization,
+            "optimize_joins": self.optimize_joins,
+            "optimize_predicates": self.optimize_predicates,
+            "simplify_expressions": self.simplify_expressions,
+        }
+        fingerprint = _expression_cache_fingerprint(
+            final_expression,
+            parameter_signature=tuple(self._parameters),
+            dialect=dialect,
+            schema=self.schema,
+            settings=settings,
+        )
+        return f"builder:{fingerprint}"
 
     def with_cte(self: Self, alias: str, query: "QueryBuilder | exp.Select | str") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
@@ -720,8 +701,8 @@ class QueryBuilder(ABC):
 
         cache = get_cache()
         cached_optimized = cache.get_optimized(cache_key)
-        if cached_optimized:
-            return cast("exp.Expr", cached_optimized)
+        if cached_optimized is not None:
+            return cast("exp.Expr", cached_optimized).copy()
 
         excluded_rules = set()
         if not self.optimize_joins:
@@ -737,7 +718,7 @@ class QueryBuilder(ABC):
             optimized = optimize(
                 expression, schema=cast("dict[str, object] | None", self.schema), dialect=self.dialect_name, rules=rules
             )
-            cache.put_optimized(cache_key, optimized)
+            cache.put_optimized(cache_key, optimized.copy())
         except Exception:
             logger.debug("Expression optimization failed, using original expression")
             return expression
@@ -754,20 +735,24 @@ class QueryBuilder(ABC):
             SQL: A SQL statement object.
         """
         cache_config = get_cache_config()
-        if not cache_config.compiled_cache_enabled:
+        if (
+            not cache_config.compiled_cache_enabled
+            or not cache_config.sql_cache_enabled
+            or (config is not None and not config.enable_caching)
+        ):
             return self._to_statement(config)
 
         cache_key_str = self._cache_key(config)
 
         cache = get_cache()
-        cached_sql = cache.get_builder(cache_key_str)
-        if cached_sql is not None:
-            return cast("SQL", cached_sql)
+        cached_entry = cache.get_builder(cache_key_str)
+        if cached_entry is None:
+            cache_entry = self._create_builder_cache_entry(config)
+            cache.put_builder(cache_key_str, cache_entry)
+        else:
+            cache_entry = cast("_BuilderCacheEntry", cached_entry)
 
-        sql_statement = self._to_statement(config)
-        cache.put_builder(cache_key_str, sql_statement)
-
-        return sql_statement
+        return self._statement_from_cache_entry(cache_entry, config)
 
     def apply_filters(self, *filters: StatementFilter, config: "StatementConfig | None" = None) -> "SQL":
         """Apply statement filters to this query builder.
@@ -797,32 +782,41 @@ class QueryBuilder(ABC):
         Returns:
             SQL: A SQL statement object.
         """
-        dialect_override = config.dialect if config else None
-        safe_query = self.build(dialect=dialect_override)
+        cache_entry = self._create_builder_cache_entry(config)
+        return self._statement_from_cache_entry(cache_entry, config)
+
+    def _create_builder_cache_entry(self, config: "StatementConfig | None") -> "_BuilderCacheEntry":
+        dialect_override = config.dialect if config is not None else None
+        resolved_dialect = _resolve_dialect(dialect_override, self.dialect)
         statement_expression = self._build_final_expression(copy=True)
 
         if self.enable_optimization and isinstance(statement_expression, exp.Expr):
             statement_expression = self._optimize_expression(statement_expression)
 
-        target_dialect = dialect_override or safe_query.dialect
-        if self._is_oracle_dialect(target_dialect) and isinstance(statement_expression, exp.Expr):
+        if statement_expression.find(exp.Lock):
+            register_lock_generator(resolved_dialect)
+        if self._is_oracle_dialect(resolved_dialect):
             statement_expression = self._unquote_oracle_identifiers(statement_expression)
+        return _BuilderCacheEntry(statement_expression, resolved_dialect)
 
-        kwargs, parameters = self._statement_parameters(safe_query.parameters)
+    def _statement_from_cache_entry(self, cache_entry: "_BuilderCacheEntry", config: "StatementConfig | None") -> "SQL":
+        statement_expression = cache_entry.expression.copy()
+        kwargs, parameters = self._statement_parameters(self._parameters.copy())
 
-        if config is None:
-            config = StatementConfig(
+        statement_config = config
+        if statement_config is None:
+            statement_config = StatementConfig(
                 parameter_config=ParameterStyleConfig(
                     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
                 ),
-                dialect=safe_query.dialect,
+                dialect=cache_entry.dialect,
             )
 
         if kwargs:
-            return SQL(statement_expression, statement_config=config, **kwargs)
+            return SQL(statement_expression, statement_config=statement_config, **kwargs)
         if parameters:
-            return SQL(statement_expression, *parameters, statement_config=config)
-        return SQL(statement_expression, statement_config=config)
+            return SQL(statement_expression, *parameters, statement_config=statement_config)
+        return SQL(statement_expression, statement_config=statement_config)
 
     def _statement_parameters(self, raw_parameters: Any) -> "tuple[dict[str, Any] | None, tuple[Any, ...] | None]":
         """Extract parameters for SQL statement creation.
@@ -1017,3 +1011,11 @@ class ExpressionBuilder(QueryBuilder):
     @property
     def _expected_result_type(self) -> "type[SQLResult]":
         return SQLResult
+
+
+class _BuilderCacheEntry:
+    __slots__ = ("dialect", "expression")
+
+    def __init__(self, expression: exp.Expr, dialect: "DialectType | None") -> None:
+        self.expression = expression
+        self.dialect = dialect

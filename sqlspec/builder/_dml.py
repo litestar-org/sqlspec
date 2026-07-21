@@ -195,7 +195,7 @@ class InsertValuesMixin:
         values_node = current_expr.args.get("expression")
         tuple_expression = exp.Tuple(expressions=row_expressions)
         if isinstance(values_node, exp.Values):
-            values_node.expressions.append(tuple_expression)
+            values_node.append("expressions", tuple_expression)
         else:
             current_expr.set("expression", exp.Values(expressions=[tuple_expression]))
         return self

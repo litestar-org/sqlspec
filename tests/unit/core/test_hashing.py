@@ -387,6 +387,17 @@ def test_hash_optimized_expression_with_schema() -> None:
     assert result.startswith("opt:")
 
 
+def test_hash_optimized_expression_distinguishes_same_sized_schema_columns() -> None:
+    """Optimizer identity includes column names and types, not only counts."""
+    expr = parse_one("SELECT value FROM items")
+    integer_schema = {"items": {"value": "INT", "label": "TEXT"}}
+    text_schema = {"items": {"value": "TEXT", "description": "TEXT"}}
+
+    assert hash_optimized_expression(expr, "postgres", schema=integer_schema) != hash_optimized_expression(
+        expr, "postgres", schema=text_schema
+    )
+
+
 def test_hash_optimized_expression_with_optimizer_settings() -> None:
     """Test hash_optimized_expression with optimizer settings."""
     expr = parse_one("SELECT * FROM users")
