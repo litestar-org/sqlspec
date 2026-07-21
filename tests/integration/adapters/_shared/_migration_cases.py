@@ -31,6 +31,7 @@ class MigrationCase:
     supports_non_transactional_default_schema: bool = False
     supports_multi_schema_migrations: bool = False
     supports_missing_schema_validation: bool = False
+    uses_oracle_ddl: bool = False
     marks: tuple[Mark | MarkDecorator, ...] = ()
 
 
@@ -81,7 +82,14 @@ SYNC_MIGRATION_CASES = (
     MigrationCase(
         "adbc-sqlite-sync", "migration_config_adbc_sqlite", "adbc", "sync", marks=(ADBC_MARK, SQLITE_XDIST_MARK)
     ),
-    MigrationCase("oracledb-sync", "migration_config_oracle_sync", "oracledb", "sync", marks=(ORACLE_XDIST_MARK,)),
+    MigrationCase(
+        "oracledb-sync",
+        "migration_config_oracle_sync",
+        "oracledb",
+        "sync",
+        uses_oracle_ddl=True,
+        marks=(ORACLE_XDIST_MARK,),
+    ),
 )
 
 ASYNC_MIGRATION_CASES = (
@@ -145,6 +153,7 @@ ASYNC_MIGRATION_CASES = (
         "migration_config_oracle_async",
         "oracledb",
         "async",
+        uses_oracle_ddl=True,
         marks=(ORACLE_XDIST_MARK, pytest.mark.anyio),
     ),
 )

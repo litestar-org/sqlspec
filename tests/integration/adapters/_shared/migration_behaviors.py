@@ -14,7 +14,7 @@ from tests.integration.adapters._shared._migration_cases import MigrationCase
 
 
 def _migration_paths(case: MigrationCase, behavior: str, tmp_path: Path) -> "tuple[str, str, str, str]":
-    if case.adapter == "oracledb":
+    if case.uses_oracle_ddl:
         token = f"ora_{case.mode[0]}_{behavior[:5]}_{uuid4().hex[:4]}"
         script_location = str(tmp_path / f"mig_{token}")
         version_table = f"dm_{token}".upper()
@@ -28,7 +28,7 @@ def _migration_paths(case: MigrationCase, behavior: str, tmp_path: Path) -> "tup
 
 
 def _create_table_migration(case: MigrationCase, table: str) -> str:
-    if case.adapter == "oracledb":
+    if case.uses_oracle_ddl:
         create_sql = f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)"
         drop_sql = f"DROP TABLE {table}"
     else:
@@ -49,7 +49,7 @@ def down():
 
 
 def _seeded_table_migration(case: MigrationCase, table: str) -> str:
-    if case.adapter == "oracledb":
+    if case.uses_oracle_ddl:
         create_sql = f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)"
         drop_sql = f"DROP TABLE {table}"
     else:

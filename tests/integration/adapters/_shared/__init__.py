@@ -35,15 +35,26 @@ _SUITE_MODULES = (
     "streaming_contract",
     "vector_contract",
 )
+_SUITE_FAMILIES = {
+    "case_metadata_contract": frozenset({"sqlite"}),
+    "events_queue_contract": frozenset({"duckdb", "mssql", "mysql", "oracle", "postgres", "sqlite"}),
+    "extra_assertions_proof_contract": frozenset({"sqlite"}),
+    "listen_notify_contract": frozenset({"postgres"}),
+    "oracle_lob_fetch_contract": frozenset({"oracle"}),
+    "postgres_extensions_contract": frozenset({"postgres"}),
+}
 
 
-def install_shared_tests(namespace: dict[str, Any]) -> None:
+def install_shared_tests(namespace: dict[str, Any], family: str) -> None:
     """Install shared test templates into a database-family module.
 
     Args:
         namespace: The family test module globals receiving the test callables.
+        family: Database family that owns the receiving module.
     """
     for module_name in _SUITE_MODULES:
+        if family not in _SUITE_FAMILIES.get(module_name, {family}):
+            continue
         module = import_module(f"tests.integration.adapters._shared.suite_{module_name}")
         for name, value in vars(module).items():
             if not name.startswith("test_") or not callable(value):

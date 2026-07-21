@@ -1194,7 +1194,7 @@ async def _async_statement_stack_observation(
         if continue_on_error:
             if fallback:
                 results = await AsyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=True)
-            elif case.adapter == "psycopg":
+            elif case.native_stack_parity_mode == "psycopg":
                 driver_any = cast("Any", driver)
                 prepared_operations = driver_any._prepare_pipeline_operations(stack)
                 assert prepared_operations is not None
@@ -1211,7 +1211,7 @@ async def _async_statement_stack_observation(
             try:
                 if fallback:
                     await AsyncDriverAdapterBase.execute_stack(cast("Any", driver), stack, continue_on_error=False)
-                elif case.adapter == "psycopg":
+                elif case.native_stack_parity_mode == "psycopg":
                     driver_any = cast("Any", driver)
                     prepared_operations = driver_any._prepare_pipeline_operations(stack)
                     assert prepared_operations is not None
@@ -1237,7 +1237,7 @@ async def _async_statement_stack_observation(
 
 def assert_sync_statement_stack_parity_contract(driver: object, case: DriverCase) -> None:
     """Assert psycopg native fail-fast stacks match the base fallback contract."""
-    if case.adapter != "psycopg":
+    if case.native_stack_parity_mode != "psycopg":
         pytest.skip(f"{case.adapter} has no active sync native stack parity case")
     from sqlspec.adapters.psycopg.core import pipeline_supported
 
@@ -1256,9 +1256,9 @@ def assert_sync_statement_stack_parity_contract(driver: object, case: DriverCase
 
 async def assert_async_statement_stack_parity_contract(driver: object, case: DriverCase) -> None:
     """Assert async native stacks match valid base fallback error and durability semantics."""
-    if case.adapter not in {"asyncpg", "psycopg", "oracledb"}:
+    if case.native_stack_parity_mode == "none":
         pytest.skip(f"{case.adapter} has no active async native stack parity case")
-    if case.adapter == "psycopg":
+    if case.native_stack_parity_mode == "psycopg":
         from sqlspec.adapters.psycopg.core import pipeline_supported
 
         if not pipeline_supported():
@@ -1267,10 +1267,10 @@ async def assert_async_statement_stack_parity_contract(driver: object, case: Dri
     driver_any = cast("Any", driver)
     if driver_any.stack_native_disabled:
         pytest.skip("native statement stacks disabled")
-    if case.adapter == "oracledb" and not await driver_any._pipeline_native_supported():
+    if case.native_stack_parity_mode == "oracle" and not await driver_any._pipeline_native_supported():
         pytest.skip("Oracle native pipeline unavailable")
 
-    continue_on_error = case.adapter != "psycopg"
+    continue_on_error = case.native_stack_continue_on_error
     fallback = await _async_statement_stack_observation(
         async_driver, case, fallback=True, continue_on_error=continue_on_error
     )
@@ -1278,7 +1278,7 @@ async def assert_async_statement_stack_parity_contract(driver: object, case: Dri
         async_driver, case, fallback=False, continue_on_error=continue_on_error
     )
     assert native == fallback
-    expected_durable_names = () if case.adapter == "psycopg" else ("parity-first", "parity-third")
+    expected_durable_names = ("parity-first", "parity-third") if continue_on_error else ()
     assert native == (expected_durable_names, StackExecutionError, 1)
 
 
@@ -4702,7 +4702,7 @@ register_sync_extra_assertion("driver_features:bigquery_sql_features", DRIVER_FE
 
 def _bigquery_job_controls(driver: object, case: DriverCase) -> None:
     """Fold BigQuery job-control wiring into the shared driver-feature contract."""
-    assert case.adapter == "bigquery"
+    assert "driver_features:bigquery_job_controls" in case.extra_assertions
     sync_driver = cast("SyncContractDriver", driver)
     assert not hasattr(driver, "execute_with_job")
     assert not hasattr(driver, "export_table_to_storage")
@@ -5418,21 +5418,21 @@ async def _reset_contract_table_async(driver: AsyncContractDriver, table: Contra
 
 
 def _row_format_config_kwargs(case: DriverCase) -> dict[str, Any]:
-    if case.adapter == "psycopg":
+    if case.row_format_config == "psycopg":
         from psycopg.rows import dict_row
 
         return {"connection_overrides": {"row_factory": dict_row}}
-    if case.adapter == "sqlite":
+    if case.row_format_config == "sqlite":
         return {"driver_features": {"row_factory": "dict"}}
     return {}
 
 
 def _async_row_format_config_kwargs(case: DriverCase) -> dict[str, Any]:
-    if case.adapter == "psycopg":
+    if case.row_format_config == "psycopg":
         from psycopg.rows import dict_row
 
         return {"connection_overrides": {"row_factory": dict_row}}
-    if case.adapter == "aiosqlite":
+    if case.row_format_config == "aiosqlite":
         return {"driver_features": {"row_factory": "dict"}}
     return {}
 
@@ -6012,7 +6012,7 @@ def _assert_batch_rows(batches: "list[ArrowRecordBatch]", expected_rows: int, *,
 
 
 def _assert_reader_rows_affected(case: DriverCase, rows_affected: int, expected_rows: int) -> None:
-    if case.adapter == "oracledb":
+    if case.arrow_reader_reports_rows_affected:
         assert rows_affected == expected_rows
         return
     assert rows_affected == -1

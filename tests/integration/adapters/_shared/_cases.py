@@ -21,6 +21,8 @@ from tests.integration.adapters._shared._schema import (
 RowCountPolicy = Literal["exact", "unavailable", "non_negative"]
 StreamChunkPolicy = Literal["bounded", "advisory"]
 InvalidSqlErrorPolicy = Literal["parser", "database", "emulator_retries"]
+NativeStackParityMode = Literal["none", "standard", "psycopg", "oracle"]
+RowFormatConfig = Literal["none", "sqlite", "aiosqlite", "psycopg"]
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ class DriverCase:
     streaming_row_count: int = 10_000
     supports_native_arrow: bool = False
     arrow_reader_honors_batch_size: bool = False
+    arrow_reader_reports_rows_affected: bool = False
     supports_explain: bool = False
     supports_execute_many: bool = True
     execute_rowcount_policy: RowCountPolicy = "exact"
@@ -97,6 +100,9 @@ class DriverCase:
     stream_chunk_policy: StreamChunkPolicy = "bounded"
     invalid_sql_error_policy: InvalidSqlErrorPolicy = "parser"
     unsupported_explain_reason: str | None = None
+    native_stack_parity_mode: NativeStackParityMode = "none"
+    native_stack_continue_on_error: bool = True
+    row_format_config: RowFormatConfig = "none"
     config_factory_fixture: str | None = None
     deviations: tuple[str, ...] = ()
     extra_assertions: tuple[str, ...] = ()
@@ -147,6 +153,7 @@ SYNC_DRIVER_CASES = (
         supports_connection_instance=True,
         supports_custom_json_serializer=True,
         supports_custom_type_adapters=True,
+        row_format_config="sqlite",
         extra_assertions=("driver_basics:noop", "streaming_native:sqlite", "stream_cursor_cleanup:start_failure"),
     ),
     DriverCase(
@@ -281,6 +288,9 @@ SYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_psycopg_sync",
         supports_connection_instance=True,
         supports_native_row_streaming=True,
+        native_stack_parity_mode="psycopg",
+        native_stack_continue_on_error=False,
+        row_format_config="psycopg",
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
@@ -395,6 +405,7 @@ SYNC_DRIVER_CASES = (
         supports_arrow_streaming=True,
         supports_native_arrow=True,
         arrow_reader_honors_batch_size=True,
+        arrow_reader_reports_rows_affected=True,
         fixture_name="contract_oracle_sync_driver",
         adapter="oracledb",
         dialect="oracle",
@@ -551,6 +562,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_aiosqlite",
         supports_connection_instance=True,
+        row_format_config="aiosqlite",
         extra_assertions=(
             "driver_basics:noop",
             "arrow_specifics:sqlite",
@@ -699,6 +711,7 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_asyncpg",
         supports_connection_instance=True,
+        native_stack_parity_mode="standard",
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
@@ -780,6 +793,9 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_psycopg_async",
         supports_connection_instance=True,
         supports_native_row_streaming=True,
+        native_stack_parity_mode="psycopg",
+        native_stack_continue_on_error=False,
+        row_format_config="psycopg",
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
@@ -848,6 +864,7 @@ ASYNC_DRIVER_CASES = (
         supports_arrow_streaming=True,
         supports_native_arrow=True,
         arrow_reader_honors_batch_size=True,
+        arrow_reader_reports_rows_affected=True,
         fixture_name="contract_oracle_async_driver",
         adapter="oracledb",
         dialect="oracle",
@@ -876,6 +893,7 @@ ASYNC_DRIVER_CASES = (
         supports_lowercase_columns=True,
         supports_uuid_feature=True,
         supports_native_row_streaming=True,
+        native_stack_parity_mode="oracle",
         extra_assertions=(
             "explain_modifiers:oracle",
             "arrow_specifics:oracle",
