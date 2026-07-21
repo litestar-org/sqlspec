@@ -7,21 +7,16 @@ from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
 from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore
+from tests.integration.fixtures.mysql import _mysql_connection_config
 
 
 @pytest.fixture
 async def mysqlconnector_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[MysqlConnectorAsyncADKStore, None]":
     """Create MysqlConnector ADK store with test database."""
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config.update({"autocommit": False, "use_pure": True})
     config = MysqlConnectorAsyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": False,
-            "use_pure": True,
-        },
+        connection_config=connection_config,
         extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
     )
 
@@ -48,16 +43,10 @@ async def mysqlconnector_adk_store_with_fk(
     mysql_service: MySQLService,
 ) -> "AsyncGenerator[MysqlConnectorAsyncADKStore, None]":
     """Create MysqlConnector ADK store with owner ID column."""
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config.update({"autocommit": False, "use_pure": True})
     config = MysqlConnectorAsyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": False,
-            "use_pure": True,
-        },
+        connection_config=connection_config,
         extension_config={
             "adk": {
                 "session_table": "test_fk_sessions",

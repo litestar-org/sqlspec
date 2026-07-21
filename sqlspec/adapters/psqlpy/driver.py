@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
+    _DML_COUNT_COLUMN,
     PsqlpyStreamSource,
+    _dml_count_query,
     build_insert_statement,
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
@@ -121,6 +123,20 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 is_select_result=True,
                 row_format="dict",
             )
+
+        if statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
+            count_sql = _dml_count_query(sql)
+            if count_sql is not None:
+                count_result = await cursor.fetch(count_sql, params)
+                count_rows, _ = collect_rows(count_result)
+                if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
+                    msg = "psqlpy DML row count query returned an invalid result"
+                    raise SQLSpecError(msg)
+                rows_affected = count_rows[0][_DML_COUNT_COLUMN]
+                if type(rows_affected) is not int or rows_affected < 0:
+                    msg = "psqlpy DML row count query returned an invalid count"
+                    raise SQLSpecError(msg)
+                return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
         result = await cursor.execute(sql, params)
         rows_affected = extract_rows_affected(result)

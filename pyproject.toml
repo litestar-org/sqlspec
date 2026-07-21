@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.55.0"
+version = "0.56.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -308,7 +308,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.55.0"
+current_version = "0.56.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
@@ -396,7 +396,6 @@ filterwarnings = [
   # opentelemetry reads entry points via importlib.metadata's deprecated
   # SelectableGroups dict interface at import time; nothing we can change here.
   "ignore:SelectableGroups dict interface is deprecated:DeprecationWarning",
-  "ignore:You are using a Python version .+ google\\.api_core:FutureWarning",
   "ignore::DeprecationWarning:google.rpc",
   "ignore::DeprecationWarning:google.gcloud",
   "ignore::DeprecationWarning:google.iam",
@@ -414,10 +413,6 @@ filterwarnings = [
   "ignore:`show_metavars_column=` will be deprecated:PendingDeprecationWarning",
   "ignore:`append_metavars_help=` will be deprecated:PendingDeprecationWarning",
   "ignore:You are using a Python version .+ which Google will stop supporting:FutureWarning",
-  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.api_core:FutureWarning",
-  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.spanner_admin_database_v1:FutureWarning",
-  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.spanner_admin_instance_v1:FutureWarning",
-  "ignore:You are using a Python version .+ which Google will stop supporting in new releases of google.cloud.bigquery_storage_v1:FutureWarning",
   "ignore::DeprecationWarning:sanic.logging.deprecation",
   "ignore:Table '.*' already exists:Warning",
   "ignore:Unknown table '.*':Warning",

@@ -4,12 +4,10 @@ import contextlib
 from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 import pytest
-from google.api_core.client_options import ClientOptions
-from google.auth.credentials import AnonymousCredentials
 from pytest_databases.docker.bigquery import BigQueryService
 from pytest_databases.docker.cockroachdb import CockroachDBService
 from pytest_databases.docker.mssql import MSSQLService
@@ -32,7 +30,7 @@ from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyDriverFeatures
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
 from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures, AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
 from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
 from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver, BigQueryDriverFeatures
@@ -66,7 +64,6 @@ from sqlspec.adapters.oracledb import (
     OracleAsyncConfig,
     OracleAsyncDriver,
     OracleDriverFeatures,
-    OraclePoolParams,
     OracleSyncConfig,
     OracleSyncDriver,
 )
@@ -79,7 +76,6 @@ from sqlspec.adapters.psycopg import (
     PsycopgAsyncConfig,
     PsycopgAsyncDriver,
     PsycopgDriverFeatures,
-    PsycopgPoolParams,
     PsycopgSyncConfig,
     PsycopgSyncDriver,
 )
@@ -131,157 +127,19 @@ from tests.integration.adapters.contracts._schema import (
     build_bigquery_contract_table,
 )
 from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
-
-
-def _postgres_connection_config(postgres_service: PostgresService) -> dict[str, Any]:
-    return {
-        "host": postgres_service.host,
-        "port": postgres_service.port,
-        "user": postgres_service.user,
-        "password": postgres_service.password,
-        "database": postgres_service.database,
-    }
-
-
-def _postgres_conninfo(postgres_service: PostgresService) -> str:
-    return (
-        f"postgresql://{postgres_service.user}:{postgres_service.password}"
-        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    )
-
-
-def _ensure_postgres_extension(postgres_service: PostgresService, extension: str) -> None:
-    import psycopg
-
-    with psycopg.connect(_postgres_conninfo(postgres_service)) as conn:
-        cast("Any", conn).execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
-        conn.commit()
-
-
-def _psqlpy_dsn(postgres_service: PostgresService) -> str:
-    return (
-        f"postgres://{postgres_service.user}:{postgres_service.password}"
-        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    )
-
-
-def _adbc_postgres_uri(postgres_service: PostgresService) -> str:
-    return (
-        f"postgresql://{postgres_service.user}:{postgres_service.password}"
-        f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    )
-
-
-def _asyncpg_pool_config(postgres_service: PostgresService) -> AsyncpgPoolConfig:
-    return AsyncpgPoolConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        database=postgres_service.database,
-    )
-
-
-def _cockroach_conninfo(cockroachdb_service: CockroachDBService) -> str:
-    return (
-        f"host={cockroachdb_service.host} port={cockroachdb_service.port} "
-        f"user=root dbname={cockroachdb_service.database} sslmode=disable"
-    )
-
-
-@pytest.fixture
-def pgvector_config_adbc(pgvector_service: PostgresService) -> Generator[AdbcConfig, None, None]:
-    """Provide an ADBC config connected to a pgvector-enabled PostgreSQL service."""
-    from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_connect_func
-
-    connection_config = {"uri": _adbc_postgres_uri(pgvector_service)}
-    conn = resolve_driver_connect_func(None, connection_config["uri"])(**build_connection_config(connection_config))
-    try:
-        cursor = conn.cursor()
-        try:
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        finally:
-            cursor.close()
-        conn.commit()
-    finally:
-        conn.close()
-
-    config = AdbcConfig(connection_config=connection_config)
-    try:
-        yield config
-    finally:
-        config.close_pool()
-
-
-@pytest.fixture
-def pgvector_config_asyncpg(pgvector_service: PostgresService) -> AsyncpgConfig:
-    """Provide an asyncpg config connected to a pgvector-enabled PostgreSQL service."""
-    _ensure_postgres_extension(pgvector_service, "vector")
-    return AsyncpgConfig(connection_config=_asyncpg_pool_config(pgvector_service))
-
-
-@pytest.fixture
-def pgvector_config_psqlpy(pgvector_service: PostgresService) -> PsqlpyConfig:
-    """Provide a psqlpy config connected to a pgvector-enabled PostgreSQL service."""
-    _ensure_postgres_extension(pgvector_service, "vector")
-    return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(pgvector_service)))
-
-
-@pytest.fixture
-def pgvector_config_psycopg(pgvector_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
-    """Provide a psycopg config connected to a pgvector-enabled PostgreSQL service."""
-    import psycopg
-
-    connection_config = PsycopgPoolParams(conninfo=_postgres_conninfo(pgvector_service), min_size=1, max_size=4)
-    with psycopg.connect(connection_config["conninfo"]) as conn:
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        conn.commit()
-
-    config = PsycopgSyncConfig(connection_config=connection_config)
-    try:
-        yield config
-    finally:
-        pool = config.connection_instance
-        if pool is not None:
-            config.close_pool()
-            config.connection_instance = None
-
-
-@pytest.fixture
-def paradedb_config_adbc(paradedb_service: PostgresService) -> Generator[AdbcConfig, None, None]:
-    """Provide an ADBC config connected to a ParadeDB service."""
-    config = AdbcConfig(connection_config={"uri": _adbc_postgres_uri(paradedb_service)})
-    try:
-        yield config
-    finally:
-        config.close_pool()
-
-
-@pytest.fixture
-def paradedb_config_asyncpg(paradedb_service: PostgresService) -> AsyncpgConfig:
-    """Provide an asyncpg config connected to a ParadeDB service."""
-    return AsyncpgConfig(connection_config=_asyncpg_pool_config(paradedb_service))
-
-
-@pytest.fixture
-def paradedb_config_psqlpy(paradedb_service: PostgresService) -> PsqlpyConfig:
-    """Provide a psqlpy config connected to a ParadeDB service."""
-    return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(paradedb_service)))
-
-
-@pytest.fixture
-def paradedb_config_psycopg(paradedb_service: PostgresService) -> Generator[PsycopgSyncConfig, None, None]:
-    """Provide a psycopg config connected to a ParadeDB service."""
-    config = PsycopgSyncConfig(
-        connection_config=PsycopgPoolParams(conninfo=_postgres_conninfo(paradedb_service), min_size=1, max_size=4)
-    )
-    try:
-        yield config
-    finally:
-        pool = config.connection_instance
-        if pool is not None:
-            config.close_pool()
-            config.connection_instance = None
+from tests.integration.fixtures.bigquery import _bigquery_connection_config
+from tests.integration.fixtures.mssql import _arrow_odbc_connection_config
+from tests.integration.fixtures.mysql import _mysql_connection_config
+from tests.integration.fixtures.oracle import _oracle_pool_params
+from tests.integration.fixtures.postgres import (
+    _adbc_postgres_uri,
+    _asyncpg_pool_config,
+    _cockroach_asyncpg_connection_config,
+    _cockroach_conninfo,
+    _postgres_connection_config,
+    _postgres_conninfo,
+    _psqlpy_dsn,
+)
 
 
 @pytest.fixture
@@ -360,13 +218,7 @@ def contract_adbc_duckdb_driver() -> Generator[AdbcDriver, None, None]:
 def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Provide a fresh ADBC PostgreSQL driver for contract tests."""
     config = AdbcConfig(
-        connection_config={
-            "uri": (
-                f"postgresql://{postgres_service.user}:{postgres_service.password}"
-                f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-            ),
-            "driver_name": "adbc_driver_postgresql",
-        }
+        connection_config={"uri": _adbc_postgres_uri(postgres_service), "driver_name": "adbc_driver_postgresql"}
     )
     try:
         with _provide_adbc_contract_driver(config, POSTGRES_CONTRACT_TABLE) as driver:
@@ -391,12 +243,7 @@ def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[
     the default dataset unset, and tables are referenced fully-qualified.
     """
     config = BigQueryConfig(
-        connection_config={
-            "project": bigquery_service.project,
-            "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
-            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        },
+        connection_config=_bigquery_connection_config(bigquery_service),
         driver_features={"job_result_timeout": 30.0, "job_retry_deadline": 0.0, "request_timeout": 15.0},
     )
     try:
@@ -432,18 +279,6 @@ def contract_bigquery_driver(
     return _bigquery_contract_session
 
 
-def _oracle_pool_params(oracle_service: OracleService) -> OraclePoolParams:
-    return OraclePoolParams(
-        host=oracle_service.host,
-        port=oracle_service.port,
-        service_name=oracle_service.service_name,
-        user=oracle_service.user,
-        password=oracle_service.password,
-        min=1,
-        max=5,
-    )
-
-
 @pytest.fixture
 def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator[OracleSyncDriver, None, None]:
     """Provide a fresh Oracle sync driver for contract tests."""
@@ -462,7 +297,7 @@ def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator
 def contract_arrow_odbc_mssql_driver(mssql_service: MSSQLService) -> Generator[ArrowOdbcDriver, None, None]:
     """Provide a fresh arrow-odbc driver backed by SQL Server."""
     config = ArrowOdbcConfig(
-        connection_config={"connection_string": mssql_service.connection_string},
+        connection_config=_arrow_odbc_connection_config(mssql_service),
         driver_features={"dbms_name": "Microsoft SQL Server"},
     )
     try:
@@ -496,18 +331,9 @@ async def contract_oracle_async_driver(oracle_23ai_service: OracleService) -> "A
 @pytest.fixture
 def contract_mysqlconnector_sync_driver(mysql_service: MySQLService) -> Generator[MysqlConnectorSyncDriver, None, None]:
     """Provide a fresh mysql-connector sync driver for contract tests."""
-    config = MysqlConnectorSyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "use_pure": True,
-            "pool_size": 5,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config.update({"use_pure": True, "pool_size": 5})
+    config = MysqlConnectorSyncConfig(connection_config=connection_config)
     try:
         with config.provide_session() as driver:
             driver.execute("SET sql_notes = 0")
@@ -527,16 +353,7 @@ def contract_mysqlconnector_sync_driver(mysql_service: MySQLService) -> Generato
 @pytest.fixture
 def contract_pymysql_driver(mysql_service: MySQLService) -> Generator[PyMysqlDriver, None, None]:
     """Provide a fresh PyMySQL driver for contract tests."""
-    config = PyMysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-        }
-    )
+    config = PyMysqlConfig(connection_config=_mysql_connection_config(mysql_service))
     try:
         with config.provide_session() as driver:
             driver.execute("SET sql_notes = 0")
@@ -619,18 +436,9 @@ async def contract_aiosqlite_driver() -> AsyncGenerator[AiosqliteDriver, None]:
 @pytest.fixture
 async def contract_aiomysql_driver(mysql_service: MySQLService) -> AsyncGenerator[AiomysqlDriver, None]:
     """Provide a fresh aiomysql driver for contract tests."""
-    config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": True,
-            "minsize": 1,
-            "maxsize": 5,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service, database_key="db")
+    connection_config.update({"minsize": 1, "maxsize": 5})
+    config = AiomysqlConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
             await driver.execute("SET sql_notes = 0")
@@ -650,18 +458,9 @@ async def contract_aiomysql_driver(mysql_service: MySQLService) -> AsyncGenerato
 @pytest.fixture
 async def contract_asyncmy_driver(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
     """Provide a fresh AsyncMy driver for contract tests."""
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "minsize": 1,
-            "maxsize": 5,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config.update({"minsize": 1, "maxsize": 5})
+    config = AsyncmyConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
             await driver.execute("SET sql_notes = 0")
@@ -683,17 +482,9 @@ async def contract_mysqlconnector_async_driver(
     mysql_service: MySQLService,
 ) -> AsyncGenerator[MysqlConnectorAsyncDriver, None]:
     """Provide a fresh mysql-connector async driver for contract tests."""
-    config = MysqlConnectorAsyncConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "use_pure": True,
-        }
-    )
+    connection_config = _mysql_connection_config(mysql_service)
+    connection_config["use_pure"] = True
+    config = MysqlConnectorAsyncConfig(connection_config=connection_config)
     async with config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -710,15 +501,8 @@ async def contract_mysqlconnector_async_driver(
 @pytest.fixture
 async def contract_asyncpg_driver(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
     """Provide a fresh asyncpg driver for contract tests."""
-    connection_config: AsyncpgPoolConfig = {
-        "host": postgres_service.host,
-        "port": postgres_service.port,
-        "user": postgres_service.user,
-        "password": postgres_service.password,
-        "database": postgres_service.database,
-        "min_size": 1,
-        "max_size": 5,
-    }
+    connection_config = _asyncpg_pool_config(postgres_service)
+    connection_config.update({"min_size": 1, "max_size": 5})
     config = AsyncpgConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
@@ -780,18 +564,9 @@ async def contract_cockroach_asyncpg_driver(
     cockroachdb_service: CockroachDBService,
 ) -> AsyncGenerator[CockroachAsyncpgDriver, None]:
     """Provide a fresh CockroachDB asyncpg driver for contract tests."""
-    config = CockroachAsyncpgConfig(
-        connection_config={
-            "host": cockroachdb_service.host,
-            "port": cockroachdb_service.port,
-            "user": "root",
-            "password": "",
-            "database": cockroachdb_service.database,
-            "ssl": None,
-            "min_size": 1,
-            "max_size": 5,
-        }
-    )
+    connection_config = _cockroach_asyncpg_connection_config(cockroachdb_service)
+    connection_config.update({"min_size": 1, "max_size": 5})
+    config = CockroachAsyncpgConfig(connection_config=connection_config)
     try:
         async with config.provide_session() as driver:
             await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -876,17 +651,6 @@ def events_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
         )
 
     return make
-
-
-def _mysql_connection_config(mysql_service: MySQLService, *, database_key: str = "database") -> dict[str, Any]:
-    return {
-        "host": mysql_service.host,
-        "port": mysql_service.port,
-        "user": mysql_service.user,
-        "password": mysql_service.password,
-        database_key: mysql_service.db,
-        "autocommit": True,
-    }
 
 
 @pytest.fixture
@@ -995,7 +759,7 @@ def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) 
 
     def make(*, extension_config: dict[str, Any], suffix: str) -> ArrowOdbcConfig:
         return ArrowOdbcConfig(
-            connection_config={"connection_string": mssql_service.connection_string},
+            connection_config=_arrow_odbc_connection_config(mssql_service),
             migration_config=_events_migration_config(tmp_path, suffix),
             extension_config=extension_config,
             driver_features={"dbms_name": "Microsoft SQL Server"},
@@ -1307,14 +1071,7 @@ def lifecycle_config_cockroach_asyncpg(
         driver_features: "CockroachAsyncpgDriverFeatures | None" = None,
         connection_instance: object | None = None,
     ) -> CockroachAsyncpgConfig:
-        connection_config: dict[str, Any] = {
-            "host": cockroachdb_service.host,
-            "port": cockroachdb_service.port,
-            "user": "root",
-            "password": "",
-            "database": cockroachdb_service.database,
-            "ssl": None,
-        }
+        connection_config = _cockroach_asyncpg_connection_config(cockroachdb_service)
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
         extra: dict[str, Any] = {}
@@ -1489,12 +1246,7 @@ def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..
     """Build fresh BigQuery configs for the connection-hook lifecycle contract (no pooling)."""
 
     def make(*, pooled: bool = False, driver_features: "BigQueryDriverFeatures | None" = None) -> BigQueryConfig:
-        connection_config: dict[str, Any] = {
-            "project": bigquery_service.project,
-            "dataset_id": f"`{bigquery_service.project}`.`{bigquery_service.dataset}`",
-            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        }
+        connection_config = _bigquery_connection_config(bigquery_service)
         if driver_features is None:
             return BigQueryConfig(connection_config=connection_config)
         return BigQueryConfig(connection_config=connection_config, driver_features=driver_features)
@@ -2025,7 +1777,7 @@ async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator
 async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenerator[ArrowOdbcStore, None]":
     """Provide a ready arrow-odbc SQL Server Litestar store for contract tests."""
     config = ArrowOdbcConfig(
-        connection_config={"connection_string": mssql_service.connection_string},
+        connection_config=_arrow_odbc_connection_config(mssql_service),
         extension_config=_STORE_EXTENSION_CONFIG,
         driver_features={"dbms_name": "Microsoft SQL Server"},
     )
@@ -2317,18 +2069,10 @@ def adk_store_cockroach_asyncpg(cockroachdb_service: CockroachDBService) -> Call
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
+        connection_config = _cockroach_asyncpg_connection_config(cockroachdb_service)
+        connection_config.update({"min_size": 1, "max_size": 5})
         config = CockroachAsyncpgConfig(
-            connection_config={
-                "host": cockroachdb_service.host,
-                "port": cockroachdb_service.port,
-                "user": "root",
-                "password": "",
-                "database": cockroachdb_service.database,
-                "ssl": None,
-                "min_size": 1,
-                "max_size": 5,
-            },
-            extension_config=_adk_extension_config(suffix),
+            connection_config=connection_config, extension_config=_adk_extension_config(suffix)
         )
         return config, CockroachAsyncpgADKStore(config)
 
@@ -2404,13 +2148,7 @@ def adk_store_adbc_postgres(postgres_service: PostgresService) -> Callable[..., 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
         config = AdbcConfig(
-            connection_config={
-                "driver_name": "postgresql",
-                "uri": (
-                    f"postgresql://{postgres_service.user}:{postgres_service.password}"
-                    f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-                ),
-            },
+            connection_config={"driver_name": "postgresql", "uri": _adbc_postgres_uri(postgres_service)},
             extension_config=_adk_extension_config(suffix),
         )
         _ensure_adbc_store_driver_available(config)
@@ -2426,7 +2164,7 @@ def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> Callable[..., Any
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
         config = ArrowOdbcConfig(
-            connection_config={"connection_string": mssql_service.connection_string},
+            connection_config=_arrow_odbc_connection_config(mssql_service),
             extension_config=_adk_extension_config(suffix),
             driver_features={"dbms_name": "Microsoft SQL Server"},
         )

@@ -8,6 +8,7 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.aiomysql import AiomysqlConfig
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
+from tests.integration.fixtures.mysql import _mysql_connection_config
 
 
 @pytest.fixture
@@ -24,17 +25,10 @@ async def aiomysql_adk_store(mysql_service: MySQLService) -> "AsyncGenerator[Aio
         Uses pytest-databases MySQL container for testing.
         Tables are created before test and cleaned up after.
     """
+    connection_config = _mysql_connection_config(mysql_service, database_key="db")
+    connection_config.update({"autocommit": False, "minsize": 1, "maxsize": 5})
     config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": False,
-            "minsize": 1,
-            "maxsize": 5,
-        },
+        connection_config=connection_config,
         extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
     )
 
@@ -70,17 +64,10 @@ async def aiomysql_adk_store_with_fk(mysql_service: MySQLService) -> "AsyncGener
         Creates a tenants table and configures FK constraint.
         Tests multi-tenant isolation and CASCADE behavior.
     """
+    connection_config = _mysql_connection_config(mysql_service, database_key="db")
+    connection_config.update({"autocommit": False, "minsize": 1, "maxsize": 5})
     config = AiomysqlConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "db": mysql_service.db,
-            "autocommit": False,
-            "minsize": 1,
-            "maxsize": 5,
-        },
+        connection_config=connection_config,
         extension_config={
             "adk": {
                 "session_table": "test_fk_sessions",

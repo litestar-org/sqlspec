@@ -694,7 +694,6 @@ ASYNC_DRIVER_CASES = (
         config_factory_fixture="lifecycle_config_psqlpy",
         supports_connection_instance=True,
         supports_native_row_streaming=True,
-        execute_rowcount_policy="unavailable",
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",

@@ -1,59 +1,63 @@
-"""AsyncMy-specific feature tests.
-
-This test suite focuses on AsyncMy adapter specific functionality including:
-- Connection pooling behavior
-- MySQL-specific SQL features
-- Async transaction handling
-- Error handling and recovery
-- Performance characteristics
-"""
+"""Shared feature coverage for the async MySQL adapters."""
 
 from collections.abc import AsyncGenerator
 
 import pytest
-from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, default_statement_config
+from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.core import SQL, SQLResult
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
+MySQLAsyncConfig = AsyncmyConfig | AiomysqlConfig
+MySQLAsyncDriver = AsyncmyDriver | AiomysqlDriver
 
-@pytest.fixture
-async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
-    """Create AsyncMy session with connection pooling."""
-    config = AsyncmyConfig(
-        connection_config={
-            "host": mysql_service.host,
-            "port": mysql_service.port,
-            "user": mysql_service.user,
-            "password": mysql_service.password,
-            "database": mysql_service.db,
-            "autocommit": True,
-            "minsize": 2,
-            "maxsize": 10,
-            "echo": False,
-        },
-        statement_config=default_statement_config,
-    )
+_MYSQL_FEATURE_TABLES = (
+    "concurrent_test",
+    "json_test",
+    "mysql_features",
+    "isolation_test",
+    "bulk_test",
+    "error_test",
+    "advanced_test",
+)
 
-    async with config.provide_session() as session:
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS concurrent_test (
+
+async def _clean_feature_objects(driver: MySQLAsyncDriver) -> None:
+    await driver.execute("SET sql_notes = 0")
+    for table in _MYSQL_FEATURE_TABLES:
+        await driver.execute_script(f"DROP TABLE IF EXISTS {table}")
+    for procedure in ("test_procedure", "simple_procedure"):
+        await driver.execute_script(f"DROP PROCEDURE IF EXISTS {procedure}")
+    await driver.execute("SET sql_notes = 1")
+
+
+@pytest.fixture(params=("asyncmy", "aiomysql"))
+async def mysql_async_driver(
+    request: pytest.FixtureRequest, asyncmy_config: AsyncmyConfig, aiomysql_config: AiomysqlConfig
+) -> AsyncGenerator[MySQLAsyncDriver, None]:
+    """Provide equivalent sessions for both async MySQL adapters."""
+    config: MySQLAsyncConfig = asyncmy_config if request.param == "asyncmy" else aiomysql_config
+    async with config.provide_session() as driver:
+        await _clean_feature_objects(driver)
+        await driver.execute_script("""
+            CREATE TABLE concurrent_test (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 thread_id VARCHAR(50),
                 value INT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        await session.execute_script("DELETE FROM concurrent_test")
+        try:
+            yield driver
+        finally:
+            await _clean_feature_objects(driver)
 
-        yield session
 
-
-async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriver) -> None:
+async def test_mysql_async_mysql_json_operations(mysql_async_driver: MySQLAsyncDriver) -> None:
     """Test MySQL JSON column operations."""
-    driver = asyncmy_pooled_session
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS json_test (
@@ -85,9 +89,9 @@ async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriv
     assert contains_result.get_data()[0]["count"] == 1
 
 
-async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: AsyncmyDriver) -> None:
+async def test_mysql_async_mysql_specific_sql_features(mysql_async_driver: MySQLAsyncDriver) -> None:
     """Test MySQL-specific SQL features and syntax."""
-    driver = asyncmy_pooled_session
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS mysql_features (
@@ -128,9 +132,9 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
     assert "important" in enum_row["tags"]
 
 
-async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: AsyncmyDriver) -> None:
+async def test_mysql_async_transaction_isolation_levels(mysql_async_driver: MySQLAsyncDriver) -> None:
     """Test MySQL transaction isolation level handling."""
-    driver = asyncmy_pooled_session
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS isolation_test (
@@ -154,9 +158,9 @@ async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: Asyn
     assert committed_result.get_data()[0]["value"] == "transaction_data"
 
 
-async def test_asyncmy_stored_procedures(asyncmy_pooled_session: AsyncmyDriver) -> None:
+async def test_mysql_async_stored_procedures(mysql_async_driver: MySQLAsyncDriver) -> None:
     """Test stored procedure execution."""
-    driver = asyncmy_pooled_session
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         DROP PROCEDURE IF EXISTS test_procedure;
@@ -180,9 +184,9 @@ async def test_asyncmy_stored_procedures(asyncmy_pooled_session: AsyncmyDriver) 
     await driver.execute("CALL simple_procedure(?)", (5,))
 
 
-async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: AsyncmyDriver) -> None:
+async def test_mysql_async_bulk_operations_performance(mysql_async_driver: MySQLAsyncDriver) -> None:
     """Test bulk operations for performance characteristics."""
-    driver = asyncmy_pooled_session
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS bulk_test (
@@ -214,9 +218,9 @@ async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: Async
     assert select_result.get_data()[99]["sequence_num"] == 99
 
 
-async def test_asyncmy_error_recovery(asyncmy_pooled_session: AsyncmyDriver) -> None:
+async def test_mysql_async_error_recovery(mysql_async_driver: MySQLAsyncDriver) -> None:
     """Test error handling and connection recovery."""
-    driver = asyncmy_pooled_session
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS error_test (
@@ -240,9 +244,9 @@ async def test_asyncmy_error_recovery(asyncmy_pooled_session: AsyncmyDriver) -> 
     assert final_result.get_data()[0]["value"] == "test_value"
 
 
-async def test_asyncmy_sql_object_advanced_features(asyncmy_pooled_session: AsyncmyDriver) -> None:
-    """Test SQL object integration with advanced AsyncMy features."""
-    driver = asyncmy_pooled_session
+async def test_mysql_async_sql_object_advanced_features(mysql_async_driver: MySQLAsyncDriver) -> None:
+    """Test SQL object integration with advanced MySQL async features."""
+    driver = mysql_async_driver
 
     await driver.execute_script("""
         CREATE TABLE IF NOT EXISTS advanced_test (

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from psqlpy import exceptions as psqlpy_exceptions
+from sqlglot import exp, parse_one
 
 from sqlspec.adapters.psqlpy import core as psqlpy_core
 from sqlspec.adapters.psqlpy.core import (
@@ -358,3 +359,76 @@ def test_extract_rows_affected_parses_valid_tag() -> None:
     """A well-formed command tag should still report the parsed row count."""
     assert psqlpy_core.extract_rows_affected("INSERT 0 3") == 3
     assert psqlpy_core.extract_rows_affected("UPDATE 5") == 5
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO events (id, payload) VALUES ($1, $2)",
+        "UPDATE events SET payload = $1 WHERE id = $2",
+        "DELETE FROM events WHERE id = $1",
+    ],
+)
+def test_dml_count_query_wraps_supported_statements(sql: str) -> None:
+    """Single DML should be wrapped in a one-row PostgreSQL count query."""
+    rewritten = psqlpy_core._dml_count_query(sql)  # pyright: ignore[reportPrivateUsage]
+
+    assert rewritten is not None
+    expression = parse_one(rewritten, dialect="postgres")
+    assert isinstance(expression, exp.Select)
+    assert expression.find(exp.Count) is not None
+    dml = expression.find(exp.Insert, exp.Update, exp.Delete)
+    assert dml is not None
+    assert dml.args.get("returning") is not None
+    assert rewritten.count("RETURNING 1") == 1
+
+
+def test_dml_count_query_preserves_placeholders_quotes_and_existing_with() -> None:
+    """The rewrite should preserve compiled placeholders and a DML-owned WITH clause."""
+    sql = (
+        'WITH source AS (SELECT $2 AS "id") '
+        'UPDATE "events" SET "payload" = $1 FROM source WHERE "events"."id" = source."id"'
+    )
+
+    rewritten = psqlpy_core._dml_count_query(sql)  # pyright: ignore[reportPrivateUsage]
+
+    assert rewritten is not None
+    assert "$1" in rewritten
+    assert "$2" in rewritten
+    assert '"events"' in rewritten
+    assert "WITH source AS" in rewritten
+
+
+def test_dml_count_query_uses_collision_free_cte_alias() -> None:
+    """A user CTE using the private base name should force a deterministic suffix."""
+    sql = (
+        "WITH _sqlspec_affected AS (SELECT $2 AS id) "
+        "UPDATE events SET payload = $1 FROM _sqlspec_affected "
+        "WHERE events.id = _sqlspec_affected.id"
+    )
+
+    rewritten = psqlpy_core._dml_count_query(sql)  # pyright: ignore[reportPrivateUsage]
+
+    assert rewritten is not None
+    assert rewritten.startswith("WITH _sqlspec_affected_1 AS")
+    assert "WITH _sqlspec_affected AS" in rewritten
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM events",
+        "MERGE INTO events USING source ON events.id = source.id WHEN MATCHED THEN DELETE",
+        "CREATE TABLE events (id INT)",
+        "UPDATE events SET payload = $1 WHERE id = $2 RETURNING id",
+    ],
+)
+def test_dml_count_query_bypasses_unsupported_or_returning_statements(sql: str) -> None:
+    """Statements outside the supported non-returning DML set should retain their native path."""
+    assert psqlpy_core._dml_count_query(sql) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_dml_count_query_surfaces_parse_errors() -> None:
+    """Invalid compiled SQL should raise rather than report a false row count."""
+    with pytest.raises(SQLSpecError, match="Unable to build psqlpy DML row count query"):
+        psqlpy_core._dml_count_query("UPDATE events SET payload =")  # pyright: ignore[reportPrivateUsage]

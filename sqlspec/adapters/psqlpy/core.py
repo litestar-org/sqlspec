@@ -6,7 +6,12 @@ import decimal
 import io
 import re
 import uuid
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, cast
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
 from sqlspec.core import (
@@ -95,6 +100,9 @@ else:
     _JSONB_TYPE = _JSONB_IMPORTED
 _TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+_DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
+_DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
+_DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
@@ -498,6 +506,32 @@ def extract_rows_affected(result: Any) -> int:
     except Exception as error:
         logger.debug("Failed to parse psqlpy command tag: %s", error)
     return 0
+
+
+@lru_cache(maxsize=_DML_COUNT_QUERY_CACHE_SIZE)
+def _dml_count_query(sql: str) -> str | None:
+    """Build a PostgreSQL query that returns an exact count for one DML statement."""
+    try:
+        expression = sqlglot.parse_one(sql, dialect="postgres")
+    except ParseError as error:
+        msg = f"Unable to build psqlpy DML row count query: {error}"
+        raise SQLSpecError(msg) from error
+
+    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)) or expression.args.get("returning"):
+        return None
+
+    used_aliases = {cte.alias_or_name for cte in expression.find_all(exp.CTE)}
+    cte_alias = _DML_COUNT_CTE_ALIAS
+    suffix = 1
+    while cte_alias in used_aliases:
+        cte_alias = f"{_DML_COUNT_CTE_ALIAS}_{suffix}"
+        suffix += 1
+
+    expression = expression.returning("1", dialect="postgres", copy=False)
+    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
+    count_query = exp.select(count_expression).from_(cte_alias, copy=False)
+    count_query.with_(cte_alias, as_=expression, copy=False)
+    return count_query.sql(dialect="postgres")
 
 
 def get_parameter_casts(statement: Any) -> "dict[int, str]":

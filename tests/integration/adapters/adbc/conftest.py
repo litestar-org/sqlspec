@@ -8,7 +8,6 @@ import pytest
 from adbc_driver_flightsql import DatabaseOptions
 from adbc_driver_flightsql import dbapi as flightsql
 from pytest_databases.docker.gizmosql import GizmoSQLService
-from pytest_databases.docker.postgres import PostgresService
 from pytest_databases.helpers import get_xdist_worker_num
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
@@ -228,34 +227,6 @@ def adbc_gizmosql_sqlite_session(adbc_gizmosql_sqlite_config: "AdbcConfig") -> "
 
     with adbc_gizmosql_sqlite_config.provide_session() as session:
         _prepare_gizmosql_test_table(session)
-        yield session
-
-
-@pytest.fixture(scope="session")
-def adbc_postgres_connection_config(postgres_service: "PostgresService") -> "dict[str, str]":
-    """Shared PostgreSQL connection configuration for ADBC tests."""
-
-    return {
-        "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    }
-
-
-@pytest.fixture(scope="session")
-def adbc_postgres_config(adbc_postgres_connection_config: "dict[str, str]") -> "Generator[AdbcConfig, None, None]":
-    """Provide an ADBC config targeting PostgreSQL."""
-
-    config = AdbcConfig(connection_config=dict(adbc_postgres_connection_config))
-    try:
-        yield config
-    finally:
-        config.close_pool()
-
-
-@pytest.fixture(scope="function")
-def adbc_sync_driver(adbc_postgres_config: "AdbcConfig") -> "Generator[AdbcDriver, None, None]":
-    """Create an ADBC driver for data dictionary testing."""
-
-    with adbc_postgres_config.provide_session() as session:
         yield session
 
 
