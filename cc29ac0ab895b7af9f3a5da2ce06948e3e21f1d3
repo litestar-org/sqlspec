@@ -1,0 +1,3 @@
+flow: test-suite-overhaul
+checkpoint: activate MSSQL shared contracts
+validation: make lint; focused MSSQL units and shared integration
