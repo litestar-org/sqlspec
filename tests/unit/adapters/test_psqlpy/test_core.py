@@ -377,7 +377,7 @@ def test_dml_count_query_wraps_supported_statements(sql: str) -> None:
     expression = parse_one(rewritten, dialect="postgres")
     assert isinstance(expression, exp.Select)
     assert expression.find(exp.Count) is not None
-    dml = expression.find((exp.Insert, exp.Update, exp.Delete))
+    dml = expression.find(exp.Insert, exp.Update, exp.Delete)
     assert dml is not None
     assert dml.args.get("returning") is not None
     assert rewritten.count("RETURNING 1") == 1

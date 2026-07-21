@@ -527,7 +527,7 @@ def _dml_count_query(sql: str) -> str | None:
         cte_alias = f"{_DML_COUNT_CTE_ALIAS}_{suffix}"
         suffix += 1
 
-    expression.set("returning", exp.Returning(expressions=[exp.Literal.number(1)]))
+    expression = expression.returning("1", dialect="postgres", copy=False)
     count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
     count_query = exp.select(count_expression).from_(cte_alias, copy=False)
     count_query.with_(cte_alias, as_=expression, copy=False)
