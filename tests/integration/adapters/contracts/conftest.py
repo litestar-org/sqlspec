@@ -66,7 +66,6 @@ from sqlspec.adapters.oracledb import (
     OracleAsyncConfig,
     OracleAsyncDriver,
     OracleDriverFeatures,
-    OraclePoolParams,
     OracleSyncConfig,
     OracleSyncDriver,
 )
@@ -130,7 +129,9 @@ from tests.integration.adapters.contracts._schema import (
     build_bigquery_contract_table,
 )
 from tests.integration.adapters.contracts._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
+from tests.integration.fixtures.mssql import _arrow_odbc_connection_config
 from tests.integration.fixtures.mysql import _mysql_connection_config
+from tests.integration.fixtures.oracle import _oracle_pool_params
 from tests.integration.fixtures.postgres import (
     _adbc_postgres_uri,
     _asyncpg_pool_config,
@@ -284,18 +285,6 @@ def contract_bigquery_driver(
     return _bigquery_contract_session
 
 
-def _oracle_pool_params(oracle_service: OracleService) -> OraclePoolParams:
-    return OraclePoolParams(
-        host=oracle_service.host,
-        port=oracle_service.port,
-        service_name=oracle_service.service_name,
-        user=oracle_service.user,
-        password=oracle_service.password,
-        min=1,
-        max=5,
-    )
-
-
 @pytest.fixture
 def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator[OracleSyncDriver, None, None]:
     """Provide a fresh Oracle sync driver for contract tests."""
@@ -314,7 +303,7 @@ def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator
 def contract_arrow_odbc_mssql_driver(mssql_service: MSSQLService) -> Generator[ArrowOdbcDriver, None, None]:
     """Provide a fresh arrow-odbc driver backed by SQL Server."""
     config = ArrowOdbcConfig(
-        connection_config={"connection_string": mssql_service.connection_string},
+        connection_config=_arrow_odbc_connection_config(mssql_service),
         driver_features={"dbms_name": "Microsoft SQL Server"},
     )
     try:
@@ -776,7 +765,7 @@ def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) 
 
     def make(*, extension_config: dict[str, Any], suffix: str) -> ArrowOdbcConfig:
         return ArrowOdbcConfig(
-            connection_config={"connection_string": mssql_service.connection_string},
+            connection_config=_arrow_odbc_connection_config(mssql_service),
             migration_config=_events_migration_config(tmp_path, suffix),
             extension_config=extension_config,
             driver_features={"dbms_name": "Microsoft SQL Server"},
@@ -1799,7 +1788,7 @@ async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator
 async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenerator[ArrowOdbcStore, None]":
     """Provide a ready arrow-odbc SQL Server Litestar store for contract tests."""
     config = ArrowOdbcConfig(
-        connection_config={"connection_string": mssql_service.connection_string},
+        connection_config=_arrow_odbc_connection_config(mssql_service),
         extension_config=_STORE_EXTENSION_CONFIG,
         driver_features={"dbms_name": "Microsoft SQL Server"},
     )
@@ -2186,7 +2175,7 @@ def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> Callable[..., Any
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
         config = ArrowOdbcConfig(
-            connection_config={"connection_string": mssql_service.connection_string},
+            connection_config=_arrow_odbc_connection_config(mssql_service),
             extension_config=_adk_extension_config(suffix),
             driver_features={"dbms_name": "Microsoft SQL Server"},
         )

@@ -1,6 +1,13 @@
 """Shared integration fixture definitions."""
 
 from tests.integration.fixtures.duckdb import duckdb_basic_config, duckdb_basic_session
+from tests.integration.fixtures.mssql import (
+    arrow_odbc_mssql_config,
+    mssql_python_config,
+    mssql_python_connection_config,
+    pymssql_config,
+    pymssql_connection_config,
+)
 from tests.integration.fixtures.mysql import (
     aiomysql_clean_driver,
     aiomysql_config,
@@ -19,6 +26,14 @@ from tests.integration.fixtures.mysql import (
     pymysql_config,
     pymysql_driver,
     pymysql_transaction_config,
+)
+from tests.integration.fixtures.oracle import (
+    oracle_aq_privileges,
+    oracle_async_config,
+    oracle_async_session,
+    oracle_connection_config,
+    oracle_sync_config,
+    oracle_sync_session,
 )
 from tests.integration.fixtures.postgres import (
     adbc_postgres_config,
@@ -65,6 +80,7 @@ __all__ = (
     "aiosqlite_config_file",
     "aiosqlite_session",
     "aiosqlite_session_config",
+    "arrow_odbc_mssql_config",
     "asyncmy_clean_driver",
     "asyncmy_config",
     "asyncmy_driver",
@@ -73,6 +89,8 @@ __all__ = (
     "asyncpg_connection_config",
     "duckdb_basic_config",
     "duckdb_basic_session",
+    "mssql_python_config",
+    "mssql_python_connection_config",
     "mysqlconnector_async_config",
     "mysqlconnector_async_driver",
     "mysqlconnector_clean_async_driver",
@@ -80,6 +98,12 @@ __all__ = (
     "mysqlconnector_sync_config",
     "mysqlconnector_sync_driver",
     "mysqlconnector_sync_transaction_config",
+    "oracle_aq_privileges",
+    "oracle_async_config",
+    "oracle_async_session",
+    "oracle_connection_config",
+    "oracle_sync_config",
+    "oracle_sync_session",
     "paradedb_config_adbc",
     "paradedb_config_asyncpg",
     "paradedb_config_psqlpy",
@@ -93,6 +117,8 @@ __all__ = (
     "psqlpy_session",
     "psycopg_async_config",
     "psycopg_sync_config",
+    "pymssql_config",
+    "pymssql_connection_config",
     "pymysql_clean_driver",
     "pymysql_config",
     "pymysql_driver",

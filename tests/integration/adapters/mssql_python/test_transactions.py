@@ -4,6 +4,7 @@ import pytest
 from pytest_databases.docker.mssql import MSSQLService
 
 from sqlspec.adapters.mssql_python import MssqlPythonConfig
+from tests.integration.fixtures.mssql import _mssql_python_connection_config
 
 pytestmark = [pytest.mark.mssql_python, pytest.mark.xdist_group("mssql_python")]
 
@@ -16,31 +17,9 @@ _COUNT_SQL = "SELECT COUNT(*) FROM sqlspec_mssql_python_transactions WHERE id = 
 def test_mssql_python_transactions_persist_and_restore_autocommit(mssql_service: MSSQLService) -> None:
     """Commit and rollback should use DBAPI-owned transactions visible across connections."""
     manual_config = MssqlPythonConfig(
-        connection_config={
-            "server": mssql_service.host,
-            "port": mssql_service.port,
-            "database": mssql_service.database,
-            "user": mssql_service.user,
-            "password": mssql_service.password,
-            "encrypt": False,
-            "trust_server_certificate": True,
-            "autocommit": False,
-            "pool_enabled": False,
-        }
+        connection_config=_mssql_python_connection_config(mssql_service, autocommit=False)
     )
-    autocommit_config = MssqlPythonConfig(
-        connection_config={
-            "server": mssql_service.host,
-            "port": mssql_service.port,
-            "database": mssql_service.database,
-            "user": mssql_service.user,
-            "password": mssql_service.password,
-            "encrypt": False,
-            "trust_server_certificate": True,
-            "autocommit": True,
-            "pool_enabled": False,
-        }
-    )
+    autocommit_config = MssqlPythonConfig(connection_config=_mssql_python_connection_config(mssql_service))
     try:
         with manual_config.provide_session() as setup:
             setup.execute_script(_DROP_TABLE_SQL)
