@@ -431,4 +431,4 @@ def test_dml_count_query_bypasses_unsupported_or_returning_statements(sql: str) 
 def test_dml_count_query_surfaces_parse_errors() -> None:
     """Invalid compiled SQL should raise rather than report a false row count."""
     with pytest.raises(SQLSpecError, match="Unable to build psqlpy DML row count query"):
-        psqlpy_core._dml_count_query("UPDATE events SET")  # pyright: ignore[reportPrivateUsage]
+        psqlpy_core._dml_count_query("UPDATE events SET payload =")  # pyright: ignore[reportPrivateUsage]
