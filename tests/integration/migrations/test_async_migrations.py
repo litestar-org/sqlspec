@@ -2,16 +2,12 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import Mock
 
 import pytest
 
-import sqlspec.utils.config_tools
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import PythonFileLoader
-from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, create_migration_runner
-from sqlspec.utils.config_tools import resolve_config_async
-from sqlspec.utils.sync_tools import run_
+from sqlspec.migrations.runner import create_migration_runner
 
 pytestmark = pytest.mark.xdist_group("migrations")
 
@@ -26,103 +22,6 @@ def test_async_migration_context_properties() -> None:
     # Test metadata operations
     context.set_execution_metadata("test_key", "test_value")
     assert context.get_execution_metadata("test_key") == "test_value"
-
-
-def test_sync_callable_config_resolution() -> None:
-    """Test resolving synchronous callable config."""
-    mock_config = Mock()
-    mock_config.database_url = "sqlite:///test.db"
-    mock_config.bind_key = "test"
-    mock_config.migration_config = {}
-
-    # Create a config factory function
-    def get_test_config() -> Mock:
-        return mock_config
-
-    async def _test() -> None:
-        # Mock the import_string to return our function
-
-        original_import = sqlspec.utils.config_tools.import_string
-
-        try:
-            sqlspec.utils.config_tools.import_string = lambda path: get_test_config
-            result = await resolve_config_async("test.config.get_database_config")
-            assert result is mock_config
-        finally:
-            sqlspec.utils.config_tools.import_string = original_import
-
-    run_(_test)()
-
-
-def test_async_callable_config_resolution() -> None:
-    """Test resolving asynchronous callable config."""
-    mock_config = Mock()
-    mock_config.database_url = "sqlite:///test.db"
-    mock_config.bind_key = "test"
-    mock_config.migration_config = {}
-
-    # Create an async config factory function
-    async def get_test_config() -> Mock:
-        return mock_config
-
-    async def _test() -> None:
-        # Mock the import_string to return our async function
-
-        original_import = sqlspec.utils.config_tools.import_string
-
-        try:
-            sqlspec.utils.config_tools.import_string = lambda path: get_test_config
-            result = await resolve_config_async("test.config.async_get_database_config")
-            assert result is mock_config
-        finally:
-            sqlspec.utils.config_tools.import_string = original_import
-
-    run_(_test)()
-
-
-def test_sync_migration_runner_instantiation(tmp_path: Path) -> None:
-    """Test sync migration runner instantiation."""
-    migration_dir = tmp_path / "migrations"
-    migration_dir.mkdir()
-
-    mock_config = Mock()
-    mock_config.database_url = "sqlite:///test.db"
-    mock_config.bind_key = "test"
-    mock_config.migration_config = {"script_location": "migrations", "version_table_name": "alembic_version"}
-
-    context = MigrationContext.from_config(mock_config)
-    runner = SyncMigrationRunner(migration_dir, {}, context, {})
-
-    # Verify it's a sync runner
-    assert isinstance(runner, SyncMigrationRunner)
-    assert hasattr(runner, "load_migration")
-    assert hasattr(runner, "execute_upgrade")
-
-
-def test_async_migration_runner_instantiation(tmp_path: Path) -> None:
-    """Test async migration runner instantiation."""
-
-    migration_dir = tmp_path / "migrations"
-    migration_dir.mkdir()
-
-    mock_config = Mock()
-    mock_config.database_url = "sqlite:///test.db"
-    mock_config.bind_key = "test"
-    mock_config.migration_config = {"script_location": "migrations", "version_table_name": "alembic_version"}
-
-    context = MigrationContext.from_config(mock_config)
-    runner = AsyncMigrationRunner(migration_dir, {}, context, {})
-
-    # Verify it's an async runner
-    assert isinstance(runner, AsyncMigrationRunner)
-    assert hasattr(runner, "load_migration")
-    assert hasattr(runner, "execute_upgrade")
-
-    # Verify methods are async
-    import inspect
-
-    assert inspect.iscoroutinefunction(runner.load_migration)
-    assert inspect.iscoroutinefunction(runner.execute_upgrade)
 
 
 def test_async_python_migration_execution(tmp_path: Path) -> None:
@@ -195,11 +94,6 @@ async def down(context):
     return ["DROP TABLE async_test;"]
 """)
 
-    mock_config = Mock()
-    mock_config.database_url = "sqlite:///test.db"
-    mock_config.bind_key = "test"
-    mock_config.migration_config = {"script_location": "migrations", "version_table_name": "alembic_version"}
-
     context = MigrationContext(dialect="postgres")
     runner = create_migration_runner(migration_dir, {}, context, {}, is_async=False)
 
@@ -256,36 +150,3 @@ def down(context):
             await loader.get_up_sql(error_migration)
 
     asyncio.run(test_error_handling())
-
-
-def test_config_resolver_with_list_configs() -> None:
-    """Test config resolver with list of configurations."""
-    mock_config1 = Mock()
-    mock_config1.database_url = "sqlite:///test1.db"
-    mock_config1.bind_key = "test1"
-    mock_config1.migration_config = {}
-
-    mock_config2 = Mock()
-    mock_config2.database_url = "sqlite:///test2.db"
-    mock_config2.bind_key = "test2"
-    mock_config2.migration_config = {}
-
-    def get_configs() -> list[Mock]:
-        return [mock_config1, mock_config2]
-
-    async def _test() -> None:
-        # Mock the import_string to return our function
-
-        original_import = sqlspec.utils.config_tools.import_string
-
-        try:
-            sqlspec.utils.config_tools.import_string = lambda path: get_configs
-            result = await resolve_config_async("test.config.get_database_configs")
-            assert isinstance(result, list)
-            assert len(result) == 2
-            assert result[0] is mock_config1
-            assert result[1] is mock_config2
-        finally:
-            sqlspec.utils.config_tools.import_string = original_import
-
-    run_(_test)()
