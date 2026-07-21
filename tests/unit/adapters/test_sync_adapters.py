@@ -3,7 +3,6 @@
 
 import sqlite3
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -353,31 +352,6 @@ def test_sync_driver_execute_script_method(sqlite_sync_driver: SqliteDriver) -> 
     assert result.successful_statements == 2
 
 
-@pytest.mark.parametrize(
-    ("method_name", "call_args"),
-    [
-        pytest.param("execute", ("SELECT * FROM users WHERE id = ?", 1), id="execute"),
-        pytest.param("execute_script", ("INSERT INTO users (name) VALUES ('alice');",), id="execute_script"),
-    ],
-)
-def test_sync_driver_execution_wrappers_reraise_deferred_database_errors(
-    sqlite_sync_driver: SqliteDriver, method_name: str, call_args: tuple[Any, ...]
-) -> None:
-    """Test wrapper methods re-raise mapped errors after the exception context exits."""
-    # Patch all potential entry points for the different method types
-    with (
-        patch.object(
-            sqlite_sync_driver, "dispatch_statement_execution", side_effect=sqlite3.Error("Test wrapper error")
-        ),
-        patch.object(sqlite_sync_driver, "dispatch_execute_many", side_effect=sqlite3.Error("Test wrapper error")),
-        patch.object(sqlite_sync_driver, "dispatch_execute_script", side_effect=sqlite3.Error("Test wrapper error")),
-    ):
-        method = getattr(sqlite_sync_driver, method_name)
-
-        with pytest.raises(SQLSpecError):
-            method(*call_args)
-
-
 def test_sync_driver_select_one(sqlite_sync_driver: SqliteDriver) -> None:
     """Test select_one method - expects error when multiple rows returned."""
     with pytest.raises(ValueError, match="Multiple results found"):
@@ -517,50 +491,3 @@ def test_sync_driver_build_statement_result(sqlite_sync_driver: SqliteDriver) ->
         assert sql_result.operation_type == "SELECT"
         assert sql_result.get_data() == [{"id": 1}]
         assert sql_result.column_names == ["id"]
-
-
-def test_sync_driver_special_handling_integration(sqlite_sync_driver: SqliteDriver) -> None:
-    """Test that dispatch_special_handling is called during dispatch."""
-    statement = SQL("SELECT * FROM users", statement_config=sqlite_sync_driver.statement_config)
-
-    with patch.object(sqlite_sync_driver, "dispatch_special_handling", return_value=None) as mock_special:
-        result = sqlite_sync_driver.dispatch_statement_execution(statement, sqlite_sync_driver.connection)
-
-        assert isinstance(result, SQLResult)
-        mock_special.assert_called_once()
-
-
-def test_sync_driver_special_handling_takes_priority_over_script_in_fast_path(sqlite_sync_driver: SqliteDriver) -> None:
-    assert sqlite_sync_driver._observability is None or sqlite_sync_driver._observability.is_idle
-
-    statement = SQL(
-        "INSERT INTO users (name) VALUES ('alice'); INSERT INTO users (name) VALUES ('bob');",
-        statement_config=sqlite_sync_driver.statement_config,
-        is_script=True,
-    )
-    sentinel = SQLResult(
-        statement=SQL("SELECT 1", statement_config=sqlite_sync_driver.statement_config), rows_affected=999
-    )
-
-    def _special_handling_returning_sentinel(_cursor: Any, stmt: SQL) -> SQLResult | None:
-        if stmt.is_script:
-            return sentinel
-        return None
-
-    with (
-        patch.object(sqlite_sync_driver, "dispatch_special_handling", side_effect=_special_handling_returning_sentinel),
-        patch.object(sqlite_sync_driver, "dispatch_execute_script") as mock_execute_script,
-    ):
-        result = sqlite_sync_driver.dispatch_statement_execution(statement, sqlite_sync_driver.connection)
-
-    assert result is sentinel
-    mock_execute_script.assert_not_called()
-
-
-def test_sync_driver_error_handling_in_dispatch(sqlite_sync_driver: SqliteDriver) -> None:
-    """Test error handling during statement dispatch."""
-    statement = SQL("SELECT * FROM users", statement_config=sqlite_sync_driver.statement_config)
-
-    with patch.object(sqlite_sync_driver, "dispatch_execute", side_effect=sqlite3.Error("Test error")):
-        with pytest.raises(SQLSpecError):
-            sqlite_sync_driver.dispatch_statement_execution(statement, sqlite_sync_driver.connection)

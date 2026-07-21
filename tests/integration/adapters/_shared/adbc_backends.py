@@ -1,0 +1,219 @@
+"""ADBC backend-specific residual coverage.
+
+The shared matrix owns backend participation, dialect metadata, CRUD, and
+portable parameter behavior. This module keeps backend-native SQL surfaces:
+PostgreSQL JSONB/arrays/full-text/inet, SQLite dynamic typing/BLOB functions,
+and DuckDB list/struct/map/JSON analytics.
+"""
+
+import math
+from collections.abc import Generator
+
+import pytest
+from pytest_databases.docker.postgres import PostgresService
+
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+from sqlspec.core import SQLResult
+from tests.integration.fixtures.adbc import xfail_if_driver_missing
+
+
+@pytest.fixture
+def postgresql_session(postgres_service: "PostgresService") -> Generator[AdbcDriver, None, None]:
+    """PostgreSQL ADBC session fixture."""
+    config = AdbcConfig(
+        connection_config={
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql",
+        }
+    )
+
+    with config.provide_session() as session:
+        yield session
+
+
+@pytest.fixture
+def sqlite_session() -> Generator[AdbcDriver, None, None]:
+    """SQLite ADBC session fixture."""
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
+
+    with config.provide_session() as session:
+        yield session
+
+
+@pytest.fixture
+def duckdb_session() -> Generator[AdbcDriver, None, None]:
+    """DuckDB ADBC session fixture."""
+    try:
+        config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
+
+        with config.provide_session() as session:
+            yield session
+    except Exception as exc:
+        if (
+            "cannot open shared object file" in str(exc)
+            or "No module named" in str(exc)
+            or "Failed to import connect function" in str(exc)
+            or "Could not configure connection" in str(exc)
+        ):
+            pytest.skip(f"DuckDB ADBC missing: {exc}")
+        raise
+
+
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
+    """Test PostgreSQL-specific features with ADBC."""
+    postgresql_session.execute_script("""
+        CREATE TABLE IF NOT EXISTS pg_test_adbc (
+            id SERIAL PRIMARY KEY,
+            jsonb_col JSONB,
+            array_col INTEGER[],
+            uuid_col UUID DEFAULT gen_random_uuid(),
+            tsvector_col TSVECTOR,
+            inet_col INET
+        )
+    """)
+
+    postgresql_session.execute(
+        """
+        INSERT INTO pg_test_adbc (jsonb_col, array_col, inet_col, tsvector_col)
+        VALUES ($1::jsonb, $2, $3::inet, to_tsvector($4))
+    """,
+        (
+            {"name": "John", "age": 30, "tags": ["developer", "python"]},
+            [1, 2, 3, 4, 5],
+            "192.168.1.1",
+            "PostgreSQL full text search",
+        ),
+    )
+
+    result = postgresql_session.execute("SELECT * FROM pg_test_adbc")
+    assert isinstance(result, SQLResult)
+    row = result.get_data()[0]
+    assert row["jsonb_col"] is not None
+    assert row["array_col"] == [1, 2, 3, 4, 5]
+    assert row["uuid_col"] is not None
+    assert row["tsvector_col"] is not None
+    assert row["inet_col"] is not None
+
+    json_query = postgresql_session.execute("""
+        SELECT
+            jsonb_col ->> 'name' as name,
+            jsonb_col ->> 'age' as age,
+            array_length(array_col, 1) as array_len
+        FROM pg_test_adbc
+    """)
+
+    assert json_query.get_data()[0]["name"] == "John"
+    assert json_query.get_data()[0]["age"] == "30"
+    assert json_query.get_data()[0]["array_len"] == 5
+
+    postgresql_session.execute_script("DROP TABLE IF EXISTS pg_test_adbc")
+
+
+@pytest.mark.xdist_group("sqlite")
+@pytest.mark.adbc
+def test_sqlite_adbc_specific_features(sqlite_session: AdbcDriver) -> None:
+    """Test SQLite-specific features with ADBC."""
+    sqlite_session.execute_script("""
+        CREATE TABLE test_sqlite_adbc (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            data BLOB,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            value REAL
+        )
+    """)
+
+    test_blob = b"SQLite binary data test"
+    sqlite_session.execute_many(
+        "INSERT INTO test_sqlite_adbc (name, data, value) VALUES (?, ?, ?)",
+        [("test1", test_blob, math.pi), ("test2", None, math.e), ("test3", b"another blob", 1.41421)],
+    )
+
+    result = sqlite_session.execute("""
+        SELECT
+            *,
+            length(data) as blob_length,
+            typeof(value) as value_type
+        FROM test_sqlite_adbc
+        ORDER BY id
+    """)
+
+    first_row = result.get_data()[0]
+    assert first_row["name"] == "test1"
+    assert first_row["data"] == test_blob
+    assert first_row["blob_length"] == len(test_blob)
+    assert first_row["value_type"] == "real"
+
+    second_row = result.get_data()[1]
+    assert second_row["data"] is None
+    assert second_row["blob_length"] is None
+
+    func_result = sqlite_session.execute("""
+        SELECT
+            COUNT(*) as total,
+            AVG(value) as avg_value,
+            GROUP_CONCAT(name) as all_names,
+            sqlite_version() as version
+        FROM test_sqlite_adbc
+    """)
+
+    func_row = func_result.get_data()[0]
+    assert func_row["total"] == 3
+    assert func_row["avg_value"] is not None
+    assert "test1" in func_row["all_names"]
+    assert func_row["version"] is not None
+
+
+@pytest.mark.xdist_group("duckdb")
+@pytest.mark.adbc
+@xfail_if_driver_missing
+def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
+    """Test DuckDB-specific features with ADBC."""
+    duckdb_session.execute_script("""
+        CREATE TABLE duckdb_test_adbc (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            numbers INTEGER[],
+            nested_data STRUCT(name VARCHAR, values INTEGER[]),
+            map_data MAP(VARCHAR, INTEGER),
+            timestamp_col TIMESTAMP,
+            json_col JSON
+        )
+    """)
+
+    duckdb_session.execute("""
+        INSERT INTO duckdb_test_adbc VALUES (
+            1,
+            'DuckDB Test',
+            [1, 2, 3, 4, 5],
+            {'name': 'nested', 'values': [10, 20, 30]},
+            MAP(['key1', 'key2'], [100, 200]),
+            '2024-01-15 10:30:00',
+            '{"type": "test", "version": 1}'
+        )
+    """)
+
+    result = duckdb_session.execute("SELECT * FROM duckdb_test_adbc")
+    row = result.get_data()[0]
+    assert row["name"] == "DuckDB Test"
+    assert row["numbers"] == [1, 2, 3, 4, 5]
+    assert row["nested_data"] is not None
+    assert row["map_data"] is not None
+    assert row["timestamp_col"] is not None
+    assert row["json_col"] is not None
+
+    analytical_result = duckdb_session.execute("""
+        SELECT
+            name,
+            numbers,
+            array_length(numbers) as array_len,
+            list_sum(numbers) as numbers_sum,
+            json_extract_string(json_col, '$.type') as json_type
+        FROM duckdb_test_adbc
+    """)
+
+    assert analytical_result.get_data()[0]["array_len"] == 5
+    assert analytical_result.get_data()[0]["numbers_sum"] == 15
+    assert analytical_result.get_data()[0]["json_type"] == "test"

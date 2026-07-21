@@ -2,17 +2,17 @@
 
 from pathlib import Path
 
-from tests.integration.adapters.contracts._cases import get_driver_case
+from tests.integration.adapters._shared._cases import get_driver_case
 
 
-def test_deferred_driver_case_is_registered_with_sync_metadata() -> None:
-    """pymssql should be visible to the contract registry even before a live fixture exists."""
+def test_active_driver_case_is_registered_with_sync_metadata() -> None:
+    """pymssql should expose active synchronous contract metadata."""
     case = get_driver_case("pymssql-sync")
 
     assert case.adapter == "pymssql"
     assert case.dialect == "tsql"
     assert case.mode == "sync"
-    assert case.integration_status == "deferred"
+    assert case.integration_status == "active"
     assert case.supports_migrations is True
     assert case.supports_pooling is False
     assert case.supports_connection_hook is False

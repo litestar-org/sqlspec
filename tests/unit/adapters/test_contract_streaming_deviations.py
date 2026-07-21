@@ -4,9 +4,9 @@ from typing import Any, cast
 
 from typing_extensions import Self
 
-from tests.integration.adapters.contracts._cases import DriverCase
-from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE
-from tests.integration.adapters.contracts.behaviors import assert_sync_streaming_contract
+from tests.integration.adapters._shared._cases import DriverCase
+from tests.integration.adapters._shared._schema import DEFAULT_CONTRACT_TABLE
+from tests.integration.adapters._shared.behaviors import assert_sync_streaming_contract
 
 
 class _FakeRowStream:

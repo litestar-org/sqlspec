@@ -2,9 +2,9 @@
 
 import pytest
 
-from tests.integration.adapters.contracts import behaviors
-from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
-from tests.integration.adapters.contracts.behaviors import EXECUTE_MANY_SPECIFICS_SCOPE, validate_extra_assertions
+from tests.integration.adapters._shared import behaviors
+from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
+from tests.integration.adapters._shared.behaviors import EXECUTE_MANY_SPECIFICS_SCOPE, validate_extra_assertions
 
 SYNC_PROOF_KEYS = ("execute_many_specifics:postgres", "execute_many_specifics:duckdb")
 ASYNC_PROOF_KEYS = ("execute_many_specifics:postgres",)

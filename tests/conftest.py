@@ -34,6 +34,15 @@ pytest_plugins = [
     "pytest_databases.docker.cockroachdb",
     "pytest_databases.docker.rustfs",
     "tests.integration.fixtures",
+    "tests.integration.fixtures.adapter_cases",
+    "tests.integration.fixtures.aiomysql_adk",
+    "tests.integration.fixtures.asyncmy_adk",
+    "tests.integration.fixtures.asyncpg_adk",
+    "tests.integration.fixtures.mysqlconnector_adk",
+    "tests.integration.fixtures.oracle_events",
+    "tests.integration.fixtures.spanner_adk",
+    "tests.integration.fixtures.spanner_events",
+    "tests.integration.fixtures.spanner_litestar",
 ]
 
 pytestmark = pytest.mark.anyio
@@ -109,7 +118,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     )
     for item in items:
         item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
-        if item.get_closest_marker("adbc") is not None or "tests/integration/adapters/adbc" in item_path:
+        if item.get_closest_marker("adbc") is not None:
             item.add_marker(skip_adbc)
             continue
         if (

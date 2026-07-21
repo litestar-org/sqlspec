@@ -1,1 +1,0 @@
-"""ADBC ADK integration tests."""

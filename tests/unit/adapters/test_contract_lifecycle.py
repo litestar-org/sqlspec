@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
+from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
 
 POOLING_CASES = (
     "sqlite-sync",

@@ -12,8 +12,9 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
 
-__all__ = ("aiosqlite_async_driver", "sqlite_sync_driver")
+__all__ = ("aiosqlite_async_driver", "sample_sql_statement", "sample_statement_config", "sqlite_sync_driver")
 
 
 class FixtureSqliteDriver(SqliteDriver):
@@ -26,6 +27,27 @@ class FixtureAiosqliteDriver(AiosqliteDriver):
     """Test-friendly aiosqlite driver that allows patching."""
 
     pass
+
+
+@pytest.fixture
+def sample_statement_config() -> StatementConfig:
+    """Return a sample SQLite statement configuration."""
+    return StatementConfig(
+        dialect="sqlite",
+        enable_caching=False,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            default_execution_parameter_style=ParameterStyle.QMARK,
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+        ),
+    )
+
+
+@pytest.fixture
+def sample_sql_statement(sample_statement_config: StatementConfig) -> SQL:
+    """Return a sample parameterized SQL statement."""
+    return SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=sample_statement_config)
 
 
 @pytest.fixture

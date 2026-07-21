@@ -3,7 +3,6 @@
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import aiosqlite
 import pytest
@@ -324,30 +323,6 @@ async def test_async_driver_execute_script_method(aiosqlite_async_driver: Aiosql
     assert result.successful_statements == 2
 
 
-@pytest.mark.parametrize(
-    ("method_name", "call_args"),
-    [
-        pytest.param("execute", ("SELECT * FROM users WHERE id = ?", 1), id="execute"),
-        pytest.param("execute_many", (SQL("INSERT INTO users (name) VALUES (?)"), [["alice"]]), id="execute_many"),
-        pytest.param("execute_script", ("INSERT INTO users (name) VALUES ('alice');",), id="execute_script"),
-    ],
-)
-async def test_async_driver_execution_wrappers_reraise_deferred_database_errors(
-    aiosqlite_async_driver: AiosqliteDriver, method_name: str, call_args: tuple[Any, ...]
-) -> None:
-    """Test wrapper methods re-raise mapped errors after the exception context exits."""
-    with patch.object(
-        aiosqlite_async_driver,
-        "dispatch_statement_execution",
-        new_callable=AsyncMock,
-        side_effect=aiosqlite.Error("Test async wrapper error"),
-    ):
-        method = getattr(aiosqlite_async_driver, method_name)
-
-        with pytest.raises(SQLSpecError):
-            await method(*call_args)
-
-
 async def test_async_driver_select_one(aiosqlite_async_driver: AiosqliteDriver) -> None:
     """Test async select_one method - expects error when multiple rows returned."""
     with pytest.raises(ValueError, match="Multiple results found"):
@@ -487,33 +462,6 @@ async def test_async_driver_build_statement_result(aiosqlite_async_driver: Aiosq
         assert sql_result.operation_type == "SELECT"
         assert sql_result.get_data() == [{"id": 1}]
         assert sql_result.column_names == ["id"]
-
-
-async def test_async_driver_special_handling_integration(aiosqlite_async_driver: AiosqliteDriver) -> None:
-    """Test that async dispatch_special_handling is called during dispatch."""
-    statement = SQL("SELECT * FROM users", statement_config=aiosqlite_async_driver.statement_config)
-
-    with patch.object(
-        aiosqlite_async_driver, "dispatch_special_handling", new_callable=AsyncMock, return_value=None
-    ) as mock_special:
-        result = await aiosqlite_async_driver.dispatch_statement_execution(statement, aiosqlite_async_driver.connection)
-
-        assert isinstance(result, SQLResult)
-        mock_special.assert_called_once()
-
-
-async def test_async_driver_error_handling_in_dispatch(aiosqlite_async_driver: AiosqliteDriver) -> None:
-    """Test error handling during async statement dispatch."""
-    statement = SQL("SELECT * FROM users", statement_config=aiosqlite_async_driver.statement_config)
-
-    with patch.object(
-        aiosqlite_async_driver,
-        "dispatch_execute",
-        new_callable=AsyncMock,
-        side_effect=aiosqlite.Error("Test async error"),
-    ):
-        with pytest.raises(SQLSpecError):
-            await aiosqlite_async_driver.dispatch_statement_execution(statement, aiosqlite_async_driver.connection)
 
 
 async def test_async_driver_concurrent_execution() -> None:

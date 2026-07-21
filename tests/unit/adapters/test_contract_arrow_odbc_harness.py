@@ -4,11 +4,11 @@ from typing import Any, cast
 
 import pytest
 
-from tests.integration.adapters.contracts import behaviors
-from tests.integration.adapters.contracts._cases import DriverCase, get_driver_case
-from tests.integration.adapters.contracts._inputs import PARAMETER_STYLE_CASES
-from tests.integration.adapters.contracts._schema import DEFAULT_CONTRACT_TABLE, ContractRow
-from tests.integration.adapters.contracts.behaviors import SyncContractDriver
+from tests.integration.adapters._shared import behaviors
+from tests.integration.adapters._shared._cases import DriverCase, get_driver_case
+from tests.integration.adapters._shared._inputs import PARAMETER_STYLE_CASES
+from tests.integration.adapters._shared._schema import DEFAULT_CONTRACT_TABLE, ContractRow
+from tests.integration.adapters._shared.behaviors import SyncContractDriver
 
 
 class _BulkOnlyDriver:
