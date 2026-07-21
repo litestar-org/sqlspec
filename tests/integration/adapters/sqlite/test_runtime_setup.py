@@ -91,9 +91,9 @@ async def _execute_script(config: RuntimeConfig, statement: str) -> None:
 async def _select(config: RuntimeConfig, statement: str) -> list[dict[str, Any]]:
     if isinstance(config, AiosqliteConfig):
         async with config.provide_session() as session:
-            return cast("list[dict[str, Any]]", (await session.execute(statement)).get_data())
+            return (await session.execute(statement)).get_data()
     with config.provide_session() as session:
-        return cast("list[dict[str, Any]]", session.execute(statement).get_data())
+        return session.execute(statement).get_data()
 
 
 async def _select_value(config: RuntimeConfig, statement: str) -> Any:
