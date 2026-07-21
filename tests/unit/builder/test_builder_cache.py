@@ -31,6 +31,14 @@ def test_builder_cache_key_preserves_placeholder_name_case() -> None:
     assert first._cache_key() != second._cache_key()
 
 
+def test_builder_cache_key_initializes_lazy_ddl_expression() -> None:
+    builder = sql.create_table("items").column("id", "INTEGER")
+
+    statement = builder.to_statement()
+
+    assert statement.sql == 'CREATE TABLE "items" ("id" INT)'
+
+
 def test_insert_values_mutation_invalidates_sqlglot_structural_hash() -> None:
     builder = sql.insert("items").columns("value").values(1)
     expression = builder.get_expression()

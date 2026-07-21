@@ -557,6 +557,8 @@ class QueryBuilder(ABC):
         Returns:
             A unique cache key representing the builder state and configuration
         """
+        if self._expression is None:
+            self._expression = self._create_base_expression()
         final_expression = self._build_final_expression()
         dialect = config.dialect if config is not None and config.dialect is not None else self.dialect_name
         settings = {
