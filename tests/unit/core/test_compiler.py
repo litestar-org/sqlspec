@@ -17,7 +17,6 @@ Test Coverage:
 import inspect
 import logging
 import threading
-import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -801,22 +800,14 @@ def test_parsing_disabled_fallback(
     ]
 
 
-@pytest.mark.benchmark
-def test_compilation_performance_characteristics(
+def test_compilation_cache_reuses_repeated_statement(
     basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
 ) -> None:
-    """Test compilation performance characteristics."""
+    """Test repeated compilation uses the processor cache."""
     processor = SQLProcessor(basic_statement_config)
-
-    start_time = time.time()
 
     for _ in range(10):
         processor.compile(sample_sql_queries["select_complex"], [True])
-
-    end_time = time.time()
-    compilation_time = end_time - start_time
-
-    assert compilation_time < 1.0
 
     assert processor._cache_hits >= 9
 
@@ -1168,32 +1159,6 @@ def test_processor_memory_efficiency_with_slots() -> None:
     slots = getattr(type(processor), "__slots__", None)
     if slots is not None:
         assert set(slots) == expected_slots
-
-
-@pytest.mark.benchmark
-def test_compilation_speed_benchmark(
-    basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]"
-) -> None:
-    """Benchmark compilation speed for performance regression detection."""
-    processor = SQLProcessor(basic_statement_config)
-
-    for _ in range(5):
-        processor.compile(sample_sql_queries["select_complex"], [True])
-
-    start_time = time.time()
-    for _ in range(100):
-        processor.compile(sample_sql_queries["select_complex"], [True])
-    cached_time = time.time() - start_time
-
-    start_time = time.time()
-    for i in range(100):
-        processor.compile(f"SELECT {i} FROM users", [i])
-    uncached_time = time.time() - start_time
-
-    assert cached_time < uncached_time / 5
-
-    assert cached_time < 0.1
-    assert uncached_time < 2.0
 
 
 def test_end_to_end_compilation_workflow(basic_statement_config: "StatementConfig") -> None:

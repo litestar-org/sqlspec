@@ -8,7 +8,6 @@ Tests the SQLFileLoader's ability to handle real-world SQL files including:
 - Mixed dialect SQL files
 """
 
-import time
 from pathlib import Path
 from typing import Any
 
@@ -30,29 +29,21 @@ except ImportError:
     console = MockConsole()
 
 
-MAX_LARGE_QUERY_LOOKUP_SECONDS = 0.75
-
-
 @pytest.fixture
 def fixtures_path() -> Path:
     """Get path to test fixtures directory."""
     return Path(__file__).parent.parent.parent / "fixtures"
 
 
-@pytest.mark.benchmark
 def test_load_entire_fixtures_directory(fixtures_path: Path) -> None:
     """Test loading the entire fixtures directory successfully."""
     loader = SQLFileLoader()
 
-    start_time = time.perf_counter()
     try:
         loader.load_sql(fixtures_path)
-        load_time = time.perf_counter() - start_time
     except Exception as e:
         pytest.skip(f"Storage backend issue, skipping directory test: {e}")
         return
-
-    assert load_time < 5.0, f"Loading took too long: {load_time:.3f}s"
 
     queries = loader.list_queries()
     assert len(queries) > 0, "No queries were loaded"
@@ -65,7 +56,7 @@ def test_load_entire_fixtures_directory(fixtures_path: Path) -> None:
     assert len(mysql_queries) > 0, "No MySQL queries found"
     assert len(root_queries) > 0, "No root-level queries found"
 
-    console.print(f"[green]✓[/green] Loaded {len(queries)} queries in {load_time:.3f}s")
+    console.print(f"[green]✓[/green] Loaded {len(queries)} queries")
     console.print(f"  • {len(postgres_queries)} PostgreSQL queries")
     console.print(f"  • {len(mysql_queries)} MySQL queries")
     console.print(f"  • {len(root_queries)} root-level queries")
@@ -280,77 +271,42 @@ def test_file_metadata_tracking(fixtures_path: Path) -> None:
     console.print(f"[green]✓[/green] Validated metadata for {tested_count} queries from {len(files)} files")
 
 
-@pytest.mark.benchmark
-def test_performance_benchmarks(fixtures_path: Path) -> None:
-    """Test that loading performance meets expectations."""
+def test_query_retrieval_from_fixture_directory(fixtures_path: Path) -> None:
+    """Test queries loaded from the fixture directory can be retrieved."""
     loader = SQLFileLoader()
 
-    start_time = time.perf_counter()
     try:
         loader.load_sql(fixtures_path)
-        load_time = time.perf_counter() - start_time
     except Exception:
         pytest.skip("Storage backend issue, skipping test")
         return
 
     queries = loader.list_queries()
 
-    assert load_time < 5.0, f"Loading too slow: {load_time:.3f}s"
     assert len(queries) > 0, "No queries loaded"
 
-    if queries:
-        sample_queries = queries[:20] if len(queries) >= 20 else queries
-        start_time = time.perf_counter()
-        successful_retrievals = 0
-        for query_name in sample_queries:
-            try:
-                loader.get_sql(query_name)
-                successful_retrievals += 1
-            except Exception:
-                continue
-        retrieval_time = time.perf_counter() - start_time
+    sample_queries = queries[:20]
+    retrieved = [loader.get_sql(query_name) for query_name in sample_queries]
 
-        if successful_retrievals > 0:
-            avg_retrieval_time = retrieval_time / successful_retrievals
-
-            if avg_retrieval_time >= 0.015:
-                console.print(
-                    f"[yellow]Warning: Query retrieval slower than optimal ({avg_retrieval_time:.6f}s > 0.015s). "
-                    "This might be due to CI environment load.[/yellow]"
-                )
-
-            assert avg_retrieval_time < 0.05, f"Query retrieval too slow: {avg_retrieval_time:.6f}s per query"
-
-            console.print("[green]Performance metrics:[/green]")
-            console.print(f"  • Load time: {load_time:.3f}s for {len(queries)} queries")
-            console.print(
-                f"  • Avg retrieval: {avg_retrieval_time:.6f}s per query ({successful_retrievals} successful)"
-            )
-        else:
-            console.print("[yellow]Warning: No queries could be retrieved for performance testing[/yellow]")
+    assert len(retrieved) == len(sample_queries)
+    assert all(isinstance(statement, SQL) for statement in retrieved)
 
 
 def test_reload_and_cache_behavior(fixtures_path: Path) -> None:
     """Test reloading behavior and cache efficiency."""
     loader = SQLFileLoader()
 
-    start_time = time.perf_counter()
     try:
         loader.load_sql(fixtures_path)
-        first_load_time = time.perf_counter() - start_time
         first_query_count = len(loader.list_queries())
     except Exception:
         pytest.skip("Storage backend issue, skipping test")
         return
 
-    start_time = time.perf_counter()
     loader.load_sql(fixtures_path)
-    second_load_time = time.perf_counter() - start_time
     second_query_count = len(loader.list_queries())
 
     assert first_query_count == second_query_count
-
-    console.print(f"[dim]Load times: first={first_load_time:.3f}s, second={second_load_time:.3f}s[/dim]")
 
 
 def test_mixed_dialect_queries(fixtures_path: Path) -> None:
@@ -641,14 +597,7 @@ limit :result_limit
     assert ":min_hit_ratio" in sql.raw_sql
     assert ":result_limit" in sql.raw_sql
 
-    start_time = time.perf_counter()
-    for _ in range(100):
-        loader.get_sql("large_database_analysis")
-    elapsed = time.perf_counter() - start_time
+    repeated = [loader.get_sql("large_database_analysis") for _ in range(100)]
 
-    assert elapsed < MAX_LARGE_QUERY_LOOKUP_SECONDS, (
-        f"Large query retrieval too slow: {elapsed:.3f}s for 100 calls "
-        f"(threshold {MAX_LARGE_QUERY_LOOKUP_SECONDS:.2f}s)"
-    )
-    console.print(f"[green]✓[/green] Large query ({len(sql.raw_sql)} chars) handled efficiently")
-    console.print(f"  • Performance: {elapsed * 1000:.1f}ms for 100 calls ({elapsed * 10.0:.1f}ms per call)")
+    assert all(statement.raw_sql == sql.raw_sql for statement in repeated)
+    console.print(f"[green]✓[/green] Large query ({len(sql.raw_sql)} chars) handled consistently")

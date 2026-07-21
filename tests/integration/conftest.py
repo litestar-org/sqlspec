@@ -3,11 +3,18 @@
 from typing import TYPE_CHECKING
 
 import pytest
+from pytest_databases.types import XdistIsolationLevel
 
 from tests.fixtures.rustfs import ensure_rustfs_bucket
 
 if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
+
+
+@pytest.fixture(scope="session")
+def xdist_rustfs_isolation_level() -> XdistIsolationLevel:
+    """Run one transient RustFS service per worker that exercises object storage."""
+    return "server"
 
 
 @pytest.fixture(scope="session")

@@ -13,7 +13,7 @@ from sqlspec.observability import LoggingConfig, ObservabilityConfig, OTelConsol
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
-pytestmark = pytest.mark.xdist_group("observability")
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 def _capture_sql_output() -> "tuple[io.StringIO, logging.Handler, logging.Logger]":

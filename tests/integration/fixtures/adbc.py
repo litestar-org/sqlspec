@@ -81,53 +81,6 @@ def _prepare_gizmosql_test_table(session: "AdbcDriver") -> None:
 
 
 @pytest.fixture(scope="session")
-def gizmosql_service(
-    docker_service: "DockerService", gizmosql_image: str, gizmosql_username: str, gizmosql_password: str
-) -> "Generator[GizmoSQLService, None, None]":
-    """Run the default GizmoSQL container using the DuckDB backend."""
-
-    def check(service: Any) -> bool:
-        try:
-            uri = f"grpc+tls://{service.host}:{service.port}"
-            db_kwargs = _gizmosql_db_kwargs(gizmosql_username, gizmosql_password)
-            with flightsql.connect(uri=uri, db_kwargs=db_kwargs, autocommit=True) as conn:
-                vendor_version = conn.adbc_get_info().get("vendor_version", "").lower()
-                return "duckdb" in vendor_version
-        except Exception:
-            return False
-
-    worker_num = get_xdist_worker_num()
-    name = "gizmosql"
-    if worker_num is not None:
-        name += f"_{worker_num}"
-
-    env = {
-        "DATABASE_BACKEND": "duckdb",
-        "GIZMOSQL_PASSWORD": gizmosql_password,
-        "GIZMOSQL_USERNAME": gizmosql_username,
-        "TLS_ENABLED": "1",
-    }
-
-    with docker_service.run(
-        image=gizmosql_image,
-        check=check,
-        container_port=31337,
-        name=name,
-        env=env,
-        timeout=90,
-        pause=1.0,
-        transient=True,
-    ) as service:
-        yield GizmoSQLService(
-            host=service.host,
-            port=service.port,
-            container=service.container,
-            username=gizmosql_username,
-            password=gizmosql_password,
-        )
-
-
-@pytest.fixture(scope="session")
 def gizmosql_sqlite_service(
     docker_service: "DockerService", gizmosql_image: str, gizmosql_username: str, gizmosql_password: str
 ) -> "Generator[GizmoSQLService, None, None]":

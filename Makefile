@@ -10,6 +10,7 @@ SHELL := /bin/bash
 .EXPORT_ALL_VARIABLES:
 MAKEFLAGS += --no-print-directory
 MYPY_WORKERS ?= 2
+ADAPTER_FAMILIES := bigquery cockroach duckdb gizmosql mssql mysql oracle postgres spanner sqlite
 
 # -----------------------------------------------------------------------------
 # Display Formatting and Colors
@@ -168,17 +169,30 @@ clean:                                              ## Cleanup temporary build a
 .PHONY: test
 test:                                               ## Run the tests
 	@echo "${INFO} Running test cases... 🧪"
-	@uv run pytest -n 4 --dist=loadgroup tests docs/examples
+	@uv run pytest -n 4 --dist=loadgroup tests/unit tests/typing docs/examples
+	@uv run pytest -n 1 --dist=loadgroup tests/integration --ignore=tests/integration/adapters
+	@for family in $(ADAPTER_FAMILIES); do
+		uv run pytest -n 1 --dist=loadgroup "tests/integration/adapters/$${family}"
+	done
 	@echo "${OK} Tests complete ✨"
 
 .PHONY: test-all
-test-all: tests				                        ## Run all tests
+test-all: test				                         ## Run all tests
 	@echo "${INFO} All tests executed successfully ✨"
 
 .PHONY: coverage
 coverage:                                           ## Run tests with coverage report
 	@echo "${INFO} Running tests with coverage... 📊"
-	@uv run pytest --cov -n 4 --dist=loadgroup --quiet tests docs/examples
+	@uv run coverage erase
+	@uv run pytest --cov --cov-report= --cov-fail-under=0 -n 4 --dist=loadgroup --quiet \
+		tests/unit tests/typing docs/examples
+	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
+		tests/integration --ignore=tests/integration/adapters
+	@for family in $(ADAPTER_FAMILIES); do
+		uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
+			"tests/integration/adapters/$${family}"
+	done
+	@uv run coverage report --fail-under=100 >/dev/null
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1
 	@echo "${OK} Coverage report generated ✨"

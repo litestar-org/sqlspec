@@ -14,7 +14,6 @@ from tests.integration.fixtures.adbc import (
     adbc_postgresql_session,
     adbc_sqlite_config,
     adbc_sqlite_session,
-    gizmosql_service,
     gizmosql_sqlite_service,
     xdist_gizmosql_isolation_level,
 )
@@ -135,7 +134,6 @@ __all__ = (
     "bigquery_session",
     "duckdb_basic_config",
     "duckdb_basic_session",
-    "gizmosql_service",
     "gizmosql_sqlite_service",
     "mssql_python_config",
     "mssql_python_connection_config",

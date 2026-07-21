@@ -902,8 +902,8 @@ DEFERRED_DRIVER_CASES = (
         "sync",
         integration_status="deferred",
         reason=(
-            "Spanner session controls remain covered by unit and adapter-specific tests until "
-            "the shared matrix has safe active opt-in gate wiring."
+            "Spanner session controls require admin-API DDL plus separate read and write lifecycles, which the "
+            "shared single-session contract fixture cannot model safely."
         ),
     ),
 )
