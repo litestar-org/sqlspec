@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
+v0.56.0
 ------------------------------------------------------------------------------
 
 **Breaking changes:**
