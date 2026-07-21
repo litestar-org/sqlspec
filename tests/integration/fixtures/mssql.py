@@ -47,7 +47,7 @@ def _arrow_odbc_connection_config(mssql_service: "MSSQLService") -> "dict[str, s
 @pytest.fixture(scope="session")
 def mssql_python_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
     """Provide shared mssql-python connection parameters."""
-    return _mssql_python_connection_config(mssql_service)
+    return _mssql_python_connection_config(mssql_service, autocommit=False)
 
 
 @pytest.fixture(scope="session")

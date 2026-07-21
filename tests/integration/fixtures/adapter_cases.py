@@ -130,16 +130,11 @@ from tests.integration.adapters._shared._schema import (
 from tests.integration.adapters._shared._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
 from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
 from tests.integration.fixtures.bigquery import _bigquery_connection_config
-from tests.integration.fixtures.mssql import (
-    _arrow_odbc_connection_config,
-    _mssql_connection_config,
-    _mssql_python_connection_config,
-)
+from tests.integration.fixtures.mssql import _arrow_odbc_connection_config
 from tests.integration.fixtures.mysql import _mysql_connection_config
 from tests.integration.fixtures.oracle import _oracle_pool_params
 from tests.integration.fixtures.postgres import (
     _adbc_postgres_uri,
-    _asyncpg_pool_config,
     _cockroach_asyncpg_connection_config,
     _cockroach_conninfo,
     _postgres_connection_config,
@@ -149,31 +144,23 @@ from tests.integration.fixtures.postgres import (
 
 
 @pytest.fixture
-def contract_sqlite_driver() -> Generator[SqliteDriver, None, None]:
+def contract_sqlite_driver(sqlite_config_regular_memory: SqliteConfig) -> Generator[SqliteDriver, None, None]:
     """Provide a fresh SQLite driver for contract tests."""
-    config = SqliteConfig(connection_config={"database": ":memory:"})
-    try:
-        with config.provide_session() as driver:
-            driver.execute("PRAGMA foreign_keys = ON")
-            driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-    finally:
-        config.close_pool()
+    with sqlite_config_regular_memory.provide_session() as driver:
+        driver.execute("PRAGMA foreign_keys = ON")
+        driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
 
 
 @pytest.fixture
-def contract_duckdb_driver() -> Generator[DuckDBDriver, None, None]:
+def contract_duckdb_driver(duckdb_basic_config: DuckDBConfig) -> Generator[DuckDBDriver, None, None]:
     """Provide a fresh DuckDB driver for contract tests."""
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(DUCKDB_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-    finally:
-        config.close_pool()
+    with duckdb_basic_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(DUCKDB_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
 
 
 _ADBC_DRIVER_MISSING_MARKERS = (
@@ -199,38 +186,24 @@ def _provide_adbc_contract_driver(config: AdbcConfig, table: ContractTable) -> G
 
 
 @pytest.fixture
-def contract_adbc_sqlite_driver() -> Generator[AdbcDriver, None, None]:
+def contract_adbc_sqlite_driver(adbc_sqlite_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
     """Provide a fresh ADBC SQLite driver for contract tests."""
-    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
-    try:
-        with _provide_adbc_contract_driver(config, DEFAULT_CONTRACT_TABLE) as driver:
-            yield driver
-    finally:
-        config.close_pool()
+    with _provide_adbc_contract_driver(adbc_sqlite_config, DEFAULT_CONTRACT_TABLE) as driver:
+        yield driver
 
 
 @pytest.fixture
-def contract_adbc_duckdb_driver() -> Generator[AdbcDriver, None, None]:
+def contract_adbc_duckdb_driver(adbc_duckdb_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
     """Provide a fresh ADBC DuckDB driver for contract tests."""
-    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
-    try:
-        with _provide_adbc_contract_driver(config, DUCKDB_CONTRACT_TABLE) as driver:
-            yield driver
-    finally:
-        config.close_pool()
+    with _provide_adbc_contract_driver(adbc_duckdb_config, DUCKDB_CONTRACT_TABLE) as driver:
+        yield driver
 
 
 @pytest.fixture
-def contract_adbc_postgres_driver(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+def contract_adbc_postgres_driver(adbc_postgres_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
     """Provide a fresh ADBC PostgreSQL driver for contract tests."""
-    config = AdbcConfig(
-        connection_config={"uri": _adbc_postgres_uri(postgres_service), "driver_name": "adbc_driver_postgresql"}
-    )
-    try:
-        with _provide_adbc_contract_driver(config, POSTGRES_CONTRACT_TABLE) as driver:
-            yield driver
-    finally:
-        config.close_pool()
+    with _provide_adbc_contract_driver(adbc_postgres_config, POSTGRES_CONTRACT_TABLE) as driver:
+        yield driver
 
 
 @pytest.fixture
@@ -286,248 +259,145 @@ def contract_bigquery_driver(
 
 
 @pytest.fixture
-def contract_oracle_sync_driver(oracle_23ai_service: OracleService) -> Generator[OracleSyncDriver, None, None]:
+def contract_oracle_sync_driver(oracle_sync_config: OracleSyncConfig) -> Generator[OracleSyncDriver, None, None]:
     """Provide a fresh Oracle sync driver for contract tests."""
-    config = OracleSyncConfig(connection_config=_oracle_pool_params(oracle_23ai_service))
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-    finally:
-        config.close_pool()
+    with oracle_sync_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
 
 
 @pytest.fixture
-def contract_arrow_odbc_mssql_driver(mssql_service: MSSQLService) -> Generator[ArrowOdbcDriver, None, None]:
+def contract_arrow_odbc_mssql_driver(arrow_odbc_mssql_config: ArrowOdbcConfig) -> Generator[ArrowOdbcDriver, None, None]:
     """Provide a fresh arrow-odbc driver backed by SQL Server."""
-    config = ArrowOdbcConfig(
-        connection_config=_arrow_odbc_connection_config(mssql_service),
-        driver_features={"dbms_name": "Microsoft SQL Server"},
-    )
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                driver.rollback()
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with arrow_odbc_mssql_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.commit()
 
 
 @pytest.fixture
-def contract_mssql_python_driver(mssql_service: MSSQLService) -> Generator[MssqlPythonDriver, None, None]:
+def contract_mssql_python_driver(mssql_python_config: MssqlPythonConfig) -> Generator[MssqlPythonDriver, None, None]:
     """Provide a fresh mssql-python driver backed by SQL Server."""
-    config = MssqlPythonConfig(connection_config=_mssql_python_connection_config(mssql_service, autocommit=False))
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                driver.rollback()
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with mssql_python_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.commit()
 
 
 @pytest.fixture
-def contract_pymssql_driver(mssql_service: MSSQLService) -> Generator[PymssqlDriver, None, None]:
+def contract_pymssql_driver(pymssql_config: PymssqlConfig) -> Generator[PymssqlDriver, None, None]:
     """Provide a fresh pymssql driver backed by SQL Server."""
-    config = PymssqlConfig(connection_config=_mssql_connection_config(mssql_service))
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                driver.rollback()
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with pymssql_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.commit()
 
 
 @pytest.fixture
-async def contract_oracle_async_driver(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncDriver, None]":
+async def contract_oracle_async_driver(oracle_async_config: OracleAsyncConfig) -> "AsyncGenerator[OracleAsyncDriver, None]":
     """Provide a fresh Oracle async driver for contract tests."""
-    config = OracleAsyncConfig(connection_config=_oracle_pool_params(oracle_23ai_service))
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-    finally:
-        await config.close_pool()
+    async with oracle_async_config.provide_session() as driver:
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
 
 
 @pytest.fixture
-def contract_mysqlconnector_sync_driver(mysql_service: MySQLService) -> Generator[MysqlConnectorSyncDriver, None, None]:
+def contract_mysqlconnector_sync_driver(
+    mysqlconnector_sync_config: MysqlConnectorSyncConfig,
+) -> Generator[MysqlConnectorSyncDriver, None, None]:
     """Provide a fresh mysql-connector sync driver for contract tests."""
-    connection_config = _mysql_connection_config(mysql_service)
-    connection_config.update({"use_pure": True, "pool_size": 5})
-    config = MysqlConnectorSyncConfig(connection_config=connection_config)
-    try:
-        with config.provide_session() as driver:
-            driver.execute("SET sql_notes = 0")
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
-            driver.execute("SET sql_notes = 1")
-            driver.commit()
-            yield driver
-            driver.execute("SET sql_notes = 0")
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute("SET sql_notes = 1")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with mysqlconnector_sync_config.provide_session() as driver:
+        driver.execute("SET sql_notes = 0")
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
+        driver.execute("SET sql_notes = 1")
+        driver.commit()
+        yield driver
+        driver.execute("SET sql_notes = 0")
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute("SET sql_notes = 1")
+        driver.commit()
 
 
 @pytest.fixture
-def contract_pymysql_driver(mysql_service: MySQLService) -> Generator[PyMysqlDriver, None, None]:
+def contract_pymysql_driver(pymysql_config: PyMysqlConfig) -> Generator[PyMysqlDriver, None, None]:
     """Provide a fresh PyMySQL driver for contract tests."""
-    config = PyMysqlConfig(connection_config=_mysql_connection_config(mysql_service))
-    try:
-        with config.provide_session() as driver:
-            driver.execute("SET sql_notes = 0")
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
-            driver.execute("SET sql_notes = 1")
-            driver.commit()
-            yield driver
-            driver.execute("SET sql_notes = 0")
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute("SET sql_notes = 1")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with pymysql_config.provide_session() as driver:
+        driver.execute("SET sql_notes = 0")
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
+        driver.execute("SET sql_notes = 1")
+        driver.commit()
+        yield driver
+        driver.execute("SET sql_notes = 0")
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute("SET sql_notes = 1")
+        driver.commit()
 
 
 @pytest.fixture
-def contract_psycopg_sync_driver(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
+def contract_psycopg_sync_driver(psycopg_sync_config: PsycopgSyncConfig) -> Generator[PsycopgSyncDriver, None, None]:
     """Provide a fresh psycopg sync driver for contract tests."""
-    config = PsycopgSyncConfig(
-        connection_config={
-            "conninfo": _postgres_conninfo(postgres_service),
-            "autocommit": True,
-            "min_size": 1,
-            "max_size": 5,
-        }
-    )
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                driver.rollback()
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with psycopg_sync_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.commit()
 
 
 @pytest.fixture
 def contract_cockroach_psycopg_sync_driver(
-    cockroachdb_service: CockroachDBService,
+    cockroach_psycopg_sync_config: CockroachPsycopgSyncConfig,
 ) -> Generator[CockroachPsycopgSyncDriver, None, None]:
     """Provide a fresh CockroachDB psycopg sync driver for contract tests."""
-    config = CockroachPsycopgSyncConfig(
-        connection_config={"conninfo": _cockroach_conninfo(cockroachdb_service), "min_size": 1, "max_size": 5}
-    )
-    try:
-        with config.provide_session() as driver:
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                driver.rollback()
-            driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            driver.commit()
-    finally:
-        config.close_pool()
+    with cockroach_psycopg_sync_config.provide_session() as driver:
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.commit()
 
 
 @pytest.fixture
-async def contract_aiosqlite_driver() -> AsyncGenerator[AiosqliteDriver, None]:
+async def contract_aiosqlite_driver(aiosqlite_session_config: AiosqliteConfig) -> AsyncGenerator[AiosqliteDriver, None]:
     """Provide a fresh aiosqlite driver for contract tests."""
-    config = AiosqliteConfig()
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute("PRAGMA foreign_keys = ON")
-            await driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-    finally:
-        if config.connection_instance:
-            await config.close_pool()
-        config.connection_instance = None
+    async with aiosqlite_session_config.provide_session() as driver:
+        await driver.execute("PRAGMA foreign_keys = ON")
+        await driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
 
 
 @pytest.fixture
-async def contract_aiomysql_driver(mysql_service: MySQLService) -> AsyncGenerator[AiomysqlDriver, None]:
+async def contract_aiomysql_driver(aiomysql_config: AiomysqlConfig) -> AsyncGenerator[AiomysqlDriver, None]:
     """Provide a fresh aiomysql driver for contract tests."""
-    connection_config = _mysql_connection_config(mysql_service, database_key="db")
-    connection_config.update({"minsize": 1, "maxsize": 5})
-    config = AiomysqlConfig(connection_config=connection_config)
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute("SET sql_notes = 0")
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
-            await driver.execute("SET sql_notes = 1")
-            await driver.commit()
-            yield driver
-            await driver.execute("SET sql_notes = 0")
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute("SET sql_notes = 1")
-            await driver.commit()
-    finally:
-        await config.close_pool()
-
-
-@pytest.fixture
-async def contract_asyncmy_driver(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyDriver, None]:
-    """Provide a fresh AsyncMy driver for contract tests."""
-    connection_config = _mysql_connection_config(mysql_service)
-    connection_config.update({"minsize": 1, "maxsize": 5})
-    config = AsyncmyConfig(connection_config=connection_config)
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute("SET sql_notes = 0")
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
-            await driver.execute("SET sql_notes = 1")
-            await driver.commit()
-            yield driver
-            await driver.execute("SET sql_notes = 0")
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute("SET sql_notes = 1")
-            await driver.commit()
-    finally:
-        await config.close_pool()
-
-
-@pytest.fixture
-async def contract_mysqlconnector_async_driver(
-    mysql_service: MySQLService,
-) -> AsyncGenerator[MysqlConnectorAsyncDriver, None]:
-    """Provide a fresh mysql-connector async driver for contract tests."""
-    connection_config = _mysql_connection_config(mysql_service)
-    connection_config["use_pure"] = True
-    config = MysqlConnectorAsyncConfig(connection_config=connection_config)
-    async with config.provide_session() as driver:
+    async with aiomysql_config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
@@ -541,106 +411,107 @@ async def contract_mysqlconnector_async_driver(
 
 
 @pytest.fixture
-async def contract_asyncpg_driver(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
+async def contract_asyncmy_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[AsyncmyDriver, None]:
+    """Provide a fresh AsyncMy driver for contract tests."""
+    async with asyncmy_config.provide_session() as driver:
+        await driver.execute("SET sql_notes = 0")
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
+        await driver.execute("SET sql_notes = 1")
+        await driver.commit()
+        yield driver
+        await driver.execute("SET sql_notes = 0")
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute("SET sql_notes = 1")
+        await driver.commit()
+
+
+@pytest.fixture
+async def contract_mysqlconnector_async_driver(
+    mysqlconnector_async_config: MysqlConnectorAsyncConfig,
+) -> AsyncGenerator[MysqlConnectorAsyncDriver, None]:
+    """Provide a fresh mysql-connector async driver for contract tests."""
+    async with mysqlconnector_async_config.provide_session() as driver:
+        await driver.execute("SET sql_notes = 0")
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(MYSQL_CONTRACT_TABLE.create_sql)
+        await driver.execute("SET sql_notes = 1")
+        await driver.commit()
+        yield driver
+        await driver.execute("SET sql_notes = 0")
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute("SET sql_notes = 1")
+        await driver.commit()
+
+
+@pytest.fixture
+async def contract_asyncpg_driver(asyncpg_config: AsyncpgConfig) -> AsyncGenerator[AsyncpgDriver, None]:
     """Provide a fresh asyncpg driver for contract tests."""
-    connection_config = _asyncpg_pool_config(postgres_service)
-    connection_config.update({"min_size": 1, "max_size": 5})
-    config = AsyncpgConfig(connection_config=connection_config)
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                await driver.rollback()
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.commit()
-    finally:
-        await config.close_pool()
+    async with asyncpg_config.provide_session() as driver:
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            await driver.rollback()
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.commit()
 
 
 @pytest.fixture
-async def contract_psqlpy_driver(postgres_service: PostgresService) -> AsyncGenerator[PsqlpyDriver, None]:
+async def contract_psqlpy_driver(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[PsqlpyDriver, None]:
     """Provide a fresh psqlpy driver for contract tests."""
-    config = PsqlpyConfig(connection_config={"dsn": _psqlpy_dsn(postgres_service), "max_db_pool_size": 5})
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                await driver.rollback()
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.commit()
-    finally:
-        await config.close_pool()
+    async with psqlpy_config.provide_session() as driver:
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            await driver.rollback()
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.commit()
 
 
 @pytest.fixture
-async def contract_psycopg_async_driver(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncDriver, None]:
+async def contract_psycopg_async_driver(psycopg_async_config: PsycopgAsyncConfig) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Provide a fresh psycopg async driver for contract tests."""
-    config = PsycopgAsyncConfig(
-        connection_config={
-            "conninfo": _postgres_conninfo(postgres_service),
-            "autocommit": True,
-            "min_size": 1,
-            "max_size": 5,
-        }
-    )
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.commit()
-    finally:
-        await config.close_pool()
+    async with psycopg_async_config.provide_session() as driver:
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.commit()
 
 
 @pytest.fixture
 async def contract_cockroach_asyncpg_driver(
-    cockroachdb_service: CockroachDBService,
+    cockroach_asyncpg_config: CockroachAsyncpgConfig,
 ) -> AsyncGenerator[CockroachAsyncpgDriver, None]:
     """Provide a fresh CockroachDB asyncpg driver for contract tests."""
-    connection_config = _cockroach_asyncpg_connection_config(cockroachdb_service)
-    connection_config.update({"min_size": 1, "max_size": 5})
-    config = CockroachAsyncpgConfig(connection_config=connection_config)
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.commit()
-    finally:
-        await config.close_pool()
+    async with cockroach_asyncpg_config.provide_session() as driver:
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.commit()
 
 
 @pytest.fixture
 async def contract_cockroach_psycopg_async_driver(
-    cockroachdb_service: CockroachDBService,
+    cockroach_psycopg_async_config: CockroachPsycopgAsyncConfig,
 ) -> AsyncGenerator[CockroachPsycopgAsyncDriver, None]:
     """Provide a fresh CockroachDB psycopg async driver for contract tests."""
-    config = CockroachPsycopgAsyncConfig(
-        connection_config={"conninfo": _cockroach_conninfo(cockroachdb_service), "min_size": 1, "max_size": 5}
-    )
-    try:
-        async with config.provide_session() as driver:
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
-            await driver.commit()
-            yield driver
-            with contextlib.suppress(Exception):
-                await driver.rollback()
-            await driver.execute_script("DROP TABLE IF EXISTS contract_items")
-            await driver.commit()
-    finally:
-        await config.close_pool()
+    async with cockroach_psycopg_async_config.provide_session() as driver:
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
+        with contextlib.suppress(Exception):
+            await driver.rollback()
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.commit()
 
 
 def _events_migration_config(tmp_path: Path, suffix: str) -> dict[str, Any]:
