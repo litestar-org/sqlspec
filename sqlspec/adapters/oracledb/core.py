@@ -51,28 +51,6 @@ if TYPE_CHECKING:
     from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
 
 
-class _OracleSyncStreamDriver(Protocol):
-    connection: "OracleSyncConnection"
-    driver_features: dict[str, Any]
-
-    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
-
-    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
-
-    def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
-
-
-class _OracleAsyncStreamDriver(Protocol):
-    connection: "OracleAsyncConnection"
-    driver_features: dict[str, Any]
-
-    def handle_database_exceptions(self) -> "AsyncExceptionHandler": ...
-
-    def _check_pending_exception(self, exc_handler: "AsyncExceptionHandler") -> None: ...
-
-    def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
-
-
 __all__ = (
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
@@ -269,52 +247,6 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
     if isinstance(parameters, tuple):
         return list(parameters)
     return parameters
-
-
-def _coerce_value_sync(
-    connection: Any, value: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
-) -> Any:
-    """Route a single parameter value through wrapper-aware coercion (sync)."""
-    if isinstance(value, OracleClob):
-        inner = value.value
-        if isinstance(inner, bytes):
-            inner = inner.decode("utf-8")
-        return connection.createlob(clob_type, inner)
-    if isinstance(value, OracleBlob):
-        inner = value.value
-        if isinstance(inner, str):
-            inner = inner.encode("utf-8")
-        return connection.createlob(blob_type, inner)
-    if isinstance(value, OracleJson):
-        return value.value
-    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
-        return connection.createlob(clob_type, value)
-    if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
-        return connection.createlob(blob_type, bytes(value))
-    return value
-
-
-async def _coerce_value_async(
-    connection: Any, value: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
-) -> Any:
-    """Async mirror of :func:`_coerce_value_sync`."""
-    if isinstance(value, OracleClob):
-        inner = value.value
-        if isinstance(inner, bytes):
-            inner = inner.decode("utf-8")
-        return await connection.createlob(clob_type, inner)
-    if isinstance(value, OracleBlob):
-        inner = value.value
-        if isinstance(inner, str):
-            inner = inner.encode("utf-8")
-        return await connection.createlob(blob_type, inner)
-    if isinstance(value, OracleJson):
-        return value.value
-    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
-        return await connection.createlob(clob_type, value)
-    if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
-        return await connection.createlob(blob_type, bytes(value))
-    return value
 
 
 def coerce_large_parameters_sync(
@@ -553,31 +485,6 @@ def apply_driver_features(
     return statement_config, features
 
 
-def _description_requires_lob_coercion(description: "list[Any]") -> bool:
-    """Return True when cursor metadata indicates LOB-compatible columns."""
-    # Keep in sync with resolve_row_metadata's inlined cache-miss LOB detection.
-    for column in description:
-        try:
-            type_code = column[1]
-        except (TypeError, IndexError, KeyError):
-            type_code = getattr(column, "type_code", None)
-            if type_code is None:
-                # Unknown metadata shape: keep conservative behavior.
-                return True
-
-        type_name = getattr(type_code, "name", None)
-        if isinstance(type_name, str):
-            upper_name = type_name.upper()
-            if any(marker in upper_name for marker in _LOB_TYPE_NAME_MARKERS):
-                return True
-            continue
-
-        type_text = str(type_code).upper()
-        if any(marker in type_text for marker in _LOB_TYPE_NAME_MARKERS):
-            return True
-    return False
-
-
 def resolve_row_metadata(
     description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[int, tuple[Any, list[str], bool]]"
 ) -> "tuple[list[str], bool]":
@@ -754,103 +661,6 @@ class OracleAsyncStreamSource:
                 cursor.close()
 
 
-def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:
-    """Return True when a row contains readable values that need LOB coercion."""
-    for value in row:
-        value_type = type(value)
-        if value_type in _SCALAR_PASSTHROUGH_TYPES:
-            continue
-        if is_readable(value):
-            return True
-    return False
-
-
-def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
-    """Coerce LOB handles to concrete values for synchronous execution.
-
-    Processes each value in the row, reading locator objects returned for
-    OUT binds, PL/SQL, or explicit ``fetch_lobs=True``. Direct-fetched
-    ``str``/``bytes`` values from the default path pass through unchanged.
-
-    Args:
-        row: Tuple of column values from database fetch.
-
-    Returns:
-        Tuple of coerced values with LOBs read to strings/bytes.
-    """
-    coerced_values: list[Any] | None = None
-    for index, value in enumerate(row):
-        value_type = type(value)
-        if value_type in _SCALAR_PASSTHROUGH_TYPES:
-            if coerced_values is not None:
-                coerced_values.append(value)
-            continue
-
-        if is_readable(value):
-            try:
-                processed_value = value.read()
-            except Exception:
-                if coerced_values is not None:
-                    coerced_values.append(value)
-                continue
-
-            if coerced_values is None:
-                coerced_values = list(row[:index])
-            coerced_values.append(processed_value)
-            continue
-
-        if coerced_values is not None:
-            coerced_values.append(value)
-
-    if coerced_values is None:
-        return row
-    return tuple(coerced_values)
-
-
-async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
-    """Coerce LOB handles to concrete values for asynchronous execution.
-
-    Processes each value in the row, reading locator objects returned for
-    OUT binds, PL/SQL, or explicit ``fetch_lobs=True``. Direct-fetched
-    ``str``/``bytes`` values from the default path pass through unchanged.
-
-    Args:
-        row: Tuple of column values from database fetch.
-
-    Returns:
-        Tuple of coerced values with LOBs read to strings/bytes.
-    """
-    coerced_values: list[Any] | None = None
-    for index, value in enumerate(row):
-        value_type = type(value)
-        if value_type in _SCALAR_PASSTHROUGH_TYPES:
-            if coerced_values is not None:
-                coerced_values.append(value)
-            continue
-
-        if is_readable(value):
-            try:
-                processed_value = await TYPE_CONVERTER.process_lob(value)
-            except Exception:
-                if coerced_values is not None:
-                    coerced_values.append(value)
-                continue
-
-            if coerced_values is None:
-                if processed_value is value:
-                    continue
-                coerced_values = list(row[:index])
-            coerced_values.append(processed_value)
-            continue
-
-        if coerced_values is not None:
-            coerced_values.append(value)
-
-    if coerced_values is None:
-        return row
-    return tuple(coerced_values)
-
-
 def collect_sync_rows(
     fetched_data: "list[Any] | None",
     description: "list[Any] | None",
@@ -953,26 +763,6 @@ async def collect_async_rows(
     return data, resolved_column_names
 
 
-def _create_oracle_error(
-    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
-) -> SQLSpecError:
-    """Create a SQLSpec exception from an Oracle error.
-
-    Args:
-        error: The original Oracle exception
-        code: Oracle error code
-        error_class: The SQLSpec exception class to instantiate
-        description: Human-readable description of the error type
-
-    Returns:
-        A new SQLSpec exception instance with the original as its cause
-    """
-    msg = f"Oracle {description} [ORA-{code:05d}]: {error}" if code else f"Oracle {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
-
-
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map Oracle exceptions to SQLSpec exceptions.
 
@@ -1032,9 +822,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-driver_profile = build_profile()
-
-
 def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the OracleDB statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
@@ -1043,5 +830,217 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
         profile, statement_overrides={"dialect": "oracle"}, json_serializer=serializer
     )
 
+
+class _OracleSyncStreamDriver(Protocol):
+    connection: "OracleSyncConnection"
+    driver_features: dict[str, Any]
+
+    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
+
+    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
+
+    def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+
+
+class _OracleAsyncStreamDriver(Protocol):
+    connection: "OracleAsyncConnection"
+    driver_features: dict[str, Any]
+
+    def handle_database_exceptions(self) -> "AsyncExceptionHandler": ...
+
+    def _check_pending_exception(self, exc_handler: "AsyncExceptionHandler") -> None: ...
+
+    def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+
+
+def _coerce_value_sync(
+    connection: Any, value: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
+) -> Any:
+    """Route a single parameter value through wrapper-aware coercion (sync)."""
+    if isinstance(value, OracleClob):
+        inner = value.value
+        if isinstance(inner, bytes):
+            inner = inner.decode("utf-8")
+        return connection.createlob(clob_type, inner)
+    if isinstance(value, OracleBlob):
+        inner = value.value
+        if isinstance(inner, str):
+            inner = inner.encode("utf-8")
+        return connection.createlob(blob_type, inner)
+    if isinstance(value, OracleJson):
+        return value.value
+    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+        return connection.createlob(clob_type, value)
+    if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
+        return connection.createlob(blob_type, bytes(value))
+    return value
+
+
+async def _coerce_value_async(
+    connection: Any, value: Any, *, clob_type: Any, blob_type: Any, varchar2_byte_limit: int, raw_byte_limit: int
+) -> Any:
+    """Async mirror of :func:`_coerce_value_sync`."""
+    if isinstance(value, OracleClob):
+        inner = value.value
+        if isinstance(inner, bytes):
+            inner = inner.decode("utf-8")
+        return await connection.createlob(clob_type, inner)
+    if isinstance(value, OracleBlob):
+        inner = value.value
+        if isinstance(inner, str):
+            inner = inner.encode("utf-8")
+        return await connection.createlob(blob_type, inner)
+    if isinstance(value, OracleJson):
+        return value.value
+    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+        return await connection.createlob(clob_type, value)
+    if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
+        return await connection.createlob(blob_type, bytes(value))
+    return value
+
+
+def _description_requires_lob_coercion(description: "list[Any]") -> bool:
+    """Return True when cursor metadata indicates LOB-compatible columns."""
+    # Keep in sync with resolve_row_metadata's inlined cache-miss LOB detection.
+    for column in description:
+        try:
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            type_code = getattr(column, "type_code", None)
+            if type_code is None:
+                # Unknown metadata shape: keep conservative behavior.
+                return True
+
+        type_name = getattr(type_code, "name", None)
+        if isinstance(type_name, str):
+            upper_name = type_name.upper()
+            if any(marker in upper_name for marker in _LOB_TYPE_NAME_MARKERS):
+                return True
+            continue
+
+        type_text = str(type_code).upper()
+        if any(marker in type_text for marker in _LOB_TYPE_NAME_MARKERS):
+            return True
+    return False
+
+
+def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:
+    """Return True when a row contains readable values that need LOB coercion."""
+    for value in row:
+        value_type = type(value)
+        if value_type in _SCALAR_PASSTHROUGH_TYPES:
+            continue
+        if is_readable(value):
+            return True
+    return False
+
+
+def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
+    """Coerce LOB handles to concrete values for synchronous execution.
+
+    Processes each value in the row, reading locator objects returned for
+    OUT binds, PL/SQL, or explicit ``fetch_lobs=True``. Direct-fetched
+    ``str``/``bytes`` values from the default path pass through unchanged.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        Tuple of coerced values with LOBs read to strings/bytes.
+    """
+    coerced_values: list[Any] | None = None
+    for index, value in enumerate(row):
+        value_type = type(value)
+        if value_type in _SCALAR_PASSTHROUGH_TYPES:
+            if coerced_values is not None:
+                coerced_values.append(value)
+            continue
+
+        if is_readable(value):
+            try:
+                processed_value = value.read()
+            except Exception:
+                if coerced_values is not None:
+                    coerced_values.append(value)
+                continue
+
+            if coerced_values is None:
+                coerced_values = list(row[:index])
+            coerced_values.append(processed_value)
+            continue
+
+        if coerced_values is not None:
+            coerced_values.append(value)
+
+    if coerced_values is None:
+        return row
+    return tuple(coerced_values)
+
+
+async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
+    """Coerce LOB handles to concrete values for asynchronous execution.
+
+    Processes each value in the row, reading locator objects returned for
+    OUT binds, PL/SQL, or explicit ``fetch_lobs=True``. Direct-fetched
+    ``str``/``bytes`` values from the default path pass through unchanged.
+
+    Args:
+        row: Tuple of column values from database fetch.
+
+    Returns:
+        Tuple of coerced values with LOBs read to strings/bytes.
+    """
+    coerced_values: list[Any] | None = None
+    for index, value in enumerate(row):
+        value_type = type(value)
+        if value_type in _SCALAR_PASSTHROUGH_TYPES:
+            if coerced_values is not None:
+                coerced_values.append(value)
+            continue
+
+        if is_readable(value):
+            try:
+                processed_value = await TYPE_CONVERTER.process_lob(value)
+            except Exception:
+                if coerced_values is not None:
+                    coerced_values.append(value)
+                continue
+
+            if coerced_values is None:
+                if processed_value is value:
+                    continue
+                coerced_values = list(row[:index])
+            coerced_values.append(processed_value)
+            continue
+
+        if coerced_values is not None:
+            coerced_values.append(value)
+
+    if coerced_values is None:
+        return row
+    return tuple(coerced_values)
+
+
+def _create_oracle_error(
+    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from an Oracle error.
+
+    Args:
+        error: The original Oracle exception
+        code: Oracle error code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
+    msg = f"Oracle {description} [ORA-{code:05d}]: {error}" if code else f"Oracle {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+driver_profile = build_profile()
 
 default_statement_config = build_statement_config()

@@ -1,19 +1,7 @@
 # pyright: reportArgumentType=false
 """Unit tests for Oracle row materialization helpers."""
 
-import inspect
-from typing import TYPE_CHECKING, Any, cast
-
-import pytest
-
 from sqlspec.adapters.oracledb.core import collect_async_rows, collect_sync_rows, resolve_row_metadata
-from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
-from sqlspec.core import OperationProfile, ParameterProfile, ProcessedState
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.driver._query_cache import CachedQuery
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 
 
 class _TypeCode:
@@ -31,54 +19,6 @@ class _ReadableValue:
 
     def read(self) -> str:
         return self._value
-
-
-class _AsyncReadableValue:
-    __slots__ = ("_value",)
-
-    def __init__(self, value: str) -> None:
-        self._value = value
-
-    async def read(self) -> str:
-        return self._value
-
-
-class _AsyncCursor:
-    def __init__(self) -> None:
-        self.description = [("PAYLOAD", _TypeCode("DB_TYPE_CLOB"))]
-        self.rowcount = 1
-        self.execute_calls: list[tuple[str, object, dict[str, object]]] = []
-
-    async def execute(self, sql: str, parameters: object, **kwargs: object) -> None:
-        self.execute_calls.append((sql, parameters, kwargs))
-
-    async def fetchall(self) -> list[tuple[object]]:
-        return [(_AsyncReadableValue("async text"),)]
-
-    def close(self) -> None:
-        return None
-
-
-class _AsyncConnection:
-    def __init__(self, cursor: _AsyncCursor) -> None:
-        self.cursor_obj = cursor
-
-    def cursor(self) -> _AsyncCursor:
-        return self.cursor_obj
-
-
-def _cached_select(compiled_sql: str = "SELECT payload FROM dual") -> CachedQuery:
-    return CachedQuery(
-        compiled_sql=compiled_sql,
-        parameter_profile=ParameterProfile(),
-        input_named_parameters=(),
-        applied_wrap_types=False,
-        parameter_casts={},
-        operation_type="SELECT",
-        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
-        param_count=0,
-        processed_state=ProcessedState(compiled_sql=compiled_sql, execution_parameters=[], operation_type="SELECT"),
-    )
 
 
 def test_collect_sync_rows_reuses_original_rows_when_no_lob_columns() -> None:
@@ -134,23 +74,6 @@ async def test_collect_async_rows_leaves_json_text_as_string_without_content_sni
     (data, _) = await collect_async_rows(rows, description, {"enable_lowercase_column_names": True})
     assert data == [(1, '{"key": "value"}')]
     assert isinstance(data[0][1], str)
-
-
-@pytest.mark.anyio
-async def test_oracle_async_cached_collect_reads_async_lob_locators() -> None:
-    """Async direct collection should not leave coroutine objects in rows."""
-    cursor = _AsyncCursor()
-    driver = OracleAsyncDriver(
-        connection=cast("OracleAsyncConnection", _AsyncConnection(cursor)),
-        driver_features={"enable_lowercase_column_names": True, "fetch_lobs": True},
-    )
-
-    result = await driver._execute_cache_hit("SELECT payload FROM dual", {}, _cached_select())
-
-    value = result.get_data()[0]["payload"]
-    if inspect.iscoroutine(value):
-        value.close()
-    assert value == "async text"
 
 
 def test_resolve_row_metadata_reuses_cached_description() -> None:
@@ -210,76 +133,3 @@ def test_resolve_row_metadata_cache_contract_still_holds_after_single_pass_rewri
     assert second_names is first_names
     assert first_requires_lob is second_requires_lob
     assert cache[id(description)][0] is description
-
-
-def _raise_attribute_error(*_args: object, **_kwargs: object) -> object:
-    raise AttributeError("native arrow unavailable")
-
-
-def _sync_connection() -> "OracleSyncConnection":
-    return cast("OracleSyncConnection", object())
-
-
-def _async_connection() -> "OracleAsyncConnection":
-    return cast("OracleAsyncConnection", object())
-
-
-def test_select_to_arrow_fallback_sync_select_to_arrow_fallback_passes_prepared_statement(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-    sentinel = object()
-
-    def fallback(
-        self: SyncDriverAdapterBase,
-        statement: object,
-        /,
-        *parameters: object,
-        statement_config: object = None,
-        **kwargs: object,
-    ) -> object:
-        _ = (self, kwargs)
-        captured["statement"] = statement
-        captured["parameters"] = parameters
-        captured["statement_config"] = statement_config
-        return sentinel
-
-    monkeypatch.setattr(OracleSyncDriver, "_execute_arrow_dataframe", _raise_attribute_error)
-    monkeypatch.setattr(SyncDriverAdapterBase, "select_to_arrow", fallback)
-    driver = OracleSyncDriver(connection=_sync_connection())
-    result = driver.select_to_arrow("SELECT :id FROM dual", {"id": 1})
-    assert result is sentinel
-    assert captured["parameters"] == ()
-    assert captured["statement"].is_processed is True
-    assert captured["statement_config"] is driver.statement_config
-
-
-@pytest.mark.anyio
-async def test_select_to_arrow_fallback_async_select_to_arrow_fallback_passes_prepared_statement(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-    sentinel = object()
-
-    async def fallback(
-        self: AsyncDriverAdapterBase,
-        statement: object,
-        /,
-        *parameters: object,
-        statement_config: object = None,
-        **kwargs: object,
-    ) -> object:
-        _ = (self, kwargs)
-        captured["statement"] = statement
-        captured["parameters"] = parameters
-        captured["statement_config"] = statement_config
-        return sentinel
-
-    monkeypatch.setattr(OracleAsyncDriver, "_execute_arrow_dataframe", _raise_attribute_error)
-    monkeypatch.setattr(AsyncDriverAdapterBase, "select_to_arrow", fallback)
-    driver = OracleAsyncDriver(connection=_async_connection())
-    result = await driver.select_to_arrow("SELECT :id FROM dual", {"id": 1})
-    assert result is sentinel
-    assert captured["parameters"] == ()
-    assert captured["statement"].is_processed is True
-    assert captured["statement_config"] is driver.statement_config

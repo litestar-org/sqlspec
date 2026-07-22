@@ -2,9 +2,9 @@
 
 import pytest
 
-from tests.integration.adapters.contracts import behaviors
-from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
-from tests.integration.adapters.contracts.behaviors import STATEMENT_STACK_SCOPE, validate_extra_assertions
+from tests.integration.adapters._shared import behaviors
+from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
+from tests.integration.adapters._shared.behaviors import STATEMENT_STACK_SCOPE, validate_extra_assertions
 
 PARITY_PROOF_KEY = "statement_stack:native_fallback_parity"
 OPTED_IN_CASE_IDS = ("psycopg-sync", "asyncpg-async", "psycopg-async", "oracledb-async")

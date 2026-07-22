@@ -12,8 +12,9 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
 
-__all__ = ("aiosqlite_async_driver", "sqlite_sync_driver")
+__all__ = ("aiosqlite_async_driver", "sample_sql_statement", "sample_statement_config", "sqlite_sync_driver")
 
 
 class FixtureSqliteDriver(SqliteDriver):
@@ -26,6 +27,27 @@ class FixtureAiosqliteDriver(AiosqliteDriver):
     """Test-friendly aiosqlite driver that allows patching."""
 
     pass
+
+
+@pytest.fixture
+def sample_statement_config() -> StatementConfig:
+    """Return a sample SQLite statement configuration."""
+    return StatementConfig(
+        dialect="sqlite",
+        enable_caching=False,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            default_execution_parameter_style=ParameterStyle.QMARK,
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+        ),
+    )
+
+
+@pytest.fixture
+def sample_sql_statement(sample_statement_config: StatementConfig) -> SQL:
+    """Return a sample parameterized SQL statement."""
+    return SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=sample_statement_config)
 
 
 @pytest.fixture
@@ -52,26 +74,3 @@ async def aiosqlite_async_driver() -> AsyncGenerator[FixtureAiosqliteDriver, Non
         yield FixtureAiosqliteDriver(conn)
     finally:
         await conn.close()
-
-
-def _coverage_is_active(config: pytest.Config) -> bool:
-    if not config.pluginmanager.has_plugin("pytest_cov"):
-        return False
-    return bool(config.getoption("--cov", default=None))
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers",
-        "benchmark: wall-clock-sensitive perf test; skipped when --cov is active "
-        "because sys.settrace overhead invalidates the timing threshold.",
-    )
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
-    if not _coverage_is_active(config):
-        return
-    skip = pytest.mark.skip(reason="benchmark test skipped under --cov: coverage tracing skews wall-clock timing")
-    for item in items:
-        if "benchmark" in item.keywords:
-            item.add_marker(skip)

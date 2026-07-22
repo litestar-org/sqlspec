@@ -1,5 +1,22 @@
 """Shared integration fixture definitions."""
 
+from tests.integration.fixtures.adbc import (
+    adbc_duckdb_config,
+    adbc_duckdb_driver,
+    adbc_duckdb_session,
+    adbc_gizmosql_config,
+    adbc_gizmosql_connection_config,
+    adbc_gizmosql_session,
+    adbc_gizmosql_sqlite_config,
+    adbc_gizmosql_sqlite_connection_config,
+    adbc_gizmosql_sqlite_session,
+    adbc_postgresql_config,
+    adbc_postgresql_session,
+    adbc_sqlite_config,
+    adbc_sqlite_session,
+    gizmosql_sqlite_service,
+    xdist_gizmosql_isolation_level,
+)
 from tests.integration.fixtures.bigquery import (
     bigquery_config,
     bigquery_session,
@@ -48,6 +65,9 @@ from tests.integration.fixtures.postgres import (
     asyncpg_async_driver,
     asyncpg_config,
     asyncpg_connection_config,
+    cockroach_asyncpg_config,
+    cockroach_psycopg_async_config,
+    cockroach_psycopg_sync_config,
     paradedb_config_adbc,
     paradedb_config_asyncpg,
     paradedb_config_psqlpy,
@@ -83,8 +103,21 @@ from tests.integration.fixtures.sqlite import (
 )
 
 __all__ = (
+    "adbc_duckdb_config",
+    "adbc_duckdb_driver",
+    "adbc_duckdb_session",
+    "adbc_gizmosql_config",
+    "adbc_gizmosql_connection_config",
+    "adbc_gizmosql_session",
+    "adbc_gizmosql_sqlite_config",
+    "adbc_gizmosql_sqlite_connection_config",
+    "adbc_gizmosql_sqlite_session",
     "adbc_postgres_config",
     "adbc_postgres_connection_config",
+    "adbc_postgresql_config",
+    "adbc_postgresql_session",
+    "adbc_sqlite_config",
+    "adbc_sqlite_session",
     "adbc_sync_driver",
     "aiomysql_clean_driver",
     "aiomysql_config",
@@ -102,8 +135,12 @@ __all__ = (
     "asyncpg_connection_config",
     "bigquery_config",
     "bigquery_session",
+    "cockroach_asyncpg_config",
+    "cockroach_psycopg_async_config",
+    "cockroach_psycopg_sync_config",
     "duckdb_basic_config",
     "duckdb_basic_session",
+    "gizmosql_sqlite_service",
     "mssql_python_config",
     "mssql_python_connection_config",
     "mysqlconnector_async_config",
@@ -151,4 +188,5 @@ __all__ = (
     "sqlite_session",
     "sqlite_temp_file_config",
     "table_schema_prefix",
+    "xdist_gizmosql_isolation_level",
 )

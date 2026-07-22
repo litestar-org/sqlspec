@@ -138,24 +138,6 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         msg = "CockroachDB transaction retry limit exceeded"
         raise TransactionRetryError(msg) from last_error
 
-    def _apply_follower_reads(self, cursor: "CockroachSyncCursor") -> None:
-        if not self.driver_features.get("enable_follower_reads", False):
-            return
-        if not self._follower_staleness:
-            return
-        cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
-
-    def _dispatch_execute_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
-        if statement.returns_rows():
-            self._apply_follower_reads(cursor)
-        return super().dispatch_execute(cursor, statement)
-
-    def _dispatch_execute_many_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
-        return PsycopgSyncDriver.dispatch_execute_many(self, cursor, statement)
-
-    def _dispatch_execute_script_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
-        return PsycopgSyncDriver.dispatch_execute_script(self, cursor, statement)
-
     def dispatch_execute(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return self._dispatch_execute_impl(cursor, statement)
 
@@ -174,6 +156,24 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             # Intentionally assign CockroachDB-specific data dictionary to parent slot
             self._data_dictionary = CockroachPsycopgSyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgSyncDataDictionary", self._data_dictionary)
+
+    def _apply_follower_reads(self, cursor: "CockroachSyncCursor") -> None:
+        if not self.driver_features.get("enable_follower_reads", False):
+            return
+        if not self._follower_staleness:
+            return
+        cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
+
+    def _dispatch_execute_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
+        if statement.returns_rows():
+            self._apply_follower_reads(cursor)
+        return super().dispatch_execute(cursor, statement)
+
+    def _dispatch_execute_many_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
+        return PsycopgSyncDriver.dispatch_execute_many(self, cursor, statement)
+
+    def _dispatch_execute_script_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
+        return PsycopgSyncDriver.dispatch_execute_script(self, cursor, statement)
 
 
 class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
@@ -229,24 +229,6 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         msg = "CockroachDB transaction retry limit exceeded"
         raise TransactionRetryError(msg) from last_error
 
-    async def _apply_follower_reads(self, cursor: "CockroachAsyncCursor") -> None:
-        if not self.driver_features.get("enable_follower_reads", False):
-            return
-        if not self._follower_staleness:
-            return
-        await cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
-
-    async def _dispatch_execute_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
-        if statement.returns_rows():
-            await self._apply_follower_reads(cursor)
-        return await super().dispatch_execute(cursor, statement)
-
-    async def _dispatch_execute_many_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
-        return await PsycopgAsyncDriver.dispatch_execute_many(self, cursor, statement)
-
-    async def _dispatch_execute_script_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
-        return await PsycopgAsyncDriver.dispatch_execute_script(self, cursor, statement)
-
     async def dispatch_execute(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await self._dispatch_execute_impl(cursor, statement)
 
@@ -265,6 +247,24 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             # Intentionally assign CockroachDB-specific data dictionary to parent slot
             self._data_dictionary = CockroachPsycopgAsyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgAsyncDataDictionary", self._data_dictionary)
+
+    async def _apply_follower_reads(self, cursor: "CockroachAsyncCursor") -> None:
+        if not self.driver_features.get("enable_follower_reads", False):
+            return
+        if not self._follower_staleness:
+            return
+        await cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
+
+    async def _dispatch_execute_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
+        if statement.returns_rows():
+            await self._apply_follower_reads(cursor)
+        return await super().dispatch_execute(cursor, statement)
+
+    async def _dispatch_execute_many_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
+        return await PsycopgAsyncDriver.dispatch_execute_many(self, cursor, statement)
+
+    async def _dispatch_execute_script_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
+        return await PsycopgAsyncDriver.dispatch_execute_script(self, cursor, statement)
 
 
 register_driver_profile("cockroach_psycopg", driver_profile)

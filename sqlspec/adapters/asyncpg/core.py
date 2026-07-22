@@ -85,41 +85,6 @@ PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 
 
-def _convert_datetime_param(value: Any) -> Any:
-    """Convert datetime parameter, handling ISO strings."""
-
-    if isinstance(value, str):
-        return datetime.datetime.fromisoformat(value)
-    return value
-
-
-def _convert_date_param(value: Any) -> Any:
-    """Convert date parameter, handling ISO strings."""
-
-    if isinstance(value, str):
-        return datetime.date.fromisoformat(value)
-    return value
-
-
-def _convert_time_param(value: Any) -> Any:
-    """Convert time parameter, handling ISO strings."""
-
-    if isinstance(value, str):
-        return datetime.time.fromisoformat(value)
-    return value
-
-
-def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
-    """Return custom type coercions for AsyncPG."""
-
-    return {
-        datetime.datetime: _convert_datetime_param,
-        datetime.date: _convert_date_param,
-        datetime.time: _convert_time_param,
-        **build_uuid_coercions(native=True),
-    }
-
-
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build connection configuration with non-null values only.
 
@@ -150,9 +115,6 @@ def build_profile() -> "DriverParameterProfile":
         custom_type_coercions=_custom_type_coercions(),
         default_dialect="postgres",
     )
-
-
-driver_profile = build_profile()
 
 
 def configure_parameter_serializers(
@@ -219,55 +181,6 @@ def build_statement_config(
     )
 
     return base_config.replace(parameter_config=parameter_config)
-
-
-default_statement_config = build_statement_config()
-
-
-def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, bytearray):
-        return bytes(value)
-    if isinstance(value, memoryview):
-        return value.tobytes()
-    if isinstance(value, str):
-        return value.encode("utf-8")
-
-    encoded = encoder(value)
-    if isinstance(encoded, bytes):
-        return encoded
-    if isinstance(encoded, bytearray):
-        return bytes(encoded)
-    if isinstance(encoded, memoryview):
-        return encoded.tobytes()
-    return str(encoded).encode("utf-8")
-
-
-def _decode_json_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
-    if isinstance(value, str):
-        return decoder(value)
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    return decoder(bytes(value).decode("utf-8"))
-
-
-def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
-    payload = _encode_json_payload(value, encoder)
-    if payload.startswith(_JSONB_BINARY_VERSION):
-        return payload
-    return _JSONB_BINARY_VERSION + payload
-
-
-def _decode_jsonb_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
-    if isinstance(value, str):
-        return decoder(value)
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    payload = bytes(value)
-    if payload.startswith(_JSONB_BINARY_VERSION):
-        payload = payload[1:]
-    return decoder(payload.decode("utf-8"))
 
 
 async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
@@ -365,26 +278,6 @@ def resolve_many_rowcount(parameter_sets: Any, *, fallback_count: "int | None" =
     if isinstance(parameter_sets, Sized):
         return len(parameter_sets)
     return 0
-
-
-def _create_postgres_error(
-    error: Any, code: "str | None", error_class: type[SQLSpecError], description: str
-) -> SQLSpecError:
-    """Create a SQLSpec exception from an asyncpg error.
-
-    Args:
-        error: The original asyncpg exception
-        code: PostgreSQL SQLSTATE error code
-        error_class: The SQLSpec exception class to instantiate
-        description: Human-readable description of the error type
-
-    Returns:
-        A new SQLSpec exception instance with the original as its cause
-    """
-    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
 
 
 _EXCEPTION_MAPPING_DISPATCHER.register(
@@ -534,3 +427,109 @@ class AsyncpgStreamSource:
             except Exception:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()
+
+
+def _convert_datetime_param(value: Any) -> Any:
+    """Convert datetime parameter, handling ISO strings."""
+
+    if isinstance(value, str):
+        return datetime.datetime.fromisoformat(value)
+    return value
+
+
+def _convert_date_param(value: Any) -> Any:
+    """Convert date parameter, handling ISO strings."""
+
+    if isinstance(value, str):
+        return datetime.date.fromisoformat(value)
+    return value
+
+
+def _convert_time_param(value: Any) -> Any:
+    """Convert time parameter, handling ISO strings."""
+
+    if isinstance(value, str):
+        return datetime.time.fromisoformat(value)
+    return value
+
+
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for AsyncPG."""
+
+    return {
+        datetime.datetime: _convert_datetime_param,
+        datetime.date: _convert_date_param,
+        datetime.time: _convert_time_param,
+        **build_uuid_coercions(native=True),
+    }
+
+
+def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, str):
+        return value.encode("utf-8")
+
+    encoded = encoder(value)
+    if isinstance(encoded, bytes):
+        return encoded
+    if isinstance(encoded, bytearray):
+        return bytes(encoded)
+    if isinstance(encoded, memoryview):
+        return encoded.tobytes()
+    return str(encoded).encode("utf-8")
+
+
+def _decode_json_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+    if isinstance(value, str):
+        return decoder(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    return decoder(bytes(value).decode("utf-8"))
+
+
+def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
+    payload = _encode_json_payload(value, encoder)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        return payload
+    return _JSONB_BINARY_VERSION + payload
+
+
+def _decode_jsonb_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+    if isinstance(value, str):
+        return decoder(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    payload = bytes(value)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        payload = payload[1:]
+    return decoder(payload.decode("utf-8"))
+
+
+def _create_postgres_error(
+    error: Any, code: "str | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from an asyncpg error.
+
+    Args:
+        error: The original asyncpg exception
+        code: PostgreSQL SQLSTATE error code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
+    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

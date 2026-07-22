@@ -37,10 +37,6 @@ if TYPE_CHECKING:
 __all__ = ("ArrowOdbcCursor", "ArrowOdbcDriver", "ArrowOdbcExceptionHandler", "resolve_dialect_from_dbms_name")
 
 
-def _quote_odbc_table(table: str) -> str:
-    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
-
-
 class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
     """Sync context manager handling arrow-odbc exceptions."""
 
@@ -208,15 +204,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "ArrowOdbcRawCursor") -> int:
         return 0
 
-    def _connection_in_transaction(self) -> bool:
-        """Return whether SQLSpec holds an explicit transaction on the connection.
-
-        arrow-odbc does not expose a portable transaction-state API, so the
-        driver tracks the boundary opened by begin() and closed by
-        commit()/rollback().
-        """
-        return self._transaction_active
-
     def begin(self) -> None:
         try:
             self.connection.execute("BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN")
@@ -377,6 +364,15 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
+    def _connection_in_transaction(self) -> bool:
+        """Return whether SQLSpec holds an explicit transaction on the connection.
+
+        arrow-odbc does not expose a portable transaction-state API, so the
+        driver tracks the boundary opened by begin() and closed by
+        commit()/rollback().
+        """
+        return self._transaction_active
+
     def _read_arrow_batches(self, sql: str, parameters: "list[str | None] | None", batch_size: int) -> Any:
         kwargs: dict[str, Any] = {
             "query": sql,
@@ -406,6 +402,10 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         if connection_string:
             return str(connection_string)
         return None
+
+
+def _quote_odbc_table(table: str) -> str:
+    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
 def _statement_dialect_for(dialect: str) -> str:

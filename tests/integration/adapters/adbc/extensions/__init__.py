@@ -1,1 +1,0 @@
-"""ADBC extension integration tests."""

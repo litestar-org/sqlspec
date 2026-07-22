@@ -180,69 +180,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
-    ) -> "SQLResult":
-        """Execute cached queries through the async cursor fast path."""
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
-        normalized_parameters = normalize_execute_parameters(prepared_params)
-        direct_statement: SQL | None = None
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        self._invalidate_rowid_target_cache(cached.operation_type)
-        try:
-            async with exc_handler:
-                if cached.operation_profile.returns_rows:
-                    fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
-                        self.connection,
-                        _execute_fetchall_with_metadata,
-                        self.connection,
-                        cached.compiled_sql,
-                        normalized_parameters,
-                        cached.operation_type,
-                        cached.processed_state.parsed_expression,
-                        self._rowid_target_cache,
-                    )
-                    data, column_names, row_count = collect_rows(fetched_data, description)
-                    execution_result = self.create_execution_result(
-                        self.connection,
-                        selected_data=data,
-                        column_names=column_names,
-                        data_row_count=row_count,
-                        is_select_result=True,
-                        row_format=resolve_row_format(data),
-                        last_inserted_id=last_inserted_id,
-                    )
-                    direct_statement = self._cached_statement(
-                        sql,
-                        params,
-                        cached,
-                        cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
-                        params_are_simple=True,
-                        compiled_sql=cached.compiled_sql,
-                    )
-                    result = self.build_statement_result(direct_statement, execution_result)
-                else:
-                    affected_rows, last_inserted_id = await run_on_worker_thread(
-                        self.connection,
-                        _execute_and_resolve_metadata,
-                        self.connection,
-                        cached.compiled_sql,
-                        normalized_parameters,
-                        cached.operation_type,
-                        cached.processed_state.parsed_expression,
-                        self._rowid_target_cache,
-                    )
-                    result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
-
-            self._check_pending_exception(exc_handler)
-            assert result is not None
-            return result
-        finally:
-            self._invalidate_rowid_target_cache(cached.operation_type)
-            if direct_statement is not None:
-                self._release_pooled_statement(direct_statement)
-
     async def execute_many(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -273,115 +210,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             self._invalidate_rowid_target_cache(operation)
             return DMLResult(operation, affected_rows)
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
-
-    def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
-        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
-            self._rowid_target_cache.clear()
-
-    def _can_use_execute_many_thin_path(
-        self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"
-    ) -> bool:
-        if type(parameters) is not list:
-            return False
-        if not parameters:
-            return False
-        if "?" not in statement:
-            return False
-
-        parameter_config = config.parameter_config
-        if parameter_config.default_parameter_style is not ParameterStyle.QMARK:
-            return False
-        if (
-            parameter_config.default_execution_parameter_style is not None
-            and parameter_config.default_execution_parameter_style is not ParameterStyle.QMARK
-        ):
-            return False
-        if parameter_config.ast_transformer is not None or parameter_config.output_transformer is not None:
-            return False
-        if parameter_config.needs_static_script_compilation:
-            return False
-        if config.output_transformer is not None or config.statement_transformers:
-            return False
-
-        return self._thin_path_parameters_are_eligible(parameters, parameter_config.type_coercion_map)
-
-    @staticmethod
-    def _thin_path_parameters_are_eligible(
-        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
-    ) -> bool:
-        first_sequence = AiosqliteDriver._as_sequence_parameter_set(parameters[0])
-        if first_sequence is None:
-            return False
-
-        first_type = type(first_sequence)
-        row_len = len(first_sequence)
-        coercion_map = type_coercion_map
-        has_type_coercion = bool(coercion_map)
-        fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
-
-        if row_len == 1:
-            if has_type_coercion and coercion_map is not None:
-                for param_set in parameters:
-                    sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-                    if sequence is None or type(sequence) is not first_type:
-                        return False
-                    if len(sequence) != 1:
-                        return False
-                    if parameter_value_needs_processing(sequence[0], coercion_map, fallback_items):
-                        return False
-                return True
-
-            for param_set in parameters:
-                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-                if sequence is None or type(sequence) is not first_type:
-                    return False
-                if len(sequence) != 1:
-                    return False
-                if type(sequence[0]) is TypedParameter:
-                    return False
-            return True
-
-        if has_type_coercion and coercion_map is not None:
-            for param_set in parameters:
-                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-                if sequence is None or type(sequence) is not first_type:
-                    return False
-                if len(sequence) != row_len:
-                    return False
-                for value in sequence:
-                    if parameter_value_needs_processing(value, coercion_map, fallback_items):
-                        return False
-            return True
-
-        for param_set in parameters:
-            sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-            if sequence is None or type(sequence) is not first_type:
-                return False
-            if len(sequence) != row_len:
-                return False
-            for value in sequence:
-                if type(value) is TypedParameter:
-                    return False
-        return True
-
-    @staticmethod
-    def _as_sequence_parameter_set(param_set: "StatementParameters") -> "list[Any] | tuple[Any, ...] | None":
-        if isinstance(param_set, list):
-            return param_set
-        if isinstance(param_set, tuple):
-            return param_set
-        return None
-
-    @staticmethod
-    def _resolve_dml_operation_type(statement: str) -> "OperationType":
-        command_keyword = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
-        if command_keyword == "INSERT":
-            return "INSERT"
-        if command_keyword == "UPDATE":
-            return "UPDATE"
-        if command_keyword == "DELETE":
-            return "DELETE"
-        return "COMMAND"
 
     # ─────────────────────────────────────────────────────────────────────────────
     # TRANSACTION MANAGEMENT
@@ -538,6 +366,178 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from aiosqlite cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
+    ) -> "SQLResult":
+        """Execute cached queries through the async cursor fast path."""
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
+        normalized_parameters = normalize_execute_parameters(prepared_params)
+        direct_statement: SQL | None = None
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        self._invalidate_rowid_target_cache(cached.operation_type)
+        try:
+            async with exc_handler:
+                if cached.operation_profile.returns_rows:
+                    fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
+                        self.connection,
+                        _execute_fetchall_with_metadata,
+                        self.connection,
+                        cached.compiled_sql,
+                        normalized_parameters,
+                        cached.operation_type,
+                        cached.processed_state.parsed_expression,
+                        self._rowid_target_cache,
+                    )
+                    data, column_names, row_count = collect_rows(fetched_data, description)
+                    execution_result = self.create_execution_result(
+                        self.connection,
+                        selected_data=data,
+                        column_names=column_names,
+                        data_row_count=row_count,
+                        is_select_result=True,
+                        row_format=resolve_row_format(data),
+                        last_inserted_id=last_inserted_id,
+                    )
+                    direct_statement = self._cached_statement(
+                        sql,
+                        params,
+                        cached,
+                        cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
+                        params_are_simple=True,
+                        compiled_sql=cached.compiled_sql,
+                    )
+                    result = self.build_statement_result(direct_statement, execution_result)
+                else:
+                    affected_rows, last_inserted_id = await run_on_worker_thread(
+                        self.connection,
+                        _execute_and_resolve_metadata,
+                        self.connection,
+                        cached.compiled_sql,
+                        normalized_parameters,
+                        cached.operation_type,
+                        cached.processed_state.parsed_expression,
+                        self._rowid_target_cache,
+                    )
+                    result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
+
+            self._check_pending_exception(exc_handler)
+            assert result is not None
+            return result
+        finally:
+            self._invalidate_rowid_target_cache(cached.operation_type)
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
+
+    def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
+        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
+            self._rowid_target_cache.clear()
+
+    def _can_use_execute_many_thin_path(
+        self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"
+    ) -> bool:
+        if type(parameters) is not list:
+            return False
+        if not parameters:
+            return False
+        if "?" not in statement:
+            return False
+
+        parameter_config = config.parameter_config
+        if parameter_config.default_parameter_style is not ParameterStyle.QMARK:
+            return False
+        if (
+            parameter_config.default_execution_parameter_style is not None
+            and parameter_config.default_execution_parameter_style is not ParameterStyle.QMARK
+        ):
+            return False
+        if parameter_config.ast_transformer is not None or parameter_config.output_transformer is not None:
+            return False
+        if parameter_config.needs_static_script_compilation:
+            return False
+        if config.output_transformer is not None or config.statement_transformers:
+            return False
+
+        return self._thin_path_parameters_are_eligible(parameters, parameter_config.type_coercion_map)
+
+    @staticmethod
+    def _thin_path_parameters_are_eligible(
+        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
+    ) -> bool:
+        first_sequence = AiosqliteDriver._as_sequence_parameter_set(parameters[0])
+        if first_sequence is None:
+            return False
+
+        first_type = type(first_sequence)
+        row_len = len(first_sequence)
+        coercion_map = type_coercion_map
+        has_type_coercion = bool(coercion_map)
+        fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
+
+        if row_len == 1:
+            if has_type_coercion and coercion_map is not None:
+                for param_set in parameters:
+                    sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+                    if sequence is None or type(sequence) is not first_type:
+                        return False
+                    if len(sequence) != 1:
+                        return False
+                    if parameter_value_needs_processing(sequence[0], coercion_map, fallback_items):
+                        return False
+                return True
+
+            for param_set in parameters:
+                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
+                    return False
+                if len(sequence) != 1:
+                    return False
+                if type(sequence[0]) is TypedParameter:
+                    return False
+            return True
+
+        if has_type_coercion and coercion_map is not None:
+            for param_set in parameters:
+                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+                if sequence is None or type(sequence) is not first_type:
+                    return False
+                if len(sequence) != row_len:
+                    return False
+                for value in sequence:
+                    if parameter_value_needs_processing(value, coercion_map, fallback_items):
+                        return False
+            return True
+
+        for param_set in parameters:
+            sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
+            if sequence is None or type(sequence) is not first_type:
+                return False
+            if len(sequence) != row_len:
+                return False
+            for value in sequence:
+                if type(value) is TypedParameter:
+                    return False
+        return True
+
+    @staticmethod
+    def _as_sequence_parameter_set(param_set: "StatementParameters") -> "list[Any] | tuple[Any, ...] | None":
+        if isinstance(param_set, list):
+            return param_set
+        if isinstance(param_set, tuple):
+            return param_set
+        return None
+
+    @staticmethod
+    def _resolve_dml_operation_type(statement: str) -> "OperationType":
+        command_keyword = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
+        if command_keyword == "INSERT":
+            return "INSERT"
+        if command_keyword == "UPDATE":
+            return "UPDATE"
+        if command_keyword == "DELETE":
+            return "DELETE"
+        return "COMMAND"
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

@@ -224,6 +224,184 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # TRANSACTION MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def begin(self) -> None:
+        """Begin a database transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be started
+        """
+        try:
+            if not self.connection.in_transaction:
+                self.connection.execute("BEGIN")
+        except sqlite3.Error as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def commit(self) -> None:
+        """Commit the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be committed
+        """
+        try:
+            self.connection.commit()
+        except sqlite3.Error as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        Raises:
+            SQLSpecError: If transaction cannot be rolled back
+        """
+        try:
+            self.connection.rollback()
+        except sqlite3.Error as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
+        """Create context manager for SQLite cursor.
+
+        Args:
+            connection: SQLite database connection
+
+        Returns:
+            Cursor context manager for safe cursor operations
+        """
+        return SqliteCursor(connection)
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native SQLite row stream backed by chunked ``fetchmany``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size))
+
+    def handle_database_exceptions(self) -> "SqliteExceptionHandler":
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            Exception handler with deferred exception pattern for mypyc compatibility.
+        """
+        return SqliteExceptionHandler()
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # STORAGE API
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write Arrow-compatible output to storage (sync)."""
+
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into SQLite using batched inserts."""
+
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        prepared_records = (
+            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+            if records and self._arrow_rows_need_preparation(arrow_table)
+            else records
+        )
+        owns_transaction = not self.connection.in_transaction
+        try:
+            if owns_transaction:
+                self.connection.execute("BEGIN IMMEDIATE")
+            if overwrite:
+                statement = f"DELETE FROM {format_identifier(table)}"
+                with self.with_cursor(self.connection) as cursor:
+                    cursor.execute(statement)
+            if records:
+                insert_sql = build_insert_statement(table, columns)
+                with self.with_cursor(self.connection) as cursor:
+                    cursor.executemany(insert_sql, cast("Any", prepared_records))
+            if owns_transaction:
+                self.connection.commit()
+        except sqlite3.Error as exc:
+            if owns_transaction:
+                self.connection.rollback()
+            raise create_mapped_exception(exc) from exc
+
+        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into SQLite."""
+
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    @property
+    def data_dictionary(self) -> "SqliteDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = SqliteDataDictionary()
+        return self._data_dictionary
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PRIVATE/INTERNAL METHODS
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect SQLite rows for the direct execution path."""
+        return collect_rows(fetched, cursor.description)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Resolve rowcount from SQLite cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
+
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
@@ -403,184 +581,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         if command_keyword == "DELETE":
             return "DELETE"
         return "COMMAND"
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def begin(self) -> None:
-        """Begin a database transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be started
-        """
-        try:
-            if not self.connection.in_transaction:
-                self.connection.execute("BEGIN")
-        except sqlite3.Error as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def commit(self) -> None:
-        """Commit the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be committed
-        """
-        try:
-            self.connection.commit()
-        except sqlite3.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        Raises:
-            SQLSpecError: If transaction cannot be rolled back
-        """
-        try:
-            self.connection.rollback()
-        except sqlite3.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
-        """Create context manager for SQLite cursor.
-
-        Args:
-            connection: SQLite database connection
-
-        Returns:
-            Cursor context manager for safe cursor operations
-        """
-        return SqliteCursor(connection)
-
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
-        """Return a native SQLite row stream backed by chunked ``fetchmany``."""
-        if not statement.returns_rows():
-            return None
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size))
-
-    def handle_database_exceptions(self) -> "SqliteExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
-
-        Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
-        """
-        return SqliteExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def select_to_storage(
-        self,
-        statement: "SQL | str",
-        destination: "StorageDestination",
-        /,
-        *parameters: Any,
-        statement_config: "StatementConfig | None" = None,
-        partitioner: "dict[str, object] | None" = None,
-        format_hint: "StorageFormat | None" = None,
-        telemetry: "StorageTelemetry | None" = None,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Execute a query and write Arrow-compatible output to storage (sync)."""
-
-        self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
-        sync_pipeline = self._storage_pipeline()
-        telemetry_payload = self._write_storage_result(
-            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
-        )
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_arrow(
-        self,
-        table: str,
-        source: "ArrowResult | Any",
-        *,
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        telemetry: "StorageTelemetry | None" = None,
-    ) -> "StorageBridgeJob":
-        """Load Arrow data into SQLite using batched inserts."""
-
-        self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        prepared_records = (
-            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_rows_need_preparation(arrow_table)
-            else records
-        )
-        owns_transaction = not self.connection.in_transaction
-        try:
-            if owns_transaction:
-                self.connection.execute("BEGIN IMMEDIATE")
-            if overwrite:
-                statement = f"DELETE FROM {format_identifier(table)}"
-                with self.with_cursor(self.connection) as cursor:
-                    cursor.execute(statement)
-            if records:
-                insert_sql = build_insert_statement(table, columns)
-                with self.with_cursor(self.connection) as cursor:
-                    cursor.executemany(insert_sql, cast("Any", prepared_records))
-            if owns_transaction:
-                self.connection.commit()
-        except sqlite3.Error as exc:
-            if owns_transaction:
-                self.connection.rollback()
-            raise create_mapped_exception(exc) from exc
-
-        telemetry_payload = self._ingest_telemetry(arrow_table)
-        telemetry_payload["destination"] = table
-        self._attach_partition_telemetry(telemetry_payload, partitioner)
-        return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into SQLite."""
-
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    @property
-    def data_dictionary(self) -> "SqliteDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = SqliteDataDictionary()
-        return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        """Collect SQLite rows for the direct execution path."""
-        return collect_rows(fetched, cursor.description)
-
-    def resolve_rowcount(self, cursor: Any) -> int:
-        """Resolve rowcount from SQLite cursor for the direct execution path."""
-        return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

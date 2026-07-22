@@ -162,13 +162,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-driver_profile = build_profile()
-
-
 def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
@@ -345,7 +338,8 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     )
 
 
-default_statement_config = build_statement_config()
+def _bool_to_int(value: bool) -> int:
+    return int(value)
 
 
 class _DuckDBStreamSource:
@@ -402,3 +396,8 @@ def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] 
             value = row.get(column)
             if isinstance(value, str):
                 row[column] = UUID(value)
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

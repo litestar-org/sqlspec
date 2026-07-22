@@ -4,9 +4,9 @@ Put each new test at the lowest layer that proves the behavior once. This keeps 
 
 ## Choose the test location
 
-Use `tests/integration/adapters/contracts/` when every capable adapter should act the same. Add the case to the shared suite. Describe any needed capability flag in its `README.md`. Contract tests use shared driver cases and real sessions.
+Use `tests/integration/adapters/<database>/test_shared.py` when every capable driver for a database family should act the same. Reusable templates and capability metadata live in `tests/integration/adapters/_shared/`; family modules own collection so failures are reported under SQLite, MySQL, PostgreSQL, Oracle, MSSQL, and the other database families.
 
-Use `tests/integration/adapters/<adapter>/` for behavior that belongs to one backend or vendor API. Examples include emulator differences, native bulk loads, server data types, and unique driver options. Reuse `tests/integration/fixtures/`. Do not create a second pool or service fixture in the adapter folder.
+Use `tests/integration/adapters/<database>/<driver>/` for behavior that belongs to one driver or vendor API. Examples include emulator differences, native bulk loads, server data types, and unique driver options. Reuse `tests/integration/fixtures/`. Do not create a second pool or service fixture in the driver folder.
 
 Use `tests/unit/` for code that does not need a database. Good targets include parsing, config setup, conversion functions, and clear third-party boundaries. Do not build a driver over a mock connection. Do not patch private compile or dispatch methods. Test those paths through an integration test or contract.
 
@@ -33,4 +33,4 @@ make test
 make coverage
 ```
 
-When adapter behavior changes, also run the matching contract cases and the adapter's integration directory. Compiled-build changes require `make install-compiled` followed by `make test`.
+When adapter behavior changes, run the database family's `test_shared.py` and the driver's integration directory. Compiled-build changes require `make install-compiled` followed by `make test`.

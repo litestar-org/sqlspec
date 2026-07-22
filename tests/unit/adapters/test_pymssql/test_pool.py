@@ -2,7 +2,7 @@
 
 from typing import Any, cast
 
-from tests.unit.adapters.test_pymssql.conftest import FakeConnection, FakePymssqlModule
+from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakePymssqlModule
 
 
 def test_pool_connects_with_config_and_runs_hook(monkeypatch) -> None:

@@ -43,10 +43,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 
-def _quote_mssql_table(table: str) -> str:
-    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
-
-
 __all__ = (
     "MssqlPythonBulkCopyResult",
     "MssqlPythonCursor",
@@ -199,13 +195,11 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
     def collect_rows(self, cursor: "MssqlPythonRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = _resolve_column_names(cursor.description, self._column_name_cache)
-        return fetched, column_names, len(fetched)
+        rows = materialize_tuple_rows(fetched)
+        return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: "MssqlPythonRawCursor") -> int:
         return _cursor_rowcount(cursor)
-
-    def _connection_in_transaction(self) -> bool:
-        return self._transaction_active
 
     def begin(self) -> None:
         if self._transaction_active:
@@ -237,17 +231,6 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from exc
         self._transaction_active = False
         self._restore_connection_autocommit()
-
-    def _restore_connection_autocommit(self) -> None:
-        restore_autocommit = self._restore_autocommit
-        self._restore_autocommit = False
-        if not restore_autocommit:
-            return
-        try:
-            self.connection.autocommit = True
-        except _MSSQL_ERROR as exc:
-            msg = f"Failed to restore autocommit: {exc}"
-            raise SQLSpecError(msg) from exc
 
     def with_cursor(self, connection: "MssqlPythonConnection") -> "MssqlPythonCursor":
         return MssqlPythonCursor(connection)
@@ -426,6 +409,24 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         """Load staged artifacts from storage into SQL Server via BulkCopy."""
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    def _connection_in_transaction(self) -> bool:
+        return self._transaction_active
+
+    def _restore_connection_autocommit(self) -> None:
+        restore_autocommit = self._restore_autocommit
+        self._restore_autocommit = False
+        if not restore_autocommit:
+            return
+        try:
+            self.connection.autocommit = True
+        except _MSSQL_ERROR as exc:
+            msg = f"Failed to restore autocommit: {exc}"
+            raise SQLSpecError(msg) from exc
+
+
+def _quote_mssql_table(table: str) -> str:
+    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:

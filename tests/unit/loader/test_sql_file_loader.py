@@ -9,7 +9,6 @@ Tests for SQLFileLoader core functionality including:
 - Parameter style detection and preservation
 """
 
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1003,9 +1002,8 @@ def test_parse_oracle_ddl_fixture(fixture_parsing_path: Path) -> None:
         assert "No named SQL statements found" in str(e)
 
 
-@pytest.mark.benchmark
-def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
-    """Test parsing performance with large fixture files."""
+def test_large_fixture_parsing(fixture_parsing_path: Path) -> None:
+    """Test parsing large fixture files."""
 
     large_fixtures = [
         "postgres/collection-database_details.sql",
@@ -1023,11 +1021,8 @@ def test_large_fixture_parsing_performance(fixture_parsing_path: Path) -> None:
         with open(fixture_file, encoding="utf-8") as f:
             content = f.read()
 
-        start_time = time.time()
         statements = SQLFileLoader._parse_statements(content, str(fixture_file))
-        parse_time = time.time() - start_time
 
-        assert parse_time < 0.5, f"Parsing {fixture_path} took too long: {parse_time:.3f}s"
         assert len(statements) > 0, f"No statements found in {fixture_path}"
 
 

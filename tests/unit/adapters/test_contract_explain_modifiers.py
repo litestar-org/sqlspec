@@ -2,9 +2,9 @@
 
 import pytest
 
-from tests.integration.adapters.contracts import behaviors
-from tests.integration.adapters.contracts._cases import DRIVER_CASES, get_driver_case
-from tests.integration.adapters.contracts.behaviors import EXPLAIN_MODIFIERS_SCOPE, validate_extra_assertions
+from tests.integration.adapters._shared import behaviors
+from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
+from tests.integration.adapters._shared.behaviors import EXPLAIN_MODIFIERS_SCOPE, validate_extra_assertions
 
 SYNC_PROOF_KEYS = (
     "explain_modifiers:postgres",

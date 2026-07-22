@@ -9,6 +9,8 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
+from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyPoolParams
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgPoolParams, PsycopgSyncConfig
 
@@ -19,6 +21,9 @@ __all__ = (
     "asyncpg_async_driver",
     "asyncpg_config",
     "asyncpg_connection_config",
+    "cockroach_asyncpg_config",
+    "cockroach_psycopg_async_config",
+    "cockroach_psycopg_sync_config",
     "paradedb_config_adbc",
     "paradedb_config_asyncpg",
     "paradedb_config_psqlpy",
@@ -156,6 +161,53 @@ async def psqlpy_config(postgres_service: "PostgresService") -> "AsyncGenerator[
         if config.connection_instance is not None:
             config.connection_instance.close()
             config.connection_instance = None
+
+
+@pytest.fixture(scope="session")
+async def cockroach_asyncpg_config(
+    cockroachdb_service: "CockroachDBService",
+) -> "AsyncGenerator[CockroachAsyncpgConfig, None]":
+    """Provide a session-scoped CockroachDB asyncpg configuration."""
+    connection_config = _cockroach_asyncpg_connection_config(cockroachdb_service)
+    connection_config.update({"min_size": 1, "max_size": 5})
+    config = CockroachAsyncpgConfig(connection_config=connection_config)
+    try:
+        yield config
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+            config.connection_instance = None
+
+
+@pytest.fixture(scope="session")
+async def cockroach_psycopg_async_config(
+    cockroachdb_service: "CockroachDBService",
+) -> "AsyncGenerator[CockroachPsycopgAsyncConfig, None]":
+    """Provide a session-scoped CockroachDB psycopg async configuration."""
+    config = CockroachPsycopgAsyncConfig(
+        connection_config={"conninfo": _cockroach_conninfo(cockroachdb_service), "min_size": 1, "max_size": 5}
+    )
+    try:
+        yield config
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+            config.connection_instance = None
+
+
+@pytest.fixture(scope="session")
+def cockroach_psycopg_sync_config(
+    cockroachdb_service: "CockroachDBService",
+) -> "Generator[CockroachPsycopgSyncConfig, None, None]":
+    """Provide a session-scoped CockroachDB psycopg sync configuration."""
+    config = CockroachPsycopgSyncConfig(
+        connection_config={"conninfo": _cockroach_conninfo(cockroachdb_service), "min_size": 1, "max_size": 5}
+    )
+    try:
+        yield config
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
 
 
 @pytest.fixture

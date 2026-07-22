@@ -67,44 +67,6 @@ _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
 )
 
 
-class _SpannerResultSetProtocol(Protocol):
-    metadata: Any
-
-    def __iter__(self) -> Iterator[Any]: ...
-
-
-class _SpannerReadProtocol(Protocol):
-    def execute_sql(
-        self,
-        sql: str,
-        params: "dict[str, Any] | None" = None,
-        param_types: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> _SpannerResultSetProtocol: ...
-
-
-class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
-    committed: "Any | None"
-
-    def execute_update(
-        self,
-        sql: str,
-        params: "dict[str, Any] | None" = None,
-        param_types: "dict[str, Any] | None" = None,
-        **kwargs: Any,
-    ) -> int: ...
-
-    def batch_update(
-        self, batch: "list[tuple[str, dict[str, Any] | None, dict[str, Any]]]", **kwargs: Any
-    ) -> "tuple[Any, list[int]]": ...
-
-    def insert_or_update(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
-
-    def commit(self) -> None: ...
-
-    def rollback(self) -> None: ...
-
-
 class SpannerExceptionHandler(BaseSyncExceptionHandler):
     """Map Spanner client exceptions to SQLSpec exceptions.
 
@@ -124,120 +86,6 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
-
-
-class _PerCallExecuteOptions:
-    """Per-call Spanner execution options captured for a single dispatch."""
-
-    __slots__ = ("directed_read_options", "request_options", "retry", "timeout")
-
-    def __init__(
-        self,
-        *,
-        request_options: "RequestOptions | dict[str, Any] | None" = None,
-        directed_read_options: "DirectedReadOptions | None" = None,
-        retry: "Retry | None" = None,
-        timeout: "float | None" = None,
-    ) -> None:
-        self.request_options = request_options
-        self.directed_read_options = directed_read_options
-        self.retry = retry
-        self.timeout = timeout
-
-
-class _SpannerSelectStreamSource:
-    """Native chunk source for Spanner SELECT streaming."""
-
-    __slots__ = (
-        "_chunk_size",
-        "_column_names",
-        "_column_plan",
-        "_driver",
-        "_execute_kwargs",
-        "_param_types",
-        "_params",
-        "_result_set",
-        "_row_iterator",
-        "_sql",
-    )
-
-    def __init__(
-        self,
-        driver: "SpannerSyncDriver",
-        sql: str,
-        params: "dict[str, Any] | None",
-        param_types: "dict[str, Any]",
-        chunk_size: int,
-        execute_kwargs: "dict[str, Any]",
-    ) -> None:
-        self._driver = driver
-        self._sql = sql
-        self._params = params
-        self._param_types = param_types
-        self._chunk_size = chunk_size
-        self._execute_kwargs = execute_kwargs
-        self._column_names: list[str] | None = None
-        self._column_plan: tuple[tuple[int, Any], ...] | None = None
-        self._result_set: _SpannerResultSetProtocol | None = None
-        self._row_iterator: Iterator[Any] | None = None
-
-    def start(self) -> None:
-        handler = self._driver.handle_database_exceptions()
-        with handler:
-            result_set = self._driver.connection.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = iter(result_set)
-        self._driver._check_pending_exception(handler)
-
-    def fetch_chunk(self) -> "list[dict[str, Any]]":
-        result_set = self._result_set
-        row_iterator = self._row_iterator
-        column_names = self._column_names
-        if result_set is None or row_iterator is None:
-            return []
-
-        handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = list(islice(row_iterator, self._chunk_size))
-        self._driver._check_pending_exception(handler)
-        if not rows:
-            return []
-
-        if column_names is None:
-            try:
-                metadata = result_set.metadata
-                row_type = metadata.row_type
-                fields = row_type.fields
-            except AttributeError:
-                msg = "Result set metadata not available."
-                raise SQLConversionError(msg)
-            if not fields:
-                msg = "Result set metadata not available."
-                raise SQLConversionError(msg)
-            column_names, column_plan = self._driver._resolve_row_plan(fields)
-            self._column_names = column_names
-            self._column_plan = column_plan
-
-        converted_rows, resolved_column_names = collect_rows(
-            rows, (), column_names=column_names, column_plan=self._column_plan
-        )
-        self._column_names = resolved_column_names
-        return rows_to_dicts(converted_rows, resolved_column_names)
-
-    def close(self, error: bool = False) -> None:
-        result_set = self._result_set
-        if result_set is not None:
-            close = getattr(result_set, "close", None)
-            if callable(close):
-                with contextlib.suppress(Exception):
-                    close()
-        self._result_set = None
-        self._row_iterator = None
-        self._column_names = None
-        self._column_plan = None
 
 
 class SpannerSyncDriver(SyncDriverAdapterBase):
@@ -533,38 +381,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         finally:
             self._pending_execute_options = previous_options
 
-    def _execute_kwargs(self, *, for_read: bool = False) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {
-            key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features
-        }
-        request_options = self.driver_features.get("request_options")
-        if request_options is not None:
-            kwargs["request_options"] = request_options
-        directed_read_options = self.driver_features.get("directed_read_options")
-        if for_read and directed_read_options is not None:
-            kwargs["directed_read_options"] = directed_read_options
-        pending = self._pending_execute_options
-        if pending is not None:
-            if pending.request_options is not None:
-                kwargs["request_options"] = pending.request_options
-            if pending.retry is not None:
-                kwargs["retry"] = pending.retry
-            if pending.timeout is not None:
-                kwargs["timeout"] = pending.timeout
-            if for_read and pending.directed_read_options is not None:
-                kwargs["directed_read_options"] = pending.directed_read_options
-        return kwargs
-
-    def _pop_execute_options(self, kwargs: dict[str, Any]) -> "_PerCallExecuteOptions | None":
-        if not any(key in kwargs for key in ("request_options", "directed_read_options", "retry", "timeout")):
-            return None
-        return _PerCallExecuteOptions(
-            request_options=kwargs.pop("request_options", None),
-            directed_read_options=kwargs.pop("directed_read_options", None),
-            retry=kwargs.pop("retry", None),
-            timeout=kwargs.pop("timeout", None),
-        )
-
     # ─────────────────────────────────────────────────────────────────────────────
     # ARROW API METHODS
     # ─────────────────────────────────────────────────────────────────────────────
@@ -636,46 +452,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
-        """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
-        column_count = len(columns)
-        max_cells = 80_000
-        chunks: list[list[list[Any]]] = []
-        values: list[list[Any]] = []
-        pending_cells = 0
-        for record in records:
-            if values and pending_cells + column_count > max_cells:
-                chunks.append(values)
-                values = []
-                pending_cells = 0
-            coerced = self._coerce_params({f"p{i}": value for i, value in enumerate(record)}) or {}
-            values.append([coerced.get(f"p{i}") for i in range(column_count)])
-            pending_cells += column_count
-            if pending_cells == max_cells:
-                chunks.append(values)
-                values = []
-                pending_cells = 0
-        if values:
-            chunks.append(values)
-        return chunks
-
-    def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
-        """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
-        session = cast("object", getattr(self.connection, "_session", None))
-        database = cast("Any", getattr(session, "_database", None)) if session is not None else None
-        if database is None:
-            msg = "Spanner Batch Write API requires a database-backed session."
-            raise SQLConversionError(msg)
-        with database.mutation_groups() as mutation_groups:
-            for chunk in chunks:
-                group = mutation_groups.group()
-                group.insert_or_update(table, columns, chunk)
-            for response in mutation_groups.batch_write():
-                status = response.status
-                if status is not None and status.code:
-                    msg = f"Spanner batch_write group failed: {status.message}"
-                    raise SQLConversionError(msg)
-
     def load_from_storage(
         self,
         table: str,
@@ -730,6 +506,78 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """
         return 0
 
+    def _execute_kwargs(self, *, for_read: bool = False) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features
+        }
+        request_options = self.driver_features.get("request_options")
+        if request_options is not None:
+            kwargs["request_options"] = request_options
+        directed_read_options = self.driver_features.get("directed_read_options")
+        if for_read and directed_read_options is not None:
+            kwargs["directed_read_options"] = directed_read_options
+        pending = self._pending_execute_options
+        if pending is not None:
+            if pending.request_options is not None:
+                kwargs["request_options"] = pending.request_options
+            if pending.retry is not None:
+                kwargs["retry"] = pending.retry
+            if pending.timeout is not None:
+                kwargs["timeout"] = pending.timeout
+            if for_read and pending.directed_read_options is not None:
+                kwargs["directed_read_options"] = pending.directed_read_options
+        return kwargs
+
+    def _pop_execute_options(self, kwargs: dict[str, Any]) -> "_PerCallExecuteOptions | None":
+        if not any(key in kwargs for key in ("request_options", "directed_read_options", "retry", "timeout")):
+            return None
+        return _PerCallExecuteOptions(
+            request_options=kwargs.pop("request_options", None),
+            directed_read_options=kwargs.pop("directed_read_options", None),
+            retry=kwargs.pop("retry", None),
+            timeout=kwargs.pop("timeout", None),
+        )
+
+    def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
+        """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
+        column_count = len(columns)
+        max_cells = 80_000
+        chunks: list[list[list[Any]]] = []
+        values: list[list[Any]] = []
+        pending_cells = 0
+        for record in records:
+            if values and pending_cells + column_count > max_cells:
+                chunks.append(values)
+                values = []
+                pending_cells = 0
+            coerced = self._coerce_params({f"p{i}": value for i, value in enumerate(record)}) or {}
+            values.append([coerced.get(f"p{i}") for i in range(column_count)])
+            pending_cells += column_count
+            if pending_cells == max_cells:
+                chunks.append(values)
+                values = []
+                pending_cells = 0
+        if values:
+            chunks.append(values)
+        return chunks
+
+    def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
+        """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
+        session = cast("object", getattr(self.connection, "_session", None))
+        database = cast("Any", getattr(session, "_database", None)) if session is not None else None
+        if database is None:
+            msg = "Spanner Batch Write API requires a database-backed session."
+            raise SQLConversionError(msg)
+        with database.mutation_groups() as mutation_groups:
+            for chunk in chunks:
+                group = mutation_groups.group()
+                group.insert_or_update(table, columns, chunk)
+            for response in mutation_groups.batch_write():
+                status = response.status
+                if status is not None and status.code:
+                    msg = f"Spanner batch_write group failed: {status.message}"
+                    raise SQLConversionError(msg)
+
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return False
@@ -743,6 +591,158 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _resolve_row_plan(self, fields: Any) -> "tuple[list[str], tuple[tuple[int, Any], ...] | None]":
         json_deserializer = cast("Callable[[str], Any]", self.driver_features.get("json_deserializer", from_json))
         return resolve_row_plan(fields, self._row_plan_cache, json_deserializer=json_deserializer)
+
+
+class _SpannerResultSetProtocol(Protocol):
+    metadata: Any
+
+    def __iter__(self) -> Iterator[Any]: ...
+
+
+class _SpannerReadProtocol(Protocol):
+    def execute_sql(
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> _SpannerResultSetProtocol: ...
+
+
+class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
+    committed: "Any | None"
+
+    def execute_update(
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int: ...
+
+    def batch_update(
+        self, batch: "list[tuple[str, dict[str, Any] | None, dict[str, Any]]]", **kwargs: Any
+    ) -> "tuple[Any, list[int]]": ...
+
+    def insert_or_update(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
+
+class _PerCallExecuteOptions:
+    """Per-call Spanner execution options captured for a single dispatch."""
+
+    __slots__ = ("directed_read_options", "request_options", "retry", "timeout")
+
+    def __init__(
+        self,
+        *,
+        request_options: "RequestOptions | dict[str, Any] | None" = None,
+        directed_read_options: "DirectedReadOptions | None" = None,
+        retry: "Retry | None" = None,
+        timeout: "float | None" = None,
+    ) -> None:
+        self.request_options = request_options
+        self.directed_read_options = directed_read_options
+        self.retry = retry
+        self.timeout = timeout
+
+
+class _SpannerSelectStreamSource:
+    """Native chunk source for Spanner SELECT streaming."""
+
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_column_plan",
+        "_driver",
+        "_execute_kwargs",
+        "_param_types",
+        "_params",
+        "_result_set",
+        "_row_iterator",
+        "_sql",
+    )
+
+    def __init__(
+        self,
+        driver: "SpannerSyncDriver",
+        sql: str,
+        params: "dict[str, Any] | None",
+        param_types: "dict[str, Any]",
+        chunk_size: int,
+        execute_kwargs: "dict[str, Any]",
+    ) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._params = params
+        self._param_types = param_types
+        self._chunk_size = chunk_size
+        self._execute_kwargs = execute_kwargs
+        self._column_names: list[str] | None = None
+        self._column_plan: tuple[tuple[int, Any], ...] | None = None
+        self._result_set: _SpannerResultSetProtocol | None = None
+        self._row_iterator: Iterator[Any] | None = None
+
+    def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        with handler:
+            result_set = self._driver.connection.execute_sql(
+                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+            )
+            self._result_set = result_set
+            self._row_iterator = iter(result_set)
+        self._driver._check_pending_exception(handler)
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        result_set = self._result_set
+        row_iterator = self._row_iterator
+        column_names = self._column_names
+        if result_set is None or row_iterator is None:
+            return []
+
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        with handler:
+            rows = list(islice(row_iterator, self._chunk_size))
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+
+        if column_names is None:
+            try:
+                metadata = result_set.metadata
+                row_type = metadata.row_type
+                fields = row_type.fields
+            except AttributeError:
+                msg = "Result set metadata not available."
+                raise SQLConversionError(msg)
+            if not fields:
+                msg = "Result set metadata not available."
+                raise SQLConversionError(msg)
+            column_names, column_plan = self._driver._resolve_row_plan(fields)
+            self._column_names = column_names
+            self._column_plan = column_plan
+
+        converted_rows, resolved_column_names = collect_rows(
+            rows, (), column_names=column_names, column_plan=self._column_plan
+        )
+        self._column_names = resolved_column_names
+        return rows_to_dicts(converted_rows, resolved_column_names)
+
+    def close(self, error: bool = False) -> None:
+        result_set = self._result_set
+        if result_set is not None:
+            close = getattr(result_set, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+        self._result_set = None
+        self._row_iterator = None
+        self._column_names = None
+        self._column_plan = None
 
 
 register_driver_profile("spanner", driver_profile)

@@ -5,8 +5,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.integration.adapters.contracts._cases import DriverCase
-from tests.integration.adapters.contracts.behaviors import (
+from tests.integration.adapters._shared._cases import DriverCase
+from tests.integration.adapters._shared.behaviors import (
     dispatch_async_extra_assertions,
     dispatch_sync_extra_assertions,
     known_extra_assertion_keys,
@@ -34,7 +34,7 @@ def _registered_sync(key: str, scope: str) -> "Iterator[list[tuple[object, Drive
     try:
         yield calls
     finally:
-        from tests.integration.adapters.contracts import behaviors
+        from tests.integration.adapters._shared import behaviors
 
         behaviors._SYNC_EXTRA_ASSERTIONS.pop(key, None)
 
@@ -50,7 +50,7 @@ def _registered_async(key: str, scope: str) -> "Iterator[list[tuple[object, Driv
     try:
         yield calls
     finally:
-        from tests.integration.adapters.contracts import behaviors
+        from tests.integration.adapters._shared import behaviors
 
         behaviors._ASYNC_EXTRA_ASSERTIONS.pop(key, None)
 

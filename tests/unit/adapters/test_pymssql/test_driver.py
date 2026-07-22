@@ -7,7 +7,7 @@ import pytest
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError, TransactionError, UniqueViolationError
-from tests.unit.adapters.test_pymssql.conftest import (
+from tests.unit.adapters.test_pymssql._fakes import (
     FakeConnection,
     FakeCursor,
     FakePymssqlIntegrityError,

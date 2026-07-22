@@ -118,15 +118,6 @@ def pipeline_supported() -> bool:
         return False
 
 
-def _compose_table_identifier(table: str) -> "PsycopgComposed":
-    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
-    if not parts:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    identifiers = [PsycopgIdentifier(part) for part in parts]
-    return PsycopgSQL(".").join(identifiers)
-
-
 def build_copy_from_command(table: str, columns: "list[str]") -> "PsycopgComposed":
     table_identifier = _compose_table_identifier(table)
     column_sql = PsycopgSQL(", ").join([PsycopgIdentifier(column) for column in columns])
@@ -135,46 +126,6 @@ def build_copy_from_command(table: str, columns: "list[str]") -> "PsycopgCompose
 
 def build_truncate_command(table: str) -> "PsycopgComposed":
     return PsycopgSQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
-    """Return custom type coercions for psycopg."""
-
-    return {
-        datetime.datetime: _identity,
-        datetime.date: _identity,
-        datetime.time: _identity,
-        **build_uuid_coercions(native=True),
-    }
-
-
-def _parameter_config(
-    profile: "DriverParameterProfile", serializer: "Callable[[Any], str]", deserializer: "Callable[[str], Any]"
-) -> "ParameterStyleConfig":
-    """Construct parameter configuration with shared JSON serializer support.
-
-    Args:
-        profile: Driver parameter profile to extend.
-        serializer: JSON serializer for parameter coercion.
-        deserializer: JSON deserializer for result coercion.
-
-    Returns:
-        ParameterStyleConfig with updated type coercions.
-    """
-
-    base_config = build_statement_config_from_profile(
-        profile, json_serializer=serializer, json_deserializer=deserializer
-    ).parameter_config
-
-    updated_type_map = dict(base_config.type_coercion_map)
-    updated_type_map[list] = build_json_list_converter(serializer)
-    updated_type_map[tuple] = build_json_tuple_converter(serializer)
-
-    return base_config.replace(type_coercion_map=updated_type_map)
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -197,9 +148,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-driver_profile = build_profile()
-
-
 def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
@@ -212,9 +160,6 @@ def build_statement_config(
         profile, json_serializer=serializer, json_deserializer=deserializer
     )
     return base_config.replace(parameter_config=parameter_config)
-
-
-default_statement_config = build_statement_config()
 
 
 def apply_driver_features(
@@ -665,3 +610,57 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     # Priority 3: Default fallback
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")
+
+
+def _compose_table_identifier(table: str) -> "PsycopgComposed":
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    identifiers = [PsycopgIdentifier(part) for part in parts]
+    return PsycopgSQL(".").join(identifiers)
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for psycopg."""
+
+    return {
+        datetime.datetime: _identity,
+        datetime.date: _identity,
+        datetime.time: _identity,
+        **build_uuid_coercions(native=True),
+    }
+
+
+def _parameter_config(
+    profile: "DriverParameterProfile", serializer: "Callable[[Any], str]", deserializer: "Callable[[str], Any]"
+) -> "ParameterStyleConfig":
+    """Construct parameter configuration with shared JSON serializer support.
+
+    Args:
+        profile: Driver parameter profile to extend.
+        serializer: JSON serializer for parameter coercion.
+        deserializer: JSON deserializer for result coercion.
+
+    Returns:
+        ParameterStyleConfig with updated type coercions.
+    """
+
+    base_config = build_statement_config_from_profile(
+        profile, json_serializer=serializer, json_deserializer=deserializer
+    ).parameter_config
+
+    updated_type_map = dict(base_config.type_coercion_map)
+    updated_type_map[list] = build_json_list_converter(serializer)
+    updated_type_map[tuple] = build_json_tuple_converter(serializer)
+
+    return base_config.replace(type_coercion_map=updated_type_map)
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

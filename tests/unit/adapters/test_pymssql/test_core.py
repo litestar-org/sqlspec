@@ -9,6 +9,7 @@ from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     ForeignKeyViolationError,
+    NotNullViolationError,
     UniqueViolationError,
 )
 
@@ -24,12 +25,12 @@ def test_profile_uses_tsql_and_pyformat_execution() -> None:
     supported_execution_styles = driver_profile.supported_execution_styles
     assert supported_execution_styles is not None
     assert ParameterStyle.POSITIONAL_PYFORMAT in supported_execution_styles
-    assert ParameterStyle.NAMED_PYFORMAT in supported_execution_styles
+    assert ParameterStyle.NAMED_PYFORMAT not in supported_execution_styles
     assert parameter_config.default_execution_parameter_style is ParameterStyle.POSITIONAL_PYFORMAT
     supported_execution_parameter_styles = parameter_config.supported_execution_parameter_styles
     assert supported_execution_parameter_styles is not None
     assert ParameterStyle.POSITIONAL_PYFORMAT in supported_execution_parameter_styles
-    assert ParameterStyle.NAMED_PYFORMAT in supported_execution_parameter_styles
+    assert ParameterStyle.NAMED_PYFORMAT not in supported_execution_parameter_styles
 
 
 def test_statement_config_compiles_qmark_input_to_percent_s() -> None:
@@ -44,8 +45,8 @@ def test_statement_config_compiles_qmark_input_to_percent_s() -> None:
     assert parameters in ([3], (3,))
 
 
-def test_statement_config_preserves_named_pyformat_input() -> None:
-    """Named pyformat input should remain a mapping for pymssql."""
+def test_statement_config_compiles_named_pyformat_input_to_positional() -> None:
+    """Named pyformat input should compile to pymssql's supported positional style."""
     from sqlspec.adapters.pymssql.core import default_statement_config
 
     statement = SQL(
@@ -54,8 +55,8 @@ def test_statement_config_preserves_named_pyformat_input() -> None:
 
     compiled_sql, parameters = statement.compile()
 
-    assert "WHERE id = %(user_id)s" in compiled_sql
-    assert parameters == {"user_id": 3}
+    assert "WHERE id = %s" in compiled_sql
+    assert parameters in ([3], (3,))
 
 
 def test_format_identifier_and_insert_statement_use_tsql_identifiers() -> None:
@@ -121,6 +122,24 @@ def test_create_mapped_exception_disambiguates_547_check_vs_foreign_key(
 
     assert isinstance(mapped, expected_type)
     assert expected_detail in str(mapped)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (Exception(2627, b"Violation of UNIQUE KEY constraint"), UniqueViolationError),
+        (Exception("Cannot insert the value NULL; column does not allow nulls"), NotNullViolationError),
+        (Exception("The INSERT statement conflicted with the CHECK constraint"), CheckViolationError),
+        (Exception("The INSERT statement conflicted with the FOREIGN KEY constraint"), ForeignKeyViolationError),
+    ],
+)
+def test_create_mapped_exception_classifies_native_constraint_shapes(
+    error: Exception, expected_type: type[Exception]
+) -> None:
+    """Native pymssql argument and message shapes map to specific constraint exceptions."""
+    from sqlspec.adapters.pymssql.core import create_mapped_exception
+
+    assert isinstance(create_mapped_exception(error), expected_type)
 
 
 def test_normalize_execute_many_parameters_passes_through() -> None:

@@ -51,25 +51,6 @@ if TYPE_CHECKING:
     BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
 
 
-class _BigQueryRow(Protocol):
-    def items(self) -> "Iterable[tuple[str, object]]": ...
-
-
-class _BigQueryStreamDriver(Protocol):
-    connection: "BigQueryConnection"
-    _job_retry: "Retry | None"
-    _job_retry_deadline: float
-    _job_result_timeout: float | object
-
-    def _run_query_job(
-        self, connection: "BigQueryConnection", sql: str, parameters: "StatementParameters"
-    ) -> "QueryJob": ...
-
-    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
-
-    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
-
-
 __all__ = (
     "BigQueryStreamSource",
     "apply_driver_features",
@@ -139,36 +120,6 @@ _BQ_TYPE_MAP: "dict[type, tuple[str, str | None]]" = {
 }
 
 
-def _has_synthetic_positional_keys(parameters: "list[dict[str, Any]]") -> bool:
-    """Return True when the first parameter mapping is keyed only by synthetic positional names.
-
-    Synthetic names are ``param_<int>`` or bare digit strings produced by qmark/positional
-    parameter expansion. They do not correspond to the target table's columns, so a Parquet
-    column-load cannot be built from them.
-    """
-    if not parameters:
-        return False
-    first = parameters[0]
-    if not isinstance(first, dict) or not first:
-        return False
-    return all(
-        isinstance(key, str) and (key.isdigit() or (key.startswith("param_") and key[6:].isdigit())) for key in first
-    )
-
-
-def _uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
-    """Return True when a BigQuery client points at a local emulator endpoint."""
-    bq_conn = cast("object", getattr(connection, "_connection", None))
-    api_base_url = cast("str | None", getattr(bq_conn, "API_BASE_URL", None)) if bq_conn is not None else None
-    if not isinstance(api_base_url, str):
-        return False
-    try:
-        hostname = urlparse(api_base_url).hostname
-    except ValueError:
-        return False
-    return hostname in LOCAL_BIGQUERY_ENDPOINT_HOSTS
-
-
 def try_bulk_insert(
     connection: "BigQueryConnection",
     sql: str,
@@ -226,54 +177,6 @@ def try_bulk_insert(
 _MAX_INLINED_INSERT_ROWS = 500
 
 
-def _build_multi_row_insert_script(
-    expression: "exp.Expr",
-    parameters: "list[dict[str, Any]]",
-    literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
-) -> "str | None":
-    """Collapse a single-tuple INSERT ... VALUES batch into chunked multi-row statements.
-
-    Args:
-        expression: Parsed statement expression.
-        parameters: Parameter dictionaries to inline.
-        literal_inliner: Callable used to inline literal values.
-
-    Returns:
-        Script SQL with one multi-row INSERT per chunk, or None when the statement
-        shape does not support multi-row collapsing.
-    """
-    if not isinstance(expression, exp.Insert):
-        return None
-    values = expression.args.get("expression")
-    if not isinstance(values, exp.Values):
-        return None
-    value_tuples = values.expressions
-    if len(value_tuples) != 1 or not isinstance(value_tuples[0], exp.Tuple):
-        return None
-
-    template_tuple = value_tuples[0]
-    inlined_tuples: list[exp.Expr] = []
-    for param_set in parameters:
-        tuple_copy: exp.Expr = template_tuple.copy()
-        if param_set:
-            transformed, _ = literal_inliner(tuple_copy, param_set, ParameterProfile.empty())
-            if not isinstance(transformed, exp.Tuple):
-                return None
-            tuple_copy = transformed
-        inlined_tuples.append(tuple_copy)
-
-    statements: list[str] = []
-    for start in range(0, len(inlined_tuples), _MAX_INLINED_INSERT_ROWS):
-        chunk = inlined_tuples[start : start + _MAX_INLINED_INSERT_ROWS]
-        statement = expression.copy()
-        statement_values = statement.args.get("expression")
-        if not isinstance(statement_values, exp.Values):
-            return None
-        statement_values.set("expressions", chunk)
-        statements.append(str(statement.sql(dialect="bigquery")))
-    return ";\n".join(statements)
-
-
 def build_inlined_script(
     sql: str,
     parameters: "list[dict[str, Any]]",
@@ -318,94 +221,7 @@ def build_inlined_script(
     return ";\n".join(script_statements)
 
 
-def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQueryParam":
-    """Create BigQuery ARRAY parameter.
-
-    Args:
-        name: Parameter name.
-        value: Array value (converted to list, empty list if None).
-        array_type: BigQuery array element type.
-
-    Returns:
-        ArrayQueryParameter instance.
-    """
-    bigquery = _load_bigquery_module()
-    return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
-
-
-def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> "BigQueryParam":
-    """Create BigQuery JSON parameter as STRING type.
-
-    Args:
-        name: Parameter name.
-        value: JSON-serializable value.
-        json_serializer: Function to serialize to JSON string.
-
-    Returns:
-        ScalarQueryParameter with STRING type.
-    """
-    bigquery = _load_bigquery_module()
-    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value)))
-
-
-def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
-    """Create BigQuery scalar parameter.
-
-    Args:
-        name: Parameter name.
-        value: Scalar value.
-        param_type: BigQuery parameter type (INT64, FLOAT64, etc.).
-
-    Returns:
-        ScalarQueryParameter instance.
-    """
-    bigquery = _load_bigquery_module()
-    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, param_type, value))
-
-
-def _load_bigquery_module() -> Any:
-    global _BIGQUERY_MODULE
-    if _BIGQUERY_MODULE is None:
-        from google.cloud import bigquery
-
-        _BIGQUERY_MODULE = bigquery
-    return _BIGQUERY_MODULE
-
-
 logger = get_logger("sqlspec.adapters.bigquery.core")
-
-
-def _query_parameter_type(value: Any) -> "tuple[str | None, str | None]":
-    """Determine BigQuery parameter type from Python value.
-
-    Args:
-        value: Python value to determine BigQuery type for
-
-    Returns:
-        Tuple of (parameter_type, array_element_type)
-    """
-    if value is None:
-        return ("STRING", None)
-
-    value_type = type(value)
-
-    if value_type is datetime.datetime:
-        return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
-
-    if value_type in _BQ_TYPE_MAP:
-        return _BQ_TYPE_MAP[value_type]
-
-    if isinstance(value, (list, tuple)):
-        if not value:
-            msg = "Cannot determine BigQuery ARRAY type for empty sequence."
-            raise SQLSpecError(msg)
-        element_type, _ = _query_parameter_type(value[0])
-        if element_type is None:
-            msg = f"Unsupported element type in ARRAY: {type(value[0])}"
-            raise SQLSpecError(msg)
-        return "ARRAY", element_type
-
-    return None, None
 
 
 def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") -> "list[BigQueryParam]":
@@ -444,44 +260,6 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
         raise SQLSpecError(msg)
 
     return bq_parameters
-
-
-def _inline_bigquery_literals(
-    expression: "exp.Expr", parameters: Any, inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]"
-) -> str:
-    """Inline literal values into a parsed SQLGlot expression."""
-    if not parameters:
-        return str(expression.sql(dialect="bigquery"))
-
-    transformed_expression, _ = inliner(expression, parameters, ParameterProfile.empty())
-    return str(transformed_expression.sql(dialect="bigquery"))
-
-
-def _should_retry_bigquery_job(exception: Exception) -> bool:
-    """Return True when a BigQuery job exception is safe to retry."""
-    from google.cloud.exceptions import GoogleCloudError
-
-    if not isinstance(exception, GoogleCloudError):
-        return False
-
-    errors = exception.errors if has_errors(exception) and exception.errors is not None else []
-    retryable_reasons = {
-        "backendError",
-        "internalError",
-        "jobInternalError",
-        "rateLimitExceeded",
-        "jobRateLimitExceeded",
-    }
-
-    for err in errors:
-        if not isinstance(err, dict):
-            continue
-        reason = err.get("reason")
-        message = (err.get("message") or "").lower()
-        if reason in retryable_reasons:
-            return not ("nonexistent_column" in message or ("column" in message and "not present" in message))
-
-    return False
 
 
 def build_retry(deadline: float) -> "Retry":
@@ -525,15 +303,6 @@ def copy_job_config(source_config: "QueryJobConfig", target_config: "QueryJobCon
     """Copy known job config fields from source to target."""
     for attr in _COPY_JOB_FIELDS:
         _copy_job_config_field(source_config, target_config, attr)
-
-
-def _copy_job_config_field(source_config: "QueryJobConfig", target_config: "QueryJobConfig", attr: str) -> None:
-    try:
-        value = getattr(source_config, attr)
-    except (AttributeError, TypeError):
-        return
-    if value is not None:
-        setattr(target_config, attr, value)
 
 
 def run_query_job(
@@ -603,42 +372,6 @@ def run_query_job(
     return connection.query(sql, **query_kwargs)
 
 
-def _run_query_and_wait(
-    connection: "BigQueryConnection",
-    sql: str,
-    parameters: Any,
-    *,
-    default_job_config: "QueryJobConfig | None",
-    json_serializer: "Callable[[Any], str]",
-    retry: "Retry | None" = None,
-    wait_timeout: float | None = None,
-    job_retry: "Retry | None" = None,
-    page_size: int | None = None,
-    max_results: int | None = None,
-) -> Any:
-    """Execute a BigQuery query via query_and_wait and return the row iterator."""
-    from google.cloud.bigquery import QueryJobConfig
-
-    final_job_config = QueryJobConfig()
-    if default_job_config:
-        copy_job_config(default_job_config, final_job_config)
-    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
-
-    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
-    if retry is not None:
-        query_kwargs["retry"] = retry
-    if wait_timeout is not None:
-        query_kwargs["api_timeout"] = wait_timeout
-        query_kwargs["wait_timeout"] = wait_timeout
-    if job_retry is not None:
-        query_kwargs["job_retry"] = job_retry
-    if page_size is not None:
-        query_kwargs["page_size"] = page_size
-    if max_results is not None:
-        query_kwargs["max_results"] = max_results
-    return connection.query_and_wait(sql, **query_kwargs)
-
-
 def build_load_job_config(file_format: "BigQueryLoadFormat", overwrite: bool) -> "LoadJobConfig":
     from google.cloud.bigquery import LoadJobConfig
 
@@ -663,52 +396,6 @@ def build_arrow_write_stream_payload(
             requests, stream_name, batch, schema_bytes, types, max_request_bytes=max_request_bytes
         )
     return requests
-
-
-def _append_sized_arrow_requests(
-    requests: "list[Any]", stream_name: str, batch: Any, schema_bytes: bytes, types: Any, *, max_request_bytes: int
-) -> None:
-    pending = [batch]
-    while pending:
-        current = pending.pop(0)
-        include_schema = not requests
-        request = _build_arrow_append_request(
-            stream_name, current, schema_bytes, types, include_stream=include_schema, include_schema=include_schema
-        )
-        if _append_request_size(request) < max_request_bytes:
-            requests.append(request)
-            continue
-        if current.num_rows <= 1:
-            msg = "BigQuery Storage Write API row exceeds the maximum AppendRowsRequest size."
-            raise StorageOperationFailedError(msg)
-        left_count = current.num_rows // 2
-        pending.insert(0, current.slice(left_count, current.num_rows - left_count))
-        pending.insert(0, current.slice(0, left_count))
-
-
-def _build_arrow_append_request(
-    stream_name: str, batch: Any, schema_bytes: bytes, types: Any, *, include_stream: bool, include_schema: bool
-) -> Any:
-    arrow_data = types.AppendRowsRequest.ArrowData(
-        rows=types.ArrowRecordBatch(serialized_record_batch=batch.serialize().to_pybytes(), row_count=batch.num_rows)
-    )
-    if include_schema:
-        arrow_data.writer_schema = types.ArrowSchema(serialized_schema=schema_bytes)
-    request = types.AppendRowsRequest(arrow_rows=arrow_data)
-    if include_stream:
-        request.write_stream = stream_name
-    return request
-
-
-def _append_request_size(request: Any) -> int:
-    try:
-        return int(request._pb.ByteSize())
-    except AttributeError:
-        arrow_rows = request.arrow_rows
-        size = len(arrow_rows.rows.serialized_record_batch)
-        size += len(getattr(arrow_rows.writer_schema, "serialized_schema", b"") or b"")
-        size += len(getattr(request, "write_stream", "").encode())
-        return size
 
 
 def build_load_job_telemetry(job: "QueryJob", table: str, *, format_label: str) -> "StorageTelemetry":
@@ -776,21 +463,6 @@ def extract_insert_table(sql: str, expression: "exp.Expr | None" = None, *, allo
     except Exception:
         logger.debug("Failed to extract table name from INSERT statement")
     return None
-
-
-def _map_bigquery_source_format(file_format: "BigQueryLoadFormat | str") -> str:
-    if file_format == "parquet":
-        return "PARQUET"
-    if file_format in {"json", "jsonl"}:
-        return "NEWLINE_DELIMITED_JSON"
-    if file_format == "csv":
-        return "CSV"
-    if file_format == "avro":
-        return "AVRO"
-    if file_format == "orc":
-        return "ORC"
-    msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
-    raise StorageCapabilityError(msg, capability="parquet_import_enabled")
 
 
 def resolve_column_names(schema: Any | None, cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
@@ -976,23 +648,6 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _tuple_to_list(value: Any) -> Any:
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
-def _return_none(_: Any) -> None:
-    return None
-
-
-driver_profile = build_profile()
-
-
 def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
     """Construct the BigQuery statement configuration with optional JSON serializer."""
     serializer = json_serializer or to_json
@@ -1000,9 +655,6 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "bigquery"}, json_serializer=serializer
     )
-
-
-default_statement_config = build_statement_config()
 
 
 def apply_driver_features(
@@ -1019,27 +671,6 @@ def apply_driver_features(
         parameter_config = statement_config.parameter_config.replace(type_coercion_map=type_coercion_map)
         statement_config = statement_config.replace(parameter_config=parameter_config)
     return statement_config, features
-
-
-def _create_bigquery_error(
-    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
-) -> SQLSpecError:
-    """Create a SQLSpec exception from a BigQuery error.
-
-    Args:
-        error: The original BigQuery exception
-        code: HTTP status code
-        error_class: The SQLSpec exception class to instantiate
-        description: Human-readable description of the error type
-
-    Returns:
-        A new SQLSpec exception instance with the original as its cause
-    """
-    code_str = f"[HTTP {code}]" if code else ""
-    msg = f"BigQuery {description} {code_str}: {error}" if code_str else f"BigQuery {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
@@ -1099,3 +730,371 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_bigquery_error(error, status_code, OperationalError, "operational error")
 
     return _create_bigquery_error(error, status_code, SQLSpecError, "error")
+
+
+class _BigQueryRow(Protocol):
+    def items(self) -> "Iterable[tuple[str, object]]": ...
+
+
+class _BigQueryStreamDriver(Protocol):
+    connection: "BigQueryConnection"
+    _job_retry: "Retry | None"
+    _job_retry_deadline: float
+    _job_result_timeout: float | object
+
+    def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
+
+    def _run_query_job(
+        self, connection: "BigQueryConnection", sql: str, parameters: "StatementParameters"
+    ) -> "QueryJob": ...
+
+    def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
+
+
+def _has_synthetic_positional_keys(parameters: "list[dict[str, Any]]") -> bool:
+    """Return True when the first parameter mapping is keyed only by synthetic positional names.
+
+    Synthetic names are ``param_<int>`` or bare digit strings produced by qmark/positional
+    parameter expansion. They do not correspond to the target table's columns, so a Parquet
+    column-load cannot be built from them.
+    """
+    if not parameters:
+        return False
+    first = parameters[0]
+    if not isinstance(first, dict) or not first:
+        return False
+    return all(
+        isinstance(key, str) and (key.isdigit() or (key.startswith("param_") and key[6:].isdigit())) for key in first
+    )
+
+
+def _uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
+    """Return True when a BigQuery client points at a local emulator endpoint."""
+    bq_conn = cast("object", getattr(connection, "_connection", None))
+    api_base_url = cast("str | None", getattr(bq_conn, "API_BASE_URL", None)) if bq_conn is not None else None
+    if not isinstance(api_base_url, str):
+        return False
+    try:
+        hostname = urlparse(api_base_url).hostname
+    except ValueError:
+        return False
+    return hostname in LOCAL_BIGQUERY_ENDPOINT_HOSTS
+
+
+def _build_multi_row_insert_script(
+    expression: "exp.Expr",
+    parameters: "list[dict[str, Any]]",
+    literal_inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]",
+) -> "str | None":
+    """Collapse a single-tuple INSERT ... VALUES batch into chunked multi-row statements.
+
+    Args:
+        expression: Parsed statement expression.
+        parameters: Parameter dictionaries to inline.
+        literal_inliner: Callable used to inline literal values.
+
+    Returns:
+        Script SQL with one multi-row INSERT per chunk, or None when the statement
+        shape does not support multi-row collapsing.
+    """
+    if not isinstance(expression, exp.Insert):
+        return None
+    values = expression.args.get("expression")
+    if not isinstance(values, exp.Values):
+        return None
+    value_tuples = values.expressions
+    if len(value_tuples) != 1 or not isinstance(value_tuples[0], exp.Tuple):
+        return None
+
+    template_tuple = value_tuples[0]
+    inlined_tuples: list[exp.Expr] = []
+    for param_set in parameters:
+        tuple_copy: exp.Expr = template_tuple.copy()
+        if param_set:
+            transformed, _ = literal_inliner(tuple_copy, param_set, ParameterProfile.empty())
+            if not isinstance(transformed, exp.Tuple):
+                return None
+            tuple_copy = transformed
+        inlined_tuples.append(tuple_copy)
+
+    statements: list[str] = []
+    for start in range(0, len(inlined_tuples), _MAX_INLINED_INSERT_ROWS):
+        chunk = inlined_tuples[start : start + _MAX_INLINED_INSERT_ROWS]
+        statement = expression.copy()
+        statement_values = statement.args.get("expression")
+        if not isinstance(statement_values, exp.Values):
+            return None
+        statement_values.set("expressions", chunk)
+        statements.append(str(statement.sql(dialect="bigquery")))
+    return ";\n".join(statements)
+
+
+def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQueryParam":
+    """Create BigQuery ARRAY parameter.
+
+    Args:
+        name: Parameter name.
+        value: Array value (converted to list, empty list if None).
+        array_type: BigQuery array element type.
+
+    Returns:
+        ArrayQueryParameter instance.
+    """
+    bigquery = _load_bigquery_module()
+    return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
+
+
+def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> "BigQueryParam":
+    """Create BigQuery JSON parameter as STRING type.
+
+    Args:
+        name: Parameter name.
+        value: JSON-serializable value.
+        json_serializer: Function to serialize to JSON string.
+
+    Returns:
+        ScalarQueryParameter with STRING type.
+    """
+    bigquery = _load_bigquery_module()
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value)))
+
+
+def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
+    """Create BigQuery scalar parameter.
+
+    Args:
+        name: Parameter name.
+        value: Scalar value.
+        param_type: BigQuery parameter type (INT64, FLOAT64, etc.).
+
+    Returns:
+        ScalarQueryParameter instance.
+    """
+    bigquery = _load_bigquery_module()
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, param_type, value))
+
+
+def _load_bigquery_module() -> Any:
+    global _BIGQUERY_MODULE
+    if _BIGQUERY_MODULE is None:
+        from google.cloud import bigquery
+
+        _BIGQUERY_MODULE = bigquery
+    return _BIGQUERY_MODULE
+
+
+def _query_parameter_type(value: Any) -> "tuple[str | None, str | None]":
+    """Determine BigQuery parameter type from Python value.
+
+    Args:
+        value: Python value to determine BigQuery type for
+
+    Returns:
+        Tuple of (parameter_type, array_element_type)
+    """
+    if value is None:
+        return ("STRING", None)
+
+    value_type = type(value)
+
+    if value_type is datetime.datetime:
+        return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
+
+    if value_type in _BQ_TYPE_MAP:
+        return _BQ_TYPE_MAP[value_type]
+
+    if isinstance(value, (list, tuple)):
+        if not value:
+            msg = "Cannot determine BigQuery ARRAY type for empty sequence."
+            raise SQLSpecError(msg)
+        element_type, _ = _query_parameter_type(value[0])
+        if element_type is None:
+            msg = f"Unsupported element type in ARRAY: {type(value[0])}"
+            raise SQLSpecError(msg)
+        return "ARRAY", element_type
+
+    return None, None
+
+
+def _inline_bigquery_literals(
+    expression: "exp.Expr", parameters: Any, inliner: "Callable[[Any, Any, ParameterProfile], tuple[Any, Any]]"
+) -> str:
+    """Inline literal values into a parsed SQLGlot expression."""
+    if not parameters:
+        return str(expression.sql(dialect="bigquery"))
+
+    transformed_expression, _ = inliner(expression, parameters, ParameterProfile.empty())
+    return str(transformed_expression.sql(dialect="bigquery"))
+
+
+def _should_retry_bigquery_job(exception: Exception) -> bool:
+    """Return True when a BigQuery job exception is safe to retry."""
+    from google.cloud.exceptions import GoogleCloudError
+
+    if not isinstance(exception, GoogleCloudError):
+        return False
+
+    errors = exception.errors if has_errors(exception) and exception.errors is not None else []
+    retryable_reasons = {
+        "backendError",
+        "internalError",
+        "jobInternalError",
+        "rateLimitExceeded",
+        "jobRateLimitExceeded",
+    }
+
+    for err in errors:
+        if not isinstance(err, dict):
+            continue
+        reason = err.get("reason")
+        message = (err.get("message") or "").lower()
+        if reason in retryable_reasons:
+            return not ("nonexistent_column" in message or ("column" in message and "not present" in message))
+
+    return False
+
+
+def _copy_job_config_field(source_config: "QueryJobConfig", target_config: "QueryJobConfig", attr: str) -> None:
+    try:
+        value = getattr(source_config, attr)
+    except (AttributeError, TypeError):
+        return
+    if value is not None:
+        setattr(target_config, attr, value)
+
+
+def _run_query_and_wait(
+    connection: "BigQueryConnection",
+    sql: str,
+    parameters: Any,
+    *,
+    default_job_config: "QueryJobConfig | None",
+    json_serializer: "Callable[[Any], str]",
+    retry: "Retry | None" = None,
+    wait_timeout: float | None = None,
+    job_retry: "Retry | None" = None,
+    page_size: int | None = None,
+    max_results: int | None = None,
+) -> Any:
+    """Execute a BigQuery query via query_and_wait and return the row iterator."""
+    from google.cloud.bigquery import QueryJobConfig
+
+    final_job_config = QueryJobConfig()
+    if default_job_config:
+        copy_job_config(default_job_config, final_job_config)
+    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
+
+    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
+    if retry is not None:
+        query_kwargs["retry"] = retry
+    if wait_timeout is not None:
+        query_kwargs["api_timeout"] = wait_timeout
+        query_kwargs["wait_timeout"] = wait_timeout
+    if job_retry is not None:
+        query_kwargs["job_retry"] = job_retry
+    if page_size is not None:
+        query_kwargs["page_size"] = page_size
+    if max_results is not None:
+        query_kwargs["max_results"] = max_results
+    return connection.query_and_wait(sql, **query_kwargs)
+
+
+def _append_sized_arrow_requests(
+    requests: "list[Any]", stream_name: str, batch: Any, schema_bytes: bytes, types: Any, *, max_request_bytes: int
+) -> None:
+    pending = [batch]
+    while pending:
+        current = pending.pop(0)
+        include_schema = not requests
+        request = _build_arrow_append_request(
+            stream_name, current, schema_bytes, types, include_stream=include_schema, include_schema=include_schema
+        )
+        if _append_request_size(request) < max_request_bytes:
+            requests.append(request)
+            continue
+        if current.num_rows <= 1:
+            msg = "BigQuery Storage Write API row exceeds the maximum AppendRowsRequest size."
+            raise StorageOperationFailedError(msg)
+        left_count = current.num_rows // 2
+        pending.insert(0, current.slice(left_count, current.num_rows - left_count))
+        pending.insert(0, current.slice(0, left_count))
+
+
+def _build_arrow_append_request(
+    stream_name: str, batch: Any, schema_bytes: bytes, types: Any, *, include_stream: bool, include_schema: bool
+) -> Any:
+    arrow_data = types.AppendRowsRequest.ArrowData(
+        rows=types.ArrowRecordBatch(serialized_record_batch=batch.serialize().to_pybytes(), row_count=batch.num_rows)
+    )
+    if include_schema:
+        arrow_data.writer_schema = types.ArrowSchema(serialized_schema=schema_bytes)
+    request = types.AppendRowsRequest(arrow_rows=arrow_data)
+    if include_stream:
+        request.write_stream = stream_name
+    return request
+
+
+def _append_request_size(request: Any) -> int:
+    try:
+        return int(request._pb.ByteSize())
+    except AttributeError:
+        arrow_rows = request.arrow_rows
+        size = len(arrow_rows.rows.serialized_record_batch)
+        size += len(getattr(arrow_rows.writer_schema, "serialized_schema", b"") or b"")
+        size += len(getattr(request, "write_stream", "").encode())
+        return size
+
+
+def _map_bigquery_source_format(file_format: "BigQueryLoadFormat | str") -> str:
+    if file_format == "parquet":
+        return "PARQUET"
+    if file_format in {"json", "jsonl"}:
+        return "NEWLINE_DELIMITED_JSON"
+    if file_format == "csv":
+        return "CSV"
+    if file_format == "avro":
+        return "AVRO"
+    if file_format == "orc":
+        return "ORC"
+    msg = f"BigQuery does not support loading '{file_format}' artifacts via the storage bridge"
+    raise StorageCapabilityError(msg, capability="parquet_import_enabled")
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _tuple_to_list(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _return_none(_: Any) -> None:
+    return None
+
+
+def _create_bigquery_error(
+    error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from a BigQuery error.
+
+    Args:
+        error: The original BigQuery exception
+        code: HTTP status code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
+    code_str = f"[HTTP {code}]" if code else ""
+    msg = f"BigQuery {description} {code_str}: {error}" if code_str else f"BigQuery {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()

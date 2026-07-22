@@ -7,13 +7,17 @@ import requests.exceptions
 from _pytest.reports import TestReport
 
 from sqlspec.exceptions import OperationalError
-from tests.integration.adapters.bigquery import conftest as bigquery_conftest
+from tests.integration.adapters.bigquery.bigquery import conftest as bigquery_conftest
 
 
 def _failed_bigquery_report() -> TestReport:
     return TestReport(
-        nodeid="tests/integration/adapters/bigquery/test_arrow.py::test_select_to_arrow_empty_result",
-        location=("tests/integration/adapters/bigquery/test_arrow.py", 148, "test_select_to_arrow_empty_result"),
+        nodeid="tests/integration/adapters/bigquery/bigquery/test_arrow.py::test_select_to_arrow_empty_result",
+        location=(
+            "tests/integration/adapters/bigquery/bigquery/test_arrow.py",
+            148,
+            "test_select_to_arrow_empty_result",
+        ),
         keywords={},
         outcome="failed",
         longrepr="failure",

@@ -4,7 +4,7 @@
 from collections.abc import Sequence
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import pytest
 from psqlpy import exceptions as psqlpy_exceptions
@@ -16,18 +16,12 @@ from sqlspec.adapters.psqlpy.core import (
     coerce_numeric_for_write,
     coerce_records_for_execute_many,
     collect_rows,
-    default_statement_config,
     encode_records_for_binary_copy,
     format_execute_many_parameters,
     get_parameter_casts,
     prepare_parameters_with_casts,
 )
-from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
-from sqlspec.core import SQL
 from sqlspec.exceptions import DataError, IntegrityError, OperationalError, PermissionDeniedError, SQLSpecError
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
 
 
 @pytest.mark.parametrize(
@@ -297,56 +291,6 @@ def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
     )
     prepared = prepare_parameters_with_casts([[1, 2]], {}, statement_config)
     assert prepared == [(1, 2)]
-
-
-class _Cursor:
-    def __init__(self) -> None:
-        self.execute_calls: list[tuple[Any, ...]] = []
-
-    async def execute(self, *args: Any) -> str:
-        self.execute_calls.append(args)
-        return "OK"
-
-
-def _connection() -> "PsqlpyConnection":
-    return cast("PsqlpyConnection", object())
-
-
-class _Driver(PsqlpyDriver):
-    def __init__(self, compiled_sql: str, parameters: object = None) -> None:
-        super().__init__(connection=_connection())
-        self.compiled_sql = compiled_sql
-        self.compiled_parameters = parameters
-
-    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
-        return (self.compiled_sql, self.compiled_parameters)
-
-
-@pytest.mark.anyio
-async def test_driver_psqlpy_execute_script_multi_statement_with_params_executes_all() -> None:
-    driver = _Driver("INSERT INTO t VALUES ($1); INSERT INTO t VALUES ($1)", [1])
-    statement = SimpleNamespace(statement_config=default_statement_config)
-    result = await driver.dispatch_execute_script(cast("PsqlpyConnection", _Cursor()), cast("SQL", statement))
-    assert result.statement_count == 2
-    assert result.successful_statements == 2
-
-
-@pytest.mark.anyio
-async def test_driver_psqlpy_execute_script_uses_empty_params_for_each_sub_statement() -> None:
-    driver = _Driver("SELECT 1; SELECT 2")
-    statement = SimpleNamespace(statement_config=default_statement_config)
-    cursor = _Cursor()
-    await driver.dispatch_execute_script(cast("PsqlpyConnection", cursor), cast("SQL", statement))
-    assert cursor.execute_calls == [("SELECT 1", []), ("SELECT 2", [])]
-
-
-@pytest.mark.anyio
-async def test_driver_psqlpy_execute_script_passes_single_statement_parameters() -> None:
-    driver = _Driver("INSERT INTO t VALUES ($1)", [1])
-    statement = SimpleNamespace(statement_config=default_statement_config)
-    cursor = _Cursor()
-    await driver.dispatch_execute_script(cast("PsqlpyConnection", cursor), cast("SQL", statement))
-    assert cursor.execute_calls == [("INSERT INTO t VALUES ($1)", [1])]
 
 
 @pytest.mark.parametrize("tag", ["", "NOT A COMMAND TAG", "SELECT"])

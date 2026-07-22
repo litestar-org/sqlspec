@@ -2,6 +2,7 @@ import logging
 import os
 import warnings
 from collections.abc import Generator
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,15 @@ pytest_plugins = [
     "pytest_databases.docker.cockroachdb",
     "pytest_databases.docker.rustfs",
     "tests.integration.fixtures",
+    "tests.integration.fixtures.adapter_cases",
+    "tests.integration.fixtures.aiomysql_adk",
+    "tests.integration.fixtures.asyncmy_adk",
+    "tests.integration.fixtures.asyncpg_adk",
+    "tests.integration.fixtures.mysqlconnector_adk",
+    "tests.integration.fixtures.oracle_events",
+    "tests.integration.fixtures.spanner_adk",
+    "tests.integration.fixtures.spanner_events",
+    "tests.integration.fixtures.spanner_litestar",
 ]
 
 pytestmark = pytest.mark.anyio
@@ -57,6 +67,28 @@ def is_compiled() -> bool:
 requires_interpreted = pytest.mark.skipif(
     is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
 )
+
+
+def _module_is_available(module: str) -> bool:
+    try:
+        return find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+_MSSQL_PYTHON_AVAILABLE = _module_is_available("mssql_python")
+_SPANNER_AVAILABLE = _module_is_available("google.cloud.spanner_v1")
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Skip optional adapter unit trees before importing unavailable dependencies."""
+    _ = config
+    path = str(collection_path)
+    if "tests/unit/adapters/test_mssql_python" in path and not _MSSQL_PYTHON_AVAILABLE:
+        return True
+    if "tests/unit/adapters/test_spanner" in path and not _SPANNER_AVAILABLE:
+        return True
+    return None
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -109,12 +141,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     )
     for item in items:
         item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
-        if item.get_closest_marker("adbc") is not None or "tests/integration/adapters/adbc" in item_path:
+        if item.get_closest_marker("adbc") is not None:
             item.add_marker(skip_adbc)
             continue
         if (
             "tests/unit/adapters/" in item_path
             or "tests/unit/driver/" in item_path
+            or "tests/unit/extensions/" in item_path
             or item_path.endswith("tests/unit/config/test_storage_capabilities.py")
             or "tests/unit/observability/" in item_path
         ):

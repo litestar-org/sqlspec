@@ -1,8 +1,12 @@
 """Integration tests for Sanic extension with real database requests."""
 
+import os
 import tempfile
 
 import pytest
+
+os.environ.setdefault("SANIC_DEPRECATION_FILTER", "ignore")
+
 from sanic import Request, Sanic, response
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig

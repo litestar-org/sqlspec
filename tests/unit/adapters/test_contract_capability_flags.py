@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.integration.adapters.contracts._cases import DriverCase
+from tests.integration.adapters._shared._cases import DriverCase
 
 NEW_CAPABILITY_FLAGS = (
     "supports_lob",

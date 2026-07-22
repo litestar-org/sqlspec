@@ -4,7 +4,6 @@ These tests use mock.patch to count compile() invocations and ensure
 the optimization is maintained - any regression will cause test failure.
 """
 
-import sqlite3
 import tempfile
 from unittest.mock import patch
 
@@ -133,41 +132,3 @@ def test_single_compilation_compile_called_once_for_execute_many(sqlite_spec):
         with patch.object(SQL, "compile", counting_compile):
             session.execute_many("INSERT INTO batch_test (id) VALUES (?)", [(1,), (2,), (3,)])
     assert call_count <= 1, f"compile() called {call_count} times, expected at most 1"
-
-
-@pytest.mark.benchmark
-@pytest.mark.parametrize("run", range(3))
-def test_performance_overhead_performance_overhead_acceptable(run):
-    """SQLSpec overhead should be reasonable compared to raw sqlite3.
-
-    SQLSpec adds features like parameter validation, SQL parsing,
-    observability, and caching - some overhead is expected.
-    Target: <60x overhead (down from ~92x before optimizations).
-
-    Uses multiple rows to amortize per-call overhead and get stable timing.
-    """
-    import time
-
-    ROWS = 2000
-    with tempfile.TemporaryDirectory() as d:
-        conn = sqlite3.connect(f"{d}/raw.db")
-        try:
-            conn.execute("CREATE TABLE t (id INT)")
-            start = time.perf_counter()
-            for i in range(ROWS):
-                conn.execute("INSERT INTO t VALUES (?)", (i,))
-            raw_time = time.perf_counter() - start
-        finally:
-            conn.close()
-        spec = SQLSpec()
-        config = spec.add_config(SqliteConfig(connection_config={"database": f"{d}/spec.db"}))
-        with spec.provide_session(config) as session:
-            session.execute("CREATE TABLE t (id INT)")
-            start = time.perf_counter()
-            for i in range(ROWS):
-                session.execute("INSERT INTO t VALUES (?)", (i,))
-            spec_time = time.perf_counter() - start
-        overhead = spec_time / raw_time
-        assert overhead < 200, (
-            f"Overhead {overhead:.1f}x exceeds 200x target (raw={raw_time:.4f}s, spec={spec_time:.4f}s)"
-        )

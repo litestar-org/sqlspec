@@ -141,14 +141,6 @@ class AdbcSelectStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
-def _fetch_record_batch(cursor: Any) -> Any:
-    fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
-    if fetch_record_batch is None:
-        msg = "ADBC cursor does not expose fetch_record_batch() for native row streaming."
-        raise SQLSpecError(msg)
-    return fetch_record_batch()
-
-
 @final
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC driver for Arrow Database Connectivity.
@@ -753,6 +745,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         if isinstance(first_value, int):
             return first_value
         return fallback
+
+
+def _fetch_record_batch(cursor: Any) -> Any:
+    fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
+    if fetch_record_batch is None:
+        msg = "ADBC cursor does not expose fetch_record_batch() for native row streaming."
+        raise SQLSpecError(msg)
+    return fetch_record_batch()
 
 
 register_driver_profile("adbc", driver_profile)

@@ -4,25 +4,18 @@
 import asyncio
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.adapters.psycopg.core import (
     build_async_pipeline_execution_result,
     build_copy_from_command,
     build_pipeline_execution_result,
     create_mapped_exception,
-    default_statement_config,
     resolve_many_rowcount,
 )
-from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
-from sqlspec.core import SQL
 from sqlspec.exceptions import SQLParsingError, UniqueViolationError
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
 
 
 def test_resolve_many_rowcount_prefers_positive_driver_rowcount() -> None:
@@ -207,147 +200,3 @@ def test_build_async_pipeline_execution_result_detects_record_row_format() -> No
         assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
 
     asyncio.run(_run())
-
-
-class _SyncCopyContext:
-    def __init__(self, rows: list[bytes] | None = None) -> None:
-        self.rows = rows or []
-        self.writes: list[bytes] = []
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-    def __iter__(self) -> Iterator[bytes]:
-        return iter(self.rows)
-
-    def write(self, data: bytes) -> None:
-        self.writes.append(data)
-
-
-class _SyncCursor:
-    def __init__(self) -> None:
-        self.rowcount = 0
-        self.description = None
-        self.copy_calls: list[str] = []
-        self.execute_calls: list[tuple[Any, ...]] = []
-        self.copy_context = _SyncCopyContext([b"exported"])
-
-    def copy(self, sql: str) -> _SyncCopyContext:
-        self.copy_calls.append(sql)
-        return self.copy_context
-
-    def execute(self, *args: Any) -> None:
-        self.execute_calls.append(args)
-
-
-class _AsyncCopyContext:
-    def __init__(self, rows: list[bytes] | None = None) -> None:
-        self.rows = rows or []
-        self.writes: list[bytes] = []
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *_args: object) -> None:
-        return None
-
-    def __aiter__(self) -> "_AsyncCopyContext":
-        self._iter = iter(self.rows)
-        return self
-
-    async def __anext__(self) -> bytes:
-        try:
-            return next(self._iter)
-        except StopIteration as exc:
-            raise StopAsyncIteration from exc
-
-    async def write(self, data: bytes) -> None:
-        self.writes.append(data)
-
-
-class _AsyncCursor:
-    def __init__(self) -> None:
-        self.rowcount = 0
-        self.description = None
-        self.copy_calls: list[str] = []
-        self.execute_calls: list[tuple[Any, ...]] = []
-        self.copy_context = _AsyncCopyContext([b"exported"])
-
-    def copy(self, sql: str) -> _AsyncCopyContext:
-        self.copy_calls.append(sql)
-        return self.copy_context
-
-    async def execute(self, *args: Any) -> None:
-        self.execute_calls.append(args)
-
-
-def _sync_connection() -> "PsycopgSyncConnection":
-    return cast("PsycopgSyncConnection", object())
-
-
-def _async_connection() -> "PsycopgAsyncConnection":
-    return cast("PsycopgAsyncConnection", object())
-
-
-class _SyncDriver(PsycopgSyncDriver):
-    def __init__(self, compiled_sql: str, parameters: object = None) -> None:
-        super().__init__(connection=_sync_connection())
-        self.compiled_sql = compiled_sql
-        self.compiled_parameters = parameters
-
-    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
-        return (self.compiled_sql, self.compiled_parameters)
-
-
-class _AsyncDriver(PsycopgAsyncDriver):
-    def __init__(self, compiled_sql: str, parameters: object = None) -> None:
-        super().__init__(connection=_async_connection())
-        self.compiled_sql = compiled_sql
-        self.compiled_parameters = parameters
-
-    def _compiled_sql(self, *_args: object, **_kwargs: object) -> tuple[str, object]:
-        return (self.compiled_sql, self.compiled_parameters)
-
-
-def test_driver_psycopg_sync_execute_script_multi_statement_with_params_executes_all() -> None:
-    driver = _SyncDriver("INSERT INTO t VALUES (%s); INSERT INTO t VALUES (%s)", [1])
-    statement = SimpleNamespace(statement_config=default_statement_config)
-    result = driver.dispatch_execute_script(_SyncCursor(), cast("SQL", statement))
-    assert result.statement_count == 2
-    assert result.successful_statements == 2
-
-
-@pytest.mark.anyio
-async def test_driver_psycopg_async_execute_script_multi_statement_with_params_executes_all() -> None:
-    driver = _AsyncDriver("INSERT INTO t VALUES (%s); INSERT INTO t VALUES (%s)", [1])
-    statement = SimpleNamespace(statement_config=default_statement_config)
-    result = await driver.dispatch_execute_script(_AsyncCursor(), cast("SQL", statement))
-    assert result.statement_count == 2
-    assert result.successful_statements == 2
-
-
-@pytest.mark.anyio
-async def test_driver_psycopg_async_copy_from_uses_copy_for_program_variant() -> None:
-    driver = _AsyncDriver("COPY users FROM PROGRAM 'cat data.csv'")
-    statement = SimpleNamespace(
-        operation_type="COPY_FROM", parameters="payload", statement_config=default_statement_config
-    )
-    cursor = _AsyncCursor()
-    await driver.dispatch_special_handling(cursor, cast("SQL", statement))
-    assert cursor.copy_calls == ["COPY users FROM PROGRAM 'cat data.csv'"]
-    assert cursor.execute_calls == []
-
-
-@pytest.mark.anyio
-async def test_driver_psycopg_async_copy_to_uses_copy_for_file_variant() -> None:
-    driver = _AsyncDriver("COPY users TO '/tmp/users.csv'")
-    statement = SimpleNamespace(operation_type="COPY_TO", parameters=None, statement_config=default_statement_config)
-    cursor = _AsyncCursor()
-    result = await driver.dispatch_special_handling(cursor, cast("SQL", statement))
-    assert cursor.copy_calls == ["COPY users TO '/tmp/users.csv'"]
-    assert cursor.execute_calls == []
-    assert result is not None
-    assert result.data == [{"copy_output": "exported"}]

@@ -45,7 +45,7 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
@@ -93,17 +93,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
-    """Return custom type coercions for pymssql."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int}
-    coercions.update(build_uuid_coercions())
-    return coercions
-
-
 def build_profile() -> "DriverParameterProfile":
     """Create the pymssql driver parameter profile."""
     return DriverParameterProfile(
@@ -111,7 +100,7 @@ def build_profile() -> "DriverParameterProfile":
         default_style=ParameterStyle.QMARK,
         supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_PYFORMAT},
         default_execution_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
         has_native_list_expansion=False,
         preserve_parameter_format=True,
         needs_static_script_compilation=False,
@@ -121,9 +110,6 @@ def build_profile() -> "DriverParameterProfile":
         custom_type_coercions=_custom_type_coercions(),
         default_dialect="tsql",
     )
-
-
-driver_profile = build_profile()
 
 
 def build_statement_config(
@@ -136,9 +122,6 @@ def build_statement_config(
         json_serializer=json_serializer or to_json,
         json_deserializer=json_deserializer or from_json,
     )
-
-
-default_statement_config = build_statement_config()
 
 
 def apply_driver_features(
@@ -175,6 +158,10 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
             return error_class(f"SQL Server error {error_number}: {description}. Original error: {error}")
         if logger is not None:
             logger.debug("Unmapped SQL Server error number: %s", error_number)
+
+    constraint_exception = _constraint_exception_from_message(error)
+    if constraint_exception is not None:
+        return constraint_exception
 
     exc_name = type(error).__name__
     if exc_name == "IntegrityError":
@@ -239,6 +226,32 @@ def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int 
     return 0
 
 
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _constraint_exception_from_message(error: Exception) -> "SQLSpecError | None":
+    """Classify SQL Server constraint messages when a driver omits the native error number."""
+    message = str(error)
+    normalized = message.lower()
+    if "unique key constraint" in normalized or "duplicate key" in normalized:
+        return UniqueViolationError(f"SQL Server unique constraint violation. Original error: {message}")
+    if "cannot insert the value null" in normalized or "does not allow nulls" in normalized:
+        return NotNullViolationError(f"SQL Server not-null constraint violation. Original error: {message}")
+    if "check constraint" in normalized:
+        return CheckViolationError(f"SQL Server check constraint violation. Original error: {message}")
+    if "foreign key constraint" in normalized:
+        return ForeignKeyViolationError(f"SQL Server foreign key constraint violation. Original error: {message}")
+    return None
+
+
+def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
+    """Return custom type coercions for pymssql."""
+    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int}
+    coercions.update(build_uuid_coercions())
+    return coercions
+
+
 def _quote_bracket_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
     if cleaned.startswith("[") and cleaned.endswith("]"):
@@ -254,3 +267,7 @@ def _extract_error_number(exc: Exception) -> "int | None":
         return int(matches[-1])
     except ValueError:
         return None
+
+
+driver_profile = build_profile()
+default_statement_config = build_statement_config()
