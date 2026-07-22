@@ -20,14 +20,18 @@ v0.56.0
 
 **Added:**
 
-* New sync and async schema checks can create missing tables and add columns.
-  Use ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
+* New ``SchemaTarget`` and ``SchemaEnsureResult`` types plus sync and async
+  schema checks can create missing tables and add columns. Use
+  ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
+  ADK, Litestar session, and durable event stores expose ``manage_schema``,
+  ``create_schema``, and ``run_migrations`` controls for this lifecycle.
 * Oracle ADK, durable event, and Litestar session tables now share opt-in
   compression, partitioning, In-Memory, and table-option configuration.
-* BigQuery session and queue partition options, CockroachDB session hash
-  sharding and row-level TTL, PostgreSQL table/autovacuum tuning, and opt-in
-  SQLite extension PRAGMA profiles are now available across the applicable
-  Litestar, Events, and ADK stores.
+* BigQuery session and queue partition options and CockroachDB session hash
+  sharding and row-level TTL are now available.
+* Applicable Litestar, Events, and ADK stores now expose PostgreSQL table and
+  autovacuum tuning, MySQL and MariaDB table/index options, Spanner sharding and
+  table/index options, and opt-in SQLite extension PRAGMA profiles.
 
 **Changed:**
 
@@ -36,14 +40,20 @@ v0.56.0
 * ADK, Litestar session, and durable event stores now derive additive schema
   currency from their canonical DDL. ADK no longer seeds or bumps a
   ``schema_version`` row for additive changes.
-* Oracle extension-table optimizations are capability-gated through the
-  pool-scoped data dictionary and degrade to structured warnings when an
-  option is unavailable.
+* Oracle server-version, JSON storage, and extension-table capability detection
+  now share the config/pool-scoped data dictionary cache. Requested storage
+  optimizations degrade to structured warnings when an option is unavailable.
 
 **Fixed:**
 
+* PostgreSQL-family ADBC connections now bind top-level UUID parameters as
+  PostgreSQL ``uuid`` values across ordinary, batch, streaming, and Arrow
+  execution routes. (`#650 <https://github.com/litestar-org/sqlspec/issues/650>`_)
 * Psycopg sync and async transactions now restore the connection's original
   autocommit mode after SQLSpec-owned commit or rollback operations (`#648`_).
+* Spanner data-dictionary queries now cast nullable metadata filters to their
+  concrete ``STRING`` or ``TIMESTAMP`` types, avoiding conflicting parameter
+  inference when optional filters are omitted.
 * Builder caching now reuses value-independent expression templates and binds
   each call's current parameters and statement configuration. This also
   isolates CTE bodies and returned ASTs instead of sharing mutable cached

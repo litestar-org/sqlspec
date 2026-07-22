@@ -8,10 +8,12 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from uuid import UUID
 
 import sqlspec.utils.correlation as correlation_module
 import sqlspec.utils.schema as schema_module
 import sqlspec.utils.sync_tools as sync_tools_module
+from sqlspec.adapters.adbc.core import prepare_postgres_uuid_bindings
 from sqlspec.utils.correlation import CorrelationContext
 
 if sys.version_info >= (3, 11):
@@ -19,6 +21,16 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_adbc_postgres_uuid_binding_runs_across_mypyc_boundary() -> None:
+    """The compiled ADBC core should retain UUID rewrite behavior."""
+    value = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    sql, parameters = prepare_postgres_uuid_bindings("SELECT $1", [value], is_many=False, dialect="postgres")
+
+    assert sql == "SELECT CAST($1 AS UUID)"
+    assert parameters == [str(value)]
 
 
 def _load_mypyc_boundary_map_module() -> ModuleType:
@@ -83,6 +95,7 @@ def test_pyproject_mypyc_include_patterns_cover_smoke_critical_modules() -> None
         "sqlspec/core/result/_base.py",
         "sqlspec/core/splitter.py",
         "sqlspec/driver/_query_cache.py",
+        "sqlspec/adapters/adbc/core.py",
         "sqlspec/adapters/sqlite/core.py",
         "sqlspec/adapters/psqlpy/core.py",
         "sqlspec/adapters/sqlite/pool.py",

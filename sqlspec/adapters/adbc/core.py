@@ -3,7 +3,13 @@
 import datetime
 import decimal
 from collections.abc import Sized
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, cast
+from uuid import UUID
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import (
@@ -68,6 +74,7 @@ __all__ = (
     "normalize_script_rowcount",
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
+    "prepare_postgres_uuid_bindings",
     "resolve_column_names",
     "resolve_dialect_from_config",
     "resolve_dialect_from_driver_path",
@@ -84,6 +91,7 @@ __all__ = (
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
+_UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
@@ -845,6 +853,177 @@ def prepare_parameters_with_casts(
             parameters, parameter_casts, type_map, dispatcher, converter, json_encoder
         )
     return parameters
+
+
+def prepare_postgres_uuid_bindings(
+    compiled_sql: str, prepared_parameters: Any, *, is_many: bool, dialect: str
+) -> "tuple[str, object]":
+    """Bind top-level UUID values through PostgreSQL-family ADBC drivers.
+
+    Args:
+        compiled_sql: SQL after normal statement compilation and cache rebinding.
+        prepared_parameters: Current execution's driver parameters.
+        is_many: Whether parameters contain an execute-many batch.
+        dialect: Resolved ADBC dialect name.
+
+    Returns:
+        Rewritten SQL and current-call parameters with UUID values normalized,
+        or the inputs unchanged when no placeholder needs a new UUID cast.
+    """
+    if not is_postgres_dialect(dialect):
+        return compiled_sql, prepared_parameters
+    if is_many:
+        uuid_ordinals = _detect_batch_uuid_ordinals(prepared_parameters)
+    elif isinstance(prepared_parameters, (list, tuple)):
+        uuid_ordinals = tuple(
+            index for index, value in enumerate(prepared_parameters, 1) if isinstance(value, _UUID_TYPES)
+        )
+    else:
+        uuid_ordinals = ()
+    if not uuid_ordinals:
+        return compiled_sql, prepared_parameters
+    sqlglot_dialect = "postgres" if dialect == "postgresql" else dialect
+    rewritten_sql, effective_ordinals = _rewrite_postgres_uuid_placeholders(
+        compiled_sql, tuple(sorted(uuid_ordinals)), sqlglot_dialect
+    )
+    if not effective_ordinals:
+        return compiled_sql, prepared_parameters
+    if is_many:
+        converted_rows = [
+            _convert_uuid_row(row, effective_ordinals, row_number)
+            for row_number, row in enumerate(prepared_parameters, 1)
+        ]
+        converted_parameters = tuple(converted_rows) if isinstance(prepared_parameters, tuple) else converted_rows
+    else:
+        converted_parameters = _convert_uuid_row(prepared_parameters, effective_ordinals, 1)
+    return rewritten_sql, converted_parameters
+
+
+def _parameter_ordinal(parameter: exp.Parameter) -> "int | None":
+    value = parameter.this
+    if not isinstance(value, exp.Literal) or value.is_string:
+        return None
+    try:
+        return int(value.this)
+    except (TypeError, ValueError):
+        return None
+
+
+def _direct_parameter_cast(parameter: exp.Parameter) -> "exp.Cast | None":
+    current: exp.Expression = parameter
+    parent = current.parent
+    while isinstance(parent, exp.Paren):
+        current = parent
+        parent = current.parent
+    if isinstance(parent, exp.Cast) and parent.this is current:
+        return parent
+    return None
+
+
+@lru_cache(maxsize=256)
+def _rewrite_postgres_uuid_placeholders(
+    sql: str, uuid_ordinals: "tuple[int, ...]", dialect: str
+) -> "tuple[str, tuple[int, ...]]":
+    """Wrap requested UUID parameter placeholders in explicit UUID casts.
+
+    Placeholders that already carry a different explicit cast stay authoritative
+    and are excluded from the returned effective ordinals. Results are memoized
+    per ``(sql, uuid_ordinals, dialect)`` so repeated executions of the same
+    statement shape reuse the rewrite without parsing again.
+    """
+    try:
+        expressions = cast(
+            "list[exp.Expression]",
+            [expression for expression in sqlglot.parse(sql, read=dialect) if expression is not None],
+        )
+    except ParseError as exc:
+        msg = f"Failed to parse PostgreSQL ADBC SQL for UUID parameter binding: {exc}"
+        raise SQLSpecError(msg) from exc
+    if not expressions:
+        msg = "Failed to parse PostgreSQL ADBC SQL for UUID parameter binding: SQLGlot returned no statements."
+        raise SQLSpecError(msg)
+
+    requested = set(uuid_ordinals)
+    authoritative: set[int] = set()
+    for expression in expressions:
+        for parameter in expression.find_all(exp.Parameter):
+            ordinal = _parameter_ordinal(parameter)
+            if ordinal is None or ordinal not in requested:
+                continue
+            cast_expression = _direct_parameter_cast(parameter)
+            if cast_expression is not None:
+                target = cast_expression.args.get("to")
+                target_kind = target.args.get("kind") if isinstance(target, exp.DataType) else None
+                if isinstance(target_kind, exp.Dot):
+                    target_kind = target_kind.expression
+                is_uuid_cast = isinstance(target, exp.DataType) and (
+                    target.this == exp.DataType.Type.UUID
+                    or (
+                        target.this == exp.DataType.Type.USERDEFINED
+                        and isinstance(target_kind, exp.Identifier)
+                        and target_kind.name.lower() == "uuid"
+                    )
+                )
+                if not is_uuid_cast:
+                    authoritative.add(ordinal)
+    effective = tuple(ordinal for ordinal in uuid_ordinals if ordinal not in authoritative)
+    effective_set = set(effective)
+
+    def wrap_parameter(node: exp.Expression) -> exp.Expression:
+        if not isinstance(node, exp.Parameter):
+            return node
+        ordinal = _parameter_ordinal(node)
+        if ordinal is None or ordinal not in effective_set:
+            return node
+        if _direct_parameter_cast(node) is not None:
+            return node
+        return exp.Cast(this=node.copy(), to=exp.DataType.build("UUID"))
+
+    for expression in expressions:
+        expression.transform(wrap_parameter, copy=False)
+    return "; ".join(expression.sql(dialect=dialect) for expression in expressions), effective
+
+
+def _detect_batch_uuid_ordinals(parameters: Any) -> "tuple[int, ...]":
+    if not isinstance(parameters, (list, tuple)) or not parameters:
+        return ()
+    first_row = parameters[0]
+    if not isinstance(first_row, (list, tuple)):
+        return ()
+    expected_size = len(first_row)
+    for row in parameters:
+        if not isinstance(row, (list, tuple)) or len(row) != expected_size:
+            return ()
+    return tuple(
+        ordinal
+        for ordinal in range(1, expected_size + 1)
+        if any(isinstance(row[ordinal - 1], _UUID_TYPES) for row in parameters)
+    )
+
+
+def _convert_uuid_row(row: Any, ordinals: "tuple[int, ...]", row_number: int) -> Any:
+    converted = list(row)
+    for ordinal in ordinals:
+        value = converted[ordinal - 1]
+        if value is None:
+            continue
+        if not isinstance(value, _UUID_TYPES) and not isinstance(value, str):
+            msg = (
+                f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has incompatible "
+                f"{type(value).__name__} value in batch row {row_number}; expected a UUID object, "
+                "parseable UUID string, or None."
+            )
+            raise SQLSpecError(msg)
+        try:
+            converted[ordinal - 1] = str(UUID(str(value)))
+        except (AttributeError, TypeError, ValueError) as exc:
+            msg = (
+                f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has incompatible "
+                f"{type(value).__name__} value in batch row {row_number}; expected a UUID object, "
+                "parseable UUID string, or None."
+            )
+            raise SQLSpecError(msg) from exc
+    return tuple(converted) if isinstance(row, tuple) else converted
 
 
 def _create_adbc_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:

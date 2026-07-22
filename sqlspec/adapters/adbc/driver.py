@@ -22,6 +22,7 @@ from sqlspec.adapters.adbc.core import (
     normalize_postgres_empty_parameters,
     normalize_script_rowcount,
     prepare_postgres_parameters,
+    prepare_postgres_uuid_bindings,
     resolve_column_names,
     resolve_dialect_name,
     resolve_many_rowcount,
@@ -188,6 +189,16 @@ class AdbcDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def _compiled_sql(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[str, object]":
+        compiled_sql, prepared_parameters = super()._compiled_sql(
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        return prepare_postgres_uuid_bindings(
+            compiled_sql, prepared_parameters, is_many=statement.is_many, dialect=self._dialect_name
+        )
 
     def dispatch_execute(self, cursor: "AdbcRawCursor", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
