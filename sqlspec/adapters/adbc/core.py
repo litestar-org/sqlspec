@@ -40,7 +40,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
     map_sqlstate_to_exception,
 )
-from sqlspec.typing import PGVECTOR_INSTALLED, UUID_UTILS_INSTALLED, Empty
+from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
@@ -91,11 +91,7 @@ __all__ = (
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
-_UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
-if UUID_UTILS_INSTALLED:
-    from uuid_utils import UUID as UUID_UTILS_UUID
-
-    _UUID_TYPES = (UUID, UUID_UTILS_UUID)
+_UUID_TYPES: "tuple[type[Any], ...]" = tuple(build_uuid_coercions())
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
