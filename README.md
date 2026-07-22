@@ -1,13 +1,24 @@
+<div align="center">
+
 # SQLSpec
+
+**Type-safe SQL execution for Python, without an ORM.**
 
 [![PyPI](https://img.shields.io/pypi/v/sqlspec)](https://pypi.org/project/sqlspec/)
 [![Python](https://img.shields.io/pypi/pyversions/sqlspec)](https://pypi.org/project/sqlspec/)
 [![License](https://img.shields.io/pypi/l/sqlspec)](https://github.com/litestar-org/sqlspec/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-sqlspec.dev-blue)](https://sqlspec.dev/)
 
-SQLSpec is a SQL execution layer for Python. You write the SQL -- as strings, through a builder API, or loaded from files -- and SQLSpec handles connections, parameter binding, SQL injection prevention, dialect translation, and mapping results back to typed Python objects. It uses [sqlglot](https://github.com/tobymao/sqlglot) under the hood to parse, validate, and optimize your queries before they hit the database.
+</div>
 
-It works with PostgreSQL (asyncpg, psycopg, psqlpy), SQLite (sqlite3, aiosqlite), DuckDB, MySQL (asyncmy, aiomysql, mysql-connector, pymysql), SQL Server (mssql-python, pymssql, arrow-odbc), Oracle (oracledb), CockroachDB, BigQuery, Spanner, and supported ADBC backends including Snowflake, Flight SQL, and GizmoSQL. Sync or async, same API. It also includes a built-in storage layer, Arrow export through native paths or conversion fallbacks, storage-bridge bulk ingest for adapters with native ingest support, and integrations for Litestar, FastAPI, Flask, Sanic, and Starlette.
+SQLSpec is a SQL execution layer for Python. You write the SQL -- as strings, through a builder API, or loaded from files. SQLSpec handles connections, parameter binding, and dialect translation. It maps results back to typed Python objects. It uses [sqlglot](https://github.com/tobymao/sqlglot) under the hood. Queries are parsed, validated, and optimized before they hit the database.
+
+| Area | Support |
+| --- | --- |
+| **One API** | The same session and result APIs with sync or async drivers. |
+| **Databases** | PostgreSQL, SQLite, DuckDB, MySQL, SQL Server, Oracle, CockroachDB, BigQuery, Spanner, and supported Arrow Database Connectivity backends such as Snowflake, Flight SQL, and GizmoSQL. |
+| **Data tools** | Typed result mapping, Arrow export, built-in storage, and native bulk ingest where the adapter supports it. |
+| **Frameworks** | Litestar, FastAPI, Flask, Sanic, and Starlette. |
 
 ## Quick Start
 
@@ -20,6 +31,7 @@ from dataclasses import dataclass
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
+
 
 @dataclass
 class Greeting:
@@ -36,22 +48,7 @@ with spec.provide_session(db) as session:
     print(greeting.message)  # Output: Hello, SQLSpec!
 ```
 
-Write SQL, define a schema, get typed objects back. Or use the query builder -- they're interchangeable:
-
-```python
-from sqlspec import sql
-
-# Builder API -- same driver, same result mapping
-users = session.select(
-    sql.select("id", "name", "email")
-       .from_("users")
-       .where("active = :active")
-       .order_by("name")
-       .limit(10),
-    active=True,
-    schema_type=User,
-)
-```
+Write SQL, define a schema, get typed objects back. The [getting started guide](https://sqlspec.dev/getting_started/) covers adapter installation and the query builder.
 
 ## Features
 
