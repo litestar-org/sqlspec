@@ -42,6 +42,9 @@ v0.56.0
 
 **Fixed:**
 
+* PostgreSQL-family ADBC connections now bind top-level UUID parameters as
+  PostgreSQL ``uuid`` values across ordinary, batch, streaming, and Arrow
+  execution routes. (`#650 <https://github.com/litestar-org/sqlspec/issues/650>`_)
 * Builder caching now reuses value-independent expression templates and binds
   each call's current parameters and statement configuration. This also
   isolates CTE bodies and returned ASTs instead of sharing mutable cached
