@@ -114,7 +114,12 @@ def test_reused_uuid_placeholder_is_rewritten_at_every_occurrence() -> None:
 
 @pytest.mark.parametrize(
     ("sql", "expected_sql"),
-    [("SELECT CAST($1 AS UUID)", "SELECT CAST($1 AS UUID)"), ("SELECT $1::uuid", "SELECT CAST($1 AS UUID)")],
+    [
+        ("SELECT CAST($1 AS UUID)", "SELECT CAST($1 AS UUID)"),
+        ("SELECT $1::uuid", "SELECT CAST($1 AS UUID)"),
+        ("SELECT $1::public.uuid", "SELECT CAST($1 AS public.uuid)"),
+        ('SELECT $1::"public"."uuid"', 'SELECT CAST($1 AS "public"."uuid")'),
+    ],
 )
 def test_existing_uuid_cast_is_reused(sql: str, expected_sql: str) -> None:
     compiled_sql, compiled_parameters = _compile(sql, (UUID_VALUE,))
@@ -125,7 +130,11 @@ def test_existing_uuid_cast_is_reused(sql: str, expected_sql: str) -> None:
 
 @pytest.mark.parametrize(
     ("sql", "expected_sql"),
-    [("SELECT CAST($1 AS TEXT)", "SELECT CAST($1 AS TEXT)"), ("SELECT $1::varchar", "SELECT CAST($1 AS VARCHAR)")],
+    [
+        ("SELECT CAST($1 AS TEXT)", "SELECT CAST($1 AS TEXT)"),
+        ("SELECT $1::varchar", "SELECT CAST($1 AS VARCHAR)"),
+        ("SELECT $1::public.my_uuid", "SELECT CAST($1 AS public.my_uuid)"),
+    ],
 )
 def test_different_explicit_cast_remains_authoritative(sql: str, expected_sql: str) -> None:
     compiled_sql, compiled_parameters = _compile(sql, (UUID_VALUE,))
