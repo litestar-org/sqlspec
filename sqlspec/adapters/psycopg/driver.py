@@ -172,7 +172,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     bulk data transfer, and PostgreSQL-specific error handling.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -188,6 +188,8 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsycopgSyncDataDictionary | None = None
+        self._restore_autocommit = False
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -337,12 +339,17 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
+        if self._connection_in_transaction():
+            return
         try:
-            if self.connection.autocommit:
+            restore_autocommit = self.connection.autocommit
+            if restore_autocommit:
                 self.connection.autocommit = False
         except psycopg.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._restore_autocommit = restore_autocommit
+        self._transaction_active = True
 
     def commit(self) -> None:
         """Commit the current transaction on the current connection."""
@@ -351,6 +358,8 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         except psycopg.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
+        self._restore_original_autocommit()
 
     def rollback(self) -> None:
         """Rollback the current transaction on the current connection."""
@@ -359,6 +368,8 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         except psycopg.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
+        self._restore_original_autocommit()
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
@@ -634,7 +645,18 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
+        return self._transaction_active or self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE
+
+    def _restore_original_autocommit(self) -> None:
+        """Restore autocommit after a completed SQLSpec-owned transaction."""
+        if not self._restore_autocommit:
+            return
+        self._restore_autocommit = False
+        try:
+            self.connection.autocommit = True
+        except psycopg.Error as e:
+            msg = f"Failed to restore autocommit: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
@@ -670,7 +692,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     and async pub/sub support.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -686,6 +708,8 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsycopgAsyncDataDictionary | None = None
+        self._restore_autocommit = False
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -835,12 +859,17 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
+        if self._connection_in_transaction():
+            return
         try:
-            if self.connection.autocommit:
+            restore_autocommit = self.connection.autocommit
+            if restore_autocommit:
                 await self.connection.set_autocommit(False)
         except psycopg.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._restore_autocommit = restore_autocommit
+        self._transaction_active = True
 
     async def commit(self) -> None:
         """Commit the current transaction on the current connection."""
@@ -849,6 +878,8 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         except psycopg.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
+        await self._restore_original_autocommit()
 
     async def rollback(self) -> None:
         """Rollback the current transaction on the current connection."""
@@ -857,6 +888,8 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         except psycopg.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = False
+        await self._restore_original_autocommit()
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
@@ -1139,7 +1172,18 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return bool(self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE)
+        return self._transaction_active or self.connection.info.transaction_status != TRANSACTION_STATUS_IDLE
+
+    async def _restore_original_autocommit(self) -> None:
+        """Restore autocommit after a completed SQLSpec-owned transaction."""
+        if not self._restore_autocommit:
+            return
+        self._restore_autocommit = False
+        try:
+            await self.connection.set_autocommit(True)
+        except psycopg.Error as e:
+            msg = f"Failed to restore autocommit: {e}"
+            raise SQLSpecError(msg) from e
 
 
 def _attribute_pipeline_failure(

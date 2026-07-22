@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from sqlspec import StatementStack
+
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgDriver
     from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
@@ -23,6 +25,12 @@ def test_cockroach_psycopg_sync_retries_whole_transaction(
     def operation() -> str:
         nonlocal calls
         calls += 1
+        results = contract_cockroach_psycopg_sync_driver.execute_stack(
+            StatementStack().push_execute("SELECT 1 AS transaction_probe")
+        )
+        assert len(results) == 1
+        assert contract_cockroach_psycopg_sync_driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
+        assert contract_cockroach_psycopg_sync_driver.connection.autocommit is False
         if calls == 1:
             raise _RetryableCockroachError("restart transaction")
         return "ok"
@@ -55,6 +63,12 @@ async def test_cockroach_psycopg_async_retries_whole_transaction(
     async def operation() -> str:
         nonlocal calls
         calls += 1
+        results = await contract_cockroach_psycopg_async_driver.execute_stack(
+            StatementStack().push_execute("SELECT 1 AS transaction_probe")
+        )
+        assert len(results) == 1
+        assert contract_cockroach_psycopg_async_driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
+        assert contract_cockroach_psycopg_async_driver.connection.autocommit is False
         if calls == 1:
             raise _RetryableCockroachError("restart transaction")
         return "ok"
