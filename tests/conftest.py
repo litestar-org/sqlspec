@@ -2,6 +2,7 @@ import logging
 import os
 import warnings
 from collections.abc import Generator
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,28 @@ requires_interpreted = pytest.mark.skipif(
 )
 
 
+def _module_is_available(module: str) -> bool:
+    try:
+        return find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+_MSSQL_PYTHON_AVAILABLE = _module_is_available("mssql_python")
+_SPANNER_AVAILABLE = _module_is_available("google.cloud.spanner_v1")
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Skip optional adapter unit trees before importing unavailable dependencies."""
+    _ = config
+    path = str(collection_path)
+    if "tests/unit/adapters/test_mssql_python" in path and not _MSSQL_PYTHON_AVAILABLE:
+        return True
+    if "tests/unit/adapters/test_spanner" in path and not _SPANNER_AVAILABLE:
+        return True
+    return None
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Add custom pytest command line options."""
     parser.addoption(
@@ -124,6 +147,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if (
             "tests/unit/adapters/" in item_path
             or "tests/unit/driver/" in item_path
+            or "tests/unit/extensions/" in item_path
             or item_path.endswith("tests/unit/config/test_storage_capabilities.py")
             or "tests/unit/observability/" in item_path
         ):

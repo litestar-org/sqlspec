@@ -266,6 +266,10 @@ def contract_oracle_sync_driver(oracle_sync_config: OracleSyncConfig) -> Generat
         driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
         driver.commit()
         yield driver
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        driver.commit()
 
 
 @pytest.fixture
@@ -322,6 +326,10 @@ async def contract_oracle_async_driver(
         await driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
         await driver.commit()
         yield driver
+        with contextlib.suppress(Exception):
+            await driver.rollback()
+        await driver.execute_script("DROP TABLE IF EXISTS contract_items")
+        await driver.commit()
 
 
 @pytest.fixture
@@ -486,6 +494,8 @@ async def contract_psycopg_async_driver(
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
         await driver.commit()
         yield driver
+        with contextlib.suppress(Exception):
+            await driver.rollback()
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.commit()
 
@@ -500,6 +510,8 @@ async def contract_cockroach_asyncpg_driver(
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
         await driver.commit()
         yield driver
+        with contextlib.suppress(Exception):
+            await driver.rollback()
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.commit()
 

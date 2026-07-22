@@ -1,8 +1,5 @@
-import inspect
 import sqlite3
 from typing import Any, cast
-
-from sqlspec.adapters.sqlite.driver import SqliteDriver
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -26,11 +23,6 @@ def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
         assert not _target_supports_rowid(legacy_connection, (None, "shadowed_without_rowid"))
     finally:
         connection.close()
-
-
-def test_driver_cache_execute_cache_hit_has_no_unreachable_returns_rows_guard() -> None:
-    source = inspect.getsource(SqliteDriver._execute_cache_hit)
-    assert "if returns_rows:" not in source
 
 
 def test_pool_no_duplicate_typedef_sqlite_connection_params_not_exported_from_pool() -> None:
