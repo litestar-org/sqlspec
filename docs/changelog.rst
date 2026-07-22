@@ -42,6 +42,8 @@ v0.56.0
 
 **Fixed:**
 
+* Psycopg sync and async transactions now restore the connection's original
+  autocommit mode after SQLSpec-owned commit or rollback operations (`#648`_).
 * Builder caching now reuses value-independent expression templates and binds
   each call's current parameters and statement configuration. This also
   isolates CTE bodies and returned ASTs instead of sharing mutable cached
@@ -206,6 +208,8 @@ v0.54.0 - SQL processing correctness and cleanup
 * Documentation builds now filter the known ``pymssql`` stub-only
   ``QueryParams`` guarded-import warning through the custom Sphinx tooling
   instead of changing adapter runtime code.
+
+.. _#648: https://github.com/litestar-org/sqlspec/issues/648
 
 v0.52.0 - SQL Server adapters, ADK profiles, and cloud connectors
 ------------------------------------------------------------------------------
