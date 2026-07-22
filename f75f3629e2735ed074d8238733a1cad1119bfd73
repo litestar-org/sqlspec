@@ -1,0 +1,9 @@
+Flow: test-suite-overhaul
+
+Closed: sqlspec-oy1r.6.1, sqlspec-oy1r.6, sqlspec-oy1r
+
+Validation: make lint passed; targeted Oracle explain collection selected 20 cases; CI runs 29883290616 and 29883290731 passed at f75f3629e; independent completion review found no blockers.
+
+Final topology: 782 Python test files; 158,620 test LOC; 8,060 top-level tests; 8 conftests; 0 integration mock files; 0 empty adapter directories.
+
+Scope: intentional adapter readability commit 9a11ef388 preserved; final Oracle SQL.explain contract fix is test-only.
