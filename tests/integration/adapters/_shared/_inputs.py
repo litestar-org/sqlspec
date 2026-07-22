@@ -520,7 +520,9 @@ def _explain_sql_factory(table: ContractTable, dialect: str) -> object:
 
 
 def _explain_sql_object(table: ContractTable, dialect: str) -> object:
-    return SQL(f"SELECT name FROM {table.name}", statement_config=StatementConfig(dialect=dialect)).explain()
+    return SQL(
+        f"SELECT value FROM {table.name} WHERE value >= 0", statement_config=StatementConfig(dialect=dialect)
+    ).explain()
 
 
 EXPLAIN_CASES = (
