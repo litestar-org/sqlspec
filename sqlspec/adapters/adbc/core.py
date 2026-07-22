@@ -91,7 +91,7 @@ __all__ = (
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
-_UUID_TYPES: "tuple[type[Any], ...]" = tuple(build_uuid_coercions())
+_UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
@@ -867,7 +867,8 @@ def prepare_postgres_uuid_bindings(
         dialect: Resolved ADBC dialect name.
 
     Returns:
-        Rewritten SQL and current-call parameters with UUID values normalized.
+        Rewritten SQL and current-call parameters with UUID values normalized,
+        or the inputs unchanged when no placeholder needs a new UUID cast.
     """
     if not is_postgres_dialect(dialect):
         return compiled_sql, prepared_parameters
@@ -881,9 +882,12 @@ def prepare_postgres_uuid_bindings(
         uuid_ordinals = ()
     if not uuid_ordinals:
         return compiled_sql, prepared_parameters
+    sqlglot_dialect = "postgres" if dialect == "postgresql" else dialect
     rewritten_sql, effective_ordinals = _rewrite_postgres_uuid_placeholders(
-        compiled_sql, tuple(sorted(uuid_ordinals)), dialect
+        compiled_sql, tuple(sorted(uuid_ordinals)), sqlglot_dialect
     )
+    if not effective_ordinals:
+        return compiled_sql, prepared_parameters
     if is_many:
         converted_rows = [
             _convert_uuid_row(row, effective_ordinals, row_number)
@@ -895,7 +899,7 @@ def prepare_postgres_uuid_bindings(
     return rewritten_sql, converted_parameters
 
 
-def _parameter_ordinal(parameter: exp.Parameter) -> int | None:
+def _parameter_ordinal(parameter: exp.Parameter) -> "int | None":
     value = parameter.this
     if not isinstance(value, exp.Literal) or value.is_string:
         return None
@@ -905,7 +909,7 @@ def _parameter_ordinal(parameter: exp.Parameter) -> int | None:
         return None
 
 
-def _direct_parameter_cast(parameter: exp.Parameter) -> exp.Cast | None:
+def _direct_parameter_cast(parameter: exp.Parameter) -> "exp.Cast | None":
     current: exp.Expression = parameter
     parent = current.parent
     while isinstance(parent, exp.Paren):
@@ -920,11 +924,17 @@ def _direct_parameter_cast(parameter: exp.Parameter) -> exp.Cast | None:
 def _rewrite_postgres_uuid_placeholders(
     sql: str, uuid_ordinals: "tuple[int, ...]", dialect: str
 ) -> "tuple[str, tuple[int, ...]]":
-    sqlglot_dialect = "postgres" if dialect == "postgresql" else dialect
+    """Wrap requested UUID parameter placeholders in explicit UUID casts.
+
+    Placeholders that already carry a different explicit cast stay authoritative
+    and are excluded from the returned effective ordinals. Results are memoized
+    per ``(sql, uuid_ordinals, dialect)`` so repeated executions of the same
+    statement shape reuse the rewrite without parsing again.
+    """
     try:
         expressions = cast(
             "list[exp.Expression]",
-            [expression for expression in sqlglot.parse(sql, read=sqlglot_dialect) if expression is not None],
+            [expression for expression in sqlglot.parse(sql, read=dialect) if expression is not None],
         )
     except ParseError as exc:
         msg = f"Failed to parse PostgreSQL ADBC SQL for UUID parameter binding: {exc}"
@@ -971,7 +981,7 @@ def _rewrite_postgres_uuid_placeholders(
 
     for expression in expressions:
         expression.transform(wrap_parameter, copy=False)
-    return "; ".join(expression.sql(dialect=sqlglot_dialect) for expression in expressions), effective
+    return "; ".join(expression.sql(dialect=dialect) for expression in expressions), effective
 
 
 def _detect_batch_uuid_ordinals(parameters: Any) -> "tuple[int, ...]":
@@ -979,13 +989,11 @@ def _detect_batch_uuid_ordinals(parameters: Any) -> "tuple[int, ...]":
         return ()
     first_row = parameters[0]
     if not isinstance(first_row, (list, tuple)):
-        msg = "ADBC PostgreSQL UUID batches require list or tuple parameter rows."
-        raise SQLSpecError(msg)
+        return ()
     expected_size = len(first_row)
     for row in parameters:
         if not isinstance(row, (list, tuple)) or len(row) != expected_size:
-            msg = "ADBC PostgreSQL UUID batch rows must contain the same number of values."
-            raise SQLSpecError(msg)
+            return ()
     return tuple(
         ordinal
         for ordinal in range(1, expected_size + 1)

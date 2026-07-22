@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc._typing import AdbcConnection
-from sqlspec.adapters.adbc.core import get_statement_config
+from sqlspec.adapters.adbc.core import get_statement_config, prepare_postgres_uuid_bindings
 from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import SQLSpecError
@@ -132,8 +132,8 @@ def test_existing_uuid_cast_is_reused(sql: str, expected_sql: str) -> None:
     ("sql", "expected_sql"),
     [
         ("SELECT CAST($1 AS TEXT)", "SELECT CAST($1 AS TEXT)"),
-        ("SELECT $1::varchar", "SELECT CAST($1 AS VARCHAR)"),
-        ("SELECT $1::public.my_uuid", "SELECT CAST($1 AS public.my_uuid)"),
+        ("SELECT $1::varchar", "SELECT $1::varchar"),
+        ("SELECT $1::public.my_uuid", "SELECT $1::public.my_uuid"),
     ],
 )
 def test_different_explicit_cast_remains_authoritative(sql: str, expected_sql: str) -> None:
@@ -146,7 +146,7 @@ def test_different_explicit_cast_remains_authoritative(sql: str, expected_sql: s
 def test_different_explicit_cast_skips_all_reused_occurrences() -> None:
     compiled_sql, compiled_parameters = _compile("SELECT $1::text, $1", (UUID_VALUE,))
 
-    assert compiled_sql == "SELECT CAST($1 AS TEXT), $1"
+    assert compiled_sql == "SELECT $1::text, $1"
     assert compiled_parameters == [UUID_VALUE]
 
 
@@ -160,7 +160,7 @@ def test_existing_uuid_cast_is_reused_for_other_occurrences() -> None:
 def test_parenthesized_different_cast_remains_authoritative() -> None:
     compiled_sql, compiled_parameters = _compile("SELECT ($1)::text", (UUID_VALUE,))
 
-    assert compiled_sql == "SELECT CAST(($1) AS TEXT)"
+    assert compiled_sql == "SELECT ($1)::text"
     assert compiled_parameters == [UUID_VALUE]
 
 
@@ -233,6 +233,24 @@ def test_batch_without_uuid_objects_is_unchanged() -> None:
     assert compiled_parameters == parameters
 
 
+def test_batch_with_scalar_rows_is_left_unchanged() -> None:
+    parameters = ["first", "second"]
+
+    sql, converted = prepare_postgres_uuid_bindings("SELECT $1", parameters, is_many=True, dialect="postgres")
+
+    assert sql == "SELECT $1"
+    assert converted is parameters
+
+
+def test_batch_with_inconsistent_row_shapes_is_left_unchanged() -> None:
+    parameters = [(UUID_VALUE, "first"), (UUID_VALUE,)]
+
+    sql, converted = prepare_postgres_uuid_bindings("SELECT $1, $2", parameters, is_many=True, dialect="postgres")
+
+    assert sql == "SELECT $1, $2"
+    assert converted is parameters
+
+
 def test_structural_rewrite_cache_is_bounded_and_keyed_by_dialect_and_ordinals() -> None:
     rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
     rewrite.cache_clear()
@@ -253,7 +271,7 @@ def test_structural_rewrite_cache_is_bounded_and_keyed_by_dialect_and_ordinals()
 def test_structural_rewrite_uses_ast_and_ignores_literal_and_comment_placeholders() -> None:
     rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
 
-    rewritten, effective = rewrite("SELECT '$1' AS literal, $1 -- $1\n", (1,), "postgresql")
+    rewritten, effective = rewrite("SELECT '$1' AS literal, $1 -- $1\n", (1,), "postgres")
 
     assert "'$1' AS literal" in rewritten
     assert "CAST($1" in rewritten
