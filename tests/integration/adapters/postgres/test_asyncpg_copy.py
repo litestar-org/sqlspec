@@ -14,9 +14,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.xdist_group("postgres")
 
 
-async def test_asyncpg_copy_from_stdin_uses_public_driver_path(
-    contract_asyncpg_driver: "AsyncpgDriver",
-) -> None:
+async def test_asyncpg_copy_from_stdin_uses_public_driver_path(contract_asyncpg_driver: "AsyncpgDriver") -> None:
     await contract_asyncpg_driver.execute_script(
         "DROP TABLE IF EXISTS asyncpg_copy_items; CREATE TABLE asyncpg_copy_items (id INTEGER, name TEXT)"
     )
@@ -36,9 +34,7 @@ async def test_asyncpg_copy_from_stdin_uses_public_driver_path(
         metadata_config = default_statement_config.replace(
             execution_args={"postgres_copy_data": "3\tCarol", "postgres_copy_table": "asyncpg_copy_items"}
         )
-        await contract_asyncpg_driver.execute(
-            SQL("COPY metadata_target FROM STDIN", statement_config=metadata_config)
-        )
+        await contract_asyncpg_driver.execute(SQL("COPY metadata_target FROM STDIN", statement_config=metadata_config))
 
         result = await contract_asyncpg_driver.select("SELECT id, name FROM asyncpg_copy_items ORDER BY id")
         assert result == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}, {"id": 3, "name": "Carol"}]
