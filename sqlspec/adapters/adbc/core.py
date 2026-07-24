@@ -635,6 +635,8 @@ _BASE_TYPE_COERCION_MAP: Final[dict[type, Any]] = {
     tuple: _convert_array_for_postgres_adbc,
     list: _convert_array_for_postgres_adbc,
     dict: _identity,
+    UUID: _identity,
+    **build_uuid_coercions(native=True),
 }
 
 
@@ -873,29 +875,27 @@ def prepare_postgres_uuid_bindings(
     if not is_postgres_dialect(dialect):
         return compiled_sql, prepared_parameters
     if is_many:
-        uuid_ordinals = _detect_batch_uuid_ordinals(prepared_parameters)
+        scalar_ordinals, array_ordinals = _detect_batch_uuid_ordinals(prepared_parameters)
     elif isinstance(prepared_parameters, (list, tuple)):
-        uuid_ordinals = tuple(
-            index for index, value in enumerate(prepared_parameters, 1) if isinstance(value, _UUID_TYPES)
-        )
+        scalar_ordinals, array_ordinals = _detect_uuid_ordinals(prepared_parameters)
     else:
-        uuid_ordinals = ()
-    if not uuid_ordinals:
+        scalar_ordinals, array_ordinals = (), ()
+    if not scalar_ordinals and not array_ordinals:
         return compiled_sql, prepared_parameters
     sqlglot_dialect = "postgres" if dialect == "postgresql" else dialect
-    rewritten_sql, effective_ordinals = _rewrite_postgres_uuid_placeholders(
-        compiled_sql, tuple(sorted(uuid_ordinals)), sqlglot_dialect
+    rewritten_sql, effective_scalars, effective_arrays = _rewrite_postgres_uuid_placeholders(
+        compiled_sql, tuple(sorted(scalar_ordinals)), tuple(sorted(array_ordinals)), sqlglot_dialect
     )
-    if not effective_ordinals:
+    if not effective_scalars and not effective_arrays:
         return compiled_sql, prepared_parameters
     if is_many:
         converted_rows = [
-            _convert_uuid_row(row, effective_ordinals, row_number)
+            _convert_uuid_row(row, effective_scalars, effective_arrays, row_number)
             for row_number, row in enumerate(prepared_parameters, 1)
         ]
         converted_parameters = tuple(converted_rows) if isinstance(prepared_parameters, tuple) else converted_rows
     else:
-        converted_parameters = _convert_uuid_row(prepared_parameters, effective_ordinals, 1)
+        converted_parameters = _convert_uuid_row(prepared_parameters, effective_scalars, effective_arrays, 1)
     return rewritten_sql, converted_parameters
 
 
@@ -920,16 +920,42 @@ def _direct_parameter_cast(parameter: exp.Parameter) -> "exp.Cast | None":
     return None
 
 
+def _is_uuid_data_type(target: Any) -> bool:
+    """Report whether a cast target names the scalar ``UUID`` type."""
+    if not isinstance(target, exp.DataType):
+        return False
+    if target.this == exp.DataType.Type.UUID:
+        return True
+    target_kind = target.args.get("kind")
+    if isinstance(target_kind, exp.Dot):
+        target_kind = target_kind.expression
+    return (
+        target.this == exp.DataType.Type.USERDEFINED
+        and isinstance(target_kind, exp.Identifier)
+        and target_kind.name.lower() == "uuid"
+    )
+
+
+def _is_uuid_array_data_type(target: Any) -> bool:
+    """Report whether a cast target names a one-dimensional ``UUID[]`` type."""
+    if not isinstance(target, exp.DataType) or target.this != exp.DataType.Type.ARRAY:
+        return False
+    element_types = target.expressions
+    return len(element_types) == 1 and _is_uuid_data_type(element_types[0])
+
+
 @lru_cache(maxsize=256)
 def _rewrite_postgres_uuid_placeholders(
-    sql: str, uuid_ordinals: "tuple[int, ...]", dialect: str
-) -> "tuple[str, tuple[int, ...]]":
-    """Wrap requested UUID parameter placeholders in explicit UUID casts.
+    sql: str, scalar_ordinals: "tuple[int, ...]", array_ordinals: "tuple[int, ...]", dialect: str
+) -> "tuple[str, tuple[int, ...], tuple[int, ...]]":
+    """Wrap requested UUID parameter placeholders in explicit UUID or UUID[] casts.
 
-    Placeholders that already carry a different explicit cast stay authoritative
-    and are excluded from the returned effective ordinals. Results are memoized
-    per ``(sql, uuid_ordinals, dialect)`` so repeated executions of the same
-    statement shape reuse the rewrite without parsing again.
+    Placeholders already carrying the cast their ordinal requires keep that cast
+    and stay effective. Placeholders carrying any other explicit cast stay
+    authoritative and are excluded from the returned effective ordinals. Results
+    are memoized per ``(sql, scalar_ordinals, array_ordinals, dialect)`` so
+    repeated executions of the same statement shape reuse the rewrite without
+    parsing again.
     """
     try:
         expressions = cast(
@@ -943,7 +969,8 @@ def _rewrite_postgres_uuid_placeholders(
         msg = "Failed to parse PostgreSQL ADBC SQL for UUID parameter binding: SQLGlot returned no statements."
         raise SQLSpecError(msg)
 
-    requested = set(uuid_ordinals)
+    array_requested = set(array_ordinals)
+    requested = set(scalar_ordinals) | array_requested
     authoritative: set[int] = set()
     for expression in expressions:
         for parameter in expression.find_all(exp.Parameter):
@@ -951,23 +978,18 @@ def _rewrite_postgres_uuid_placeholders(
             if ordinal is None or ordinal not in requested:
                 continue
             cast_expression = _direct_parameter_cast(parameter)
-            if cast_expression is not None:
-                target = cast_expression.args.get("to")
-                target_kind = target.args.get("kind") if isinstance(target, exp.DataType) else None
-                if isinstance(target_kind, exp.Dot):
-                    target_kind = target_kind.expression
-                is_uuid_cast = isinstance(target, exp.DataType) and (
-                    target.this == exp.DataType.Type.UUID
-                    or (
-                        target.this == exp.DataType.Type.USERDEFINED
-                        and isinstance(target_kind, exp.Identifier)
-                        and target_kind.name.lower() == "uuid"
-                    )
-                )
-                if not is_uuid_cast:
-                    authoritative.add(ordinal)
-    effective = tuple(ordinal for ordinal in uuid_ordinals if ordinal not in authoritative)
-    effective_set = set(effective)
+            if cast_expression is None:
+                continue
+            target = cast_expression.args.get("to")
+            matches_required_cast = (
+                _is_uuid_array_data_type(target) if ordinal in array_requested else _is_uuid_data_type(target)
+            )
+            if not matches_required_cast:
+                authoritative.add(ordinal)
+    effective_scalars = tuple(ordinal for ordinal in scalar_ordinals if ordinal not in authoritative)
+    effective_arrays = tuple(ordinal for ordinal in array_ordinals if ordinal not in authoritative)
+    effective_array_set = set(effective_arrays)
+    effective_set = set(effective_scalars) | effective_array_set
 
     def wrap_parameter(node: exp.Expression) -> exp.Expression:
         if not isinstance(node, exp.Parameter):
@@ -977,54 +999,112 @@ def _rewrite_postgres_uuid_placeholders(
             return node
         if _direct_parameter_cast(node) is not None:
             return node
-        return exp.Cast(this=node.copy(), to=exp.DataType.build("UUID"))
+        target_type = "UUID[]" if ordinal in effective_array_set else "UUID"
+        return exp.Cast(this=node.copy(), to=exp.DataType.build(target_type, dialect=dialect))
 
     for expression in expressions:
         expression.transform(wrap_parameter, copy=False)
-    return "; ".join(expression.sql(dialect=dialect) for expression in expressions), effective
+    rewritten = "; ".join(expression.sql(dialect=dialect) for expression in expressions)
+    return rewritten, effective_scalars, effective_arrays
 
 
-def _detect_batch_uuid_ordinals(parameters: Any) -> "tuple[int, ...]":
+def _sequence_holds_uuid(values: "list[Any] | tuple[Any, ...]") -> bool:
+    """Report whether a sequence's first non-null element is a UUID."""
+    for value in values:
+        if value is not None:
+            return isinstance(value, _UUID_TYPES)
+    return False
+
+
+def _detect_uuid_ordinals(parameters: "list[Any] | tuple[Any, ...]") -> "tuple[tuple[int, ...], tuple[int, ...]]":
+    """Split a parameter sequence into scalar-UUID and UUID-array ordinals."""
+    scalar_ordinals: list[int] = []
+    array_ordinals: list[int] = []
+    for ordinal, value in enumerate(parameters, 1):
+        if isinstance(value, _UUID_TYPES):
+            scalar_ordinals.append(ordinal)
+        elif isinstance(value, (list, tuple)) and _sequence_holds_uuid(value):
+            array_ordinals.append(ordinal)
+    return tuple(scalar_ordinals), tuple(array_ordinals)
+
+
+def _detect_batch_uuid_ordinals(parameters: Any) -> "tuple[tuple[int, ...], tuple[int, ...]]":
     if not isinstance(parameters, (list, tuple)) or not parameters:
-        return ()
+        return (), ()
     first_row = parameters[0]
     if not isinstance(first_row, (list, tuple)):
-        return ()
+        return (), ()
     expected_size = len(first_row)
     for row in parameters:
         if not isinstance(row, (list, tuple)) or len(row) != expected_size:
-            return ()
-    return tuple(
-        ordinal
-        for ordinal in range(1, expected_size + 1)
-        if any(isinstance(row[ordinal - 1], _UUID_TYPES) for row in parameters)
-    )
+            return (), ()
+    scalar_ordinals: list[int] = []
+    array_ordinals: list[int] = []
+    for ordinal in range(1, expected_size + 1):
+        values = [row[ordinal - 1] for row in parameters]
+        if any(isinstance(value, _UUID_TYPES) for value in values):
+            scalar_ordinals.append(ordinal)
+        elif any(isinstance(value, (list, tuple)) and _sequence_holds_uuid(value) for value in values):
+            array_ordinals.append(ordinal)
+    return tuple(scalar_ordinals), tuple(array_ordinals)
 
 
-def _uuid_binding_error(ordinal: int, value: Any, row_number: int) -> str:
+def _uuid_binding_error(ordinal: int, value: Any, row_number: int, element_index: "int | None" = None) -> str:
     """Build the incompatible-value message for a UUID parameter ordinal."""
+    location = "" if element_index is None else f" at element {element_index}"
     return (
         f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has incompatible "
-        f"{type(value).__name__} value in batch row {row_number}; expected a UUID object, "
+        f"{type(value).__name__} value{location} in batch row {row_number}; expected a UUID object, "
         "parseable UUID string, or None."
     )
 
 
-def _convert_uuid_row(row: Any, ordinals: "tuple[int, ...]", row_number: int) -> Any:
+def _convert_uuid_value(value: Any, ordinal: int, row_number: int, element_index: "int | None" = None) -> Any:
+    """Normalize one UUID-bound value to its canonical string form."""
+    if value is None:
+        return None
+    if isinstance(value, _UUID_TYPES):
+        return str(value)
+    if not isinstance(value, str):
+        raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number, element_index))
+    try:
+        return str(UUID(value))
+    except (TypeError, ValueError) as exc:
+        raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number, element_index)) from exc
+
+
+def _null_array_element_error(ordinal: int, row_number: int, element_index: int) -> str:
+    """Build the null-array-element message for a UUID array parameter ordinal."""
+    return (
+        f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has a null value at element {element_index} "
+        f"in batch row {row_number}; the PostgreSQL ADBC driver encodes null array elements as empty "
+        "strings, which PostgreSQL rejects for UUID[]. Remove the null element or bind the array as text."
+    )
+
+
+def _convert_uuid_sequence(values: Any, ordinal: int, row_number: int) -> "list[Any]":
+    """Normalize every element of a UUID array parameter."""
+    converted: list[Any] = []
+    for element_index, value in enumerate(values, 1):
+        if value is None:
+            raise SQLSpecError(_null_array_element_error(ordinal, row_number, element_index))
+        converted.append(_convert_uuid_value(value, ordinal, row_number, element_index))
+    return converted
+
+
+def _convert_uuid_row(
+    row: Any, scalar_ordinals: "tuple[int, ...]", array_ordinals: "tuple[int, ...]", row_number: int
+) -> Any:
     converted = list(row)
-    for ordinal in ordinals:
+    for ordinal in scalar_ordinals:
+        converted[ordinal - 1] = _convert_uuid_value(converted[ordinal - 1], ordinal, row_number)
+    for ordinal in array_ordinals:
         value = converted[ordinal - 1]
         if value is None:
             continue
-        if isinstance(value, _UUID_TYPES):
-            converted[ordinal - 1] = str(value)
-            continue
-        if not isinstance(value, str):
+        if not isinstance(value, (list, tuple)):
             raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number))
-        try:
-            converted[ordinal - 1] = str(UUID(value))
-        except (TypeError, ValueError) as exc:
-            raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number)) from exc
+        converted[ordinal - 1] = _convert_uuid_sequence(value, ordinal, row_number)
     return tuple(converted) if isinstance(row, tuple) else converted
 
 

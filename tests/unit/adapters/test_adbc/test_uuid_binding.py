@@ -178,15 +178,122 @@ def test_non_postgres_dialect_leaves_uuid_unchanged() -> None:
     assert compiled_parameters == [UUID_VALUE]
 
 
-@pytest.mark.parametrize("nested", [[UUID_VALUE], {"identifier": UUID_VALUE}])
-def test_nested_uuid_values_are_not_rewritten(nested: object) -> None:
-    compiled_sql, compiled_parameters = _compile("SELECT ?", (nested,))
+def test_mapping_uuid_values_are_not_rewritten() -> None:
+    compiled_sql, compiled_parameters = _compile("SELECT ?", ({"identifier": UUID_VALUE},))
 
     assert compiled_sql == "SELECT $1"
-    if isinstance(nested, dict):
-        assert compiled_parameters == ['{"identifier":"550e8400-e29b-41d4-a716-446655440000"}']
-    else:
-        assert list(cast("Any", compiled_parameters)) == [nested]
+    assert compiled_parameters == ['{"identifier":"550e8400-e29b-41d4-a716-446655440000"}']
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [pytest.param([UUID_VALUE, OTHER_UUID_VALUE], id="list"), pytest.param((UUID_VALUE, OTHER_UUID_VALUE), id="tuple")],
+)
+def test_uuid_sequence_binds_as_uuid_array(sequence: object) -> None:
+    """A homogeneous UUID sequence binds as one uuid[] parameter."""
+    compiled_sql, compiled_parameters = _compile("SELECT ?", (sequence,))
+
+    assert compiled_sql == "SELECT CAST($1 AS UUID[])"
+    assert list(cast("Any", compiled_parameters)) == [[str(UUID_VALUE), str(OTHER_UUID_VALUE)]]
+
+
+def test_uuid_array_with_null_element_raises() -> None:
+    """ADBC encodes null array elements as empty strings, which PostgreSQL rejects for UUID[]."""
+    with pytest.raises(SQLSpecError, match="ordinal 1 has a null value at element 2"):
+        _compile("SELECT ?", ([UUID_VALUE, None, OTHER_UUID_VALUE],))
+
+
+def test_existing_uuid_array_cast_is_reused_without_double_wrapping() -> None:
+    """A caller-written UUID[] cast satisfies the requirement; values still convert."""
+    compiled_sql, compiled_parameters = _compile("SELECT CAST(? AS UUID[])", ([UUID_VALUE],))
+
+    assert compiled_sql == "SELECT CAST($1 AS UUID[])"
+    assert list(cast("Any", compiled_parameters)) == [[str(UUID_VALUE)]]
+
+
+def test_any_clause_with_uuid_array_cast_is_reused() -> None:
+    compiled_sql, compiled_parameters = _compile(
+        "SELECT id FROM example WHERE id = ANY(CAST(? AS UUID[]))", ([UUID_VALUE, OTHER_UUID_VALUE],)
+    )
+
+    assert compiled_sql.count("AS UUID[])") == 1
+    assert list(cast("Any", compiled_parameters)) == [[str(UUID_VALUE), str(OTHER_UUID_VALUE)]]
+
+
+def test_bare_any_clause_gains_a_uuid_array_cast() -> None:
+    """PostgreSQL has no uuid = text operator, so a cast-free ANY must be rewritten."""
+    compiled_sql, _ = _compile("SELECT id FROM example WHERE id = ANY(?)", ([UUID_VALUE],))
+
+    assert compiled_sql == "SELECT id FROM example WHERE id = ANY(CAST($1 AS UUID[]))"
+
+
+def test_different_explicit_array_cast_stays_authoritative() -> None:
+    compiled_sql, compiled_parameters = _compile("SELECT CAST(? AS TEXT[])", ([UUID_VALUE],))
+
+    assert compiled_sql == "SELECT CAST($1 AS TEXT[])"
+    assert list(cast("Any", compiled_parameters)) == [[UUID_VALUE]]
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected"),
+    [
+        pytest.param([], [], id="empty"),
+        pytest.param([None, None], [None, None], id="all-none"),
+        pytest.param((), [], id="empty-tuple-normalized-to-list"),
+    ],
+)
+def test_sequences_without_a_uuid_element_are_left_unchanged(sequence: object, expected: object) -> None:
+    """Detection cannot infer intent from an empty or all-null sequence."""
+    compiled_sql, compiled_parameters = _compile("SELECT ?", (sequence,))
+
+    assert compiled_sql == "SELECT $1"
+    assert list(cast("Any", compiled_parameters)) == [expected]
+
+
+def test_sequence_with_non_uuid_first_element_is_left_unchanged() -> None:
+    """The first non-null element decides; a non-UUID head leaves the parameter alone."""
+    compiled_sql, compiled_parameters = _compile("SELECT ?", ([42, UUID_VALUE],))
+
+    assert compiled_sql == "SELECT $1"
+    assert list(cast("Any", compiled_parameters)) == [[42, UUID_VALUE]]
+
+
+@pytest.mark.parametrize(
+    ("sequence", "element_index"),
+    [
+        pytest.param([UUID_VALUE, 42], 2, id="incompatible-type"),
+        pytest.param([UUID_VALUE, "not-a-uuid"], 2, id="unparseable-string"),
+        pytest.param([UUID_VALUE, OTHER_UUID_VALUE, object()], 3, id="later-element"),
+    ],
+)
+def test_uuid_array_with_incompatible_element_raises(sequence: object, element_index: int) -> None:
+    with pytest.raises(SQLSpecError, match=f"ordinal 1 has incompatible .* element {element_index}"):
+        _compile("SELECT ?", (sequence,))
+
+
+def test_scalar_and_array_uuid_ordinals_coexist_in_one_statement() -> None:
+    compiled_sql, compiled_parameters = _compile("SELECT ?, ?, ?", (UUID_VALUE, [OTHER_UUID_VALUE], "ordinary"))
+
+    assert compiled_sql == "SELECT CAST($1 AS UUID), CAST($2 AS UUID[]), $3"
+    assert list(cast("Any", compiled_parameters)) == [str(UUID_VALUE), [str(OTHER_UUID_VALUE)], "ordinary"]
+
+
+def test_batch_uuid_array_ordinals_are_detected() -> None:
+    compiled_sql, compiled_parameters = _compile(
+        "INSERT INTO values_table (identifiers, label) VALUES (?, ?)",
+        [([UUID_VALUE], "first"), ([OTHER_UUID_VALUE, UUID_VALUE], "second")],
+        is_many=True,
+    )
+
+    assert compiled_sql == "INSERT INTO values_table (identifiers, label) VALUES (CAST($1 AS UUID[]), $2)"
+    assert compiled_parameters == [([str(UUID_VALUE)], "first"), ([str(OTHER_UUID_VALUE), str(UUID_VALUE)], "second")]
+
+
+def test_non_postgres_dialect_leaves_uuid_array_unchanged() -> None:
+    compiled_sql, compiled_parameters = _compile("SELECT ?", ([UUID_VALUE],), dialect="sqlite")
+
+    assert compiled_sql == "SELECT ?"
+    assert list(cast("Any", compiled_parameters)) == [[UUID_VALUE]]
 
 
 @pytest.mark.skipif(not UUID_UTILS_INSTALLED, reason="uuid_utils not installed")
@@ -297,29 +404,44 @@ def test_structural_rewrite_cache_is_bounded_and_keyed_by_dialect_and_ordinals()
     rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
     rewrite.cache_clear()
 
-    first = rewrite("SELECT $1, $2", (1,), "postgres")
-    second = rewrite("SELECT $1, $2", (1,), "postgres")
-    third = rewrite("SELECT $1, $2", (2,), "postgres")
-    fourth = rewrite("SELECT $1, $2", (1,), "pgvector")
+    first = rewrite("SELECT $1, $2", (1,), (), "postgres")
+    second = rewrite("SELECT $1, $2", (1,), (), "postgres")
+    third = rewrite("SELECT $1, $2", (2,), (), "postgres")
+    fourth = rewrite("SELECT $1, $2", (1,), (), "pgvector")
 
-    assert first == second == ("SELECT CAST($1 AS UUID), $2", (1,))
-    assert third == ("SELECT $1, CAST($2 AS UUID)", (2,))
+    assert first == second == ("SELECT CAST($1 AS UUID), $2", (1,), ())
+    assert third == ("SELECT $1, CAST($2 AS UUID)", (2,), ())
     assert fourth == first
     assert rewrite.cache_info().hits == 1
     assert rewrite.cache_info().misses == 3
     assert rewrite.cache_info().maxsize == 256
 
 
+def test_structural_rewrite_cache_distinguishes_scalar_from_array_ordinals() -> None:
+    """The same SQL and ordinal produce different rewrites depending on the ordinal's kind."""
+    rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
+    rewrite.cache_clear()
+
+    scalar_only = rewrite("SELECT $1", (1,), (), "postgres")
+    array_only = rewrite("SELECT $1", (), (1,), "postgres")
+
+    assert scalar_only == ("SELECT CAST($1 AS UUID)", (1,), ())
+    assert array_only == ("SELECT CAST($1 AS UUID[])", (), (1,))
+    assert rewrite.cache_info().misses == 2
+    assert rewrite.cache_info().hits == 0
+
+
 def test_structural_rewrite_uses_ast_and_ignores_literal_and_comment_placeholders() -> None:
     rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
 
-    rewritten, effective = rewrite("SELECT '$1' AS literal, $1 -- $1\n", (1,), "postgres")
+    rewritten, effective, effective_arrays = rewrite("SELECT '$1' AS literal, $1 -- $1\n", (1,), (), "postgres")
 
     assert "'$1' AS literal" in rewritten
     assert "CAST($1" in rewritten
     assert rewritten.count("AS UUID)") == 1
     assert "/* $1 */" in rewritten
     assert effective == (1,)
+    assert effective_arrays == ()
 
 
 @pytest.mark.parametrize(
@@ -346,7 +468,7 @@ def test_structural_rewrite_reports_sqlglot_parse_errors() -> None:
     rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
 
     with pytest.raises(SQLSpecError, match="Failed to parse PostgreSQL ADBC SQL for UUID parameter binding"):
-        rewrite("SELECT (", (1,), "postgres")
+        rewrite("SELECT (", (1,), (), "postgres")
 
 
 def test_value_dependent_binding_does_not_leak_between_same_sql_calls() -> None:

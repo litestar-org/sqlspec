@@ -12,12 +12,29 @@ Recent Updates
 v0.57.0
 ------------------------------------------------------------------------------
 
+**Added:**
+
+* PostgreSQL-family ADBC drivers accept a list or tuple of UUIDs as a single
+  array parameter, so queries such as
+  ``WHERE id = ANY(CAST(? AS UUID[]))`` now work. The cast is added
+  automatically when the query does not already supply one.
+
+**Fixed:**
+
+* PostgreSQL-family ADBC drivers no longer fail when a UUID is a statement's
+  only parameter. Repeated executions of such a statement previously reused a
+  cached plan that skipped UUID binding and reached PostgreSQL as ``bytea``.
+
 **Changed:**
 
 * PostgreSQL-family ADBC drivers convert UUID parameters faster. UUID objects
   are now formatted directly instead of being re-parsed on every execution,
   which roughly halves the conversion cost of large ``execute_many`` batches.
   Bound values are unchanged.
+* Binding a UUID array containing ``None`` now raises an explicit error. The
+  PostgreSQL ADBC driver encodes null array elements as empty strings, which
+  PostgreSQL rejects for ``UUID[]``; the previous behavior was an opaque
+  ``invalid input syntax for type uuid`` failure from the server.
 
 v0.56.0
 ------------------------------------------------------------------------------
