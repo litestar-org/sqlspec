@@ -5807,10 +5807,42 @@ async def assert_async_script_parameter_embedding_contract(driver: object, case:
     )
 
 
+PLAN_TABLE_EXPLAIN_DIALECTS: "frozenset[str]" = frozenset({"oracle"})
+"""Dialects whose EXPLAIN writes a plan table instead of returning a result set.
+
+Oracle spells the statement ``EXPLAIN PLAN FOR``, which populates PLAN_TABLE and
+returns nothing; the plan is read back through DBMS_XPLAN by the modifier contract.
+"""
+
+EMPTY_PLAN_CASES: "frozenset[tuple[str, str]]" = frozenset({("sqlite", "insert")})
+"""(dialect, explain case id) pairs where the database reports no plan rows.
+
+SQLite produces no query plan for an INSERT that supplies literal VALUES, because
+there is no scan to describe.
+"""
+
+
 def _explain_skip_reason(case: DriverCase) -> str:
     if case.unsupported_explain_reason is not None:
         return case.unsupported_explain_reason
     return f"{case.adapter} ({case.dialect}) has no verified EXPLAIN support"
+
+
+def _expects_plan_rows(case: DriverCase, explain_case: ExplainCase) -> bool:
+    """Whether the database returns plan rows for this driver and artifact."""
+    if case.dialect in PLAN_TABLE_EXPLAIN_DIALECTS:
+        return False
+    return (case.dialect, explain_case.id) not in EMPTY_PLAN_CASES
+
+
+def _assert_explain_plan(result: "SQLResult", case: DriverCase, explain_case: ExplainCase) -> None:
+    """Assert the driver surfaced the plan the database produced."""
+    assert result.data is not None
+    if _expects_plan_rows(case, explain_case):
+        assert result.data, (
+            f"{case.id} discarded the plan for the {explain_case.id!r} EXPLAIN artifact; "
+            f"expected plan rows, got {result.data!r}"
+        )
 
 
 def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
@@ -5819,7 +5851,7 @@ def assert_sync_explain_contract(driver: object, case: DriverCase, explain_case:
         pytest.skip(_explain_skip_reason(case))
     sync_driver = cast("SyncContractDriver", driver)
     result = assert_sql_result(sync_driver.execute(explain_case.build(case.table, _sqlglot_dialect(case))))
-    assert result.data is not None
+    _assert_explain_plan(result, case, explain_case)
 
 
 async def assert_async_explain_contract(driver: object, case: DriverCase, explain_case: ExplainCase) -> None:
@@ -5828,7 +5860,7 @@ async def assert_async_explain_contract(driver: object, case: DriverCase, explai
         pytest.skip(_explain_skip_reason(case))
     async_driver = cast("AsyncContractDriver", driver)
     result = assert_sql_result(await async_driver.execute(explain_case.build(case.table, _sqlglot_dialect(case))))
-    assert result.data is not None
+    _assert_explain_plan(result, case, explain_case)
 
 
 EXPLAIN_MODIFIERS_SCOPE = "explain_modifiers"
