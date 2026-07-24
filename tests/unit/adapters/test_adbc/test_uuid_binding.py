@@ -200,6 +200,48 @@ def test_uuid_utils_values_are_normalized() -> None:
     assert compiled_parameters == [str(UUID_VALUE)]
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(str(UUID_VALUE), id="canonical-string"),
+        pytest.param(str(UUID_VALUE).upper(), id="uppercase-string"),
+        pytest.param(UUID_VALUE.hex, id="unhyphenated-string"),
+    ],
+)
+def test_string_values_are_never_detected_as_uuid_in_single_execution(value: str) -> None:
+    """A bare string is bound as text; only UUID objects select an ordinal for casting."""
+    compiled_sql, compiled_parameters = _compile("SELECT ?", (value,))
+
+    assert compiled_sql == "SELECT $1"
+    assert compiled_parameters == [value]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(str(UUID_VALUE), id="canonical-string"),
+        pytest.param(str(UUID_VALUE).upper(), id="uppercase-string"),
+        pytest.param(f"{{{UUID_VALUE}}}", id="braced-string"),
+        pytest.param(UUID_VALUE.urn, id="urn-string"),
+        pytest.param(UUID_VALUE.hex, id="unhyphenated-string"),
+    ],
+)
+def test_batch_string_values_normalize_to_canonical_form(value: str) -> None:
+    """Once a UUID object establishes an ordinal, every parseable string form canonicalizes."""
+    _, compiled_parameters = _compile("SELECT ?", [(UUID_VALUE,), (value,)], is_many=True)
+
+    assert compiled_parameters == [(str(UUID_VALUE),), (str(UUID_VALUE),)]
+
+
+def test_uuid_objects_convert_to_canonical_form() -> None:
+    """UUID objects emit the canonical dashed lowercase string on single and batch paths."""
+    _, single = _compile("SELECT ?", (OTHER_UUID_VALUE,))
+    _, batch = _compile("SELECT ?", [(UUID_VALUE,), (OTHER_UUID_VALUE,), (None,)], is_many=True)
+
+    assert single == [str(OTHER_UUID_VALUE)]
+    assert batch == [(str(UUID_VALUE),), (str(OTHER_UUID_VALUE),), (None,)]
+
+
 def test_batch_uuid_inference_uses_every_row_and_accepts_none_and_uuid_strings() -> None:
     compiled_sql, compiled_parameters = _compile(
         "INSERT INTO values_table (identifier, label) VALUES (?, ?)",

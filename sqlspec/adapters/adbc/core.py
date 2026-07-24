@@ -1001,28 +1001,30 @@ def _detect_batch_uuid_ordinals(parameters: Any) -> "tuple[int, ...]":
     )
 
 
+def _uuid_binding_error(ordinal: int, value: Any, row_number: int) -> str:
+    """Build the incompatible-value message for a UUID parameter ordinal."""
+    return (
+        f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has incompatible "
+        f"{type(value).__name__} value in batch row {row_number}; expected a UUID object, "
+        "parseable UUID string, or None."
+    )
+
+
 def _convert_uuid_row(row: Any, ordinals: "tuple[int, ...]", row_number: int) -> Any:
     converted = list(row)
     for ordinal in ordinals:
         value = converted[ordinal - 1]
         if value is None:
             continue
-        if not isinstance(value, _UUID_TYPES) and not isinstance(value, str):
-            msg = (
-                f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has incompatible "
-                f"{type(value).__name__} value in batch row {row_number}; expected a UUID object, "
-                "parseable UUID string, or None."
-            )
-            raise SQLSpecError(msg)
+        if isinstance(value, _UUID_TYPES):
+            converted[ordinal - 1] = str(value)
+            continue
+        if not isinstance(value, str):
+            raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number))
         try:
-            converted[ordinal - 1] = str(UUID(str(value)))
-        except (AttributeError, TypeError, ValueError) as exc:
-            msg = (
-                f"ADBC PostgreSQL UUID parameter ordinal {ordinal} has incompatible "
-                f"{type(value).__name__} value in batch row {row_number}; expected a UUID object, "
-                "parseable UUID string, or None."
-            )
-            raise SQLSpecError(msg) from exc
+            converted[ordinal - 1] = str(UUID(value))
+        except (TypeError, ValueError) as exc:
+            raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number)) from exc
     return tuple(converted) if isinstance(row, tuple) else converted
 
 

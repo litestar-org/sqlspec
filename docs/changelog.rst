@@ -9,6 +9,16 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.57.0
+------------------------------------------------------------------------------
+
+**Changed:**
+
+* PostgreSQL-family ADBC drivers convert UUID parameters faster. UUID objects
+  are now formatted directly instead of being re-parsed on every execution,
+  which roughly halves the conversion cost of large ``execute_many`` batches.
+  Bound values are unchanged.
+
 v0.56.0
 ------------------------------------------------------------------------------
 
