@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.57.0
+v0.56.1
 ------------------------------------------------------------------------------
 
 **Added:**
@@ -37,6 +37,10 @@ v0.57.0
   ``$n``, and a named parameter used more than once was sent once per use
   instead of being deduplicated. ``SQL.copy(statement_config=...)`` also raised
   ``TypeError`` and now accepts an override.
+* ``TABLE table_name`` statements now return their rows on PostgreSQL, DuckDB,
+  and MySQL. SQLGlot does not currently model this shorthand for
+  ``SELECT * FROM table_name``, so SQLSpec previously classified it as a
+  non-row-returning command and discarded the result.
 
 **Changed:**
 
