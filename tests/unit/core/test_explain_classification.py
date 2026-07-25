@@ -1,12 +1,32 @@
 """Unit tests for row-returning classification of command-shaped statements."""
 
+from typing import get_args
+
 import pytest
 import sqlglot
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.core.compiler import SQLProcessor
+from sqlspec.core.compiler import OperationType, SQLProcessor
+from sqlspec.core.statement import RETURNS_ROWS_OPERATIONS
 
 ROW_RETURNING_EXPLAIN_DIALECTS = ("postgres", "mysql", "sqlite", "duckdb", "bigquery", "tsql", "spanner")
+
+
+def test_returns_rows_operations_are_reachable_operation_types() -> None:
+    """Every entry must be an operation type the compiler can actually emit."""
+    unreachable = RETURNS_ROWS_OPERATIONS - set(get_args(OperationType))
+
+    assert not unreachable, f"unreachable operation types in RETURNS_ROWS_OPERATIONS: {sorted(unreachable)}"
+
+
+def test_pragma_row_returning_comes_from_the_operation_type_set() -> None:
+    """PRAGMA is classified by operation type because the profile does not cover it."""
+    expression = sqlglot.parse_one("PRAGMA table_info(t)", dialect="sqlite")
+    operation_type = SQLProcessor._operation_type(expression)
+
+    assert operation_type == "PRAGMA"
+    assert SQLProcessor._operation_profile(expression, operation_type).returns_rows is False
+    assert "PRAGMA" in RETURNS_ROWS_OPERATIONS
 
 
 @pytest.mark.parametrize("dialect", ROW_RETURNING_EXPLAIN_DIALECTS)
