@@ -793,9 +793,10 @@ def _records_to_json_rows(
                     raise ImproperConfigurationError(msg)
                 if type(record) is not dict or record_keys != resolved:
                     can_reuse = False
+            validated_records = cast("list[Mapping[str, Any]]", materialized)
             if can_reuse:
-                return cast("list[dict[str, Any]]", materialized)
-            return [{column: record[column] for column in resolved} for record in materialized]
+                return cast("list[dict[str, Any]]", validated_records)
+            return [{column: record[column] for column in resolved} for record in validated_records]
 
         resolved = columns
         expected = set(resolved)
