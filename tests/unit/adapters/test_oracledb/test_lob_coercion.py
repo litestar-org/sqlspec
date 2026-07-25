@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -198,6 +198,44 @@ def test_coerce_many_parameters_sync_applies_json_coercion_to_every_row(sync_con
     assert all(row["payload"] is sync_connection.createlob.return_value for row in result)
 
 
+def test_coerce_many_parameters_sync_preserves_unchanged_rows_without_version_resolution(
+    sync_connection: MagicMock,
+) -> None:
+    """Pass-through batches retain their containers and skip JSON metadata work."""
+    rows = [(1, "short", b"x", None, 3.5), (2, "short", b"x", None, 4.5)]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major") as resolve_major:
+        result = coerce_many_parameters_sync(
+            sync_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    assert result is rows
+    assert all(result_row is source_row for result_row, source_row in zip(result, rows, strict=True))
+    resolve_major.assert_not_called()
+
+
+def test_coerce_many_parameters_sync_resolves_json_storage_once(sync_connection: MagicMock) -> None:
+    """One batch shares a single server-storage decision across all JSON values."""
+    rows = [{"id": 1, "payload": {"row": 1}}, {"id": 2, "payload": [{"row": 2}]}]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major", return_value=18) as resolve_major:
+        coerce_many_parameters_sync(
+            sync_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    resolve_major.assert_called_once_with(sync_connection, None)
+
+
 @pytest.mark.anyio
 async def test_coerce_many_parameters_async_applies_json_coercion_to_every_row(async_connection: AsyncMock) -> None:
     """Async executemany coercion awaits locator creation for every row."""
@@ -215,6 +253,46 @@ async def test_coerce_many_parameters_async_applies_json_coercion_to_every_row(a
 
     assert async_connection.createlob.await_count == 2
     assert all(row["payload"] is async_connection.createlob.return_value for row in result)
+
+
+@pytest.mark.anyio
+async def test_coerce_many_parameters_async_preserves_unchanged_rows_without_version_resolution(
+    async_connection: AsyncMock,
+) -> None:
+    """Async pass-through batches retain containers and skip JSON metadata work."""
+    rows = [(1, "short", b"x", None, 3.5), (2, "short", b"x", None, 4.5)]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major") as resolve_major:
+        result = await coerce_many_parameters_async(
+            async_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    assert result is rows
+    assert all(result_row is source_row for result_row, source_row in zip(result, rows, strict=True))
+    resolve_major.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_coerce_many_parameters_async_resolves_json_storage_once(async_connection: AsyncMock) -> None:
+    """Async batches share one server-storage decision across JSON values."""
+    rows = [{"id": 1, "payload": {"row": 1}}, {"id": 2, "payload": [{"row": 2}]}]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major", return_value=18) as resolve_major:
+        await coerce_many_parameters_async(
+            async_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    resolve_major.assert_called_once_with(async_connection, None)
 
 
 def test_oracle_sync_stream_source_coerces_json_filter_before_execute() -> None:
@@ -277,6 +355,7 @@ def test_coerce_large_parameters_sync_list_parameters_passthrough(sync_connectio
         raw_byte_limit=RAW_LIMIT,
     )
     assert result == ["a", "b"]
+    assert result is params
     sync_connection.createlob.assert_not_called()
 
 
