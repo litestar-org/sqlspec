@@ -21,6 +21,11 @@ v0.56.1
 
 **Fixed:**
 
+* PostgreSQL-family ADBC row APIs now decode scalar ``UUID`` and ``UUID[]``
+  opaque storage values to Python UUIDs across buffered and streamed results.
+  Native Arrow results preserve the extension schema, and
+  ``enable_arrow_extension_types=False`` restores raw storage bytes on row
+  APIs.
 * PostgreSQL-family ADBC drivers no longer fail when a UUID is a statement's
   only parameter. Repeated executions of such a statement previously reused a
   cached plan that skipped UUID binding and reached PostgreSQL as ``bytea``.
