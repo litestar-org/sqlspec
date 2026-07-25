@@ -47,6 +47,21 @@ def test_plain_arrow_table_uses_whole_table_pylist_path() -> None:
     assert table.to_pylist_calls == 1
 
 
+def test_streamed_opaque_uuid_columns_match_buffered_row_decoding() -> None:
+    table = _build_uuid_table()
+    driver = _make_driver(table)
+
+    with driver.select_stream(
+        "SELECT identifier, identifiers, label FROM uuid_values", native_only=True, chunk_size=1
+    ) as stream:
+        rows = list(stream)
+
+    assert rows == [
+        {"identifier": UUID_VALUE, "identifiers": [UUID_VALUE, None, OTHER_UUID_VALUE], "label": "first"},
+        {"identifier": None, "identifiers": [], "label": "second"},
+    ]
+
+
 class _AdbcUuidResultCursor:
     def __init__(self, table: pa.Table) -> None:
         self.closed = False
@@ -58,6 +73,9 @@ class _AdbcUuidResultCursor:
 
     def fetch_arrow_table(self) -> pa.Table:
         return self._table
+
+    def fetch_record_batch(self) -> pa.RecordBatchReader:
+        return pa.RecordBatchReader.from_batches(self._table.schema, self._table.to_batches(max_chunksize=1))
 
     def close(self) -> None:
         self.closed = True
@@ -107,16 +125,11 @@ def _make_driver(table: pa.Table, *, enable_arrow_extension_types: bool = True) 
 
 def _build_uuid_table() -> pa.Table:
     opaque_type = pa.opaque(pa.binary(), "uuid", "PostgreSQL")
-    scalar_values = pa.ExtensionArray.from_storage(
-        opaque_type,
-        pa.array([UUID_VALUE.bytes, None], type=pa.binary()),
-    )
+    scalar_values = pa.ExtensionArray.from_storage(opaque_type, pa.array([UUID_VALUE.bytes, None], type=pa.binary()))
     list_values = pa.ExtensionArray.from_storage(
-        opaque_type,
-        pa.array([UUID_VALUE.bytes, None, OTHER_UUID_VALUE.bytes], type=pa.binary()),
+        opaque_type, pa.array([UUID_VALUE.bytes, None, OTHER_UUID_VALUE.bytes], type=pa.binary())
     )
     uuid_lists = pa.ListArray.from_arrays(pa.array([0, 3, 3], type=pa.int32()), list_values)
     return pa.Table.from_arrays(
-        [scalar_values, uuid_lists, pa.array(["first", "second"])],
-        names=["identifier", "identifiers", "label"],
+        [scalar_values, uuid_lists, pa.array(["first", "second"])], names=["identifier", "identifiers", "label"]
     )

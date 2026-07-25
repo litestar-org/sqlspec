@@ -40,7 +40,7 @@ from sqlspec.core import (
 )
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
-from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -129,7 +129,12 @@ class AdbcSelectStreamSource:
                 batch = next(reader)
             except StopIteration:
                 return []
-            rows = cast("list[dict[str, Any]]", batch.to_pylist())
+            rows = arrow_table_to_pylist(
+                batch,
+                decode_arrow_extension_types=bool(
+                    self._driver.driver_features.get("enable_arrow_extension_types", True)
+                ),
+            )
             if rows:
                 return rows
 
@@ -224,7 +229,10 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             arrow_table = cursor.fetch_arrow_table()
-            data = arrow_table.to_pylist()
+            data = arrow_table_to_pylist(
+                arrow_table,
+                decode_arrow_extension_types=bool(self.driver_features.get("enable_arrow_extension_types", True)),
+            )
             column_names = list(arrow_table.column_names)
             return self.create_execution_result(
                 cursor,
