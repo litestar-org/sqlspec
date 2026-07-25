@@ -5807,9 +5807,6 @@ async def assert_async_script_parameter_embedding_contract(driver: object, case:
     )
 
 
-PLAN_TABLE_EXPLAIN_DIALECTS: "frozenset[str]" = frozenset({"oracle"})
-"""Dialects whose EXPLAIN writes a plan table instead of returning a result set."""
-
 EMPTY_PLAN_CASES: "frozenset[tuple[str, str]]" = frozenset({("sqlite", "insert")})
 """(dialect, explain case id) pairs where the database reports no plan rows."""
 
@@ -5822,8 +5819,6 @@ def _explain_skip_reason(case: DriverCase) -> str:
 
 def _expects_plan_rows(case: DriverCase, explain_case: ExplainCase) -> bool:
     """Whether the database returns plan rows for this driver and artifact."""
-    if case.dialect in PLAN_TABLE_EXPLAIN_DIALECTS:
-        return False
     return (case.dialect, explain_case.id) not in EMPTY_PLAN_CASES
 
 
@@ -5909,22 +5904,44 @@ async def _assert_async_explain_artifacts(driver: object, artifacts: "list[objec
         assert result.data is not None
 
 
+def _oracle_owned_plan_sql(table: ContractTable) -> str:
+    return f"EXPLAIN PLAN SET STATEMENT_ID = 'contract_owned' FOR {_explain_select_sql(table)}"
+
+
 def _sync_explain_oracle_display(driver: object, case: DriverCase) -> None:
-    """Fold Oracle's two-step EXPLAIN PLAN FOR + DBMS_XPLAN.DISPLAY workflow."""
+    """Prove managed cleanup and caller-owned plan-table behavior."""
     sync_driver = cast("SyncContractDriver", driver)
-    sync_driver.execute(Explain(_explain_select_sql(case.table), dialect="oracle").build())
-    plan = assert_sql_result(sync_driver.execute("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())"))
-    assert plan.data is not None
-    assert len(plan.data) > 0
+    managed = assert_sql_result(sync_driver.execute(Explain(_explain_select_sql(case.table), dialect="oracle").build()))
+    assert managed.data
+    assert sync_driver.select_value("SELECT COUNT(*) FROM plan_table WHERE statement_id LIKE 'sqlspec_%'") == 0
+
+    owned = assert_sql_result(sync_driver.execute(_oracle_owned_plan_sql(case.table)))
+    assert not owned.data
+
+    plan = assert_sql_result(
+        sync_driver.execute("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, 'contract_owned', 'TYPICAL'))")
+    )
+    assert plan.data
+    sync_driver.execute("DELETE FROM plan_table WHERE statement_id = 'contract_owned'")
 
 
 async def _async_explain_oracle_display(driver: object, case: DriverCase) -> None:
-    """Fold Oracle's two-step EXPLAIN PLAN FOR + DBMS_XPLAN.DISPLAY workflow (async)."""
+    """Prove managed cleanup and caller-owned plan-table behavior (async)."""
     async_driver = cast("AsyncContractDriver", driver)
-    await async_driver.execute(Explain(_explain_select_sql(case.table), dialect="oracle").build())
-    plan = assert_sql_result(await async_driver.execute("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY())"))
-    assert plan.data is not None
-    assert len(plan.data) > 0
+    managed = assert_sql_result(
+        await async_driver.execute(Explain(_explain_select_sql(case.table), dialect="oracle").build())
+    )
+    assert managed.data
+    assert await async_driver.select_value("SELECT COUNT(*) FROM plan_table WHERE statement_id LIKE 'sqlspec_%'") == 0
+
+    owned = assert_sql_result(await async_driver.execute(_oracle_owned_plan_sql(case.table)))
+    assert not owned.data
+
+    plan = assert_sql_result(
+        await async_driver.execute("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, 'contract_owned', 'TYPICAL'))")
+    )
+    assert plan.data
+    await async_driver.execute("DELETE FROM plan_table WHERE statement_id = 'contract_owned'")
 
 
 register_sync_extra_assertion(

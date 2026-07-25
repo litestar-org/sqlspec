@@ -27,10 +27,11 @@ v0.57.0
 * ``EXPLAIN`` statements now return their query plan. Explained statements were
   classified as non-row-returning, so drivers ran the ``EXPLAIN`` and then
   discarded the plan, leaving ``select()`` and ``execute()`` with no rows. This
-  affected every adapter except DuckDB, ADBC, Oracle, and BigQuery. ``SHOW`` and
-  ``DESCRIBE`` are now classified the same way. Oracle is unchanged: it spells
-  the statement ``EXPLAIN PLAN FOR``, which populates a plan table rather than
-  returning rows. (`#655 <https://github.com/litestar-org/sqlspec/issues/655>`_)
+  affected every adapter except DuckDB, ADBC, and BigQuery. ``SHOW`` and
+  ``DESCRIBE`` are now classified the same way. Oracle ``.explain()`` calls now
+  tag the plan-table entry, return ``DBMS_XPLAN`` rows, and remove the entry
+  before returning. Raw caller-owned ``EXPLAIN PLAN`` statements remain
+  unchanged. (`#655 <https://github.com/litestar-org/sqlspec/issues/655>`_)
 * Explaining a statement no longer discards its configuration. An explained
   PostgreSQL statement previously compiled with ``?`` placeholders instead of
   ``$n``, and a named parameter used more than once was sent once per use

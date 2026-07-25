@@ -26,6 +26,8 @@ EXPLAIN_OPTION_FIELDS: Final[tuple[str, ...]] = (
     "generic_plan",
 )
 EXPLAIN_OPTIONS_SLOTS: Final = EXPLAIN_OPTION_FIELDS
+ORACLE_MANAGED_EXPLAIN_META_KEY: Final[str] = "sqlspec_managed_oracle_explain"
+ORACLE_EXPLAIN_PREFIX: Final[str] = "EXPLAIN PLAN FOR "
 
 
 class ExplainFormat(str, Enum):
