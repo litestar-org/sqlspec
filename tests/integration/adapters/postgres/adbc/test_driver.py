@@ -1,6 +1,6 @@
 """PostgreSQL-backed ADBC driver residuals."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -202,3 +202,24 @@ def test_postgresql_lone_uuid_parameter_survives_statement_cache_hits(postgresql
         assert [row["value"] for row in rows] == sorted(values)
     finally:
         postgresql_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_postgresql_uuid_row_stream_and_arrow_boundary(postgresql_session: AdbcDriver) -> None:
+    """Row APIs decode UUIDs while the Arrow API preserves the opaque extension."""
+    value = UUID("550e8400-e29b-41d4-a716-446655440000")
+    statement = f"SELECT CAST('{value}' AS UUID) AS value"
+
+    buffered = postgresql_session.select_one(statement)
+    with postgresql_session.select_stream(statement, native_only=True, chunk_size=1) as stream:
+        streamed = list(stream)
+    arrow_result = postgresql_session.select_to_arrow(statement)
+    arrow_table = arrow_result.data
+    arrow_type = arrow_table.schema.field("value").type
+
+    assert buffered == {"value": value}
+    assert streamed == [buffered]
+    assert arrow_type.extension_name == "arrow.opaque"
+    assert arrow_type.type_name == "uuid"
+    assert arrow_table.to_pylist() == [{"value": value.bytes}]
