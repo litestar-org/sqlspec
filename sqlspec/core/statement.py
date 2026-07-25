@@ -75,15 +75,8 @@ __all__ = (
 )
 logger = get_logger("sqlspec.core.statement")
 
-RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({
-    "SELECT",
-    "WITH",
-    "VALUES",
-    "TABLE",
-    "SHOW",
-    "DESCRIBE",
-    "PRAGMA",
-})
+RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA"})
+"""Operation types that return rows independently of the operation profile."""
 MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
@@ -903,11 +896,13 @@ class SQL:
             return new_sql
 
         statement_expression = self._raw_expression if statement is None else statement
+        statement_config = kwargs.pop("statement_config", self._statement_config)
+        is_many = kwargs.pop("is_many", self._is_many)
         new_sql = SQL(
             statement_expression or self._raw_sql,
             *(parameters if parameters is not None else self._original_parameters),
-            statement_config=self._statement_config,
-            is_many=self._is_many,
+            statement_config=statement_config,
+            is_many=is_many,
             **kwargs,
         )
         if parameters is None:

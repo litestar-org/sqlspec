@@ -1,7 +1,7 @@
 """Oracle Driver"""
 
 import logging
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, overload
 
 from oracledb import create_pipeline as create_oracle_pipeline
 
@@ -57,6 +57,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
+from sqlspec.core.explain import ORACLE_EXPLAIN_PREFIX, ORACLE_MANAGED_EXPLAIN_META_KEY
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     AsyncRowStream,
@@ -73,6 +74,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -95,6 +97,15 @@ __all__ = (
 
 
 logger = get_logger(__name__)
+
+PLAN_STATEMENT_ID_MAX_LENGTH: Final[int] = 30
+"""Width of the PLAN_TABLE STATEMENT_ID column."""
+
+PLAN_STATEMENT_ID_PREFIX: Final[str] = "sqlspec_"
+
+PLAN_DISPLAY_SQL: Final[str] = "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, :statement_id, 'TYPICAL'))"
+
+PLAN_CLEANUP_SQL: Final[str] = "DELETE FROM plan_table WHERE statement_id = :statement_id"
 
 
 class OraclePipelineDriver(Protocol):
@@ -367,6 +378,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+
+        explained_sql = _managed_explain_statement(statement, sql)
+        if explained_sql is not None:
+            return self._dispatch_explain_plan(cursor, explained_sql, prepared_parameters)
 
         cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
@@ -844,6 +859,54 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def _resolve_row_metadata(self, description: Any) -> "tuple[list[str], bool]":
         return resolve_row_metadata(description, self.driver_features, self._row_metadata_cache)
 
+    def _dispatch_explain_plan(self, cursor: Any, explained_sql: str, parameters: Any) -> "ExecutionResult":
+        """Request a plan, read it back, and release the plan table rows.
+
+        Oracle writes the plan to a table instead of returning it, so the plan is
+        tagged with a generated statement id, formatted through ``DBMS_XPLAN``, and
+        deleted again. All three statements run in the caller's transaction, so the
+        plan is read before a rollback can discard it.
+
+        Args:
+            cursor: Oracle cursor object.
+            explained_sql: Statement whose plan is wanted.
+            parameters: Bind values for the explained statement.
+
+        Returns:
+            Execution result carrying the formatted plan rows.
+        """
+        statement_id = _new_plan_statement_id()
+        cursor.execute(_tagged_explain_plan_sql(statement_id, explained_sql), parameters or {})
+
+        try:
+            cursor.execute(PLAN_DISPLAY_SQL, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features))
+            fetched_data = cursor.fetchall()
+            column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+            data, column_names = collect_sync_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
+            )
+            result = self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
+            )
+        except Exception:
+            try:
+                cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
+            except Exception:
+                logger.warning("Failed to clean up Oracle plan rows after plan retrieval failed", exc_info=True)
+            raise
+        else:
+            cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
+        return result
+
     def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
         """Execute SQL and return an Oracle DataFrame."""
         params = parameters if parameters is not None else []
@@ -1019,6 +1082,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+
+        explained_sql = _managed_explain_statement(statement, sql)
+        if explained_sql is not None:
+            return await self._dispatch_explain_plan(cursor, explained_sql, prepared_parameters)
 
         await cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
@@ -1512,6 +1579,56 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     def _resolve_row_metadata(self, description: Any) -> "tuple[list[str], bool]":
         return resolve_row_metadata(description, self.driver_features, self._row_metadata_cache)
 
+    async def _dispatch_explain_plan(self, cursor: Any, explained_sql: str, parameters: Any) -> "ExecutionResult":
+        """Request a plan, read it back, and release the plan table rows.
+
+        Oracle writes the plan to a table instead of returning it, so the plan is
+        tagged with a generated statement id, formatted through ``DBMS_XPLAN``, and
+        deleted again. All three statements run in the caller's transaction, so the
+        plan is read before a rollback can discard it.
+
+        Args:
+            cursor: Oracle cursor object.
+            explained_sql: Statement whose plan is wanted.
+            parameters: Bind values for the explained statement.
+
+        Returns:
+            Execution result carrying the formatted plan rows.
+        """
+        statement_id = _new_plan_statement_id()
+        await cursor.execute(_tagged_explain_plan_sql(statement_id, explained_sql), parameters or {})
+
+        try:
+            await cursor.execute(
+                PLAN_DISPLAY_SQL, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features)
+            )
+            fetched_data = await cursor.fetchall()
+            column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+            data, column_names = await collect_async_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
+            )
+            result = self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
+            )
+        except Exception:
+            try:
+                await cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
+            except Exception:
+                logger.warning("Failed to clean up Oracle plan rows after plan retrieval failed", exc_info=True)
+            raise
+        else:
+            await cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
+        return result
+
     async def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
         """Execute SQL and return an Oracle DataFrame."""
         params = parameters if parameters is not None else []
@@ -1674,6 +1791,57 @@ def _row_has_async_readable(row: Any) -> bool:
     except TypeError:
         values = (row,)
     return any(is_async_readable(value) for value in values)
+
+
+def _managed_explain_statement(statement: "SQL", sql: str) -> "str | None":
+    """Extract a SQLSpec-built Oracle plan request without parsing SQL text.
+
+    ``Explain.build()`` marks its SQLGlot command expression. Raw caller SQL has no
+    marker and stays on the ordinary one-statement path. The marked form has one exact
+    generated prefix, so extracting the inner statement is a constant-prefix slice,
+    not a second SQL parse.
+
+    Args:
+        statement: Prepared SQL object.
+        sql: Compiled statement text.
+
+    Returns:
+        The inner statement, or None when SQLSpec does not own the plan flow.
+
+    Raises:
+        SQLSpecError: If a marked statement no longer has SQLSpec's generated shape.
+    """
+    expression = statement.raw_expression
+    if expression is None or not expression.meta.get(ORACLE_MANAGED_EXPLAIN_META_KEY, False):
+        return None
+
+    if not sql.startswith(ORACLE_EXPLAIN_PREFIX) or len(sql) == len(ORACLE_EXPLAIN_PREFIX):
+        msg = "SQLSpec-managed Oracle EXPLAIN statement lost its generated prefix"
+        raise SQLSpecError(msg)
+    return sql[len(ORACLE_EXPLAIN_PREFIX) :]
+
+
+def _new_plan_statement_id() -> str:
+    """Build an identifier that isolates one plan within the session plan table.
+
+    Returns:
+        Identifier of at most ``PLAN_STATEMENT_ID_MAX_LENGTH`` alphanumeric characters.
+    """
+    suffix_length = PLAN_STATEMENT_ID_MAX_LENGTH - len(PLAN_STATEMENT_ID_PREFIX)
+    return f"{PLAN_STATEMENT_ID_PREFIX}{uuid4().hex[:suffix_length]}"
+
+
+def _tagged_explain_plan_sql(statement_id: str, explained_sql: str) -> str:
+    """Rewrite a plan request so its rows can be located and removed again.
+
+    Args:
+        statement_id: Identifier produced by ``_new_plan_statement_id``.
+        explained_sql: Statement whose plan is wanted, with its bind placeholders intact.
+
+    Returns:
+        Plan request tagged with the statement id.
+    """
+    return f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR {explained_sql}"
 
 
 def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":

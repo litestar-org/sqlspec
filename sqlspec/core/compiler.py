@@ -101,6 +101,13 @@ OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]] = {
     exp.Rollback: "COMMAND",
 }
 
+ROW_RETURNING_COMMANDS: Final[frozenset[str]] = frozenset({"EXPLAIN", "SHOW", "DESC", "DESCRIBE"})
+
+ROW_RETURNING_STATEMENT_KEYWORDS: Final[frozenset[str]] = frozenset({"TABLE"})
+"""Leading keywords of row-returning statements that sqlglot does not model."""
+
+PLAN_TABLE_EXPLAIN_PREFIX: Final[str] = "PLAN"
+
 COPY_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY", "COPY_FROM", "COPY_TO")
 
 COPY_FROM_OPERATION_TYPES: Final[tuple[OperationType, ...]] = ("COPY", "COPY_FROM")
@@ -549,10 +556,17 @@ class SQLProcessor:
             else:
                 expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
         except ParseError:
-            return None, "COMMAND", OperationProfile.empty()
+            returns_rows = SQLProcessor._statement_text_returns_rows(sqlglot_sql)
+            return None, "COMMAND", OperationProfile(returns_rows=returns_rows)
         else:
             operation_type = SQLProcessor._operation_type(expression)
             operation_profile = SQLProcessor._operation_profile(expression, operation_type)
+            if (
+                operation_type == "COMMAND"
+                and not operation_profile.returns_rows
+                and SQLProcessor._statement_text_returns_rows(sqlglot_sql)
+            ):
+                operation_profile.returns_rows = True
             return expression, operation_type, operation_profile
 
     def _store_parse_cache(
@@ -1048,6 +1062,10 @@ class SQLProcessor:
             copy_kind = expr.args.get("kind")
             modifies_rows = copy_kind is True
             returns_rows = copy_kind is False
+        elif isinstance(expr, (exp.Describe, exp.Show)):
+            returns_rows = True
+        elif isinstance(expr, exp.Command):
+            returns_rows = SQLProcessor._command_returns_rows(expr)
 
         if not returns_rows and operation_type == "SELECT":
             returns_rows = True
@@ -1056,6 +1074,56 @@ class SQLProcessor:
             modifies_rows = True
 
         return OperationProfile(returns_rows=returns_rows, modifies_rows=modifies_rows)
+
+    @staticmethod
+    def _command_returns_rows(expression: "exp.Command") -> bool:
+        """Determine whether an unparsed command produces a result set.
+
+        The command keyword decides the result shape, except for the
+        ``EXPLAIN PLAN FOR`` form, which writes a plan table and returns nothing.
+
+        Args:
+            expression: Command expression carrying the keyword and its raw payload.
+
+        Returns:
+            True when the command yields result rows.
+        """
+        keyword = expression.this
+        if not isinstance(keyword, str):
+            return False
+
+        normalized = keyword.upper()
+        if normalized not in ROW_RETURNING_COMMANDS:
+            return False
+
+        if normalized != "EXPLAIN":
+            return True
+
+        payload = expression.args.get("expression")
+        if not isinstance(payload, exp.Literal):
+            return True
+
+        return not payload.name.lstrip().upper().startswith(PLAN_TABLE_EXPLAIN_PREFIX)
+
+    @staticmethod
+    def _statement_text_returns_rows(sql: str) -> bool:
+        """Determine whether the leading keyword names a row-returning statement.
+
+        Covers statements sqlglot has no expression for, where the parse either fails
+        or yields an unrelated shape. ``TABLE t`` is shorthand for ``SELECT * FROM t``
+        and parses as a column aliased to ``t``.
+
+        Args:
+            sql: Raw statement text.
+
+        Returns:
+            True when the statement text opens with a row-returning keyword and an operand.
+        """
+        parts = sql.lstrip().split(maxsplit=1)
+        if not parts[1:]:
+            return False
+
+        return parts[0].upper() in ROW_RETURNING_STATEMENT_KEYWORDS
 
     def clear_cache(self) -> None:
         """Clear compilation cache and reset statistics."""

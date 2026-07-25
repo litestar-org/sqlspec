@@ -7,16 +7,15 @@ dialect-aware SQL generation.
 from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import trait
-from sqlglot import Dialect
+from sqlglot import Dialect, exp
 from typing_extensions import Self
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.core.explain import ExplainFormat, ExplainOptions
+from sqlspec.core.explain import ORACLE_EXPLAIN_PREFIX, ORACLE_MANAGED_EXPLAIN_META_KEY, ExplainFormat, ExplainOptions
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_expression
 
 if TYPE_CHECKING:
-    from sqlglot import exp
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.protocols import SQLBuilderProtocol
@@ -194,7 +193,7 @@ def build_oracle_explain(statement_sql: str, options: "ExplainOptions") -> str:
     Returns:
         EXPLAIN PLAN FOR SQL string
     """
-    return f"EXPLAIN PLAN FOR {statement_sql}"
+    return f"{ORACLE_EXPLAIN_PREFIX}{statement_sql}"
 
 
 def build_bigquery_explain(statement_sql: str, options: "ExplainOptions") -> str:
@@ -269,7 +268,7 @@ class Explain:
     various options that are translated to dialect-specific syntax.
     """
 
-    __slots__ = ("_dialect", "_options", "_parameters", "_statement_sql")
+    __slots__ = ("_dialect", "_options", "_parameters", "_source_config", "_statement_sql")
 
     def __init__(
         self,
@@ -287,40 +286,9 @@ class Explain:
         self._dialect = dialect
         self._options = options if options is not None else ExplainOptions()
         self._parameters: dict[str, Any] = {}
+        self._source_config: StatementConfig | None = None
 
         self._statement_sql = self._resolve_statement_sql(statement)
-
-    def _resolve_statement_sql(self, statement: "str | exp.Expr | SQL | SQLBuilderProtocol") -> str:
-        """Resolve statement to SQL string.
-
-        Args:
-            statement: The statement to resolve
-
-        Returns:
-            SQL string representation of the statement
-        """
-        if isinstance(statement, str):
-            return statement
-
-        if isinstance(statement, SQL):
-            self._parameters.update(statement.named_parameters)
-            return statement.raw_sql
-
-        if is_expression(statement):
-            dialect_str = normalize_dialect_name(self._dialect)
-            return statement.sql(dialect=dialect_str)
-
-        if has_parameter_builder(statement):
-            safe_query = statement.build(dialect=self._dialect)
-            if safe_query.parameters:
-                self._parameters.update(safe_query.parameters)
-            return str(safe_query.sql)
-
-        if has_expression_and_sql(statement):
-            return statement.sql
-
-        msg = f"Cannot resolve statement to SQL: {type(statement).__name__}"
-        raise SQLBuilderError(msg)
 
     def analyze(self, enabled: bool = True) -> Self:
         """Enable ANALYZE option (execute statement for real statistics).
@@ -493,16 +461,23 @@ class Explain:
             SQL object containing the EXPLAIN statement
         """
         target_dialect = dialect or self._dialect
-        explain_sql = build_explain_sql(self._statement_sql, self._options, target_dialect)
-        statement_config = StatementConfig(dialect=target_dialect) if target_dialect is not None else None
+        statement_config = self._resolve_statement_config(target_dialect)
+        if normalize_dialect_name(target_dialect) in ORACLE_DIALECTS:
+            oracle_statement = exp.Command(
+                this="EXPLAIN", expression=exp.Literal.string(f"PLAN FOR {self._statement_sql}")
+            )
+            oracle_statement.meta[ORACLE_MANAGED_EXPLAIN_META_KEY] = True
+            statement: str | exp.Expr = oracle_statement
+        else:
+            statement = build_explain_sql(self._statement_sql, self._options, target_dialect)
 
         if self._parameters:
             if statement_config is None:
-                return SQL(explain_sql, self._parameters)
-            return SQL(explain_sql, self._parameters, statement_config=statement_config)
+                return SQL(statement, self._parameters)
+            return SQL(statement, self._parameters, statement_config=statement_config)
         if statement_config is None:
-            return SQL(explain_sql)
-        return SQL(explain_sql, statement_config=statement_config)
+            return SQL(statement)
+        return SQL(statement, statement_config=statement_config)
 
     def to_sql(self, dialect: "DialectType | None" = None) -> str:
         """Build and return just the SQL string.
@@ -519,6 +494,61 @@ class Explain:
     def __repr__(self) -> str:
         """String representation."""
         return f"Explain({self._statement_sql!r}, dialect={self._dialect!r}, options={self._options!r})"
+
+    def _resolve_statement_sql(self, statement: "str | exp.Expr | SQL | SQLBuilderProtocol") -> str:
+        """Resolve statement to SQL string.
+
+        Args:
+            statement: The statement to resolve
+
+        Returns:
+            SQL string representation of the statement
+        """
+        if isinstance(statement, str):
+            return statement
+
+        if isinstance(statement, SQL):
+            self._parameters.update(statement.named_parameters)
+            self._source_config = statement.statement_config
+            return statement.raw_sql
+
+        if is_expression(statement):
+            dialect_str = normalize_dialect_name(self._dialect)
+            return statement.sql(dialect=dialect_str)
+
+        if has_parameter_builder(statement):
+            safe_query = statement.build(dialect=self._dialect)
+            if safe_query.parameters:
+                self._parameters.update(safe_query.parameters)
+            return str(safe_query.sql)
+
+        if has_expression_and_sql(statement):
+            return statement.sql
+
+        msg = f"Cannot resolve statement to SQL: {type(statement).__name__}"
+        raise SQLBuilderError(msg)
+
+    def _resolve_statement_config(self, target_dialect: "DialectType | None") -> "StatementConfig | None":
+        """Resolve the configuration the explained statement should carry.
+
+        A source ``SQL`` object supplies its own configuration so the explained
+        statement keeps its placeholder style and parameter handling. An explicit
+        builder dialect overrides only the dialect.
+
+        Args:
+            target_dialect: Dialect the EXPLAIN is being rendered for.
+
+        Returns:
+            Configuration for the explained statement, or None when neither a source
+            configuration nor a dialect is available.
+        """
+        source_config = self._source_config
+        if source_config is None:
+            return StatementConfig(dialect=target_dialect) if target_dialect is not None else None
+
+        if target_dialect is not None and source_config.dialect != target_dialect:
+            return source_config.replace(dialect=target_dialect)
+        return source_config
 
 
 @trait

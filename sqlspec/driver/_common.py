@@ -1100,7 +1100,7 @@ class CommonDriverAttributesMixin:
 
     def _cached_execution(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQLResult | None | Awaitable[SQLResult | None]":
+    ) -> "SQLResult | Awaitable[SQLResult | None] | None":
         """Attempt cached execution for query.
 
         Args:

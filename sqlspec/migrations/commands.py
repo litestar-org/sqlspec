@@ -1996,7 +1996,7 @@ def _output_exception(
 ) -> None:
     """Output an exception message to logger or console."""
     if use_logger:
-        logger.exception(message, *args)
+        logger.error(message, *args)
     else:
         if not echo:
             return

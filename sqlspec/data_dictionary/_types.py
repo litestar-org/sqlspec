@@ -172,7 +172,7 @@ class ObjectIdentity:
             self.source,
         ))
 
-    def __reduce__(self) -> "tuple[type[ObjectIdentity], tuple[str, str], dict[str, str | None | MetadataSource]]":
+    def __reduce__(self) -> "tuple[type[ObjectIdentity], tuple[str, str], dict[str, str | MetadataSource | None]]":
         return (
             self.__class__,
             (self.name, self.object_type),
@@ -273,7 +273,7 @@ class MetadataCapabilityProfile:
                 return capability
         return MetadataCapability(domain=domain, support=MetadataSupport.UNKNOWN)
 
-    def to_dict(self) -> "dict[str, str | None | tuple[dict[str, str | tuple[str, ...]], ...]]":
+    def to_dict(self) -> "dict[str, str | tuple[dict[str, str | tuple[str, ...]], ...] | None]":
         """Serialize the profile with stable string enum values."""
         return {
             "dialect": self.dialect,

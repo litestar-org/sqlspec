@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.57.0
+v0.56.1
 ------------------------------------------------------------------------------
 
 **Added:**
@@ -24,6 +24,23 @@ v0.57.0
 * PostgreSQL-family ADBC drivers no longer fail when a UUID is a statement's
   only parameter. Repeated executions of such a statement previously reused a
   cached plan that skipped UUID binding and reached PostgreSQL as ``bytea``.
+* ``EXPLAIN`` statements now return their query plan. Explained statements were
+  classified as non-row-returning, so drivers ran the ``EXPLAIN`` and then
+  discarded the plan, leaving ``select()`` and ``execute()`` with no rows. This
+  affected every adapter except DuckDB, ADBC, and BigQuery. ``SHOW`` and
+  ``DESCRIBE`` are now classified the same way. Oracle ``.explain()`` calls now
+  tag the plan-table entry, return ``DBMS_XPLAN`` rows, and remove the entry
+  before returning. Raw caller-owned ``EXPLAIN PLAN`` statements remain
+  unchanged. (`#655 <https://github.com/litestar-org/sqlspec/issues/655>`_)
+* Explaining a statement no longer discards its configuration. An explained
+  PostgreSQL statement previously compiled with ``?`` placeholders instead of
+  ``$n``, and a named parameter used more than once was sent once per use
+  instead of being deduplicated. ``SQL.copy(statement_config=...)`` also raised
+  ``TypeError`` and now accepts an override.
+* ``TABLE table_name`` statements now return their rows on PostgreSQL, DuckDB,
+  and MySQL. SQLGlot does not currently model this shorthand for
+  ``SELECT * FROM table_name``, so SQLSpec previously classified it as a
+  non-row-returning command and discarded the result.
 
 **Changed:**
 

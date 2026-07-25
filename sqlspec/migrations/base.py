@@ -99,7 +99,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
 
     @abstractmethod
-    def ensure_tracking_table(self, driver: DriverT) -> "None | Awaitable[None]":
+    def ensure_tracking_table(self, driver: DriverT) -> "Awaitable[None] | None":
         """Create the migration tracking table if it doesn't exist.
 
         Implementations should also check for and add any missing columns
@@ -108,7 +108,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         ...
 
     @abstractmethod
-    def get_current_version(self, driver: DriverT) -> "str | None | Awaitable[str | None]":
+    def get_current_version(self, driver: DriverT) -> "str | Awaitable[str | None] | None":
         """Get the latest applied migration version."""
         ...
 
@@ -122,12 +122,12 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
     @abstractmethod
     def record_migration(
         self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
-    ) -> "None | Awaitable[None]":
+    ) -> "Awaitable[None] | None":
         """Record a successfully applied migration."""
         ...
 
     @abstractmethod
-    def remove_migration(self, driver: DriverT, version: str) -> "None | Awaitable[None]":
+    def remove_migration(self, driver: DriverT, version: str) -> "Awaitable[None] | None":
         """Remove a migration record."""
         ...
 
@@ -463,32 +463,32 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             logger.info("Initialized migrations in %s", directory)
 
     @abstractmethod
-    def init(self, directory: str, package: bool = True) -> "None | Awaitable[None]":
+    def init(self, directory: str, package: bool = True) -> "Awaitable[None] | None":
         """Initialize migration directory structure."""
         ...
 
     @abstractmethod
-    def current(self, verbose: bool = False) -> "str | None | Awaitable[str | None]":
+    def current(self, verbose: bool = False) -> "str | Awaitable[str | None] | None":
         """Show current migration version."""
         ...
 
     @abstractmethod
-    def upgrade(self, revision: str = "head") -> "None | Awaitable[None]":
+    def upgrade(self, revision: str = "head") -> "Awaitable[None] | None":
         """Upgrade to a target revision."""
         ...
 
     @abstractmethod
-    def downgrade(self, revision: str = "-1") -> "None | Awaitable[None]":
+    def downgrade(self, revision: str = "-1") -> "Awaitable[None] | None":
         """Downgrade to a target revision."""
         ...
 
     @abstractmethod
-    def stamp(self, revision: str) -> "None | Awaitable[None]":
+    def stamp(self, revision: str) -> "Awaitable[None] | None":
         """Mark database as being at a specific revision without running migrations."""
         ...
 
     @abstractmethod
-    def revision(self, message: str, file_type: str | None = None) -> "None | Awaitable[None]":
+    def revision(self, message: str, file_type: str | None = None) -> "Awaitable[None] | None":
         """Create a new migration file."""
         ...
 
