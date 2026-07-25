@@ -1069,10 +1069,8 @@ class SQLProcessor:
     def _command_returns_rows(expression: "exp.Command") -> bool:
         """Determine whether an unparsed command produces a result set.
 
-        SQLGlot falls back to ``exp.Command`` for statements it does not model, which
-        includes ``EXPLAIN`` on every dialect except MySQL. The command keyword decides
-        the result shape. Oracle and Db2 spell the plan-capture form ``EXPLAIN PLAN FOR``,
-        which writes a plan table and returns nothing.
+        The command keyword decides the result shape, except for the
+        ``EXPLAIN PLAN FOR`` form, which writes a plan table and returns nothing.
 
         Args:
             expression: Command expression carrying the keyword and its raw payload.

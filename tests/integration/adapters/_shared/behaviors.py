@@ -5808,18 +5808,10 @@ async def assert_async_script_parameter_embedding_contract(driver: object, case:
 
 
 PLAN_TABLE_EXPLAIN_DIALECTS: "frozenset[str]" = frozenset({"oracle"})
-"""Dialects whose EXPLAIN writes a plan table instead of returning a result set.
-
-Oracle spells the statement ``EXPLAIN PLAN FOR``, which populates PLAN_TABLE and
-returns nothing; the plan is read back through DBMS_XPLAN by the modifier contract.
-"""
+"""Dialects whose EXPLAIN writes a plan table instead of returning a result set."""
 
 EMPTY_PLAN_CASES: "frozenset[tuple[str, str]]" = frozenset({("sqlite", "insert")})
-"""(dialect, explain case id) pairs where the database reports no plan rows.
-
-SQLite produces no query plan for an INSERT that supplies literal VALUES, because
-there is no scan to describe.
-"""
+"""(dialect, explain case id) pairs where the database reports no plan rows."""
 
 
 def _explain_skip_reason(case: DriverCase) -> str:

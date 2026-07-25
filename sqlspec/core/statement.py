@@ -76,12 +76,7 @@ __all__ = (
 logger = get_logger("sqlspec.core.statement")
 
 RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA"})
-"""Operation types that return rows independently of the operation profile.
-
-PRAGMA is the load-bearing entry: the profile does not classify ``exp.Pragma``.
-Row-returning shapes that the profile already covers, and command keywords such as
-SHOW and DESCRIBE, are classified there instead.
-"""
+"""Operation types that return rows independently of the operation profile."""
 MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
