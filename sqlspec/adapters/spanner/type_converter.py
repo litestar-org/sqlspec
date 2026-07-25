@@ -191,28 +191,38 @@ def coerce_params_for_spanner(
 
     json_object_type = _get_json_object_type()
     coerced: dict[str, Any] = {}
+    changed = False
     for key, value in params.items():
         if type(value) is TypedParameter:
             value = value.value
+            changed = True
         if isinstance(value, _UUID_TYPES):
             std_uuid = value if isinstance(value, UUID) else uuid_from_bytes(value.bytes)
             coerced[key] = bytes_to_spanner(uuid_to_spanner(std_uuid))
+            changed = True
         elif isinstance(value, bytes):
             coerced[key] = bytes_to_spanner(value)
+            changed = True
         elif isinstance(value, datetime) and value.tzinfo is None:
             coerced[key] = value.replace(tzinfo=timezone.utc)
+            changed = True
         elif isinstance(value, json_object_type):
             coerced[key] = value
         elif isinstance(value, dict):
             coerced[key] = spanner_json(value)
+            changed = True
         elif isinstance(value, (list, tuple)):
             if should_json_encode_sequence(value):
                 coerced[key] = spanner_json(list(value))
+                changed = True
+            elif isinstance(value, tuple):
+                coerced[key] = list(value)
+                changed = True
             else:
-                coerced[key] = list(value) if isinstance(value, tuple) else value
+                coerced[key] = value
         else:
             coerced[key] = value
-    return coerced
+    return coerced if changed else params
 
 
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
