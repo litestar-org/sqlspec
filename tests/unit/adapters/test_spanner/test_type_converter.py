@@ -1,5 +1,6 @@
 import base64
 from datetime import date, datetime, timezone
+from typing import Any, cast
 from uuid import UUID
 
 import uuid_utils
@@ -33,7 +34,7 @@ def test_coerce_params_unwraps_typed_datetime_parameter() -> None:
 def test_coerce_params_preserves_driver_ready_parameters() -> None:
     timestamp = datetime(2026, 7, 4, 22, 9, 0, tzinfo=timezone.utc)
     array = ["alpha", "beta"]
-    payload = JsonObject({"key": "value"})
+    payload = cast("Any", JsonObject)({"key": "value"})
     params = {
         "id": 1,
         "name": "alpha",
@@ -92,7 +93,7 @@ def test_coerce_params_copies_only_when_values_require_conversion() -> None:
     assert coerced["payload"] == {"key": "value"}
     assert coerced["tuple_array"] == ["alpha", "beta"]
     assert isinstance(coerced["json_array"], JsonObject)
-    assert coerced["json_array"].serialize() == '[{"key":"value"}]'
+    assert cast("Any", coerced["json_array"]).serialize() == '[{"key":"value"}]'
     assert coerced["plain_array"] is plain_array
     assert params["stdlib_uuid"] is stdlib_uuid
     assert params["utils_uuid"] is utils_uuid
