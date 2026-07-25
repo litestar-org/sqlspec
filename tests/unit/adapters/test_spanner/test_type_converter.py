@@ -48,6 +48,7 @@ def test_coerce_params_preserves_driver_ready_parameters() -> None:
 
     coerced = coerce_params_for_spanner(params)
 
+    assert coerced is not None
     assert coerced is params
     assert coerced["tags"] is array
     assert coerced["payload"] is payload
