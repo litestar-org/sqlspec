@@ -37,14 +37,12 @@ from sqlspec.adapters.sqlite import SqliteConfig
 class Greeting:
     message: str
 
+
 spec = SQLSpec()
 db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(db) as session:
-    greeting = session.select_one(
-        "SELECT 'Hello, SQLSpec!' AS message",
-        schema_type=Greeting,
-    )
+    greeting = session.select_one("SELECT 'Hello, SQLSpec!' AS message", schema_type=Greeting)
     print(greeting.message)  # Output: Hello, SQLSpec!
 ```
 
