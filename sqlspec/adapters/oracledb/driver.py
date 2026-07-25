@@ -28,6 +28,8 @@ from sqlspec.adapters.oracledb.core import (
     build_truncate_statement,
     coerce_large_parameters_async,
     coerce_large_parameters_sync,
+    coerce_many_parameters_async,
+    coerce_many_parameters_sync,
     collect_async_rows,
     collect_sync_rows,
     connection_is_thin,
@@ -35,8 +37,6 @@ from sqlspec.adapters.oracledb.core import (
     default_statement_config,
     driver_profile,
     normalize_column_names,
-    normalize_execute_many_parameters_async,
-    normalize_execute_many_parameters_sync,
     resolve_row_metadata,
     resolve_rowcount,
     supports_df_batches,
@@ -376,6 +376,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             blob_type=DB_TYPE_BLOB,
             varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
@@ -422,7 +423,15 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
-        prepared_parameters = normalize_execute_many_parameters_sync(prepared_parameters)
+        prepared_parameters = coerce_many_parameters_sync(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
         execution_args = statement.statement_config.execution_args or {}
         batch_errors = bool(execution_args.get("oracle_batch_errors", False))
         array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
@@ -1080,6 +1089,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             blob_type=DB_TYPE_BLOB,
             varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
@@ -1126,7 +1136,15 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
-        prepared_parameters = normalize_execute_many_parameters_async(prepared_parameters)
+        prepared_parameters = await coerce_many_parameters_async(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
         execution_args = statement.statement_config.execution_args or {}
         batch_errors = bool(execution_args.get("oracle_batch_errors", False))
         array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))

@@ -8,7 +8,8 @@ Wrap a parameter value to express explicit intent:
 
 * :class:`OracleClob` — bind as ``DB_TYPE_CLOB`` regardless of length.
 * :class:`OracleBlob` — bind as ``DB_TYPE_BLOB`` regardless of length.
-* :class:`OracleJson` — bind as native JSON; defers to the C1 input handler.
+* :class:`OracleJson` — express JSON intent; the input handler selects the
+  storage type supported by the connected Oracle version.
 
 The wrappers themselves perform no validation — type discipline lives at the
 routing site so error messages can include database-context detail.
@@ -38,7 +39,7 @@ class OracleBlob:
 
 
 class OracleJson:
-    """Mark a value to be bound as native ``DB_TYPE_JSON`` regardless of detected version."""
+    """Mark a value for version-aware Oracle JSON binding."""
 
     __slots__ = ("value",)
 

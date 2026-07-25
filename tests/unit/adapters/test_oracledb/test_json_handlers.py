@@ -16,6 +16,7 @@ from sqlspec.adapters.oracledb._json_handlers import (
     json_output_type_handler,
     register_json_handlers,
 )
+from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 
 
 def _mock_cursor_with_major(major: int | None) -> Mock:
@@ -113,6 +114,14 @@ def test_input_handler_routes_dict_to_db_type_json_on_21c_plus() -> None:
 
     assert result is cursor_var
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_JSON, arraysize=5)
+
+
+def test_resolve_oracle_connection_major_falls_back_to_connection_version() -> None:
+    """Pool wrappers without the cached attribute still expose the server version."""
+    connection = Mock(spec=["version"])
+    connection.version = "18.0.0.0.0"
+
+    assert resolve_oracle_connection_major(connection) == 18
 
 
 def test_input_handler_routes_dict_to_db_type_blob_on_19c() -> None:

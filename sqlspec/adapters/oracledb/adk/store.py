@@ -296,7 +296,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         config: OracleAsyncConfig with extension_config["adk"] settings.
 
     Notes:
-        - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
+        - JSON storage type detected by capability (native JSON, BLOB IS JSON, or plain LOB)
         - event_data stored as JSON (21c+) or BLOB (older versions)
         - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
         - Named parameters using :param_name
@@ -1265,7 +1265,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         config: OracleSyncConfig with extension_config["adk"] settings.
 
     Notes:
-        - JSON storage type detected based on Oracle version (21c+, 12c+, legacy)
+        - JSON storage type detected by capability (native JSON, BLOB IS JSON, or plain LOB)
         - event_data stored as JSON (21c+) or BLOB (older versions)
         - TIMESTAMP WITH TIME ZONE for timezone-aware timestamps
         - Named parameters using :param_name

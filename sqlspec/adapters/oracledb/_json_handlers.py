@@ -6,8 +6,9 @@ and Oracle's JSON storage types via connection type handlers.
 Routing matrix (input):
 
 * Oracle 21c+ native ``JSON``: bind via ``DB_TYPE_JSON`` (binary OSON).
-* Oracle 12c-20c with ``BLOB CHECK (... IS JSON)``: bind via ``DB_TYPE_BLOB`` with
- textual UTF-8 JSON bytes.
+* Oracle 12c-20c with ``BLOB CHECK (... IS JSON)``: the driver pre-serializes
+  JSON-shaped values and creates a ``DB_TYPE_BLOB`` locator containing UTF-8
+  JSON before input-handler dispatch.
 * Oracle 11g and earlier: bind via ``DB_TYPE_CLOB`` with serialized JSON string.
 * The rung is chosen by ``resolve_oracle_json_storage``, the single JSON-threshold
  source shared with ``OracleVersionInfo`` and the extension stores.
@@ -33,11 +34,12 @@ handler returns ``None`` for values it does not own.
 """
 
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from oracledb import DB_TYPE_CHAR, DB_TYPE_NCHAR, DB_TYPE_NVARCHAR, DB_TYPE_VARCHAR
 
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON, DB_TYPE_LONG, DB_TYPE_LONG_RAW
+from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 from sqlspec.data_dictionary.dialects.oracle import (
     ORACLE_JSON_STORAGE_BLOB_JSON,
     ORACLE_JSON_STORAGE_NATIVE,
@@ -51,6 +53,7 @@ if TYPE_CHECKING:
 __all__ = (
     "chain_input_handler",
     "chain_output_handler",
+    "is_json_payload",
     "json_converter_in_blob",
     "json_converter_in_clob",
     "json_converter_out_blob",
@@ -131,7 +134,7 @@ def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
     instance: python-oracledb selects its calling convention via
     ``inspect.signature(handler)``, which succeeds for a partial of a (compiled)
     function but raises ``ValueError`` for a compiled ``__call__`` object -- the
-    latter forces the legacy 6-argument call and breaks fetches.
+    latter forces the older 6-argument call and breaks fetches.
     """
     return partial(_chained_input_handler, inner, fallback)
 
@@ -144,7 +147,7 @@ def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
     return partial(_chained_output_handler, inner, fallback)
 
 
-def _is_json_payload(value: Any) -> bool:
+def is_json_payload(value: Any) -> bool:
     """Return True if the value should be claimed by the JSON input handler.
 
     ``dict`` and ``tuple``/``list`` of dicts are claimed. Sequences whose first
@@ -167,10 +170,10 @@ def _is_json_payload(value: Any) -> bool:
 
 def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
     """Oracle input type handler for JSON-shaped Python values."""
-    if not _is_json_payload(value):
+    if not is_json_payload(value):
         return None
 
-    server_major = cast("int | None", getattr(cursor.connection, "_sqlspec_oracle_major", None))
+    server_major = resolve_oracle_connection_major(cursor.connection)
 
     if server_major is None:
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)

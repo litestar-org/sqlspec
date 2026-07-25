@@ -61,6 +61,7 @@ __all__ = (
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
     "OracledbSyncDataDictionary",
+    "resolve_oracle_connection_major",
     "storage_type_from_version",
 )
 
@@ -217,6 +218,26 @@ class OracleVersionCache:
 def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
     """Public alias for :func:`_storage_type_from_version`."""
     return _storage_type_from_version(version_info)
+
+
+def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
+    """Resolve an Oracle server major without issuing a metadata query.
+
+    Pool-scoped data-dictionary metadata is authoritative when it has already
+    been resolved. Otherwise, use the connection callback cache and finally
+    python-oracledb's connection ``version`` string. The final fallback matters
+    for reacquired pool wrappers that do not retain dynamic attributes.
+    """
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return version_cache.version.major
+    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
+    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
+        return cached_major
+    version = getattr(connection, "version", None)
+    if not version:
+        return None
+    components = parse_oracle_version_components(str(version))
+    return components[0] if components is not None else None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

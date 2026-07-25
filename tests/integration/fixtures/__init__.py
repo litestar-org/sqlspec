@@ -51,6 +51,9 @@ from tests.integration.fixtures.mysql import (
     pymysql_transaction_config,
 )
 from tests.integration.fixtures.oracle import (
+    oracle_18c_async_config,
+    oracle_18c_async_session,
+    oracle_18c_connection_config,
     oracle_aq_privileges,
     oracle_async_config,
     oracle_async_session,
@@ -151,6 +154,9 @@ __all__ = (
     "mysqlconnector_sync_driver",
     "mysqlconnector_sync_transaction_config",
     "native_bigquery_service",
+    "oracle_18c_async_config",
+    "oracle_18c_async_session",
+    "oracle_18c_connection_config",
     "oracle_aq_privileges",
     "oracle_async_config",
     "oracle_async_session",
