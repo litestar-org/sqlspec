@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -59,7 +60,7 @@ def uuid_converter_out(value: bytes | None) -> "uuid.UUID | bytes | None":
         return value
 
     try:
-        return uuid.UUID(bytes=value)
+        return uuid_from_bytes(value)
     except (ValueError, TypeError):
         logger.debug("RAW(16) value is not valid UUID format, returning as bytes", extra={"value_length": len(value)})
         return value

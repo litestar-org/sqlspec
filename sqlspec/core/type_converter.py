@@ -8,6 +8,8 @@ from uuid import UUID
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.utils.uuids import uuid_from_string
+
 __all__ = (
     "BaseInputConverter",
     "convert_decimal",
@@ -30,7 +32,7 @@ def convert_uuid(value: str) -> UUID:
     Returns:
         UUID object.
     """
-    return UUID(value)
+    return uuid_from_string(value)
 
 
 def convert_iso_datetime(value: str) -> "datetime":

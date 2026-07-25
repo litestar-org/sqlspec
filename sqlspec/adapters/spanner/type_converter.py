@@ -24,6 +24,7 @@ from uuid import UUID
 from sqlspec.core import TypedParameter
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_converters import should_json_encode_sequence
+from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -146,7 +147,7 @@ def spanner_to_uuid(value: "bytes | None") -> "UUID | bytes | None":
     if len(value) != UUID_BYTE_LENGTH:
         return value
     try:
-        return UUID(bytes=value)
+        return uuid_from_bytes(value)
     except (ValueError, TypeError):
         return value
 
@@ -194,7 +195,7 @@ def coerce_params_for_spanner(
         if type(value) is TypedParameter:
             value = value.value
         if isinstance(value, _UUID_TYPES):
-            std_uuid = value if isinstance(value, UUID) else UUID(bytes=value.bytes)
+            std_uuid = value if isinstance(value, UUID) else uuid_from_bytes(value.bytes)
             coerced[key] = bytes_to_spanner(uuid_to_spanner(std_uuid))
         elif isinstance(value, bytes):
             coerced[key] = bytes_to_spanner(value)

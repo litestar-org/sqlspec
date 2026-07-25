@@ -11,12 +11,12 @@ import contextlib
 from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
-from uuid import UUID
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
+from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
@@ -546,11 +546,11 @@ def _arrow_uuid_column_to_pylist(column: Any, data_type: Any) -> "list[Any]":
 
         array = cast("Any", column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column)
         storage_values = cast("list[Any]", array.storage.to_pylist())
-        return [UUID(bytes=value) if value is not None else None for value in storage_values]
+        return [uuid_from_bytes(value) if value is not None else None for value in storage_values]
     if _arrow_type_is_list_of_opaque_uuid(data_type):
         nested_values = cast("list[Any]", column.to_pylist())
         return [
-            [UUID(bytes=item) if item is not None else None for item in value] if value is not None else None
+            [uuid_from_bytes(item) if item is not None else None for item in value] if value is not None else None
             for value in nested_values
         ]
     return cast("list[Any]", column.to_pylist())

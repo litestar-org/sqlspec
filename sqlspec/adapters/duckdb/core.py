@@ -4,7 +4,6 @@ import contextlib
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
-from uuid import UUID
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -24,6 +23,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -395,7 +395,7 @@ def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] 
         for column in uuid_columns:
             value = row.get(column)
             if isinstance(value, str):
-                row[column] = UUID(value)
+                row[column] = uuid_from_string(value)
 
 
 driver_profile = build_profile()

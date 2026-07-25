@@ -8,6 +8,7 @@ from typing_extensions import final
 
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_optional_attr
+from sqlspec.utils.uuids import uuid_from_int
 
 if TYPE_CHECKING:
     import datetime
@@ -189,7 +190,7 @@ def _uuid_to_string(value: object) -> str:
 
 
 def _uuid_utils_to_stdlib(value: _UUIDLike) -> UUID:
-    return UUID(int=value.int)
+    return uuid_from_int(value.int)
 
 
 def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[Any], Any]]":

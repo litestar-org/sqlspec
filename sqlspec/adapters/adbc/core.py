@@ -46,6 +46,7 @@ from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
+from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -1068,7 +1069,7 @@ def _convert_uuid_value(value: Any, ordinal: int, row_number: int, element_index
     if not isinstance(value, str):
         raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number, element_index))
     try:
-        return str(UUID(value))
+        return str(uuid_from_string(value))
     except (TypeError, ValueError) as exc:
         raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number, element_index)) from exc
 
