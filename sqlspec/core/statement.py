@@ -1,7 +1,6 @@
 """SQL statement and configuration management."""
 
 import hashlib
-import uuid
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
@@ -55,6 +54,7 @@ from sqlspec.observability import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1027,7 +1027,7 @@ class SQL:
         while candidate in self._named_parameters:
             next_index += 1
             if next_index > _MAX_PARAM_COLLISION_ATTEMPTS:
-                return f"{prefixed_base}_{uuid.uuid4().hex[:8]}"
+                return f"{prefixed_base}_{uuid4().hex[:8]}"
             candidate = f"{prefixed_base}_{next_index}"
 
         self._sql_param_counters[prefixed_base] = next_index
