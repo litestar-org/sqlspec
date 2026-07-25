@@ -1099,7 +1099,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         value_type: "type[ValueT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "ValueT | None | Any":
+    ) -> "ValueT | Any | None":
         """Execute a select statement and return a single scalar value or None.
 
         Returns None if no rows are found.
@@ -1158,7 +1158,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         value_type: "type[ValueT] | None" = None,
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
-    ) -> "ValueT | None | Any":
+    ) -> "ValueT | Any | None":
         """Execute a select statement and return a single scalar value or None.
 
         This is an alias for :meth:`select_value_or_none` provided for users familiar

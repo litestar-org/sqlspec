@@ -1120,7 +1120,7 @@ class SQLProcessor:
             True when the statement text opens with a row-returning keyword and an operand.
         """
         parts = sql.lstrip().split(maxsplit=1)
-        if len(parts) < 2:
+        if not parts[1:]:
             return False
 
         return parts[0].upper() in ROW_RETURNING_STATEMENT_KEYWORDS
