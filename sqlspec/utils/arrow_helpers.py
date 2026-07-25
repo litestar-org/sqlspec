@@ -518,6 +518,7 @@ def arrow_reader_to_return_format(
     return shaped, int(table.num_rows)
 
 
+@lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
 def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
     return any(
         _arrow_type_is_opaque_uuid(field.type) or _arrow_type_is_list_of_opaque_uuid(field.type) for field in schema
@@ -535,8 +536,7 @@ def _arrow_type_is_list_of_opaque_uuid(data_type: Any) -> bool:
     ensure_pyarrow()
     import pyarrow as pa
 
-    is_list = pa.types.is_list(data_type) or pa.types.is_large_list(data_type) or pa.types.is_fixed_size_list(data_type)
-    return is_list and _arrow_type_is_opaque_uuid(data_type.value_type)
+    return pa.types.is_list(data_type) and _arrow_type_is_opaque_uuid(data_type.value_type)
 
 
 def _arrow_uuid_column_to_pylist(column: Any, data_type: Any) -> "list[Any]":
