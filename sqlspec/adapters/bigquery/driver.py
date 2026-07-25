@@ -772,14 +772,32 @@ def _bigquery_arrow_reader_from_iterable(batches: "Iterable[ArrowRecordBatch]") 
 def _records_to_json_rows(
     records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]", columns: "list[str] | None"
 ) -> "list[dict[str, Any]]":
-    materialized = list(records)
+    materialized = records if isinstance(records, list) else list(records)
     if not materialized:
         msg = "load_from_records requires at least one record."
         raise ImproperConfigurationError(msg)
 
     first = materialized[0]
     if isinstance(first, Mapping):
-        resolved = columns if columns is not None else list(first.keys())
+        if columns is None:
+            resolved = list(first.keys())
+            expected = set(resolved)
+            can_reuse = True
+            for record in materialized:
+                if not isinstance(record, Mapping):
+                    msg = "load_from_records mapping records must all be mappings."
+                    raise ImproperConfigurationError(msg)
+                record_keys = list(record.keys())
+                if set(record_keys) != expected:
+                    msg = "load_from_records mapping records must all share the same keys."
+                    raise ImproperConfigurationError(msg)
+                if type(record) is not dict or record_keys != resolved:
+                    can_reuse = False
+            if can_reuse:
+                return cast("list[dict[str, Any]]", materialized)
+            return [{column: record[column] for column in resolved} for record in materialized]
+
+        resolved = columns
         expected = set(resolved)
         rows: list[dict[str, Any]] = []
         for record in materialized:

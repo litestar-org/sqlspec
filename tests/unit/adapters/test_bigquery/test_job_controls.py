@@ -1,14 +1,17 @@
 """Unit tests for BigQuery job-control behavior."""
 
+from collections import UserDict
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pyarrow as pa
+import pytest
 from google.cloud.bigquery import LoadJobConfig
 from google.cloud.bigquery.enums import QueryApiMethod, TimestampPrecision
 
 from sqlspec.adapters.bigquery.core import build_load_job_config, run_query_job, try_bulk_insert
-from sqlspec.adapters.bigquery.driver import BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryDriver, _records_to_json_rows
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.serializers import to_json
 
 CAPABILITIES = {
@@ -248,6 +251,69 @@ def test_load_from_records_uses_bigquery_json_load_api() -> None:
     assert connection.load_json_calls[0][2]["job_config"].source_format == "NEWLINE_DELIMITED_JSON"
     assert connection.load_json_calls[0][2]["timeout"] == driver._job_request_timeout()
     assert connection.load_job.result_calls[0]["timeout"] == driver._job_request_timeout()
+
+
+def test_records_to_json_rows_preserves_validated_plain_dict_batch() -> None:
+    records = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+
+    rows = _records_to_json_rows(records, None)
+
+    assert rows is records
+    assert rows[0] is records[0]
+    assert rows[1] is records[1]
+
+
+def test_records_to_json_rows_rebuilds_rows_with_different_key_order() -> None:
+    records = [{"id": 1, "name": "a"}, {"name": "b", "id": 2}]
+
+    rows = _records_to_json_rows(records, None)
+
+    assert rows is not records
+    assert rows == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+    assert list(rows[1]) == ["id", "name"]
+
+
+def test_records_to_json_rows_rebuilds_rows_for_explicit_columns() -> None:
+    records = [{"id": 1, "name": "a"}]
+
+    rows = _records_to_json_rows(records, ["name", "id"])
+
+    assert rows is not records
+    assert rows == [{"name": "a", "id": 1}]
+    assert list(rows[0]) == ["name", "id"]
+
+
+def test_records_to_json_rows_rebuilds_mapping_subclasses() -> None:
+    record = UserDict({"id": 1, "name": "a"})
+
+    rows = _records_to_json_rows([record], None)
+
+    assert rows == [{"id": 1, "name": "a"}]
+    assert rows[0] is not record
+    assert type(rows[0]) is dict
+
+
+def test_records_to_json_rows_materializes_non_list_input_once() -> None:
+    records = ({"id": value} for value in range(2))
+
+    rows = _records_to_json_rows(cast(Any, records), None)
+
+    assert rows == [{"id": 0}, {"id": 1}]
+
+
+@pytest.mark.parametrize(
+    ("records", "columns", "message"),
+    [
+        ([], None, "at least one record"),
+        ([{"id": 1}, (2,)], None, "must all be mappings"),
+        ([{"id": 1}, {"name": "a"}], None, "must all share the same keys"),
+        ([(1, "a")], None, "requires columns"),
+        ([(1, "a")], ["id"], "must match the number of columns"),
+    ],
+)
+def test_records_to_json_rows_preserves_validation_errors(records: Any, columns: Any, message: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match=message):
+        _records_to_json_rows(records, columns)
 
 
 def test_load_job_config_fill_from_default_preserves_defaults() -> None:
