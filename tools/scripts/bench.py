@@ -103,6 +103,7 @@ __all__ = (
     "sqlspec_duckdb_repeated_queries",
     "sqlspec_duckdb_write_heavy",
     "sqlspec_mysqlconnector_json_rows",
+    "sqlspec_oracle_json_read",
     "sqlspec_oracle_lob_fetch_1k",
     "sqlspec_oracle_lob_fetch_100k",
     "sqlspec_oracle_lob_fetch_async_1k",
@@ -111,6 +112,8 @@ __all__ = (
     "sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k",
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_1k",
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_100k",
+    "sqlspec_oracle_native_json_write",
+    "sqlspec_oracle_serialized_json_write",
     "sqlspec_psycopg_async_rows",
     "sqlspec_psycopg_sync_rows",
     "sqlspec_spanner_strings",
@@ -160,6 +163,12 @@ CORE_LIBRARIES = ("raw", "sqlspec", "sqlalchemy")
 CORE_SCENARIOS = ("initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries")
 ORACLE_LOB_ROWS = 100
 ORACLE_LOB_PAYLOAD_SIZES = {"1k": 1024, "100k": 100 * 1024}
+ORACLE_JSON_ROWS = 100
+ORACLE_JSON_PAYLOAD = {
+    "active": True,
+    "count": 3,
+    "items": [{"name": "alpha", "value": 1.25}, {"name": "beta", "value": 2.5}],
+}
 ORACLE_LOB_ENV_VARS = (
     "SQLSPEC_BENCH_ORACLE_HOST",
     "SQLSPEC_BENCH_ORACLE_PORT",
@@ -182,6 +191,9 @@ SQLITE_EXTENDED_SCENARIOS = (
     ("sqlspec", "schema_type_numpy"),
 )
 ORACLE_EXTENDED_SCENARIOS = (
+    ("sqlspec_native_json", "json_write"),
+    ("sqlspec_serialized_json", "json_write"),
+    ("sqlspec", "json_read"),
     ("raw", "lob_fetch_1k"),
     ("sqlspec", "lob_fetch_1k"),
     ("sqlspec_fetch_lobs_true", "lob_fetch_1k"),
@@ -2577,6 +2589,7 @@ def sqlspec_sqlite_thin_path_stress() -> None:
 # --- Oracle LOB fetch scenarios ---
 
 ORACLE_LOB_TABLES = {"1k": "SQLSPEC_LOB_1K", "100k": "SQLSPEC_LOB_100K"}
+ORACLE_JSON_TABLE = "SQLSPEC_JSON_BENCH"
 
 
 def _get_oracledb() -> Any:
@@ -2646,6 +2659,23 @@ def _oracle_select_lob_sql(table_name: str) -> str:
 def _oracle_lob_rows(size_key: str) -> list[tuple[int, str]]:
     payload = _oracle_lob_payload(size_key)
     return [(index, payload) for index in range(1, ORACLE_LOB_ROWS + 1)]
+
+
+def _oracle_create_json_table_sql() -> str:
+    return f"CREATE TABLE {ORACLE_JSON_TABLE} (id NUMBER PRIMARY KEY, payload JSON)"
+
+
+def _oracle_insert_json_sql() -> str:
+    return f"INSERT INTO {ORACLE_JSON_TABLE} (id, payload) VALUES (:1, :2)"
+
+
+def _oracle_select_json_sql() -> str:
+    return f"SELECT id, payload FROM {ORACLE_JSON_TABLE} ORDER BY id"
+
+
+def _oracle_json_rows(*, serialized: bool) -> list[tuple[int, object]]:
+    payload: object = json.dumps(ORACLE_JSON_PAYLOAD) if serialized else ORACLE_JSON_PAYLOAD
+    return [(index, payload) for index in range(1, ORACLE_JSON_ROWS + 1)]
 
 
 def _read_oracle_lob_value(value: Any) -> Any:
@@ -2744,6 +2774,48 @@ async def _run_sqlspec_oracle_lob_fetch_async(size_key: str, *, fetch_lobs: bool
             await config.close_pool()
 
 
+def _run_sqlspec_oracle_json_write(*, serialized: bool) -> None:
+    from sqlspec.adapters.oracledb import OracleSyncConfig
+
+    spec = SQLSpec()
+    config = OracleSyncConfig(connection_config=_oracle_connection_config_from_env())
+    try:
+        with spec.provide_session(config) as session:
+            session.execute_script(_oracle_drop_table_sql(ORACLE_JSON_TABLE))
+            session.execute(_oracle_create_json_table_sql())
+            try:
+                session.execute_many(_oracle_insert_json_sql(), _oracle_json_rows(serialized=serialized))
+            finally:
+                session.execute_script(_oracle_drop_table_sql(ORACLE_JSON_TABLE))
+        _check_pool_leak(config.connection_instance, f"oracle/json_write/serialized={serialized}")
+        config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
+
+
+def _run_sqlspec_oracle_json_read() -> None:
+    from sqlspec.adapters.oracledb import OracleSyncConfig
+
+    spec = SQLSpec()
+    config = OracleSyncConfig(connection_config=_oracle_connection_config_from_env())
+    try:
+        with spec.provide_session(config) as session:
+            session.execute_script(_oracle_drop_table_sql(ORACLE_JSON_TABLE))
+            session.execute(_oracle_create_json_table_sql())
+            try:
+                session.execute_many(_oracle_insert_json_sql(), _oracle_json_rows(serialized=False))
+                rows = session.fetch(_oracle_select_json_sql())
+                assert len(rows) == ORACLE_JSON_ROWS
+            finally:
+                session.execute_script(_oracle_drop_table_sql(ORACLE_JSON_TABLE))
+        _check_pool_leak(config.connection_instance, "oracle/json_read")
+        config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
+
+
 def raw_oracle_lob_fetch_1k() -> None:
     """Fetch 100 1 KiB Oracle CLOB rows through raw python-oracledb."""
     _run_raw_oracle_lob_fetch("1k")
@@ -2792,6 +2864,21 @@ async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k() -> None:
 async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k() -> None:
     """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
     await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=True)
+
+
+def sqlspec_oracle_native_json_write() -> None:
+    """Write native Python mappings to an Oracle native JSON column."""
+    _run_sqlspec_oracle_json_write(serialized=False)
+
+
+def sqlspec_oracle_serialized_json_write() -> None:
+    """Write pre-serialized strings to an Oracle native JSON column."""
+    _run_sqlspec_oracle_json_write(serialized=True)
+
+
+def sqlspec_oracle_json_read() -> None:
+    """Read native JSON values from Oracle through SQLSpec."""
+    _run_sqlspec_oracle_json_read()
 
 
 SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
@@ -2904,6 +2991,9 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec_async", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_async_100k,
     ("sqlspec_async_fetch_lobs_true", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k,
     ("sqlspec_async_fetch_lobs_true", "oracle", "lob_fetch_100k"): sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k,
+    ("sqlspec_native_json", "oracle", "json_write"): sqlspec_oracle_native_json_write,
+    ("sqlspec_serialized_json", "oracle", "json_write"): sqlspec_oracle_serialized_json_write,
+    ("sqlspec", "oracle", "json_read"): sqlspec_oracle_json_read,
 }
 
 

@@ -29,6 +29,7 @@ from sqlspec.utils.type_guards import (
     is_pydantic_model,
     is_typed_dict,
 )
+from sqlspec.utils.uuids import uuid_from_bytes, uuid_from_string
 
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
@@ -733,12 +734,12 @@ def _convert_to_uuid(value: Any) -> UUID:
         return value
     if isinstance(value, str):
         try:
-            return UUID(value)
+            return uuid_from_string(value)
         except ValueError:
             pass
     if isinstance(value, bytes):
         try:
-            return UUID(bytes=value)
+            return uuid_from_bytes(value)
         except ValueError:
             pass
     msg = f"Cannot convert {type(value).__name__} to UUID"

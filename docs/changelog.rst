@@ -9,6 +9,45 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.56.2
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Added ``uuid_from_string()``, ``uuid_from_bytes()``, and ``uuid_from_int()``
+  in :mod:`sqlspec.utils.uuids`. They always return :class:`uuid.UUID`. Text
+  parsing uses Rust when ``uuid-utils`` is installed.
+
+**Fixed:**
+
+* PostgreSQL-family ADBC row APIs now decode scalar ``UUID`` and ``UUID[]`` data
+  to Python UUIDs. This works for buffered and streamed rows. Native Arrow
+  results keep the extension schema, and
+  ``enable_arrow_extension_types=False`` restores raw storage bytes on row
+  APIs.
+* Oracle 12c through 20c can bind direct Python JSON values to ``BLOB IS JSON``
+  columns. SQLSpec writes UTF-8 JSON to a BLOB locator for sync, async, batch,
+  and streaming calls. Oracle 21c and newer still use native ``JSON`` binding.
+  Explicit ``OracleClob`` values remain CLOBs.
+
+**Changed:**
+
+* BigQuery ``load_from_records()`` now reuses fully checked lists of plain
+  dictionaries when no fields must move. It still copies rows for explicit
+  columns, mapping subclasses, and different key orders.
+* Spanner and Oracle now reuse bind data when no value needs a conversion. They
+  copy only after the first changed value. Bound values and checks are
+  unchanged.
+* UUID parsing now uses :mod:`sqlspec.utils.uuids` across adapters and type
+  converters.
+
+**Docs:**
+
+* The Oracle guide now covers JSON storage, LOB, UUID, and VECTOR behavior. It
+  also covers driver options and an Oracle ``MERGE`` upsert recipe.
+* The ADBC guide now explains UUID row and Arrow results. It also documents the
+  ``enable_arrow_extension_types`` switch.
+
 v0.56.1
 ------------------------------------------------------------------------------
 

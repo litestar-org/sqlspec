@@ -1,6 +1,6 @@
 """PostgreSQL-backed ADBC driver residuals."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -44,10 +44,8 @@ def test_postgresql_uuid_identity_and_same_sql_cache_reuse(postgresql_session: A
         for position, value in enumerate(values, 1):
             postgresql_session.execute(insert_sql, (position, value))
 
-        rows = postgresql_session.execute(
-            f"SELECT position, value::text AS value FROM {table_name} ORDER BY position"
-        ).get_data()
-        assert [row["value"] for row in rows] == [str(value) for value in values]
+        rows = postgresql_session.execute(f"SELECT position, value FROM {table_name} ORDER BY position").get_data()
+        assert [row["value"] for row in rows] == values
     finally:
         postgresql_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -86,10 +84,8 @@ def test_postgresql_uuid_batch_inference(postgresql_session: AdbcDriver) -> None
             [(1, str(first_value).upper()), (2, None), (3, last_value)],
         )
 
-        rows = postgresql_session.execute(
-            f"SELECT position, value::text AS value FROM {table_name} ORDER BY position"
-        ).get_data()
-        assert [row["value"] for row in rows] == [str(first_value), None, str(last_value)]
+        rows = postgresql_session.execute(f"SELECT position, value FROM {table_name} ORDER BY position").get_data()
+        assert [row["value"] for row in rows] == [first_value, None, last_value]
     finally:
         postgresql_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -116,10 +112,10 @@ def test_postgresql_uuid_array_parameter_matches_rows(postgresql_session: AdbcDr
             postgresql_session.execute(f"INSERT INTO {table_name} (id) VALUES (?)", (value,))
 
         rows = postgresql_session.execute(
-            f"SELECT id::text AS id FROM {table_name} WHERE {predicate} ORDER BY id::text", (wanted,)
+            f"SELECT id FROM {table_name} WHERE {predicate} ORDER BY id", (wanted,)
         ).get_data()
 
-        assert sorted(row["id"] for row in rows) == sorted(str(value) for value in wanted)
+        assert [row["id"] for row in rows] == sorted(wanted)
     finally:
         postgresql_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -163,13 +159,10 @@ def test_postgresql_uuid_array_batch_binding(postgresql_session: AdbcDriver) -> 
         )
 
         rows = postgresql_session.execute(
-            f"SELECT position, array_to_string(identifiers, ',') AS identifiers FROM {table_name} ORDER BY position"
+            f"SELECT position, identifiers FROM {table_name} ORDER BY position"
         ).get_data()
 
-        assert [row["identifiers"] for row in rows] == [
-            ",".join(str(value) for value in first_row),
-            ",".join(str(value) for value in second_row),
-        ]
+        assert [row["identifiers"] for row in rows] == [first_row, second_row]
     finally:
         postgresql_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -205,9 +198,28 @@ def test_postgresql_lone_uuid_parameter_survives_statement_cache_hits(postgresql
         for value in values:
             postgresql_session.execute(f"INSERT INTO {table_name} (value) VALUES (?)", (value,))
 
-        rows = postgresql_session.execute(
-            f"SELECT value::text AS value FROM {table_name} ORDER BY value::text"
-        ).get_data()
-        assert sorted(row["value"] for row in rows) == sorted(str(value) for value in values)
+        rows = postgresql_session.execute(f"SELECT value FROM {table_name} ORDER BY value").get_data()
+        assert [row["value"] for row in rows] == sorted(values)
     finally:
         postgresql_session.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_postgresql_uuid_row_stream_and_arrow_boundary(postgresql_session: AdbcDriver) -> None:
+    """Row APIs decode UUIDs while the Arrow API preserves the opaque extension."""
+    value = UUID("550e8400-e29b-41d4-a716-446655440000")
+    statement = f"SELECT CAST('{value}' AS UUID) AS value"
+
+    buffered = postgresql_session.select_one(statement)
+    with postgresql_session.select_stream(statement, native_only=True, chunk_size=1) as stream:
+        streamed = list(stream)
+    arrow_result = postgresql_session.select_to_arrow(statement)
+    arrow_table = arrow_result.data
+    arrow_type = arrow_table.schema.field("value").type
+
+    assert buffered == {"value": value}
+    assert streamed == [buffered]
+    assert arrow_type.extension_name == "arrow.opaque"
+    assert arrow_type.type_name == "uuid"
+    assert arrow_table.to_pylist() == [{"value": value.bytes}]

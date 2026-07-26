@@ -16,6 +16,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
+from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
@@ -385,9 +386,17 @@ def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
     return _arrow_schema_needs_preparation(table.schema)
 
 
-def arrow_table_to_pylist(table: "ArrowTable") -> "list[dict[str, Any]]":
-    """Convert Arrow table to list of dictionaries."""
-    return table.to_pylist()
+def arrow_table_to_pylist(
+    table: "ArrowTable | ArrowRecordBatch", *, decode_arrow_extension_types: bool = False
+) -> "list[dict[str, Any]]":
+    """Convert Arrow data to dictionaries and optionally decode opaque UUID fields."""
+    if not decode_arrow_extension_types or not _arrow_schema_has_opaque_uuid(table.schema):
+        return table.to_pylist()
+
+    column_values = [
+        _arrow_uuid_column_to_pylist(table.column(index), field.type) for index, field in enumerate(table.schema)
+    ]
+    return [dict(zip(table.column_names, row, strict=False)) for row in zip(*column_values, strict=False)]
 
 
 def arrow_table_column_names(table: "ArrowTable") -> "list[str]":
@@ -507,3 +516,41 @@ def arrow_reader_to_return_format(
     table = reader.read_all()
     shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
     return shaped, int(table.num_rows)
+
+
+@lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
+def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
+    return any(
+        _arrow_type_is_opaque_uuid(field.type) or _arrow_type_is_list_of_opaque_uuid(field.type) for field in schema
+    )
+
+
+def _arrow_type_is_opaque_uuid(data_type: Any) -> bool:
+    return (
+        getattr(data_type, "extension_name", None) == "arrow.opaque"
+        and getattr(data_type, "type_name", "").casefold() == "uuid"
+    )
+
+
+def _arrow_type_is_list_of_opaque_uuid(data_type: Any) -> bool:
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    return pa.types.is_list(data_type) and _arrow_type_is_opaque_uuid(data_type.value_type)
+
+
+def _arrow_uuid_column_to_pylist(column: Any, data_type: Any) -> "list[Any]":
+    if _arrow_type_is_opaque_uuid(data_type):
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        array = cast("Any", column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column)
+        storage_values = cast("list[Any]", array.storage.to_pylist())
+        return [uuid_from_bytes(value) if value is not None else None for value in storage_values]
+    if _arrow_type_is_list_of_opaque_uuid(data_type):
+        nested_values = cast("list[Any]", column.to_pylist())
+        return [
+            [uuid_from_bytes(item) if item is not None else None for item in value] if value is not None else None
+            for value in nested_values
+        ]
+    return cast("list[Any]", column.to_pylist())

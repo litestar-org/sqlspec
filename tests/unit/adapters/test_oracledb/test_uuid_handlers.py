@@ -53,7 +53,7 @@ def test_uuid_converter_out_type_error() -> None:
     """TypeError should fall back to original bytes."""
 
     payload = b"1234567890123456"
-    with patch("uuid.UUID", side_effect=TypeError("Invalid type")):
+    with patch("sqlspec.adapters.oracledb._uuid_handlers.uuid_from_bytes", side_effect=TypeError("Invalid type")):
         result = uuid_converter_out(payload)
     assert result is payload
 
@@ -62,7 +62,7 @@ def test_uuid_converter_out_value_error() -> None:
     """ValueError should fall back to original bytes."""
 
     payload = b"1234567890123456"
-    with patch("uuid.UUID", side_effect=ValueError("Invalid UUID")):
+    with patch("sqlspec.adapters.oracledb._uuid_handlers.uuid_from_bytes", side_effect=ValueError("Invalid UUID")):
         result = uuid_converter_out(payload)
     assert result is payload
 

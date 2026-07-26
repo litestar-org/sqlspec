@@ -1,8 +1,8 @@
 """UUID and ID generation utilities with optional acceleration.
 
-Provides wrapper functions for uuid3, uuid4, uuid5, uuid6, uuid7, and nanoid generation.
-Uses uuid-utils and fastnanoid packages for performance when available,
-falling back to standard library.
+Provides wrapper functions for UUID construction, uuid3, uuid4, uuid5, uuid6,
+uuid7, and nanoid generation. Uses uuid-utils and fastnanoid packages for
+performance when available, falling back to the standard library.
 
 When uuid-utils is installed:
     - uuid3, uuid4, uuid5, uuid6, uuid7 use the faster Rust implementation
@@ -43,11 +43,58 @@ __all__ = (
     "uuid5",
     "uuid6",
     "uuid7",
+    "uuid_from_bytes",
+    "uuid_from_int",
+    "uuid_from_string",
 )
 
 
 _uuid_utils_mod: Any | None = import_optional("uuid_utils.compat")
+_uuid_utils_native_mod: Any | None = import_optional("uuid_utils")
 _fastnanoid_mod: Any | None = import_optional("fastnanoid")
+
+
+def uuid_from_string(value: str) -> "UUID":
+    """Construct a stdlib UUID from text, using Rust parsing when available.
+
+    Args:
+        value: Canonical, hexadecimal, URN, or braced UUID text accepted by
+            ``uuid.UUID`` and ``uuid_utils.UUID``.
+
+    Returns:
+        A standard-library UUID suitable for native database drivers.
+    """
+    module = _uuid_utils_native_mod
+    if module is None:
+        return UUID(value)
+    return UUID(int=module.UUID(value).int)
+
+
+def uuid_from_bytes(value: bytes) -> "UUID":
+    """Construct a stdlib UUID from its 16-byte representation.
+
+    The stdlib constructor is retained for this shape because converting a
+    Rust UUID back to the driver-compatible stdlib type is slower.
+
+    Args:
+        value: UUID bytes in big-endian order.
+
+    Returns:
+        A standard-library UUID.
+    """
+    return UUID(bytes=value)
+
+
+def uuid_from_int(value: int) -> "UUID":
+    """Construct a stdlib UUID from its 128-bit integer value.
+
+    Args:
+        value: UUID integer in the inclusive range ``0`` through ``2**128 - 1``.
+
+    Returns:
+        A standard-library UUID.
+    """
+    return UUID(int=value)
 
 
 def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":

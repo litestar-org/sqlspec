@@ -23,7 +23,7 @@ from sqlspec.adapters.oracledb._typing import (
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config
-from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
+from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
@@ -32,7 +32,6 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
@@ -413,9 +412,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         vector case) internally. UUID registration remains gated for
         backwards compatibility with existing user configurations.
 
-        Caches ``connection._sqlspec_oracle_major`` so the JSON input handler
-        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, OSON-encoded
-        ``DB_TYPE_BLOB`` on 19c-20c, JSON-string ``DB_TYPE_CLOB`` on 12c-18c)
+        Caches ``connection._sqlspec_oracle_major`` so JSON parameter coercion
+        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, a textual
+        ``BLOB IS JSON`` locator on 12c-20c, and ``DB_TYPE_CLOB`` before 12c)
         without re-querying server metadata on every bind. Caches
         ``connection._sqlspec_vector_return_format`` so the vector output
         handler can dispatch to ``numpy`` / ``list`` / ``array`` without
@@ -434,7 +433,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
         # Stash detected major version on the connection so the JSON input handler
         # can pick the right binding path without per-bind metadata queries.
-        setattr(connection, "_sqlspec_oracle_major", _resolve_connection_major(self._oracle_version_cache, connection))
+        setattr(
+            connection, "_sqlspec_oracle_major", resolve_oracle_connection_major(connection, self._oracle_version_cache)
+        )
         # Stash the vector-read format so the VECTOR output handler can
         # dispatch without re-reading driver-feature defaults on every fetch.
         setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
@@ -628,7 +629,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         # Stash detected major version on the connection so the JSON input handler
         # can pick the right binding path without per-bind metadata queries.
-        setattr(connection, "_sqlspec_oracle_major", _resolve_connection_major(self._oracle_version_cache, connection))
+        setattr(
+            connection, "_sqlspec_oracle_major", resolve_oracle_connection_major(connection, self._oracle_version_cache)
+        )
         # Stash the vector-read format so the VECTOR output handler can
         # dispatch without re-reading driver-feature defaults on every fetch.
         setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
@@ -655,24 +658,3 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             await self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
-
-
-def _resolve_connection_major(cache: "OracleVersionCache", connection: Any) -> "int | None":
-    """Resolve the Oracle server major for connection-setup type handlers.
-
-    Prefers the pool-scoped version cache once a driver has resolved it through
-    the data-dictionary path. Before that, the major is parsed from
-    ``connection.version`` — a connection attribute populated at connect time, so
-    no query is issued — using the same version parser the data dictionary uses.
-    Returns ``None`` when unavailable; callers treat ``None`` as "assume 21c+".
-    """
-    if cache.resolved and cache.version is not None:
-        return cache.version.major
-    try:
-        version_str = connection.version
-    except AttributeError:
-        return None
-    if not version_str:
-        return None
-    components = parse_oracle_version_components(str(version_str))
-    return components[0] if components is not None else None

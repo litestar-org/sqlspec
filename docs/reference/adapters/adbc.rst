@@ -2,10 +2,10 @@
 ADBC
 ====
 
-Arrow Database Connectivity adapter providing native Arrow result handling
-without conversion overhead. SQLSpec can load the ADBC drivers for PostgreSQL,
-SQLite, DuckDB, BigQuery, Snowflake, Flight SQL, and GizmoSQL from one
-``AdbcConfig`` surface.
+Arrow Database Connectivity adapter providing native Arrow result handling.
+Arrow-return APIs preserve native schemas, while row-return APIs materialize
+Python values. SQLSpec can load the ADBC drivers for PostgreSQL, SQLite, DuckDB,
+BigQuery, Snowflake, Flight SQL, and GizmoSQL from one ``AdbcConfig`` surface.
 
 Connection Configuration
 ========================
@@ -172,6 +172,37 @@ lower-level Flight SQL options, pass ``db_kwargs`` directly:
 Use ``gizmosql_backend="sqlite"`` only when the target GizmoSQL server was
 started with SQLite as its database backend. DuckDB remains the default dialect
 for GizmoSQL.
+
+PostgreSQL UUID Results
+=======================
+
+PostgreSQL-family ADBC drivers expose ``UUID`` columns as Arrow opaque binary
+extension values. SQLSpec decodes those values to :class:`uuid.UUID` on row
+APIs, including scalar UUIDs, ``UUID[]`` elements, and nulls. The behavior is
+consistent for buffered ``select``/``select_one`` calls and
+``select_stream``.
+
+Native Arrow APIs such as ``select_to_arrow`` preserve the opaque extension
+schema and its byte-oriented Arrow semantics. SQLite and DuckDB results are not
+rewritten because their ADBC schemas do not use PostgreSQL's opaque UUID
+extension.
+
+Set ``enable_arrow_extension_types=False`` in ``driver_features`` to keep raw
+storage bytes on row APIs:
+
+.. code-block:: python
+
+   from sqlspec.adapters.adbc import AdbcConfig
+
+   postgres = AdbcConfig(
+       connection_config={
+           "driver_name": "postgres",
+           "uri": "postgresql://user:password@localhost:5432/app",
+       },
+       driver_features={"enable_arrow_extension_types": False},
+   )
+
+The compatibility alias ``arrow_extension_types`` controls the same feature.
 
 PostgreSQL Extension Dialects
 =============================

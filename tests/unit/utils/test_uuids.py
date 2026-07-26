@@ -4,7 +4,9 @@ Tests UUID and Nano ID generation utilities including optional acceleration
 via uuid-utils and fastnanoid packages.
 """
 
+import ast
 import warnings
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -23,6 +25,9 @@ from sqlspec.utils.uuids import (
     uuid5,
     uuid6,
     uuid7,
+    uuid_from_bytes,
+    uuid_from_int,
+    uuid_from_string,
 )
 
 
@@ -66,6 +71,77 @@ def test_uuid4_returns_valid_uuid() -> None:
     """Test uuid4 returns a valid UUID-like object."""
     result = uuid4()
     assert _is_uuid_like(result)
+
+
+def test_uuid_construction_helpers_return_stdlib_uuid() -> None:
+    """Central constructors preserve the public and driver-compatible UUID type."""
+    expected = UUID("12345678-1234-5678-1234-567812345678")
+
+    assert uuid_from_string(str(expected)) == expected
+    assert uuid_from_bytes(expected.bytes) == expected
+    assert uuid_from_int(expected.int) == expected
+    assert type(uuid_from_string(str(expected))) is UUID
+    assert type(uuid_from_bytes(expected.bytes)) is UUID
+    assert type(uuid_from_int(expected.int)) is UUID
+
+
+def test_uuid_from_string_uses_cached_rust_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """String parsing uses uuid-utils internally while returning stdlib UUID."""
+    import sqlspec.utils.uuids as _uuids
+
+    expected = UUID("12345678-1234-5678-1234-567812345678")
+    calls: list[str] = []
+
+    class RustUuid:
+        def __init__(self, value: str) -> None:
+            calls.append(value)
+            self.int = expected.int
+
+    class FakeUuidUtils:
+        UUID = RustUuid
+
+    monkeypatch.setattr(_uuids, "_uuid_utils_native_mod", FakeUuidUtils())
+
+    result = _uuids.uuid_from_string(str(expected))
+
+    assert result == expected
+    assert type(result) is UUID
+    assert calls == [str(expected)]
+
+
+def test_production_uuid_construction_is_centralized() -> None:
+    """Production modules construct and generate UUIDs only through the facade."""
+    source_root = Path(__file__).parents[3] / "sqlspec"
+    violations: list[str] = []
+    for path in source_root.rglob("*.py"):
+        if path == source_root / "utils" / "uuids.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "uuid":
+                if any(alias.name == "uuid4" for alias in node.names):
+                    violations.append(f"{path.relative_to(source_root)}:{node.lineno}")
+                continue
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            is_direct = isinstance(function, ast.Name) and function.id == "UUID"
+            is_module = (
+                isinstance(function, ast.Attribute)
+                and function.attr == "UUID"
+                and isinstance(function.value, ast.Name)
+                and function.value.id in {"uuid", "uuid_mod", "_uuid_mod"}
+            )
+            is_module_uuid4 = (
+                isinstance(function, ast.Attribute)
+                and function.attr == "uuid4"
+                and isinstance(function.value, ast.Name)
+                and function.value.id in {"uuid", "uuid_mod", "_uuid_mod"}
+            )
+            if is_direct or is_module or is_module_uuid4:
+                violations.append(f"{path.relative_to(source_root)}:{node.lineno}")
+
+    assert violations == []
 
 
 def test_accelerated_uuid_helpers_return_stdlib_uuid_instances() -> None:

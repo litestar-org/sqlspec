@@ -50,6 +50,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
+from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -559,7 +560,7 @@ def _coerce_uuid_parameter(value: Any) -> Any:
         return value
     if isinstance(value, str):
         try:
-            return uuid.UUID(value)
+            return uuid_from_string(value)
         except ValueError as error:
             msg = "Invalid UUID parameter for psqlpy."
             raise SQLSpecError(msg) from error

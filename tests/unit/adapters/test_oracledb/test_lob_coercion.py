@@ -1,15 +1,37 @@
-"""Unit tests for Oracle LOB parameter coercion."""
+"""Unit tests for Oracle LOB and JSON parameter coercion."""
 
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Callable
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sqlspec.adapters.oracledb.core import coerce_large_parameters_async, coerce_large_parameters_sync
+from sqlspec.adapters.oracledb import OracleJson
+from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb.core import (
+    OracleAsyncStreamSource,
+    OracleSyncStreamSource,
+    coerce_large_parameters_async,
+    coerce_large_parameters_sync,
+    coerce_many_parameters_async,
+    coerce_many_parameters_sync,
+)
+from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, OracleVersionInfo
+from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.utils.serializers import to_json
 
 CLOB_TYPE = "DB_TYPE_CLOB"
 BLOB_TYPE = "DB_TYPE_BLOB"
 VARCHAR2_LIMIT = 4000
 RAW_LIMIT = 2000
+
+
+def _direct_json(payload: object) -> object:
+    return payload
+
+
+def _wrapped_json(payload: object) -> OracleJson:
+    return OracleJson(payload)
 
 
 @pytest.fixture
@@ -24,6 +46,289 @@ def async_connection() -> AsyncMock:
     conn = AsyncMock()
     conn.createlob.return_value = MagicMock(name="LOB")
     return conn
+
+
+@pytest.mark.parametrize("major", [12, 18, 20])
+@pytest.mark.parametrize(
+    ("payload", "wrapper"),
+    [({"kind": "mapping"}, _direct_json), ([{"kind": "sequence"}], _direct_json), ({"kind": "wrapped"}, _wrapped_json)],
+    ids=["dict", "list", "oracle-json"],
+)
+def test_coerce_json_parameters_sync_pre_native_versions_create_utf8_blob_locator(
+    sync_connection: MagicMock, major: int, payload: object, wrapper: "Callable[[object], object]"
+) -> None:
+    """Oracle 12c-20c JSON values become textual UTF-8 BLOB locators before binding."""
+    sync_connection._sqlspec_oracle_major = major
+    value = wrapper(payload)
+
+    result = coerce_large_parameters_sync(
+        sync_connection,
+        {"payload": value},
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    sync_connection.createlob.assert_called_once_with(BLOB_TYPE, to_json(payload, as_bytes=True))
+    assert result["payload"] is sync_connection.createlob.return_value
+
+
+@pytest.mark.parametrize(
+    ("payload", "wrapper"),
+    [({"kind": "mapping"}, _direct_json), ([{"kind": "sequence"}], _direct_json), ({"kind": "wrapped"}, _wrapped_json)],
+    ids=["dict", "list", "oracle-json"],
+)
+def test_coerce_json_parameters_sync_native_versions_keep_python_value_for_db_type_json(
+    sync_connection: MagicMock, payload: object, wrapper: "Callable[[object], object]"
+) -> None:
+    """Oracle 21c+ values stay as Python JSON for the DB_TYPE_JSON input handler."""
+    sync_connection._sqlspec_oracle_major = 21
+
+    result = coerce_large_parameters_sync(
+        sync_connection,
+        {"payload": wrapper(payload)},
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    sync_connection.createlob.assert_not_called()
+    assert result["payload"] is payload
+
+
+def test_coerce_json_parameters_sync_uses_connection_version_when_cached_major_is_missing(
+    sync_connection: MagicMock,
+) -> None:
+    """A reacquired Oracle 18c connection still takes the BLOB locator path."""
+    payload = {"kind": "reacquired"}
+    del sync_connection._sqlspec_oracle_major
+    sync_connection.version = "18.0.0.0.0"
+
+    result = coerce_large_parameters_sync(
+        sync_connection,
+        {"payload": payload},
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    sync_connection.createlob.assert_called_once_with(BLOB_TYPE, to_json(payload, as_bytes=True))
+    assert result["payload"] is sync_connection.createlob.return_value
+
+
+def test_coerce_json_parameters_sync_prefers_pool_scoped_version_cache(sync_connection: MagicMock) -> None:
+    """Resolved config metadata avoids wrapper attributes and version parsing."""
+    payload = {"kind": "cached"}
+    version_cache = OracleVersionCache()
+    version_cache.resolved = True
+    version_cache.version = OracleVersionInfo(18)
+    del sync_connection._sqlspec_oracle_major
+    sync_connection.version = "23.0.0.0.0"
+
+    result = coerce_large_parameters_sync(
+        sync_connection,
+        {"payload": payload},
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+        version_cache=version_cache,
+    )
+
+    sync_connection.createlob.assert_called_once_with(BLOB_TYPE, to_json(payload, as_bytes=True))
+    assert result["payload"] is sync_connection.createlob.return_value
+
+
+def test_coerce_json_parameters_sync_explicit_clob_remains_clob_on_oracle_18c(sync_connection: MagicMock) -> None:
+    """OracleClob intent takes precedence over version-aware JSON coercion."""
+    from sqlspec.adapters.oracledb import OracleClob
+
+    sync_connection._sqlspec_oracle_major = 18
+
+    result = coerce_large_parameters_sync(
+        sync_connection,
+        {"payload": OracleClob('{"kind":"clob"}')},
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    sync_connection.createlob.assert_called_once_with(CLOB_TYPE, '{"kind":"clob"}')
+    assert result["payload"] is sync_connection.createlob.return_value
+
+
+@pytest.mark.anyio
+async def test_coerce_json_parameters_async_oracle_18c_creates_utf8_blob_locator(async_connection: AsyncMock) -> None:
+    """The async path awaits creation of the same textual JSON BLOB locator."""
+    payload = {"kind": "async"}
+    async_connection._sqlspec_oracle_major = 18
+
+    result = await coerce_large_parameters_async(
+        async_connection,
+        {"payload": payload},
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    async_connection.createlob.assert_awaited_once_with(BLOB_TYPE, to_json(payload, as_bytes=True))
+    assert result["payload"] is async_connection.createlob.return_value
+
+
+def test_coerce_many_parameters_sync_applies_json_coercion_to_every_row(sync_connection: MagicMock) -> None:
+    """Executemany coercion visits each named-bind row."""
+    sync_connection._sqlspec_oracle_major = 18
+    rows = [{"id": 1, "payload": {"row": 1}}, {"id": 2, "payload": [{"row": 2}]}]
+
+    result = coerce_many_parameters_sync(
+        sync_connection,
+        rows,
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    assert sync_connection.createlob.call_count == 2
+    assert all(row["payload"] is sync_connection.createlob.return_value for row in result)
+
+
+def test_coerce_many_parameters_sync_preserves_unchanged_rows_without_version_resolution(
+    sync_connection: MagicMock,
+) -> None:
+    """Pass-through batches retain their containers and skip JSON metadata work."""
+    rows = [(1, "short", b"x", None, 3.5), (2, "short", b"x", None, 4.5)]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major") as resolve_major:
+        result = coerce_many_parameters_sync(
+            sync_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    assert result is rows
+    assert all(result_row is source_row for result_row, source_row in zip(result, rows, strict=True))
+    resolve_major.assert_not_called()
+
+
+def test_coerce_many_parameters_sync_resolves_json_storage_once(sync_connection: MagicMock) -> None:
+    """One batch shares a single server-storage decision across all JSON values."""
+    rows = [{"id": 1, "payload": {"row": 1}}, {"id": 2, "payload": [{"row": 2}]}]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major", return_value=18) as resolve_major:
+        coerce_many_parameters_sync(
+            sync_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    resolve_major.assert_called_once_with(sync_connection, None)
+
+
+@pytest.mark.anyio
+async def test_coerce_many_parameters_async_applies_json_coercion_to_every_row(async_connection: AsyncMock) -> None:
+    """Async executemany coercion awaits locator creation for every row."""
+    async_connection._sqlspec_oracle_major = 18
+    rows = [{"id": 1, "payload": {"row": 1}}, {"id": 2, "payload": [{"row": 2}]}]
+
+    result = await coerce_many_parameters_async(
+        async_connection,
+        rows,
+        clob_type=CLOB_TYPE,
+        blob_type=BLOB_TYPE,
+        varchar2_byte_limit=VARCHAR2_LIMIT,
+        raw_byte_limit=RAW_LIMIT,
+    )
+
+    assert async_connection.createlob.await_count == 2
+    assert all(row["payload"] is async_connection.createlob.return_value for row in result)
+
+
+@pytest.mark.anyio
+async def test_coerce_many_parameters_async_preserves_unchanged_rows_without_version_resolution(
+    async_connection: AsyncMock,
+) -> None:
+    """Async pass-through batches retain containers and skip JSON metadata work."""
+    rows = [(1, "short", b"x", None, 3.5), (2, "short", b"x", None, 4.5)]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major") as resolve_major:
+        result = await coerce_many_parameters_async(
+            async_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    assert result is rows
+    assert all(result_row is source_row for result_row, source_row in zip(result, rows, strict=True))
+    resolve_major.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_coerce_many_parameters_async_resolves_json_storage_once(async_connection: AsyncMock) -> None:
+    """Async batches share one server-storage decision across JSON values."""
+    rows = [{"id": 1, "payload": {"row": 1}}, {"id": 2, "payload": [{"row": 2}]}]
+
+    with patch("sqlspec.adapters.oracledb.core.resolve_oracle_connection_major", return_value=18) as resolve_major:
+        await coerce_many_parameters_async(
+            async_connection,
+            rows,
+            clob_type=CLOB_TYPE,
+            blob_type=BLOB_TYPE,
+            varchar2_byte_limit=VARCHAR2_LIMIT,
+            raw_byte_limit=RAW_LIMIT,
+        )
+
+    resolve_major.assert_called_once_with(async_connection, None)
+
+
+def test_oracle_sync_stream_source_coerces_json_filter_before_execute() -> None:
+    """Native sync streaming uses the same Oracle 18c BLOB locator bind path."""
+    locator = MagicMock(name="BLOB")
+    cursor = MagicMock()
+    connection = MagicMock()
+    connection._sqlspec_oracle_major = 18
+    connection.createlob.return_value = locator
+    connection.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    source = OracleSyncStreamSource(driver, "SELECT :payload FROM dual", {"payload": {"kind": "stream"}}, 100)
+
+    source.start()
+
+    parameters = cursor.execute.call_args.args[1]
+    assert parameters["payload"] is locator
+
+
+@pytest.mark.anyio
+async def test_oracle_async_stream_source_coerces_json_filter_before_execute() -> None:
+    """Native async streaming awaits the same Oracle 18c BLOB locator bind path."""
+    locator = MagicMock(name="BLOB")
+    cursor = MagicMock()
+    cursor.execute = AsyncMock()
+    connection = MagicMock()
+    connection._sqlspec_oracle_major = 18
+    connection.createlob = AsyncMock(return_value=locator)
+    connection.cursor.return_value = cursor
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", connection))
+    source = OracleAsyncStreamSource(driver, "SELECT :payload FROM dual", {"payload": {"kind": "stream"}}, 100)
+
+    await source.start()
+
+    parameters = cursor.execute.call_args.args[1]
+    assert parameters["payload"] is locator
 
 
 def test_coerce_large_parameters_sync_none_parameters_passthrough(sync_connection: MagicMock) -> None:
@@ -50,6 +355,7 @@ def test_coerce_large_parameters_sync_list_parameters_passthrough(sync_connectio
         raw_byte_limit=RAW_LIMIT,
     )
     assert result == ["a", "b"]
+    assert result is params
     sync_connection.createlob.assert_not_called()
 
 

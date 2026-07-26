@@ -14,6 +14,9 @@ from sqlspec.adapters.oracledb import (
 )
 
 __all__ = (
+    "oracle_18c_async_config",
+    "oracle_18c_async_session",
+    "oracle_18c_connection_config",
     "oracle_aq_privileges",
     "oracle_async_config",
     "oracle_async_session",
@@ -33,6 +36,35 @@ def _oracle_pool_params(oracle_service: "OracleService") -> "OraclePoolParams":
         min=1,
         max=5,
     )
+
+
+@pytest.fixture(scope="session")
+def oracle_18c_connection_config(oracle_18c_service: "OracleService") -> "OraclePoolParams":
+    """Provide Oracle 18c pool parameters for non-native JSON storage coverage."""
+    return _oracle_pool_params(oracle_18c_service)
+
+
+@pytest.fixture(scope="session")
+async def oracle_18c_async_config(
+    oracle_18c_connection_config: "OraclePoolParams",
+) -> "AsyncGenerator[OracleAsyncConfig, None]":
+    """Provide a session-scoped Oracle 18c async configuration."""
+    config = OracleAsyncConfig(connection_config=OraclePoolParams(**oracle_18c_connection_config))
+    try:
+        yield config
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+            config.connection_instance = None
+
+
+@pytest.fixture
+async def oracle_18c_async_session(
+    oracle_18c_async_config: "OracleAsyncConfig",
+) -> "AsyncGenerator[OracleAsyncDriver, None]":
+    """Create an Oracle 18c async driver session."""
+    async with oracle_18c_async_config.provide_session() as driver:
+        yield driver
 
 
 @pytest.fixture(scope="session")
