@@ -48,14 +48,7 @@ def test_file_target_returns_none(tmp_path: Path) -> None:
     assert resolve_extension_migrations_path("vendor", target) is None
 
 
-@pytest.mark.parametrize(
-    "spec",
-    [
-        r"C:\srv\migrations",
-        r"\\?\C:\srv\migrations",
-        "/opt/my:app/migrations",
-    ],
-)
+@pytest.mark.parametrize("spec", [r"C:\srv\migrations", r"\\?\C:\srv\migrations", "/opt/my:app/migrations"])
 def test_path_like_values_are_not_treated_as_modules(spec: str) -> None:
     """Drive letters and colons inside filesystem paths do not trigger module resolution."""
     assert resolve_extension_migrations_path("vendor", spec) is None
