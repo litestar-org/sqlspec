@@ -11,7 +11,7 @@ modules only after proving the boundary with installed-wheel smoke coverage.
 import asyncio
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from inspect import Signature, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, TypeVar, cast
@@ -145,7 +145,8 @@ class MigrationConfig(TypedDict):
     """List of extension names whose migrations should be included. Extension migrations maintain separate versioning and are prefixed with 'ext_{name}_'.
 
     Note: Extensions with migration support (litestar, adk, events) are auto-included when
-    their settings are present in ``extension_config``. Use ``exclude_extensions`` to opt out.
+    their settings are present in ``extension_config``, as is any extension whose settings
+    declare ``migrations_path``. Use ``exclude_extensions`` to opt out.
     """
 
     exclude_extensions: NotRequired["list[str]"]
@@ -236,6 +237,13 @@ class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
 
     All fields are optional with sensible defaults.
+    """
+
+    migrations_path: NotRequired[str | Path]
+    """Directory containing this extension's migrations, or a ``'<dotted.module>:<subdir>'`` specification.
+
+    Overrides the default ``sqlspec.extensions.<name>`` lookup. Setting this auto-includes the
+    extension in ``migration_config["include_extensions"]``.
     """
 
     session_table: NotRequired["bool | str"]
@@ -476,6 +484,13 @@ class ADKConfig(TypedDict):
         3. Selective features (sessions OR memory, not both)
     """
 
+    migrations_path: NotRequired[str | Path]
+    """Directory containing this extension's migrations, or a ``'<dotted.module>:<subdir>'`` specification.
+
+    Overrides the default ``sqlspec.extensions.<name>`` lookup. Setting this auto-includes the
+    extension in ``migration_config["include_extensions"]``.
+    """
+
     manage_schema: NotRequired[bool]
     """Apply additive target-schema reconciliation. Default: True."""
 
@@ -589,6 +604,13 @@ class EventsConfig(TypedDict):
     """Configuration options for the events extension.
 
     Use in ``extension_config["events"]``.
+    """
+
+    migrations_path: NotRequired[str | Path]
+    """Directory containing this extension's migrations, or a ``'<dotted.module>:<subdir>'`` specification.
+
+    Overrides the default ``sqlspec.extensions.<name>`` lookup. Setting this auto-includes the
+    extension in ``migration_config["include_extensions"]``.
     """
 
     manage_schema: NotRequired[bool]
@@ -944,6 +966,40 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         return self._ensure_migration_commands()
 
+    def add_extension_migrations(
+        self, name: str, migrations_path: "str | Path", settings: "dict[str, Any] | None" = None
+    ) -> None:
+        """Register migrations shipped by a package outside the ``sqlspec.extensions`` namespace.
+
+        Records the extension under ``extension_config``, opts it into
+        ``migration_config["include_extensions"]``, and rebuilds the cached migration
+        commands so the extension is discovered. Migrations are versioned under the
+        ``ext_{name}_`` prefix, so ``name`` must stay stable once migrations are applied.
+
+        Args:
+            name: Extension name, used as the ``ext_{name}_`` version prefix.
+            migrations_path: Directory containing the migrations, or a
+                ``'<dotted.module>:<subdir>'`` specification.
+            settings: Extension settings passed to its migrations. Merged into any
+                settings already registered under ``name``.
+        """
+        extension_config = cast("dict[str, Any]", self.extension_config)
+        existing = extension_config.get(name)
+        merged: dict[str, Any] = dict(existing) if isinstance(existing, Mapping) else {}
+        if settings:
+            merged.update(settings)
+        merged["migrations_path"] = migrations_path
+        extension_config[name] = merged
+
+        migration_config = cast("dict[str, Any]", self.migration_config)
+        include_extensions = migration_config.get("include_extensions")
+        include_list = list(include_extensions) if include_extensions else []
+        if name not in include_list:
+            include_list.append(name)
+        migration_config["include_extensions"] = include_list
+
+        self._rebuild_migration_commands()
+
     @abstractmethod
     def migrate_up(
         self,
@@ -1074,6 +1130,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         - **adk**: When any adk settings are present
         - **events**: When any events settings are present
 
+        Any other extension is auto-included when its settings declare ``migrations_path``,
+        which is how packages outside the ``sqlspec.extensions`` namespace ship migrations.
+
         Use ``exclude_extensions`` to opt out of auto-inclusion.
         """
         extension_settings = cast("dict[str, Any]", self.extension_config)
@@ -1087,7 +1146,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
         litestar_settings = extension_settings.get("litestar")
         if (
-            litestar_settings is not None
+            isinstance(litestar_settings, Mapping)
             and "session_table" in litestar_settings
             and "litestar" not in exclude_extensions
         ):
@@ -1104,22 +1163,21 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if events_settings is not None and "events" not in exclude_extensions:
             extensions_to_add.append("events")
 
+        for ext_name, ext_settings in extension_settings.items():
+            if ext_name in extensions_to_add or ext_name in exclude_extensions:
+                continue
+            if isinstance(ext_settings, Mapping) and "migrations_path" in ext_settings:
+                extensions_to_add.append(ext_name)
+
         if not extensions_to_add:
             return
 
         include_extensions = migration_config.get("include_extensions")
-        if include_extensions is None:
-            include_list: list[str] = []
-            migration_config["include_extensions"] = include_list
-        elif isinstance(include_extensions, tuple):
-            include_list = list(include_extensions)  # pyright: ignore
-            migration_config["include_extensions"] = include_list
-        else:
-            include_list = cast("list[str]", include_extensions)
-
+        include_list = list(include_extensions) if include_extensions else []
         for ext in extensions_to_add:
             if ext not in include_list:
                 include_list.append(ext)
+        migration_config["include_extensions"] = include_list
 
     def _build_storage_capabilities(self) -> "StorageCapabilities":
         arrow_dependency_needed = self.supports_native_arrow_export or self.supports_native_arrow_import
@@ -1250,6 +1308,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Initialize migration loader and migration command helpers."""
         runtime = self.get_observability_runtime()
         self._migration_loader = SQLFileLoader(runtime=runtime)
+        self._rebuild_migration_commands()
+
+    def _rebuild_migration_commands(self) -> None:
+        """Rebuild the cached migration commands against current configuration."""
         self._migration_commands = create_migration_commands(self)  # pyright: ignore
 
     def _ensure_migration_loader(self) -> "SQLFileLoader":

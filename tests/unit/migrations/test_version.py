@@ -15,6 +15,7 @@ from sqlspec.migrations.version import (
     generate_timestamp_version,
     is_sequential_version,
     is_timestamp_version,
+    parse_extension_stem,
     parse_version,
 )
 
@@ -326,3 +327,34 @@ def test_version_rich_comparison_migration_version_final_decorator_preserves_dat
     assert getattr(MigrationVersion, "__final__", True) is True
     assert copy.deepcopy(version) == version
     assert pickle.loads(pickle.dumps(version)) == version
+
+
+@pytest.mark.parametrize(
+    ("stem", "expected"),
+    [
+        ("ext_litestar_0001_init", ("litestar", "0001")),
+        ("ext_litestar_queues_0001_init", ("litestar_queues", "0001")),
+        ("ext_litestar_queues_0002_add_index", ("litestar_queues", "0002")),
+        ("ext_adk_20251011120000_seed", ("adk", "20251011120000")),
+        ("ext_myext_0001", ("myext", "0001")),
+        ("ext_a_b_c_0001", ("a_b_c", "0001")),
+        ("ext_litestar_0001", ("litestar", "0001")),
+    ],
+)
+def test_parse_extension_stem_splits_name_and_version(stem: str, expected: "tuple[str, str]") -> None:
+    """Extension names containing underscores keep their full name and numeric version."""
+    assert parse_extension_stem(stem) == expected
+
+
+@pytest.mark.parametrize("stem", ["ext_bogus", "ext_", "0001_core", "litestar_0001", "ext_noversion_here"])
+def test_parse_extension_stem_rejects_non_extension_stems(stem: str) -> None:
+    """Stems without an ``ext_<name>_<digits>`` shape return None."""
+    assert parse_extension_stem(stem) is None
+
+
+def test_parse_extension_stem_round_trips_through_parse_version() -> None:
+    """A multi-underscore extension version parses instead of falling back to string sort."""
+    ext_name, version = parse_extension_stem("ext_litestar_queues_0001_init")  # type: ignore[misc]
+    parsed = parse_version(f"ext_{ext_name}_{version}")
+    assert parsed.extension == "litestar_queues"
+    assert parsed.sequence == 1

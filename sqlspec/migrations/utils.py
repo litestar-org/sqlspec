@@ -8,17 +8,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateValidationError, build_template_settings
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.config import DatabaseConfigProtocol
-__all__ = ("create_migration_file", "get_author", "resolve_default_schema", "resolve_tracker_schema")
+__all__ = (
+    "create_migration_file",
+    "get_author",
+    "resolve_default_schema",
+    "resolve_extension_migrations_path",
+    "resolve_tracker_schema",
+)
 
 logger = get_logger(__name__)
+
+_MIN_MODULE_NAME_LENGTH = 2
 
 
 def resolve_default_schema(migration_config: "Mapping[str, Any] | None") -> str | None:
@@ -147,6 +157,93 @@ def get_author(
         raise TemplateValidationError(msg)
 
     return _resolve_git_author()
+
+
+def resolve_extension_migrations_path(ext_name: str, spec: "str | Path") -> "Path | None":
+    """Resolve an extension ``migrations_path`` setting to a migrations directory.
+
+    Accepts a filesystem path, or a ``<dotted.module>:<subdir>`` specification resolved
+    against the installed package. Relative filesystem paths resolve against the current
+    working directory, matching ``script_location``.
+
+    Args:
+        ext_name: Extension name the setting belongs to, used in error messages.
+        spec: Filesystem path or ``<dotted.module>:<subdir>`` specification.
+
+    Raises:
+        MigrationError: The value is not a string or path, is empty, or names a module
+            that cannot be imported.
+
+    Returns:
+        The resolved directory, or None when it does not exist.
+    """
+    if isinstance(spec, Path):
+        candidate = spec
+    elif isinstance(spec, str):
+        if not spec.strip():
+            msg = (
+                f"Extension '{ext_name}' has an empty migrations_path; "
+                f"set extension_config['{ext_name}']['migrations_path'] to a directory "
+                f"or a '<dotted.module>:<subdir>' specification."
+            )
+            raise MigrationError(msg)
+        candidate = _resolve_migrations_spec(ext_name, spec)
+    else:
+        msg = (
+            f"Extension '{ext_name}' has an invalid migrations_path of type "
+            f"{type(spec).__name__}; set extension_config['{ext_name}']['migrations_path'] "
+            f"to a string or Path."
+        )
+        raise MigrationError(msg)
+
+    return candidate if candidate.is_dir() else None
+
+
+def _resolve_migrations_spec(ext_name: str, spec: str) -> "Path":
+    """Resolve a string migrations_path to a directory, honoring module specifications.
+
+    Args:
+        ext_name: Extension name the setting belongs to, used in error messages.
+        spec: Filesystem path or ``<dotted.module>:<subdir>`` specification.
+
+    Raises:
+        MigrationError: The specification names a module that cannot be imported.
+
+    Returns:
+        The resolved directory, which may not exist.
+    """
+    module_name, separator, subdir = spec.partition(":")
+    if not separator or not _is_module_name(module_name):
+        return Path(spec)
+
+    try:
+        module_path = module_to_os_path(module_name)
+    except ImportError as exc:
+        msg = (
+            f"Extension '{ext_name}' migrations_path names module '{module_name}', "
+            f"which could not be imported ({exc}); correct "
+            f"extension_config['{ext_name}']['migrations_path'] or install the package."
+        )
+        raise MigrationError(msg) from exc
+
+    return module_path / subdir if subdir else module_path
+
+
+def _is_module_name(value: str) -> bool:
+    r"""Return whether a string is a dotted Python module name.
+
+    Single-character values are rejected so Windows drive letters in paths such as
+    ``C:\\srv\\migrations`` are treated as filesystem paths rather than modules.
+
+    Args:
+        value: Candidate module name.
+
+    Returns:
+        True when every dot-separated segment is a valid identifier.
+    """
+    if len(value) < _MIN_MODULE_NAME_LENGTH:
+        return False
+    return all(segment.isidentifier() for segment in value.split("."))
 
 
 def _get_git_config(config_key: str) -> str | None:

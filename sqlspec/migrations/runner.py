@@ -15,7 +15,7 @@ from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import _load_migration_sql, get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
-from sqlspec.migrations.version import _format_sequential_version, parse_version
+from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem, parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -238,16 +238,16 @@ class BaseMigrationRunner(ABC):
         Returns:
             The extracted version string or None.
         """
-        extension_version_parts = 3
         timestamp_min_length = 4
 
         name_without_ext = filename.rsplit(".", 1)[0]
 
         if name_without_ext.startswith("ext_"):
-            parts = name_without_ext.split("_", 3)
-            if len(parts) >= extension_version_parts:
-                return f"{parts[0]}_{parts[1]}_{parts[2]}"
-            return None
+            extension = parse_extension_stem(name_without_ext)
+            if extension is None:
+                return None
+            ext_name, ext_version = extension
+            return f"ext_{ext_name}_{ext_version}"
 
         parts = name_without_ext.split("_", 1)
         if parts and parts[0].isdigit():
@@ -435,10 +435,9 @@ class BaseMigrationRunner(ABC):
         if context_to_use and file_path.name.startswith("ext_"):
             version = self._extract_version(file_path.name)
             if version and version.startswith("ext_"):
-                min_extension_version_parts = 3
-                parts = version.split("_", 2)
-                if len(parts) >= min_extension_version_parts:
-                    ext_name = parts[1]
+                extension = parse_extension_stem(version)
+                if extension is not None:
+                    ext_name = extension[0]
                     if ext_name in self.extension_configs:
                         context_to_use = MigrationContext(
                             dialect=self.context.dialect if self.context else None,

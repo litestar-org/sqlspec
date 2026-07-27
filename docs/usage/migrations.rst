@@ -15,6 +15,7 @@ Core Concepts
 - Migrations are SQL or Python files stored in a migrations directory.
 - Each database configuration can include its own migration settings.
 - Extension migrations (ADK, events, Litestar sessions) are opt-in and versioned.
+- Any installed package can ship migrations, not just those under ``sqlspec.extensions``.
 
 Common Commands
 ---------------
@@ -73,6 +74,65 @@ Extension migrations are auto-included when the corresponding entry exists in
 specific extension, ``migration_config["include_extensions"]`` to opt in
 explicitly by extension name, or ``migration_config["enabled"] = False`` to
 disable migrations entirely for a database config.
+
+Third-Party Extension Migrations
+--------------------------------
+
+Extension names resolve against the ``sqlspec.extensions.<name>`` namespace by
+default. A package distributed separately from SQLSpec points at its own
+migrations directory with ``migrations_path``:
+
+.. code-block:: python
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        extension_config={
+            "litestar_queues": {
+                "migrations_path": "litestar_queues.backends.sqlspec:migrations",
+                "table_name": "queue_tasks",
+            }
+        },
+    )
+
+Declaring ``migrations_path`` auto-includes the extension, so it does not also
+need to appear in ``include_extensions``. ``exclude_extensions`` still opts it
+back out.
+
+``migrations_path`` accepts either form:
+
+- A ``'<dotted.module>:<subdir>'`` specification, resolved against the installed
+  package. Portable across machines, so this is the form to use in
+  ``[tool.sqlspec]`` configuration.
+- A filesystem path, absolute or relative to the working directory, matching how
+  ``script_location`` resolves.
+
+Packages that register migrations at runtime can call
+``add_extension_migrations`` instead of declaring the key:
+
+.. code-block:: python
+
+    from pathlib import Path
+
+    config.add_extension_migrations(
+        "litestar_queues",
+        Path(__file__).parent / "migrations",
+        settings={"table_name": "queue_tasks"},
+    )
+
+Both forms record the extension under ``extension_config`` and opt it into
+``include_extensions``. Call ``add_extension_migrations`` before
+``get_migration_commands()``; mutating ``extension_config`` directly after the
+configuration is built does not re-run discovery.
+
+.. note::
+
+   Migrations are versioned under an ``ext_{name}_`` prefix, and that prefix is
+   written to the migration tracking table. Keep the extension name stable once
+   migrations have been applied — renaming it orphans the applied records.
+
+   A package shipping migrations must include the directory as package data. If
+   it compiles its own modules, the migration sources must remain on disk, since
+   Python migrations are read and compiled at runtime.
 
 Configuring a Default Schema
 ----------------------------

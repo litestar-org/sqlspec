@@ -240,24 +240,34 @@ def _resolve_import_attr(obj: Any, attr: str, module: "ModuleType | None", dotte
 def module_to_os_path(dotted_path: str = "app") -> "Path":
     """Convert a module dotted path to filesystem path.
 
+    Namespace packages have no ``origin``; their first search location is used instead.
+
     Args:
         dotted_path: The path to the module.
 
     Raises:
-        TypeError: The module could not be found.
+        ModuleNotFoundError: The module could not be found.
 
     Returns:
         The path to the module.
     """
+    msg = f"Couldn't find the path for {dotted_path}"
     try:
-        if (src := find_spec(dotted_path)) is None:  # pragma: no cover
-            msg = f"Couldn't find the path for {dotted_path}"
-            raise TypeError(msg)
+        src = find_spec(dotted_path)
     except ModuleNotFoundError as e:
-        msg = f"Couldn't find the path for {dotted_path}"
-        raise TypeError(msg) from e
+        raise ModuleNotFoundError(msg, name=dotted_path) from e
 
-    path = Path(str(src.origin))
+    if src is None:
+        raise ModuleNotFoundError(msg, name=dotted_path)
+
+    if not src.origin:
+        locations = iter(cast("Any", src).submodule_search_locations or ())
+        first_location = next(locations, None)
+        if first_location is None:
+            raise ModuleNotFoundError(msg, name=dotted_path)
+        return Path(str(first_location))
+
+    path = Path(src.origin)
     return path.parent if path.is_file() else path
 
 

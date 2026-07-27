@@ -13,6 +13,7 @@ from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
+from sqlspec.migrations.utils import resolve_extension_migrations_path
 from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
@@ -553,26 +554,52 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
     def _discover_extension_migrations(self) -> "dict[str, Path]":
         """Discover migration paths for configured extensions.
 
+        An extension may declare ``migrations_path`` in its ``extension_config`` entry to
+        ship migrations from any package. Extensions without it resolve against the
+        ``sqlspec.extensions.<name>`` namespace.
+
         Returns:
             Dictionary mapping extension names to their migration paths.
         """
 
         extension_migrations = {}
 
-        for ext_name in self.extension_configs:
-            module_name = "sqlspec.extensions.litestar" if ext_name == "litestar" else f"sqlspec.extensions.{ext_name}"
+        for ext_name, ext_options in self.extension_configs.items():
+            spec = ext_options.get("migrations_path")
+            if spec is not None:
+                resolved = resolve_extension_migrations_path(ext_name, spec)
+                if resolved is None:
+                    logger.warning(
+                        "Extension '%s' migrations_path %r is not an existing directory; "
+                        "no migrations were registered for it.",
+                        ext_name,
+                        spec,
+                    )
+                else:
+                    extension_migrations[ext_name] = resolved
+                    logger.debug("Found migrations for extension %s at %s", ext_name, resolved)
+                continue
 
+            module_name = f"sqlspec.extensions.{ext_name}"
             try:
                 module_path = module_to_os_path(module_name)
-                migrations_dir = module_path / "migrations"
+            except ImportError:
+                logger.warning(
+                    "Extension '%s' is configured but '%s' is not importable; no migrations were "
+                    "registered for it. Set extension_config['%s']['migrations_path'] to register "
+                    "migrations shipped by another package.",
+                    ext_name,
+                    module_name,
+                    ext_name,
+                )
+                continue
 
-                if migrations_dir.exists():
-                    extension_migrations[ext_name] = migrations_dir
-                    logger.debug("Found migrations for extension %s at %s", ext_name, migrations_dir)
-                else:
-                    logger.warning("No migrations directory found for extension %s", ext_name)
-            except TypeError:
-                logger.warning("Extension %s not found", ext_name)
+            migrations_dir = module_path / "migrations"
+            if migrations_dir.exists():
+                extension_migrations[ext_name] = migrations_dir
+                logger.debug("Found migrations for extension %s at %s", ext_name, migrations_dir)
+            else:
+                logger.debug("Extension %s ships no migrations directory", ext_name)
 
         return extension_migrations
 

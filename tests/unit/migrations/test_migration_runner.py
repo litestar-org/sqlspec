@@ -1212,3 +1212,49 @@ DROP TABLE products;
             assert call_counts["load_sql"] == 1, "get_down_sql should NOT call load_sql (should use cache)"
 
         asyncio.run(test_no_reload())
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("ext_litestar_0001_init.sql", "ext_litestar_0001"),
+        ("ext_litestar_queues_0001_init.sql", "ext_litestar_queues_0001"),
+        ("ext_litestar_queues_0002_add_index.sql", "ext_litestar_queues_0002"),
+        ("ext_adk_20251011120000_seed.sql", "ext_adk_20251011120000"),
+        ("0001_core.sql", "0001"),
+        ("20251011120000_core.sql", "20251011120000"),
+    ],
+)
+def test_extract_version_handles_multi_underscore_extension_names(tmp_path: Path, filename: str, expected: str) -> None:
+    """Extension names containing underscores keep their numeric version."""
+    runner = SyncMigrationRunner(tmp_path)
+
+    assert runner._extract_version(filename) == expected
+
+
+def test_extract_version_result_parses_for_multi_underscore_extension(tmp_path: Path) -> None:
+    """The extracted version parses rather than falling back to raw string sorting."""
+    from sqlspec.migrations.version import parse_version
+
+    runner = SyncMigrationRunner(tmp_path)
+
+    version = runner._extract_version("ext_litestar_queues_0001_init.sql")
+    assert version is not None
+    parsed = parse_version(version)
+    assert parsed.extension == "litestar_queues"
+    assert parsed.sequence == 1
+
+
+def test_migration_context_resolves_multi_underscore_extension_settings(tmp_path: Path) -> None:
+    """Per-migration context carries the settings of an underscore-named extension."""
+    ext_dir = tmp_path / "vendor"
+    ext_dir.mkdir()
+    settings = {"table_name": "queue_tasks"}
+    runner = SyncMigrationRunner(
+        tmp_path, {"litestar_queues": ext_dir}, MigrationContext(dialect="sqlite"), {"litestar_queues": settings}
+    )
+
+    context = runner._migration_context(ext_dir / "ext_litestar_queues_0001_init.sql")
+
+    assert context is not None
+    assert context.extension_config == settings
