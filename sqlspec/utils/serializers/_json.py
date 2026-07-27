@@ -6,7 +6,7 @@ import enum
 import json
 import threading
 import uuid as uuid_mod
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
@@ -326,7 +326,7 @@ class JSONSerializer(Protocol):
         ...
 
 
-class BaseJSONSerializer(ABC):
+class BaseJSONSerializer:
     """Base class shared by JSON serializer implementations."""
 
     __slots__ = ()

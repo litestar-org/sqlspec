@@ -26,7 +26,7 @@ class MigrationLoadError(Exception):
     """Exception raised when migration loading fails."""
 
 
-class BaseMigrationLoader(abc.ABC):
+class BaseMigrationLoader:
     """Abstract base class for migration loaders."""
 
     __slots__ = ()
