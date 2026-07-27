@@ -409,3 +409,67 @@ DROP TABLE {table_name};
 
     assert "users" in tables
     assert "products" in tables
+
+
+def test_upgrade_applies_third_party_extension_migrations(tmp_path: Path) -> None:
+    """A package outside sqlspec.extensions applies migrations through the public API.
+
+    Covers both extension migration layouts: a file inside the extension's own directory,
+    and an ``ext_``-prefixed file sitting in the main migrations directory.
+    """
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    vendor_dir = tmp_path / "vendor" / "migrations"
+    vendor_dir.mkdir(parents=True)
+
+    (migrations_dir / "0001_core_init.sql").write_text("""-- name: migrate-0001-up
+CREATE TABLE core (id INTEGER PRIMARY KEY);
+
+-- name: migrate-0001-down
+DROP TABLE core;
+""")
+    (vendor_dir / "0001_create_queue_tasks.py").write_text('''"""Create the vendor queue table."""
+
+__all__ = ("down", "up")
+
+
+def up(context: "object | None" = None) -> "list[str]":
+    """Return the upgrade statements."""
+    return ["CREATE TABLE queue_tasks (id INTEGER PRIMARY KEY)"]
+
+
+def down(context: "object | None" = None) -> "list[str]":
+    """Return the downgrade statements."""
+    return ["DROP TABLE queue_tasks"]
+''')
+    (migrations_dir / "ext_litestar_queues_0002_add_index.sql").write_text(
+        """-- name: migrate-ext_litestar_queues_0002-up
+CREATE INDEX queue_tasks_id_idx ON queue_tasks (id);
+
+-- name: migrate-ext_litestar_queues_0002-down
+DROP INDEX queue_tasks_id_idx;
+"""
+    )
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "app.db")},
+        migration_config={"script_location": str(migrations_dir), "version_table_name": "ddl_migrations"},
+    )
+    config.add_extension_migrations("litestar_queues", vendor_dir, settings={"table_name": "queue_tasks"})
+
+    try:
+        commands = SyncMigrationCommands(config)
+        commands.upgrade()
+
+        with config.provide_session() as session:
+            applied = commands.tracker.get_applied_migrations(session)
+            tables = session.execute("SELECT name FROM sqlite_master WHERE type = 'table'").get_data()
+
+        versions = [row["version_num"] for row in applied]
+        assert versions == ["0001", "ext_litestar_queues_0001", "ext_litestar_queues_0002"]
+        assert "queue_tasks" in {row["name"] for row in tables}
+
+        commands.downgrade(revision="base")
+        assert commands.current() is None
+    finally:
+        config.close_pool()

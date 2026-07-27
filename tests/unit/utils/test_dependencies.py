@@ -265,8 +265,23 @@ def test_module_to_os_path_current_package() -> None:
 
 def test_module_to_os_path_nonexistent() -> None:
     """Test module_to_os_path with nonexistent module."""
-    with pytest.raises(TypeError, match="Couldn't find the path"):
+    with pytest.raises(ModuleNotFoundError, match="Couldn't find the path"):
         module_to_os_path("definitely.nonexistent.module")
+
+
+def test_module_to_os_path_missing_submodule_of_real_package() -> None:
+    """Test module_to_os_path when the parent package exists but the submodule does not."""
+    with pytest.raises(ModuleNotFoundError, match="Couldn't find the path"):
+        module_to_os_path("sqlspec.extensions.definitely_not_an_extension")
+
+
+def test_module_to_os_path_namespace_package() -> None:
+    """Test module_to_os_path resolves namespace packages to a search location."""
+    pytest.importorskip("google")
+    path = module_to_os_path("google")
+    assert isinstance(path, Path)
+    assert path.is_dir()
+    assert path.name == "google"
 
 
 def test_module_to_os_path_file_module() -> None:

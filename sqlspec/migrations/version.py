@@ -24,6 +24,7 @@ __all__ = (
     "get_next_sequential_number",
     "is_sequential_version",
     "is_timestamp_version",
+    "parse_extension_stem",
     "parse_version",
 )
 
@@ -32,6 +33,7 @@ logger = get_logger(__name__)
 SEQUENTIAL_PATTERN = re.compile(r"^(?!\d{14}$)\d+$")
 TIMESTAMP_PATTERN = re.compile(r"^(\d{14})$")
 EXTENSION_PATTERN = re.compile(r"^ext_(\w+)_(.+)$")
+EXTENSION_STEM_PATTERN = re.compile(r"^ext_(?P<name>\w+?)_(?P<version>\d+)(?:_.*)?$")
 
 
 class VersionType(Enum):
@@ -251,6 +253,26 @@ def parse_version(version_str: "str | None") -> MigrationVersion:
 
     msg = f"Invalid migration version format: {version_str}. Expected sequential (0001) or timestamp (YYYYMMDDHHmmss)."
     raise ValueError(msg)
+
+
+def parse_extension_stem(stem: str) -> "tuple[str, str] | None":
+    """Split an extension migration filename stem into its extension name and version.
+
+    The version is the first all-numeric segment after the ``ext_`` prefix, so extension
+    names containing underscores resolve correctly:
+    ``ext_litestar_queues_0001_init`` yields ``("litestar_queues", "0001")``.
+
+    Args:
+        stem: Filename stem without the file suffix, or an ``ext_``-prefixed version string.
+
+    Returns:
+        Tuple of extension name and version, or None when the stem is not an
+        extension-prefixed migration.
+    """
+    match = EXTENSION_STEM_PATTERN.match(stem)
+    if match is None:
+        return None
+    return match.group("name"), match.group("version")
 
 
 def _try_parse_version(version_str: str) -> "MigrationVersion | None":

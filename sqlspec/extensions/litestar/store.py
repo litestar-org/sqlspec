@@ -63,6 +63,7 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         "extra_commit_statuses",
         "extra_rollback_statuses",
         "manage_schema",
+        "migrations_path",
         "pool_key",
         "run_migrations",
         "session_key",

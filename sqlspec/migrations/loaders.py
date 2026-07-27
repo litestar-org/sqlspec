@@ -14,7 +14,7 @@ from typing import Any, Final, cast
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.version import _format_sequential_version
+from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem
 from sqlspec.utils.sync_tools import await_
 
 __all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQLFileLoader", "get_migration_loader")
@@ -169,16 +169,16 @@ class SQLFileLoader(BaseMigrationLoader):
         Returns:
             Version string or empty string if invalid.
         """
-        extension_version_parts = 3
         timestamp_min_length = 4
 
         name_without_ext = filename.rsplit(".", 1)[0]
 
         if name_without_ext.startswith("ext_"):
-            parts = name_without_ext.split("_", 3)
-            if len(parts) >= extension_version_parts:
-                return f"{parts[0]}_{parts[1]}_{parts[2]}"
-            return ""
+            extension = parse_extension_stem(name_without_ext)
+            if extension is None:
+                return ""
+            ext_name, ext_version = extension
+            return f"ext_{ext_name}_{ext_version}"
 
         parts = name_without_ext.split("_", 1)
         if parts and parts[0].isdigit():

@@ -9,6 +9,39 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.57.0
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Packages distributed separately from SQLSpec can now ship migrations. Set
+  ``migrations_path`` in an ``extension_config`` entry to point at a directory or
+  a ``'<dotted.module>:<subdir>'`` specification, and the extension is discovered
+  and auto-included without appearing in ``include_extensions``.
+* Added ``add_extension_migrations(name, migrations_path, settings=None)`` on
+  database configurations, for packages that register migrations at runtime
+  rather than declaratively.
+
+**Fixed:**
+
+* Extension names containing underscores no longer lose their version. A
+  migration such as ``ext_my_extension_0001_init.sql`` previously resolved to the
+  version ``ext_my_extension``, dropping ``0001`` and recording a malformed
+  version in the migration tracking table.
+* A configured extension that cannot be resolved now reports which module was
+  tried and that no migrations were registered, instead of the ambiguous
+  ``Extension <name> not found``.
+* Extensions that ship no migrations directory no longer log a warning. Six of
+  the bundled extensions have no migrations by design, so the warning was noise.
+* :func:`sqlspec.utils.module_loader.module_to_os_path` resolves namespace
+  packages to their search location instead of returning a path named ``None``.
+
+**Changed:**
+
+* :func:`sqlspec.utils.module_loader.module_to_os_path` raises
+  :class:`ModuleNotFoundError` rather than :class:`TypeError` when a module
+  cannot be found, so callers can catch the real condition.
+
 v0.56.2
 ------------------------------------------------------------------------------
 
