@@ -14,10 +14,10 @@ v0.57.0
 
 **Added:**
 
-* Packages distributed separately from SQLSpec can now ship migrations. Set
-  ``migrations_path`` in an ``extension_config`` entry to point at a directory or
-  a ``'<dotted.module>:<subdir>'`` specification, and the extension is discovered
-  and auto-included without appearing in ``include_extensions``.
+* Packages distributed separately from SQLSpec can now ship Python migrations.
+  Set ``migrations_path`` in an ``extension_config`` entry to point at a
+  directory or a ``'<dotted.module>:<subdir>'`` specification. The extension is
+  discovered and auto-included without appearing in ``include_extensions``.
 * Added ``add_extension_migrations(name, migrations_path, settings=None)`` on
   database configurations, for packages that register migrations at runtime
   rather than declaratively.
@@ -35,12 +35,29 @@ v0.57.0
   the bundled extensions have no migrations by design, so the warning was noise.
 * :func:`sqlspec.utils.module_loader.module_to_os_path` resolves namespace
   packages to their search location instead of returning a path named ``None``.
+* Compiled wheels now return correct results from :func:`isinstance` and
+  :func:`issubclass` across SQLSpec class hierarchies. A previous check could
+  poison a shared abstract-base cache and cause later query-builder execution
+  to fail.
+* Compiled migration runners no longer raise :class:`TypeError` while resolving
+  the default schema when no configuration is attached.
 
 **Changed:**
 
 * :func:`sqlspec.utils.module_loader.module_to_os_path` raises
   :class:`ModuleNotFoundError` rather than :class:`TypeError` when a module
   cannot be found, so callers can catch the real condition.
+* SQLSpec base classes no longer use ``ABCMeta`` at runtime because mypyc shares
+  its abstract-base caches across compiled class hierarchies. Static type
+  checkers still enforce abstract methods. Runtime code should not rely on
+  ``inspect.isabstract()`` or abstract-class instantiation errors for these
+  bases. ``StatementResult`` remains structurally iterable.
+
+**Known limitations:**
+
+* Extension-owned SQL migration files are discovered but cannot yet resolve
+  their prefixed named queries. Separately distributed packages should ship
+  Python migration files for this release.
 
 v0.56.2
 ------------------------------------------------------------------------------
