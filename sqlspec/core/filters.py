@@ -18,7 +18,7 @@ Features:
     - Cacheable filter configurations
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections import abc
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias
@@ -68,7 +68,7 @@ FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class StatementFilter(ABC):
+class StatementFilter:
     """Abstract base class for filters that can be appended to a statement."""
 
     __slots__ = ()
@@ -334,7 +334,7 @@ class OnBeforeAfterFilter(_DatetimeBoundFilter):
         return self._lower_value
 
 
-class InAnyFilter(StatementFilter, ABC, Generic[T]):
+class InAnyFilter(StatementFilter, Generic[T]):
     """Base class for collection-based filters that support ANY operations."""
 
     __slots__ = ("_field_name", "_values")
@@ -473,7 +473,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
     _parameter_suffix: ClassVar[str] = "not_any"
 
 
-class PaginationFilter(StatementFilter, ABC):
+class PaginationFilter(StatementFilter):
     """Base class for pagination-related filters."""
 
     __slots__ = ()

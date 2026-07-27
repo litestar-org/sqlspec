@@ -1,7 +1,7 @@
 """Base classes for SQLSpec migrations."""
 
 import os
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
@@ -71,7 +71,7 @@ class AppliedMigrationRecord(TypedDict):
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class BaseMigrationTracker(ABC, Generic[DriverT]):
+class BaseMigrationTracker(Generic[DriverT]):
     """Base class for migration version tracking."""
 
     __slots__ = ("_output_policy", "version_table", "version_table_name", "version_table_schema")
@@ -414,7 +414,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
+class BaseMigrationCommands(Generic[ConfigT, DriverT]):
     """Base class for migration commands."""
 
     extension_configs: "dict[str, dict[str, Any]]"

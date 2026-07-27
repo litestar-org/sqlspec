@@ -4,7 +4,7 @@
 import asyncio
 import builtins
 import contextlib
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -137,7 +137,7 @@ class AsyncThreadedBytesIterator:
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class ObjectStoreBase(ABC):
+class ObjectStoreBase:
     """Base class for storage backends.
 
     All synchronous methods follow the *_sync naming convention for consistency

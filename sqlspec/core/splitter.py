@@ -16,7 +16,7 @@ MySQL, SQLite, DuckDB, and BigQuery.
 import logging
 import re
 import threading
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Callable
 from enum import Enum
 from re import Pattern
@@ -141,7 +141,7 @@ SpecialTerminatorHandler: TypeAlias = Callable[[list[Token], int], bool]
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class DialectConfig(ABC):
+class DialectConfig:
     """Abstract base class for SQL dialect configurations."""
 
     __slots__ = DIALECT_CONFIG_SLOTS

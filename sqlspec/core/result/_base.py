@@ -9,8 +9,7 @@ Classes:
     ArrowResult: Apache Arrow format results for data interchange.
 """
 
-from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Sequence
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
@@ -42,6 +41,8 @@ from sqlspec.utils.module_loader import ensure_pandas, ensure_polars
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
+
     from sqlspec.core.compiler import OperationType
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
@@ -57,7 +58,7 @@ _TWO_COLUMN_THRESHOLD: Final[int] = 2
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class StatementResult(ABC, Iterable[Any]):
+class StatementResult:
     """Abstract base class for SQL statement execution results.
 
     Provides a common interface for handling different types of SQL operation

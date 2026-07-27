@@ -5,7 +5,7 @@ import hashlib
 import logging
 import re
 import time
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -57,7 +57,7 @@ class _MigrationFileEntry:
         self.extension_name = extension_name
 
 
-class BaseMigrationRunner(ABC):
+class BaseMigrationRunner:
     """Base migration runner with common functionality shared between sync and async implementations."""
 
     def __init__(
@@ -485,7 +485,7 @@ class BaseMigrationRunner(ABC):
     def _resolve_default_schema(self) -> str | None:
         """Return the configured default schema for migration execution."""
         config = self.context.config if self.context else None
-        migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None))
+        migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
         return _resolve_default_schema(migration_config)
 
     def _resolve_use_transaction(self, migration: "LoadedMigrationMetadata", use_transaction: "bool | None") -> bool:

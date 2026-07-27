@@ -4,7 +4,7 @@ Provides abstract base classes and core functionality for SQL query builders.
 """
 
 import re
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NoReturn, cast
 
@@ -115,7 +115,7 @@ class BuiltQuery:
         return hash((self.sql, frozenset(self.parameters.items()), self.dialect))
 
 
-class QueryBuilder(ABC):
+class QueryBuilder:
     """Abstract base class for SQL query builders.
 
     Provides common functionality for dialect handling, parameter management,
