@@ -144,6 +144,21 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
 # =============================================================================
 
 
+def _normalize_config_path(config_path: str) -> str:
+    """Normalize supported config resolver path syntax to a dotted path.
+
+    Args:
+        config_path: Dotted ``module.attribute`` or ``module:attribute`` path.
+
+    Returns:
+        A dotted path accepted by :func:`import_string`.
+    """
+    module_path, separator, attribute_path = config_path.partition(":")
+    if separator and module_path and attribute_path and ":" not in attribute_path:
+        return f"{module_path}.{attribute_path}"
+    return config_path
+
+
 async def resolve_config_async(
     config_path: str,
 ) -> "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]":
@@ -161,7 +176,7 @@ async def resolve_config_async(
         ConfigResolverError: If config resolution fails.
     """
     try:
-        config_obj = import_string(config_path)
+        config_obj = import_string(_normalize_config_path(config_path))
     except ImportError as e:
         msg = f"Failed to import config from path '{config_path}': {e}"
         raise ConfigResolverError(msg) from e
@@ -193,7 +208,7 @@ def resolve_config_sync(
         Resolved config instance or list of config instances.
     """
     try:
-        config_obj = import_string(config_path)
+        config_obj = import_string(_normalize_config_path(config_path))
     except ImportError as e:
         msg = f"Failed to import config from path '{config_path}': {e}"
         raise ConfigResolverError(msg) from e

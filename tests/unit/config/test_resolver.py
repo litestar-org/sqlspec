@@ -39,6 +39,26 @@ async def test_resolve_direct_config_instance() -> None:
         assert hasattr(result, "migration_config")
 
 
+async def test_resolve_config_async_accepts_colon_path() -> None:
+    """Test resolving a config from a module:attribute path."""
+    mock_config = _create_mock_config()
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mock_config) as import_mock:
+        result = await resolve_config_async("myapp.config:database_config")
+
+    assert result is mock_config
+    import_mock.assert_called_once_with("myapp.config.database_config")
+
+
+def test_resolve_config_sync_accepts_colon_path() -> None:
+    """Test resolving a config from a module:attribute path."""
+    mock_config = _create_mock_config()
+    with patch("sqlspec.utils.config_tools.import_string", return_value=mock_config) as import_mock:
+        result = resolve_config_sync("myapp.config:database_config")
+
+    assert result is mock_config
+    import_mock.assert_called_once_with("myapp.config.database_config")
+
+
 async def test_resolve_config_list() -> None:
     """Test resolving a list of config instances."""
     mock_config1 = _create_mock_config(database_url="sqlite:///test1.db", bind_key="test1")

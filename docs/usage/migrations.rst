@@ -1,10 +1,6 @@
 Migrations
 ==========
 
-.. image:: /_static/demos/migration_workflow.gif
-   :alt: SQLSpec migration workflow demo
-   :class: demo-gif
-
 SQLSpec ships with a built-in migration system backed by the SQL file loader.
 Use it when you want a lightweight, code-first workflow without pulling in
 Alembic or a full ORM stack.
@@ -20,11 +16,40 @@ Core Concepts
 Common Commands
 ---------------
 
+Start with an exported SQLite configuration in ``database.py``. Importing this
+module only defines the configuration; migrations run when you invoke the CLI,
+not at application import time.
+
+.. literalinclude:: /examples/migration_quickstart_config.py
+   :language: python
+
 .. code-block:: console
 
-   sqlspec init
-   sqlspec create-migration -m "add users"
-   sqlspec upgrade
+   sqlspec --config database:database_config show-config
+   sqlspec --config database:database_config init --no-prompt
+   sqlspec --config database:database_config create-migration -m "create users table" --no-prompt
+   sqlspec --config database:database_config upgrade --no-prompt
+   sqlspec --config database:database_config show-current-revision
+
+Configuration references accept both ``module.attribute`` and
+``module:attribute`` forms. Instead of repeating ``--config``, set the
+``SQLSPEC_CONFIG`` environment variable:
+
+.. code-block:: console
+
+   export SQLSPEC_CONFIG=database.database_config
+   sqlspec show-config
+
+Or add the reference to ``pyproject.toml``:
+
+.. code-block:: toml
+
+   [tool.sqlspec]
+   config = "database:database_config"
+
+Then run the commands without ``--config``. The example above, all three
+discovery methods, and the complete command sequence are exercised by the
+documentation test suite.
 
 Configuration
 -------------
@@ -43,7 +68,7 @@ The migration CLI resolves config from ``--config``, ``SQLSPEC_CONFIG``, or
         connection_config={"database": "/tmp/analytics.db"},
         migration_config={
             "script_location": "migrations/duckdb",
-            "version_table": "_schema_versions",
+            "version_table_name": "_schema_versions",
         },
     )
 

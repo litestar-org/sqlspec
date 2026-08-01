@@ -5,17 +5,19 @@ SQLSpec includes a CLI for managing migrations and inspecting configuration. Use
 when you want a fast, explicit workflow without additional tooling.
 
 Configuration can come from ``--config``, ``SQLSPEC_CONFIG``, or
-``[tool.sqlspec]`` in ``pyproject.toml``.
+``[tool.sqlspec]`` in ``pyproject.toml``. References accept either
+``module.attribute`` or ``module:attribute`` syntax.
 
 Core Commands
 -------------
 
 .. code-block:: console
 
-   sqlspec init
-   sqlspec create-migration -m "add users"
-   sqlspec upgrade
-   sqlspec downgrade
+   sqlspec --config database:database_config show-config
+   sqlspec --config database:database_config init --no-prompt
+   sqlspec --config database:database_config create-migration -m "add users" --no-prompt
+   sqlspec --config database:database_config upgrade --no-prompt
+   sqlspec --config database:database_config show-current-revision
 
 Common Options
 --------------
