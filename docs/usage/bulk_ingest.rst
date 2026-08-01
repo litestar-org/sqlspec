@@ -18,9 +18,10 @@ Three methods cover the common shapes. They share return type
   a staged artifact (a local path or cloud URI) into a table.
 - ``load_from_records(table, records, *, columns=None, overwrite=False)`` --
   load in-memory rows. ``records`` may be mappings (columns derived from the
-  keys) or positional sequences (``columns`` required). Records are normalized
-  and routed through the adapter's native ``load_from_arrow`` path, so every
-  adapter that supports Arrow ingest supports records too.
+  keys) or positional sequences (``columns`` required). Adapters normally
+  normalize records through their native Arrow ingest path. AsyncPG sends
+  validated record tuples directly to binary ``COPY``; callers that pass an
+  actual Arrow input still use ``load_from_arrow`` unchanged.
 
 .. code-block:: python
 
