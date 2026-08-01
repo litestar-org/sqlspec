@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
 import pytest
 
 if TYPE_CHECKING:
@@ -11,6 +12,8 @@ pytestmark = pytest.mark.xdist_group("postgres")
 
 _SYNC_TABLE = "test_psycopg_sync_load_from_records"
 _ASYNC_TABLE = "test_psycopg_async_load_from_records"
+_SYNC_ARROW_TABLE = "test_psycopg_sync_load_from_arrow"
+_ASYNC_ARROW_TABLE = "test_psycopg_async_load_from_arrow"
 _RECORDS = [
     {
         "id": 1,
@@ -23,6 +26,32 @@ _RECORDS = [
         "id": 2,
         "payload_json": {"name": "beta", "items": []},
         "payload_jsonb": {"status": "done", "details": {}},
+        "metadata_jsonb": {"worker": "two"},
+        "tags": [],
+    },
+]
+_ARROW_SCHEMA = pa.schema([
+    pa.field("id", pa.int64(), nullable=False),
+    pa.field("payload_json", pa.struct([pa.field("name", pa.string()), pa.field("items", pa.list_(pa.int64()))])),
+    pa.field(
+        "payload_jsonb",
+        pa.struct([pa.field("status", pa.string()), pa.field("details", pa.struct([pa.field("attempt", pa.int64())]))]),
+    ),
+    pa.field("metadata_jsonb", pa.struct([pa.field("worker", pa.string())])),
+    pa.field("tags", pa.list_(pa.string()), nullable=False),
+])
+_ARROW_RECORDS = [
+    {
+        "id": 1,
+        "payload_json": {"name": "alpha", "items": [1, 2]},
+        "payload_jsonb": {"status": "ready", "details": {"attempt": 1}},
+        "metadata_jsonb": None,
+        "tags": ["python", "sql"],
+    },
+    {
+        "id": 2,
+        "payload_json": {"name": "beta", "items": []},
+        "payload_jsonb": {"status": "done", "details": {"attempt": None}},
         "metadata_jsonb": {"worker": "two"},
         "tags": [],
     },
@@ -84,4 +113,64 @@ async def test_psycopg_async_load_from_records_prepares_json_mappings(
         finally:
             await session.rollback()
             await session.execute_script(f"DROP TABLE IF EXISTS {_ASYNC_TABLE}")
+            await session.commit()
+
+
+def test_psycopg_sync_load_from_arrow_prepares_struct_mappings(psycopg_sync_config: "PsycopgSyncConfig") -> None:
+    """Psycopg COPY should adapt Arrow structs without changing primitive arrays."""
+    arrow_table = pa.Table.from_pylist(_ARROW_RECORDS, schema=_ARROW_SCHEMA)
+    with psycopg_sync_config.provide_session() as session:
+        session.execute_script(f"DROP TABLE IF EXISTS {_SYNC_ARROW_TABLE}")
+        session.execute_script(
+            f"""
+            CREATE TABLE {_SYNC_ARROW_TABLE} (
+                id INTEGER PRIMARY KEY,
+                payload_json JSON NOT NULL,
+                payload_jsonb JSONB NOT NULL,
+                metadata_jsonb JSONB,
+                tags TEXT[] NOT NULL
+            )
+            """
+        )
+        session.commit()
+        try:
+            job = session.load_from_arrow(_SYNC_ARROW_TABLE, arrow_table)
+            rows = session.execute(f"SELECT * FROM {_SYNC_ARROW_TABLE} ORDER BY id").get_data()
+
+            assert rows == _ARROW_RECORDS
+            assert job.telemetry["rows_processed"] == 2
+        finally:
+            session.rollback()
+            session.execute_script(f"DROP TABLE IF EXISTS {_SYNC_ARROW_TABLE}")
+            session.commit()
+
+
+async def test_psycopg_async_load_from_arrow_prepares_struct_mappings(
+    psycopg_async_config: "PsycopgAsyncConfig",
+) -> None:
+    """Async psycopg COPY should adapt Arrow structs without changing primitive arrays."""
+    arrow_table = pa.Table.from_pylist(_ARROW_RECORDS, schema=_ARROW_SCHEMA)
+    async with psycopg_async_config.provide_session() as session:
+        await session.execute_script(f"DROP TABLE IF EXISTS {_ASYNC_ARROW_TABLE}")
+        await session.execute_script(
+            f"""
+            CREATE TABLE {_ASYNC_ARROW_TABLE} (
+                id INTEGER PRIMARY KEY,
+                payload_json JSON NOT NULL,
+                payload_jsonb JSONB NOT NULL,
+                metadata_jsonb JSONB,
+                tags TEXT[] NOT NULL
+            )
+            """
+        )
+        await session.commit()
+        try:
+            job = await session.load_from_arrow(_ASYNC_ARROW_TABLE, arrow_table)
+            rows = (await session.execute(f"SELECT * FROM {_ASYNC_ARROW_TABLE} ORDER BY id")).get_data()
+
+            assert rows == _ARROW_RECORDS
+            assert job.telemetry["rows_processed"] == 2
+        finally:
+            await session.rollback()
+            await session.execute_script(f"DROP TABLE IF EXISTS {_ASYNC_ARROW_TABLE}")
             await session.commit()
