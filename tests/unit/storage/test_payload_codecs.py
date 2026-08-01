@@ -6,6 +6,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
+import sqlspec.storage.pipeline as storage_pipeline
 from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
@@ -79,6 +80,8 @@ def test_sync_row_write_rejects_arrow_formats_before_encoding_or_io(
 ) -> None:
     pipeline = SyncStoragePipeline()
     backend = _install_backend(monkeypatch, SyncStoragePipeline)
+    monkeypatch.setattr(storage_pipeline, "serialize_collection", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "_encode_row_payload", pytest.fail)
     reset_storage_bridge_events()
 
     with pytest.raises(ValueError, match="Row storage writes support only JSON and JSONL"):
@@ -94,6 +97,7 @@ def test_sync_arrow_write_rejects_row_formats_before_encoding_or_io(
 ) -> None:
     pipeline = SyncStoragePipeline()
     backend = _install_backend(monkeypatch, SyncStoragePipeline)
+    monkeypatch.setattr(storage_pipeline, "_encode_arrow_payload", pytest.fail)
     reset_storage_bridge_events()
 
     with pytest.raises(ValueError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
@@ -109,11 +113,15 @@ async def test_async_row_write_rejects_arrow_formats_before_io(
 ) -> None:
     pipeline = AsyncStoragePipeline()
     backend = _install_backend(monkeypatch, AsyncStoragePipeline)
+    monkeypatch.setattr(storage_pipeline, "serialize_collection", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "_encode_row_payload", pytest.fail)
+    reset_storage_bridge_events()
 
     with pytest.raises(ValueError, match="Row storage writes support only JSON and JSONL"):
         await pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)  # type: ignore[arg-type]
 
     assert backend.writes == []
+    assert get_recent_storage_events() == []
 
 
 @pytest.mark.parametrize("format_hint", ["json", "jsonl"])
@@ -122,8 +130,11 @@ async def test_async_arrow_write_rejects_row_formats_before_io(
 ) -> None:
     pipeline = AsyncStoragePipeline()
     backend = _install_backend(monkeypatch, AsyncStoragePipeline)
+    monkeypatch.setattr(storage_pipeline, "_encode_arrow_payload", pytest.fail)
+    reset_storage_bridge_events()
 
     with pytest.raises(ValueError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
         await pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)  # type: ignore[arg-type]
 
     assert backend.writes == []
+    assert get_recent_storage_events() == []
