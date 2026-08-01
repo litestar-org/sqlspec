@@ -2,8 +2,11 @@
 
 import re
 from collections import OrderedDict
+from collections.abc import Mapping
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
+
+from sqlglot import exp
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgPostgresError, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
@@ -36,7 +39,7 @@ from sqlspec.driver import (
     StackExecutionObserver,
     describe_stack_statement,
 )
-from sqlspec.exceptions import SQLSpecError, StackExecutionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
@@ -333,19 +336,83 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Load Arrow data into a PostgreSQL table via COPY."""
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
+        table_name, schema_name, quoted_target = self._copy_target(table)
         if overwrite:
             try:
-                await self.connection.execute(f"TRUNCATE TABLE {table}")
+                await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
             except AsyncpgPostgresError as exc:
                 msg = f"Failed to truncate table '{table}': {exc}"
                 raise SQLSpecError(msg) from exc
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            await self.connection.copy_records_to_table(table, records=records, columns=columns)
+            await self.connection.copy_records_to_table(
+                table_name, records=records, columns=columns, schema_name=schema_name
+            )
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
+
+    async def load_from_records(
+        self,
+        table: str,
+        records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]",
+        *,
+        columns: "list[str] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load mapping or positional records directly with binary COPY."""
+        materialized = list(records)
+        if not materialized:
+            msg = "load_from_records requires at least one record."
+            raise ImproperConfigurationError(msg)
+
+        first = materialized[0]
+        if isinstance(first, Mapping):
+            resolved_columns = columns if columns is not None else list(first.keys())
+            expected_keys = set(resolved_columns)
+            copy_rows: list[tuple[Any, ...]] = []
+            for record in materialized:
+                if not isinstance(record, Mapping):
+                    msg = "load_from_records mapping records must all be mappings."
+                    raise ImproperConfigurationError(msg)
+                if set(record.keys()) != expected_keys:
+                    msg = "load_from_records mapping records must all share the same keys."
+                    raise ImproperConfigurationError(msg)
+                copy_rows.append(tuple(record[column] for column in resolved_columns))
+        else:
+            if columns is None:
+                msg = "load_from_records requires columns when records are positional sequences."
+                raise ImproperConfigurationError(msg)
+            resolved_columns = columns
+            copy_rows = []
+            for record in materialized:
+                if isinstance(record, Mapping):
+                    msg = "load_from_records positional records must all have the same shape."
+                    raise ImproperConfigurationError(msg)
+                row = tuple(record)
+                if len(row) != len(resolved_columns):
+                    msg = "load_from_records positional records must match the number of columns."
+                    raise ImproperConfigurationError(msg)
+                copy_rows.append(row)
+
+        table_name, schema_name, quoted_target = self._copy_target(table)
+        if overwrite:
+            try:
+                await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
+            except AsyncpgPostgresError as exc:
+                msg = f"Failed to truncate table '{table}': {exc}"
+                raise SQLSpecError(msg) from exc
+        await self.connection.copy_records_to_table(
+            table_name, records=copy_rows, columns=resolved_columns, schema_name=schema_name
+        )
+        telemetry_payload: StorageTelemetry = {
+            "bytes_processed": 0,
+            "destination": table,
+            "format": "records",
+            "rows_processed": len(copy_rows),
+        }
+        return self._storage_job(telemetry_payload)
 
     async def load_from_storage(
         self,
@@ -390,6 +457,31 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "AsyncpgConnection") -> int:
         """Resolve rowcount from asyncpg status for the direct execution path."""
         return parse_status(cursor)
+
+    @staticmethod
+    def _copy_target(table: str) -> "tuple[str, str | None, str]":
+        parsed = exp.to_table(table, dialect="postgres")
+        if parsed.catalog:
+            msg = "AsyncPG COPY targets must be unqualified or schema-qualified table names."
+            raise ImproperConfigurationError(msg)
+        table_identifier = cast("exp.Identifier", parsed.this)
+        table_name = (
+            table_identifier.name
+            if table_identifier.quoted
+            else normalize_identifier(table_identifier.name, "postgres")
+        )
+        schema_identifier = cast("exp.Identifier | None", parsed.args.get("db"))
+        schema_name = None
+        if schema_identifier is not None:
+            schema_name = (
+                schema_identifier.name
+                if schema_identifier.quoted
+                else normalize_identifier(schema_identifier.name, "postgres")
+            )
+        quoted_target = quote_identifier(table_name)
+        if schema_name is not None:
+            quoted_target = f"{quote_identifier(schema_name)}.{quoted_target}"
+        return table_name, schema_name, quoted_target
 
     async def _execute_stack_native(
         self, stack: "StatementStack", *, continue_on_error: bool

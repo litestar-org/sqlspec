@@ -48,6 +48,7 @@ class BenchmarkResult:
     min_seconds: float | None
     skipped: bool
     message: str = ""
+    rows_per_second: float | None = None
 
 
 @dataclass(frozen=True)
@@ -61,14 +62,16 @@ class Scenario:
     runner: Callable[[BenchmarkOptions], list[BenchmarkResult]]
 
 
-def _summarize(scenario: str, variant: str, samples: list[float]) -> BenchmarkResult:
+def _summarize(scenario: str, variant: str, samples: list[float], row_count: int | None = None) -> BenchmarkResult:
+    median_seconds = statistics.median(samples)
     return BenchmarkResult(
         scenario=scenario,
         variant=variant,
         iterations=len(samples),
-        median_seconds=statistics.median(samples),
+        median_seconds=median_seconds,
         min_seconds=min(samples),
         skipped=False,
+        rows_per_second=row_count / median_seconds if row_count is not None else None,
     )
 
 
@@ -154,6 +157,64 @@ def run_asyncpg_stmt_cache(options: BenchmarkOptions) -> list[BenchmarkResult]:
     return asyncio.run(run())
 
 
+async def _run_asyncpg_record_copy(dsn: str, options: BenchmarkOptions) -> list[BenchmarkResult]:
+    import asyncpg
+
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
+
+    batch_sizes = (1, 2, 10, 100, 1_000, 5_000)
+    connection = await asyncpg.connect(dsn=dsn)
+    driver = AsyncpgDriver(connection)
+    results: list[BenchmarkResult] = []
+    try:
+        await connection.execute("DROP TABLE IF EXISTS sqlspec_bench_asyncpg_record_copy")
+        await connection.execute("CREATE TABLE sqlspec_bench_asyncpg_record_copy (id int PRIMARY KEY, value text)")
+        for batch_size in batch_sizes:
+            rows = [(index, f"value-{index}") for index in range(batch_size)]
+
+            async def direct_copy(batch: list[tuple[int, str]] = rows) -> None:
+                await driver.load_from_records("sqlspec_bench_asyncpg_record_copy", batch, columns=["id", "value"])
+
+            async def execute_many(batch: list[tuple[int, str]] = rows) -> None:
+                await connection.executemany(
+                    "INSERT INTO sqlspec_bench_asyncpg_record_copy (id, value) VALUES ($1, $2)", batch
+                )
+
+            for variant, operation in (("direct-copy", direct_copy), ("execute-many", execute_many)):
+                for _ in range(options.warmup):
+                    await connection.execute("TRUNCATE TABLE sqlspec_bench_asyncpg_record_copy")
+                    await operation()
+                samples: list[float] = []
+                for _ in range(options.iterations):
+                    await connection.execute("TRUNCATE TABLE sqlspec_bench_asyncpg_record_copy")
+                    started = time.perf_counter()
+                    await operation()
+                    samples.append(time.perf_counter() - started)
+                results.append(
+                    _summarize(
+                        "asyncpg_record_copy", f"{variant}:batch_size={batch_size}", samples, row_count=batch_size
+                    )
+                )
+    finally:
+        await connection.close()
+    return results
+
+
+def run_asyncpg_record_copy(options: BenchmarkOptions) -> list[BenchmarkResult]:
+    """Compare direct-record COPY with parameterized executemany by batch size."""
+    dsn = os.getenv("SQLSPEC_BENCH_ASYNCPG_DSN")
+    if not dsn:
+        return [
+            _skipped(
+                "asyncpg_record_copy",
+                "direct-copy:batch_size=1",
+                options,
+                "set SQLSPEC_BENCH_ASYNCPG_DSN to run the AsyncPG record COPY crossover benchmark",
+            )
+        ]
+    return asyncio.run(_run_asyncpg_record_copy(dsn, options))
+
+
 def _run_oracle_variant(stmtcachesize: int, options: BenchmarkOptions) -> BenchmarkResult:
     import oracledb
 
@@ -211,6 +272,13 @@ def run_arrow_odbc_fetch(options: BenchmarkOptions) -> list[BenchmarkResult]:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "asyncpg_record_copy": Scenario(
+        name="asyncpg_record_copy",
+        description="Compare direct-record COPY with executemany across batch sizes.",
+        requires="SQLSPEC_BENCH_ASYNCPG_DSN",
+        skip_message="Skipped unless SQLSPEC_BENCH_ASYNCPG_DSN points at a PostgreSQL database.",
+        runner=run_asyncpg_record_copy,
+    ),
     "asyncpg_stmt_cache": Scenario(
         name="asyncpg_stmt_cache",
         description="Compare asyncpg native statement cache enabled vs disabled on one pooled connection.",
@@ -254,13 +322,17 @@ def _print_scenarios() -> None:
 
 
 def _print_results(results: list[BenchmarkResult]) -> None:
-    click.echo("scenario             variant                    median_s   min_s      status")
+    click.echo("scenario             variant                    median_s   min_s       rows/s status")
     for result in results:
         if result.skipped:
-            click.echo(f"{result.scenario:<20} {result.variant:<26} {'-':>8} {'-':>8} skipped: {result.message}")
+            click.echo(
+                f"{result.scenario:<20} {result.variant:<26} {'-':>8} {'-':>8} {'-':>12} skipped: {result.message}"
+            )
             continue
+        rows_per_second = f"{result.rows_per_second:,.1f}" if result.rows_per_second is not None else "-"
         click.echo(
-            f"{result.scenario:<20} {result.variant:<26} {result.median_seconds:>8.6f} {result.min_seconds:>8.6f} ok"
+            f"{result.scenario:<20} {result.variant:<26} {result.median_seconds:>8.6f} "
+            f"{result.min_seconds:>8.6f} {rows_per_second:>12} ok"
         )
 
 
