@@ -1910,6 +1910,12 @@ class CommonDriverAttributesMixin:
         """Return whether Arrow rows may contain nested values needing preparation."""
         return arrow_table_needs_parameter_preparation(table)
 
+    def _prepare_records_for_arrow(
+        self, records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]"
+    ) -> "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]":
+        """Prepare records before Arrow schema inference."""
+        return records
+
     @staticmethod
     def _ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
         """Build telemetry dict from Arrow table statistics."""

@@ -105,6 +105,14 @@ class PsycopgPipelineDriver(Protocol):
         kwargs: "dict[str, Any] | None" = None,
     ) -> "SQL": ...
 
+    def prepare_driver_parameters(
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: Any | None = None,
+    ) -> Any: ...
+
     def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 

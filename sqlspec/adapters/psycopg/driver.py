@@ -65,6 +65,8 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import is_readable, resolve_row_format
 
 if TYPE_CHECKING:
+    from collections import abc
+
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
@@ -106,6 +108,15 @@ class PsycopgPipelineMixin:
     """Shared helpers for psycopg sync/async pipeline execution."""
 
     __slots__ = ()
+
+    def _prepare_records_for_arrow(
+        self, records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]"
+    ) -> "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]":
+        driver = cast("PsycopgPipelineDriver", self)
+        return cast(
+            "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]",
+            driver.prepare_driver_parameters(records, driver.statement_config, is_many=True),
+        )
 
     def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[PreparedStackOperation] | None":
         prepared: list[PreparedStackOperation] = []
@@ -485,6 +496,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
+        prepared_records = cast(
+            "list[Any]",
+            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+            if records and self._arrow_rows_need_preparation(arrow_table)
+            else records,
+        )
         if records:
             copy_sql = build_copy_from_command(table, columns)
             exc_handler = self.handle_database_exceptions()
@@ -492,7 +509,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 stack.enter_context(exc_handler)
                 cursor = stack.enter_context(self.with_cursor(self.connection))
                 copy_ctx = stack.enter_context(cursor.copy(copy_sql))
-                for record in records:
+                for record in prepared_records:
                     copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
@@ -1010,6 +1027,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         columns, records = self._arrow_table_to_rows(arrow_table)
+        prepared_records = cast(
+            "list[Any]",
+            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+            if records and self._arrow_rows_need_preparation(arrow_table)
+            else records,
+        )
         if records:
             copy_sql = build_copy_from_command(table, columns)
             exc_handler = self.handle_database_exceptions()
@@ -1017,7 +1040,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 await stack.enter_async_context(exc_handler)
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
                 copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
-                for record in records:
+                for record in prepared_records:
                     await copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
