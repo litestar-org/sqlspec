@@ -1689,7 +1689,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             StorageBridgeJob with execution telemetry.
         """
-        arrow_table = self._records_to_arrow_table(records, columns)
+        prepared_records = self._prepare_records_for_arrow(records)
+        arrow_table = self._records_to_arrow_table(prepared_records, columns)
         return await self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
     def stage_artifact(self, request: "dict[str, Any]") -> "dict[str, Any]":
