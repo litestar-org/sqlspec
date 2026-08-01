@@ -6,7 +6,7 @@ import builtins
 import contextlib
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
@@ -58,17 +58,38 @@ def _read_chunk_or_sentinel(file_obj: Any, chunk_size: int) -> Any:
 class AsyncArrowBatchIterator:
     """Async iterator wrapper for sync Arrow batch iterators."""
 
-    __slots__ = ("_sync_iter",)
+    __slots__ = ("_closed", "_sync_iter")
 
     def __init__(self, sync_iterator: "Iterator[ArrowRecordBatch]") -> None:
         self._sync_iter = sync_iterator
+        self._closed = False
 
     def __aiter__(self) -> "AsyncArrowBatchIterator":
         return self
 
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close the underlying generator and its active storage reader."""
+        if self._closed:
+            return
+        self._closed = True
+        close = getattr(self._sync_iter, "close", None)
+        if close is not None:
+            await asyncio.get_running_loop().run_in_executor(None, close)
+
     def _sync_next(self) -> "ArrowRecordBatch":
+        if self._closed:
+            raise _StopAsync()
         result = _next_or_sentinel(self._sync_iter)
         if result is _EXHAUSTED:
+            self._closed = True
             raise _StopAsync()
         return cast("ArrowRecordBatch", result)
 
@@ -227,7 +248,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
+    def stream_arrow_sync(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches from storage synchronously."""
         raise NotImplementedError
 
@@ -300,6 +323,8 @@ class ObjectStoreBase:
 
     # NOTE: Returns AsyncIterator directly; keep in sync with ObjectStoreProtocol.
     @abstractmethod
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+    def stream_arrow_async(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> "AsyncIterator[ArrowRecordBatch]":
         """Stream Arrow record batches from storage asynchronously."""
         raise NotImplementedError

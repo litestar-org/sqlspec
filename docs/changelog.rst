@@ -355,8 +355,10 @@ v0.54.0 - SQL processing correctness and cleanup
 * Spanner adapter modules no longer expose module-level proxy lookup hooks.
 * Async migration squash now builds its internal migration runner with a real
   migration context, matching the synchronous command path.
-* ObStore Arrow streaming no longer resolves cloud ``base_path`` twice for
-  async streams.
+* Arrow batch streaming is now explicitly Parquet-only and reads one row group
+  at a time across local, fsspec, and obstore backends. Obstore streams through
+  its seekable reader without buffering the full object, resolves cloud
+  ``base_path`` only once, and closes readers deterministically.
 * ``sql.decode()`` now renders a trailing default argument as the ``ELSE``
   clause documented for DECODE-style expressions.
 * Async drivers can use the statement-cache direct execution path when the

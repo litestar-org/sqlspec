@@ -3,11 +3,12 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import resolve_storage_path
 from sqlspec.storage._utils import _log_storage_event, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
@@ -396,18 +397,23 @@ class FSSpecBackend:
                     break
                 yield cast("bytes", chunk)
 
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
+    def stream_arrow_sync(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage synchronously.
 
         Args:
             pattern: The glob pattern to match.
-            **kwargs: Additional arguments to pass to the glob method.
+            file_format: Storage format. Only Parquet supports bounded batch streaming.
+            batch_size: Maximum number of rows in each yielded record batch.
+            **kwargs: Additional arguments passed to PyArrow batch iteration.
 
         Yields:
             Arrow record batches from matching files.
         """
+        validate_parquet_stream_options(pattern, file_format, batch_size)
         pq = import_pyarrow_parquet()
-        for obj_path in self.glob_sync(pattern, **kwargs):
+        for obj_path in self.glob_sync(pattern):
             file_handle = execute_sync_storage_operation(
                 partial(self.fs.open, obj_path, mode="rb"),
                 backend=self.backend_type,
@@ -421,7 +427,7 @@ class FSSpecBackend:
                     operation="stream_arrow",
                     path=str(obj_path),
                 )
-                yield from parquet_file.iter_batches()  # pyright: ignore[reportUnknownMemberType]
+                yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
@@ -456,17 +462,23 @@ class FSSpecBackend:
 
         return AsyncThreadedBytesIterator(file_obj, chunk_size)
 
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    def stream_arrow_async(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
 
         Args:
             pattern: The glob pattern to match.
-            **kwargs: Additional arguments to pass to the glob method.
+            file_format: Storage format. Only Parquet supports bounded batch streaming.
+            batch_size: Maximum number of rows in each yielded record batch.
+            **kwargs: Additional arguments passed to PyArrow batch iteration.
 
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        return AsyncArrowBatchIterator(self.stream_arrow_sync(pattern, **kwargs))
+        return AsyncArrowBatchIterator(
+            self.stream_arrow_sync(pattern, file_format=file_format, batch_size=batch_size, **kwargs)
+        )
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
