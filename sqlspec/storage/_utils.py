@@ -6,7 +6,13 @@ from typing import Any
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
 
-__all__ = ("_log_storage_event", "import_pyarrow", "import_pyarrow_csv", "import_pyarrow_parquet")
+__all__ = (
+    "_log_storage_event",
+    "import_pyarrow",
+    "import_pyarrow_csv",
+    "import_pyarrow_json",
+    "import_pyarrow_parquet",
+)
 
 logger = get_logger(__name__)
 
@@ -48,6 +54,19 @@ def import_pyarrow_csv() -> "Any":
     import pyarrow.csv as pa_csv
 
     return pa_csv
+
+
+def import_pyarrow_json() -> "Any":
+    """Import PyArrow JSON module with optional dependency guard.
+
+    Returns:
+        PyArrow JSON module.
+    """
+
+    ensure_pyarrow()
+    import pyarrow.json as pa_json
+
+    return pa_json
 
 
 def _log_storage_event(

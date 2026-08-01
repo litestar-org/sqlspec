@@ -144,6 +144,8 @@ class _StorageBridgeMetrics:
 _METRICS = _StorageBridgeMetrics()
 _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 _EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
+_ARROW_WRITE_FORMATS = frozenset({"parquet", "arrow-ipc", "csv"})
+_ROW_WRITE_FORMATS = frozenset({"json", "jsonl"})
 
 
 def _storage_options(default_options: "dict[str, Any]", storage_options: "dict[str, Any] | None") -> "dict[str, Any]":
@@ -223,6 +225,18 @@ def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
         buffer.extend(to_json(row, as_bytes=True))
         buffer.extend(b"\n")
     return bytes(buffer)
+
+
+def _validate_arrow_write_format(format_choice: StorageFormat) -> None:
+    if format_choice not in _ARROW_WRITE_FORMATS:
+        msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
+        raise ValueError(msg)
+
+
+def _validate_row_write_format(format_choice: StorageFormat) -> None:
+    if format_choice not in _ROW_WRITE_FORMATS:
+        msg = "Row storage writes support only JSON and JSONL formats"
+        raise ValueError(msg)
 
 
 def _encode_arrow_payload(
@@ -353,8 +367,9 @@ class SyncStoragePipeline(_StoragePipelineBase):
     ) -> StorageTelemetry:
         """Write dictionary rows to storage using cached serializers."""
 
-        serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
+        _validate_row_write_format(format_choice)
+        serialized = serialize_collection(rows)
         payload = _encode_row_payload(serialized, format_choice)
         resolved_options = _storage_options(self._storage_options, storage_options)
         return self._write_bytes(
@@ -373,6 +388,7 @@ class SyncStoragePipeline(_StoragePipelineBase):
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
+        _validate_arrow_write_format(format_choice)
         resolved_options = _storage_options(self._storage_options, storage_options)
         format_write_options = _csv_write_options(
             format_choice, resolved_options, self._storage_options, self._csv_write_options
@@ -485,8 +501,9 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         format_hint: StorageFormat | None = None,
         storage_options: "dict[str, Any] | None" = None,
     ) -> StorageTelemetry:
-        serialized = serialize_collection(rows)
         format_choice = format_hint or "jsonl"
+        _validate_row_write_format(format_choice)
+        serialized = serialize_collection(rows)
         payload = await async_(_encode_row_payload)(serialized, format_choice)
         resolved_options = _storage_options(self._storage_options, storage_options)
         return await self._write_bytes_async(
@@ -503,6 +520,7 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         compression: str | None = None,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
+        _validate_arrow_write_format(format_choice)
         resolved_options = _storage_options(self._storage_options, storage_options)
         format_write_options = _csv_write_options(
             format_choice, resolved_options, self._storage_options, self._csv_write_options

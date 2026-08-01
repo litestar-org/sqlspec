@@ -6,6 +6,21 @@ Storage abstraction layer with multiple backend support (local filesystem,
 fsspec, obstore), configuration-based registration, and Arrow table
 import/export with CSV format support.
 
+Write and read formats
+======================
+
+Row-oriented writes accept only ``json`` and newline-delimited ``jsonl``.
+Arrow-table writes accept only ``parquet``, ``arrow-ipc``, and ``csv``. The
+pipeline rejects mismatched formats before encoding or storage I/O, so it
+cannot write one payload type under another format label. Read APIs retain the
+full format set because they decode all five formats into Arrow tables.
+
+JSONL reads use PyArrow's native JSON reader. Its type inference applies to the
+result, including conversion of date-like strings to Arrow timestamps. This
+avoids Python per-line decoding and ``Table.from_pylist()`` copies. It does not
+make ``load_from_storage()`` bounded-memory: that API reads the complete object
+payload before decoding it.
+
 Pipelines
 =========
 
