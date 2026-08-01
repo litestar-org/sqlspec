@@ -6,7 +6,8 @@ from collections.abc import Mapping
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
+from sqlglot.errors import ParseError
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgPostgresError, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
@@ -362,6 +363,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         overwrite: bool = False,
     ) -> "StorageBridgeJob":
         """Load mapping or positional records directly with binary COPY."""
+        self._require_capability("arrow_import_enabled")
         materialized = list(records)
         if not materialized:
             msg = "load_from_records requires at least one record."
@@ -460,17 +462,29 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     @staticmethod
     def _copy_target(table: str) -> "tuple[str, str | None, str]":
-        parsed = exp.to_table(table, dialect="postgres")
-        if parsed.catalog:
+        try:
+            parsed = parse_one(table, read="postgres", into=exp.Table)
+        except ParseError as exc:
+            msg = "AsyncPG COPY targets must be unqualified or schema-qualified table names."
+            raise ImproperConfigurationError(msg) from exc
+        schema_expression = parsed.args.get("db")
+        schema_identifier = schema_expression if isinstance(schema_expression, exp.Identifier) else None
+        if (
+            parsed.catalog
+            or not isinstance(parsed.this, exp.Identifier)
+            or not parsed.this.name
+            or parsed.this.name == "*"
+            or (schema_expression is not None and schema_identifier is None)
+            or (schema_identifier is not None and not schema_identifier.name)
+        ):
             msg = "AsyncPG COPY targets must be unqualified or schema-qualified table names."
             raise ImproperConfigurationError(msg)
-        table_identifier = cast("exp.Identifier", parsed.this)
+        table_identifier = parsed.this
         table_name = (
             table_identifier.name
             if table_identifier.quoted
             else normalize_identifier(table_identifier.name, "postgres")
         )
-        schema_identifier = cast("exp.Identifier | None", parsed.args.get("db"))
         schema_name = None
         if schema_identifier is not None:
             schema_name = (

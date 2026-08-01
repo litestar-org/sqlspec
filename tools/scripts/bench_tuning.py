@@ -164,11 +164,10 @@ async def _run_asyncpg_record_copy(dsn: str, options: BenchmarkOptions) -> list[
 
     batch_sizes = (1, 2, 10, 100, 1_000, 5_000)
     connection = await asyncpg.connect(dsn=dsn)
-    driver = AsyncpgDriver(connection)
+    driver = AsyncpgDriver(connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}})
     results: list[BenchmarkResult] = []
     try:
-        await connection.execute("DROP TABLE IF EXISTS sqlspec_bench_asyncpg_record_copy")
-        await connection.execute("CREATE TABLE sqlspec_bench_asyncpg_record_copy (id int PRIMARY KEY, value text)")
+        await connection.execute("CREATE TEMP TABLE sqlspec_bench_asyncpg_record_copy (id int PRIMARY KEY, value text)")
         for batch_size in batch_sizes:
             rows = [(index, f"value-{index}") for index in range(batch_size)]
 

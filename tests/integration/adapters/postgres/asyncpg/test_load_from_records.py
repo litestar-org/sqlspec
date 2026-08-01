@@ -4,8 +4,11 @@ from typing import Any
 from uuid import uuid4
 
 import pyarrow as pa
+import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
+
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 async def test_load_from_records_preserves_native_postgres_values(asyncpg_async_driver: AsyncpgDriver) -> None:

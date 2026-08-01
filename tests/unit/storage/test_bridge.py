@@ -73,10 +73,12 @@ def test_encode_row_payload_jsonl_returns_line_delimited_bytes() -> None:
 
 class DummyAsyncpgConnection:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, list[tuple[object, ...]], list[str]]] = []
+        self.calls: list[tuple[str, str | None, list[tuple[object, ...]], list[str]]] = []
 
-    async def copy_records_to_table(self, table: str, *, records: list[tuple[object, ...]], columns: list[str]) -> None:
-        self.calls.append((table, records, columns))
+    async def copy_records_to_table(
+        self, table: str, *, records: list[tuple[object, ...]], columns: list[str], schema_name: str | None = None
+    ) -> None:
+        self.calls.append((table, schema_name, records, columns))
 
 
 class DummyPsqlpyConnection:
@@ -280,8 +282,9 @@ async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> Non
 
     job = await driver.load_from_storage("public.ingest_target", "file://tmp/part-0.parquet", file_format="parquet")
 
-    assert driver.connection.calls[0][0] == "public.ingest_target"
-    assert driver.connection.calls[0][2] == ["id", "name"]
+    assert driver.connection.calls[0][0] == "ingest_target"
+    assert driver.connection.calls[0][1] == "public"
+    assert driver.connection.calls[0][3] == ["id", "name"]
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
     assert job.telemetry["destination"] == "public.ingest_target"
 
