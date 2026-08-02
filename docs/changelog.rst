@@ -9,6 +9,32 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+------------------------------------------------------------------------------
+
+**Changed:**
+
+* ``migration_config`` now rejects keys SQLSpec does not read, raising
+  :class:`~sqlspec.exceptions.ImproperConfigurationError` with the closest
+  valid key. A misspelling such as ``version_table`` instead of
+  ``version_table_name`` was previously accepted and silently ignored, leaving
+  the setting at its default. Remove or correct unrecognized keys to upgrade.
+
+**Fixed:**
+
+* Pointing ``--config`` at a module rather than a configuration object now
+  reports the ``module:attribute`` references that module exports, instead of
+  failing later with ``AttributeError: module has no attribute 'bind_key'``.
+* Configuration references that misuse ``:`` report the accepted syntax rather
+  than an import failure.
+* Errors raised while importing a configuration module keep their original type
+  and message instead of being rewrapped as an import failure.
+* The "No SQLSpec config found" help text shows the ``[tool.sqlspec]`` section
+  name, which console markup previously consumed, and no longer mangles config
+  paths that contain colons.
+* ``author`` is declared on :class:`~sqlspec.config.MigrationConfig`. The
+  migration generator already read it, but type checkers rejected it.
+
 v0.57.0
 ------------------------------------------------------------------------------
 

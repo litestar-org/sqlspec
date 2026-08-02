@@ -12,6 +12,7 @@ import asyncio
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from difflib import get_close_matches
 from inspect import Signature, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, TypeVar, cast
@@ -26,7 +27,7 @@ from sqlspec.core.config_runtime import (
     create_sync_pool,
     seed_runtime_driver_features,
 )
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker, create_migration_commands
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "MIGRATION_CONFIG_KEYS",
     "ADKConfig",
     "AsyncConfigT",
     "AsyncDatabaseConfig",
@@ -69,6 +71,7 @@ __all__ = (
     "StarletteConfig",
     "SyncConfigT",
     "SyncDatabaseConfig",
+    "validate_migration_config_keys",
 )
 
 AsyncConfigT = TypeVar("AsyncConfigT", bound="AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]")
@@ -132,6 +135,9 @@ class MigrationConfig(TypedDict):
     project_root: NotRequired[str]
     """Path to the project root directory. Used for relative path resolution."""
 
+    author: NotRequired[str]
+    """Author recorded on generated migration files. Defaults to the detected git user."""
+
     enabled: NotRequired[bool]
     """Whether this configuration should be included in CLI operations. Defaults to True."""
 
@@ -191,6 +197,31 @@ class MigrationConfig(TypedDict):
 
     Defaults to False.
     """
+
+
+MIGRATION_CONFIG_KEYS: "frozenset[str]" = MigrationConfig.__required_keys__ | MigrationConfig.__optional_keys__
+
+
+def validate_migration_config_keys(migration_config: "Mapping[str, Any]") -> None:
+    """Reject migration configuration keys that SQLSpec does not read.
+
+    Args:
+        migration_config: Migration configuration mapping to check.
+
+    Raises:
+        ImproperConfigurationError: If the mapping contains an unrecognized key.
+    """
+    unknown = sorted(key for key in migration_config if key not in MIGRATION_CONFIG_KEYS)
+    if not unknown:
+        return
+
+    lines = []
+    for key in unknown:
+        suggestions = get_close_matches(key, MIGRATION_CONFIG_KEYS, n=1, cutoff=0.6)
+        hint = f" Did you mean {suggestions[0]!r}?" if suggestions else ""
+        lines.append(f"Unknown migration_config key {key!r}.{hint}")
+    lines.append(f"Valid keys: {', '.join(sorted(MIGRATION_CONFIG_KEYS))}.")
+    raise ImproperConfigurationError(" ".join(lines))
 
 
 class FlaskConfig(TypedDict):
@@ -831,7 +862,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     @migration_config.setter
     def migration_config(self, value: "dict[str, Any] | MigrationConfig | None") -> None:
         """Store migration configuration and refresh derived migration helpers."""
-        object.__setattr__(self, "_migration_config", dict(cast("dict[str, Any]", value) or {}))
+        resolved = dict(cast("dict[str, Any]", value) or {})
+        validate_migration_config_keys(resolved)
+        object.__setattr__(self, "_migration_config", resolved)
         if self._has_initialized_attribute("extension_config"):
             self._ensure_extension_migrations()
         if self._migration_components_ready():

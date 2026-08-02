@@ -10,7 +10,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -274,6 +274,11 @@ def module_to_os_path(dotted_path: str = "app") -> "Path":
 def import_string(dotted_path: str) -> "Any":
     """Import a module or attribute from a dotted path string.
 
+    Failures are reported as ``ImportError``, except for SQLSpec errors raised by
+    the imported module itself, which propagate unchanged so their own message
+    survives. ``MissingDependencyError`` is reported as ``ImportError`` because it
+    describes an import failure.
+
     Args:
         dotted_path: The path of the module to import.
 
@@ -314,6 +319,10 @@ def import_string(dotted_path: str) -> "Any":
 
         for attr in attrs:
             obj = _resolve_import_attr(obj, attr, module, dotted_path)
+    except MissingDependencyError as e:
+        _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
+    except SQLSpecError:
+        raise
     except Exception as e:  # pylint: disable=broad-exception-caught
         _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
     return obj

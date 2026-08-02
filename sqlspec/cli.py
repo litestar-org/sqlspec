@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 import rich_click as click
 from click.core import ParameterSource
 from rich import get_console
+from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-from sqlspec.exceptions import ConfigResolverError
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import run_
@@ -67,7 +68,7 @@ def get_sqlspec_group() -> "Group":
             console.print("\nSpecify config using one of:")
             console.print("  1. CLI flag:        sqlspec --config myapp.config:get_configs <command>")
             console.print("  2. Environment var: export SQLSPEC_CONFIG=myapp.config:get_configs")
-            console.print("  3. pyproject.toml:  [tool.sqlspec]")
+            console.print(f"  3. pyproject.toml:  {escape('[tool.sqlspec]')}")
             console.print('                      config = "myapp.config:get_configs"')
             ctx.exit(1)
 
@@ -111,8 +112,8 @@ def get_sqlspec_group() -> "Group":
                     execution_hint = "[dim cyan](async-capable)[/]" if is_async else "[dim](sync)[/]"
                     console.print(f"  [dim]•[/] {config_name}: {config_type} {execution_hint}")
 
-        except (ImportError, ConfigResolverError) as e:
-            console.print(f"[red]Error loading config: {e}[/]")
+        except (ImportError, SQLSpecError) as e:
+            console.print(f"[red]Error loading config: {escape(str(e))}[/]", emoji=False)
             ctx.exit(1)
         finally:
             if cwd_added and cwd in sys.path and sys.path[0] == cwd:
