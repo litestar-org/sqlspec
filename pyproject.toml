@@ -240,6 +240,7 @@ include = [
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
+  "sqlspec/storage/_arrow_stream.py",              # Pure Parquet streaming validation and row-group iteration
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
   "sqlspec/storage/backends/fsspec.py",            # fsspec backend import surface

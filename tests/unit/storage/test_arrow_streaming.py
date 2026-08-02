@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from sqlspec.exceptions import StorageCapabilityError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED, PYARROW_INSTALLED
@@ -53,7 +54,7 @@ def test_local_stream_rejects_recognized_non_parquet_suffix_before_glob(
     store = LocalStore(str(tmp_path))
     monkeypatch.setattr(LocalStore, "glob_sync", lambda *_args, **_kwargs: pytest.fail("storage accessed"))
 
-    with pytest.raises(ValueError, match="supports only Parquet"):
+    with pytest.raises(StorageCapabilityError, match="supports only Parquet"):
         list(store.stream_arrow_sync(pattern))
 
 
@@ -61,7 +62,7 @@ def test_local_stream_rejects_non_parquet_format_before_glob(tmp_path: Path, mon
     store = LocalStore(str(tmp_path))
     monkeypatch.setattr(LocalStore, "glob_sync", lambda *_args, **_kwargs: pytest.fail("storage accessed"))
 
-    with pytest.raises(ValueError, match="file_format='csv'"):
+    with pytest.raises(StorageCapabilityError, match="file_format='csv'"):
         list(store.stream_arrow_sync("*", file_format=cast("Any", "csv")))
 
 
@@ -338,7 +339,7 @@ def test_backend_matrix_validation_precedes_object_open(
 
     monkeypatch.setattr(backend_type, "glob_sync", lambda *_args, **_kwargs: pytest.fail("storage accessed"))
 
-    with pytest.raises(ValueError, match="supports only Parquet"):
+    with pytest.raises(StorageCapabilityError, match="supports only Parquet"):
         list(store.stream_arrow_sync("*.csv"))
     with pytest.raises(ValueError, match="batch_size must be greater than zero"):
         list(store.stream_arrow_sync("*.parquet", batch_size=0))
