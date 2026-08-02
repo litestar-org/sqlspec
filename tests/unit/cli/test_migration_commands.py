@@ -4,7 +4,6 @@ import sys
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
 import pytest
@@ -13,9 +12,6 @@ from click.testing import CliRunner
 from sqlspec.cli import add_migration_commands
 
 MODULE_PREFIX = "cli_test_config_"
-
-if TYPE_CHECKING:
-    from unittest.mock import Mock
 
 
 @pytest.fixture

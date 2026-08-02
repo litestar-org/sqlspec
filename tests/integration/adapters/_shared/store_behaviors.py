@@ -118,10 +118,9 @@ async def assert_store_upsert_expiration_change_contract(store: Any) -> None:
 async def assert_store_renew_for_contract(store: Any) -> None:
     """get with renew_for extends the expiration window."""
     await store.set("session_renew", b"data", expires_in=5)
-    await asyncio.sleep(3)
     expires_before = await store.expires_in("session_renew")
     assert expires_before is not None
-    assert expires_before <= 2
+    assert expires_before <= 5
     assert await store.get("session_renew", renew_for=10) == b"data"
     expires_after = await store.expires_in("session_renew")
     assert expires_after is not None

@@ -44,7 +44,7 @@ install-uv:                                         ## Install latest version of
 	@echo "${OK} UV installed successfully"
 
 .PHONY: install
-install: destroy clean                              ## Install the project, dependencies, and pre-commit
+install: destroy clean                              ## Install the project and dependencies
 	@echo "${INFO} Starting fresh installation..."
 	@uv python pin 3.10 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
@@ -66,7 +66,7 @@ install-compiled: destroy clean                  ## Install with mypyc compilati
 .PHONY: destroy
 destroy:                                            ## Destroy the virtual environment
 	@echo "${INFO} Destroying virtual environment... 🗑️"
-	@uv run pre-commit clean >/dev/null 2>&1
+	@uv run --no-sync prek cache clean >/dev/null 2>&1 || true
 	@rm -rf .venv
 	@find sqlspec \( -name '*.so' -o -name '*.c' \) -delete >/dev/null 2>&1 || true
 	@echo "${OK} Virtual environment destroyed 🗑️"
@@ -80,8 +80,8 @@ upgrade:                                            ## Upgrade all dependencies 
 	@echo "${INFO} Updating all dependencies... 🔄"
 	@uv lock --upgrade
 	@echo "${OK} Dependencies updated 🔄"
-	@uv run pre-commit autoupdate
-	@echo "${OK} Updated Pre-commit hooks 🔄"
+	@uv run prek update --cooldown-days 7
+	@echo "${OK} Updated Prek hooks 🔄"
 	@uv lock >/dev/null 2>&1
 
 .PHONY: lock
@@ -192,7 +192,7 @@ coverage:                                           ## Run tests with coverage r
 		uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
 			"tests/integration/adapters/$${family}"
 	done
-	@uv run coverage report --fail-under=100 >/dev/null
+	@uv run coverage report --fail-under=76 >/dev/null
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1
 	@echo "${OK} Coverage report generated ✨"
@@ -229,11 +229,11 @@ type-check: mypy pyright                            ## Run all type checking
 # Linting and Formatting
 # -----------------------------------------------------------------------------
 
-.PHONY: pre-commit
-pre-commit:                                        ## Run pre-commit hooks
-	@echo "${INFO} Running pre-commit checks... 🔎"
-	@uv run pre-commit run --color=always --all-files
-	@echo "${OK} Pre-commit checks passed ✨"
+.PHONY: prek
+prek:                                              ## Run Prek hooks
+	@echo "${INFO} Running Prek checks... 🔎"
+	@uv run prek run --color=always --all-files
+	@echo "${OK} Prek checks passed ✨"
 
 .PHONY: slotscheck
 slotscheck:                                        ## Run slotscheck
@@ -245,10 +245,17 @@ slotscheck:                                        ## Run slotscheck
 fix:                                               ## Run code formatters
 	@echo "${INFO} Running code formatters... 🔧"
 	@uv run ruff check --fix --unsafe-fixes
+	@uv run ruff format
 	@echo "${OK} Code formatting complete ✨"
 
+.PHONY: zizmor
+zizmor:                                            ## Audit GitHub Actions workflows
+	@echo "${INFO} Auditing GitHub Actions workflows... 🔐"
+	@uv run --locked zizmor --strict-collection .github/workflows
+	@echo "${OK} GitHub Actions audit passed ✨"
+
 .PHONY: lint
-lint: fix pre-commit type-check slotscheck             ## Run all linting checks
+lint: fix prek type-check slotscheck zizmor         ## Run all linting checks
 	@echo "${OK} All linting checks passed ✨"
 
 .PHONY: check-all

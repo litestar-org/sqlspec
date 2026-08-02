@@ -143,7 +143,11 @@ class PyMysqlConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[PyMysqlConnection, None, None]":
-        """Get a thread-local connection."""
+        """Get a thread-local connection.
+
+        Yields:
+            A thread-local database connection.
+        """
         connection = self._get_thread_connection()
         try:
             yield connection

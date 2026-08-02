@@ -122,10 +122,11 @@ extras = [
 ]
 lint = [
   "mypy>=2.0.0",
-  "pre-commit>=3.5.0",
+  "prek>=0.4.11",
   "pyright>=1.1.386",
-  "ruff>=0.7.1",
+  "ruff>=0.16.0",
   "slotscheck>=0.16.5",
+  "zizmor>=1.28.0",
   "types-Pygments",
   "types-colorama",
   "types-cffi",
@@ -169,6 +170,7 @@ sqlspec-dark = "tools.sphinx_ext.pygments_styles:SQLSpecDarkStyle"
 sqlspec-light = "tools.sphinx_ext.pygments_styles:SQLSpecLightStyle"
 
 [tool.uv]
+exclude-newer = "7 days"
 # mysql-connector-python 9.7.0 dropped cp312/cp313/cp314 wheels (regression vs 9.6.0).
 # Override dependency metadata for every source that requests mysql-connector-python.
 # Keep the uncapped dependency on Python <3.12, and force the cap on Python >=3.12
@@ -177,6 +179,26 @@ override-dependencies = [
   "mysql-connector-python; python_version < '3.12'",
   "mysql-connector-python<9.7.0; python_version >= '3.12'",
 ]
+
+[tool.uv.exclude-newer-package]
+advanced-alchemy = false
+litestar = false
+litestar-asyncapi = false
+litestar-asyncpg = false
+litestar-autowire = false
+litestar-email = false
+litestar-granian = false
+litestar-htmx = false
+litestar-mcp = false
+litestar-oracledb = false
+litestar-queues = false
+litestar-saq = false
+litestar-security = false
+litestar-vite = false
+polyfactory = false
+pytest-databases = false
+sqlglot = false
+sqlglotc = false
 
 [build-system]
 build-backend = "hatchling.build"
@@ -224,7 +246,7 @@ exclude = [
   "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
 include = [
-  "sqlspec/base.py",                            # SQLSpec registry/session manager
+  "sqlspec/base.py",                               # SQLSpec registry/session manager
   "sqlspec/core/**/*.py",                          # Core module
   "sqlspec/builder/**/*.py",                       # Builder module
   "sqlspec/exceptions.py",                         # Exceptions module
@@ -246,7 +268,7 @@ include = [
   "sqlspec/storage/backends/fsspec.py",            # fsspec backend import surface
   "sqlspec/storage/backends/local.py",             # Local storage backend
   "sqlspec/storage/backends/obstore.py",           # obstore backend import surface
-  "sqlspec/storage/_utils.py",                      # Storage optional dependency import helpers
+  "sqlspec/storage/_utils.py",                     # Storage optional dependency import helpers
   "sqlspec/service.py",                            # Service base classes
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
   "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
@@ -551,7 +573,9 @@ preview = true
 skip-magic-trailing-comma = true
 
 [tool.ruff.lint]
+explicit-preview-rules = true
 extend-safe-fixes = ["TC"]
+extend-select = ["ASYNC119", "DOC402"]
 fixable = ["ALL"]
 ignore = [
   "A003",    # flake8-builtins - class attribute {name} is shadowing a python builtin
@@ -612,6 +636,7 @@ ignore = [
   "RUF067",  # ruff - init should only have import statements
   "PLW0717", # too many statements in try block
 ]
+preview = true
 select = ["ALL"]
 
 [tool.ruff.lint.pydocstyle]
