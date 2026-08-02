@@ -13,6 +13,8 @@ __all__ = ("decode_arrow_payload", "encode_arrow_payload")
 
 StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
 
+_PYARROW_JSON_BLOCK_SIZE = 1 << 20
+
 
 def encode_arrow_payload(
     table: "ArrowTable",
@@ -64,6 +66,7 @@ def decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arrow
         if payload == b"":
             return cast("ArrowTable", pa.table({}))
         pa_json = import_pyarrow_json()
-        return cast("ArrowTable", pa_json.read_json(pa.BufferReader(payload)))
+        read_options = pa_json.ReadOptions(block_size=max(_PYARROW_JSON_BLOCK_SIZE, len(payload)))
+        return cast("ArrowTable", pa_json.read_json(pa.BufferReader(payload), read_options=read_options))
     msg = f"Unsupported storage format for Arrow decoding: {format_choice}"
     raise ValueError(msg)

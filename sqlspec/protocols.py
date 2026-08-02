@@ -4,7 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, overload, runtime_checkable
 
 from typing_extensions import Self
 
@@ -543,7 +543,9 @@ class ObjectStoreProtocol(Protocol):
         msg = "Arrow writing not implemented"
         raise NotImplementedError(msg)
 
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
+    def stream_arrow_sync(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches from matching objects synchronously."""
         msg = "Arrow streaming not implemented"
         raise NotImplementedError(msg)
@@ -621,7 +623,9 @@ class ObjectStoreProtocol(Protocol):
         raise NotImplementedError(msg)
 
     # NOTE: Returns AsyncIterator directly; this is intentionally not async def.
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
+    def stream_arrow_async(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> "AsyncIterator[ArrowRecordBatch]":
         """Stream Arrow record batches from matching objects."""
         msg = "Async arrow streaming not implemented"
         raise NotImplementedError(msg)

@@ -7,6 +7,7 @@ import pyarrow as pa
 import pytest
 
 import sqlspec.storage.pipeline as storage_pipeline
+from sqlspec.exceptions import StorageCapabilityError
 from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
@@ -14,6 +15,7 @@ from sqlspec.storage.pipeline import (
     get_recent_storage_events,
     reset_storage_bridge_events,
 )
+from sqlspec.utils.serializers import to_json
 
 
 class _TrackingBackend:
@@ -56,6 +58,25 @@ def test_decode_whitespace_only_jsonl_is_delegated_to_pyarrow() -> None:
     assert table.equals(pa.table({}))
 
 
+def test_decode_jsonl_row_larger_than_default_block_size() -> None:
+    blob = "x" * (2 * 1024 * 1024)
+    payload = b'{"id":1,"blob":"' + blob.encode() + b'"}\n'
+
+    table = decode_arrow_payload(payload, "jsonl")
+
+    assert table.num_rows == 1
+    assert table.to_pylist()[0]["blob"] == blob
+
+
+def test_decode_jsonl_round_trips_rows_spanning_the_block_boundary() -> None:
+    rows = [{"id": index, "blob": "y" * 400_000} for index in range(6)]
+    payload = b"".join(to_json(row, as_bytes=True) + b"\n" for row in rows)
+
+    table = decode_arrow_payload(payload, "jsonl")
+
+    assert table.to_pylist() == rows
+
+
 def test_json_array_decode_keeps_existing_shape() -> None:
     table = decode_arrow_payload(b'[{"id":1},{"id":2}]', "json")
 
@@ -84,7 +105,7 @@ def test_sync_row_write_rejects_arrow_formats_before_encoding_or_io(
     monkeypatch.setattr(storage_pipeline, "_encode_row_payload", pytest.fail)
     reset_storage_bridge_events()
 
-    with pytest.raises(ValueError, match="Row storage writes support only JSON and JSONL"):
+    with pytest.raises(StorageCapabilityError, match="Row storage writes support only JSON and JSONL"):
         pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)  # type: ignore[arg-type]
 
     assert backend.writes == []
@@ -100,7 +121,7 @@ def test_sync_arrow_write_rejects_row_formats_before_encoding_or_io(
     monkeypatch.setattr(storage_pipeline, "_encode_arrow_payload", pytest.fail)
     reset_storage_bridge_events()
 
-    with pytest.raises(ValueError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
+    with pytest.raises(StorageCapabilityError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
         pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)  # type: ignore[arg-type]
 
     assert backend.writes == []
@@ -117,7 +138,7 @@ async def test_async_row_write_rejects_arrow_formats_before_io(
     monkeypatch.setattr(storage_pipeline, "_encode_row_payload", pytest.fail)
     reset_storage_bridge_events()
 
-    with pytest.raises(ValueError, match="Row storage writes support only JSON and JSONL"):
+    with pytest.raises(StorageCapabilityError, match="Row storage writes support only JSON and JSONL"):
         await pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)  # type: ignore[arg-type]
 
     assert backend.writes == []
@@ -133,7 +154,7 @@ async def test_async_arrow_write_rejects_row_formats_before_io(
     monkeypatch.setattr(storage_pipeline, "_encode_arrow_payload", pytest.fail)
     reset_storage_bridge_events()
 
-    with pytest.raises(ValueError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
+    with pytest.raises(StorageCapabilityError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
         await pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)  # type: ignore[arg-type]
 
     assert backend.writes == []

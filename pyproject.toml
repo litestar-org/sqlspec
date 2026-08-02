@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.57.0"
+version = "0.58.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -240,6 +240,7 @@ include = [
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
+  "sqlspec/storage/_arrow_stream.py",              # Pure Parquet streaming validation and row-group iteration
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
   "sqlspec/storage/backends/fsspec.py",            # fsspec backend import surface
@@ -308,7 +309,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.57.0"
+current_version = "0.58.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
+v0.58.0 - Configuration and storage correctness
 ------------------------------------------------------------------------------
 
 **Changed:**
@@ -19,9 +19,36 @@ Unreleased
   valid key. A misspelling such as ``version_table`` instead of
   ``version_table_name`` was previously accepted and silently ignored, leaving
   the setting at its default. Remove or correct unrecognized keys to upgrade.
+* Storage writes reject formats that cannot carry the payload being written,
+  raising :class:`~sqlspec.exceptions.StorageCapabilityError` before any
+  encoding or storage I/O. Row writes accept only ``json`` and ``jsonl``; Arrow
+  table writes accept only ``parquet``, ``arrow-ipc``, and ``csv``. A mismatched
+  format previously wrote one payload type under another format label. Read APIs
+  still accept all five formats.
+* ``stream_arrow_sync()`` and ``stream_arrow_async()`` accept only
+  ``file_format="parquet"`` and raise
+  :class:`~sqlspec.exceptions.StorageCapabilityError` for other formats. Use the
+  regular Arrow read APIs for CSV, Arrow IPC, JSON, and JSONL payloads.
+* JSONL payloads decode through PyArrow's native JSON reader. Its type inference
+  applies to the result, so date-like strings now decode as Arrow timestamps
+  rather than strings.
 
 **Fixed:**
 
+* Arrow batch streaming reads one Parquet row group at a time across the local,
+  fsspec, and obstore backends, and accepts a ``batch_size`` bounding each record
+  batch. The obstore backend streams through its seekable reader instead of
+  buffering the whole object in memory, resolves cloud ``base_path`` only once,
+  and closes readers deterministically when a stream is closed early.
+* Decoding a JSONL payload containing a row larger than 1 MiB no longer fails
+  with ``ArrowInvalid: straddling object straddles two block boundaries``.
+* ADBC PostgreSQL connections recover after a failed statement. The aborted
+  transaction is now cleared through the connection rather than by sending a
+  ``ROLLBACK`` statement on a cursor, which the driver rejects on a connection
+  that is already in an error state. Every later statement on that connection
+  previously failed with ``INVALID_STATE: [libpq] cannot start transaction``.
+  Uncommitted work in the aborted transaction is discarded, as PostgreSQL
+  requires; commit before a statement whose failure you intend to recover from.
 * Pointing ``--config`` at a module rather than a configuration object now
   reports the ``module:attribute`` references that module exports, instead of
   failing later with ``AttributeError: module has no attribute 'bind_key'``.
@@ -34,6 +61,16 @@ Unreleased
   paths that contain colons.
 * ``author`` is declared on :class:`~sqlspec.config.MigrationConfig`. The
   migration generator already read it, but type checkers rejected it.
+* psycopg record loads preserve JSON and JSONB object shapes through Arrow COPY.
+  JSON mappings previously reached psycopg COPY as Python dictionaries, which it
+  cannot adapt in text COPY mode.
+
+**Performance:**
+
+* ``AsyncpgDriver.load_from_records()`` writes records directly with one binary
+  COPY call instead of round-tripping them through Arrow. The removed conversion
+  dominated small and medium batches; large batches also overtake
+  ``executemany()`` throughput.
 
 v0.57.0
 ------------------------------------------------------------------------------

@@ -97,6 +97,7 @@ def test_connection_resilience(adbc_postgresql_session: AdbcDriver) -> None:
         )
     """)
     adbc_postgresql_session.execute("INSERT INTO constraint_test_adbc (unique_value) VALUES ($1)", ("unique1",))
+    adbc_postgresql_session.commit()
 
     with pytest.raises(Exception):
         adbc_postgresql_session.execute("INSERT INTO constraint_test_adbc (unique_value) VALUES ($1)", ("unique1",))

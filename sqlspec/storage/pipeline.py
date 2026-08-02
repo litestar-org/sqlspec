@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
 from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
@@ -228,15 +228,35 @@ def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
 
 
 def _validate_arrow_write_format(format_choice: StorageFormat) -> None:
+    """Reject Arrow-table writes for formats that cannot carry an Arrow payload.
+
+    Args:
+        format_choice: Requested storage format.
+
+    Raises:
+        StorageCapabilityError: If the format is not an Arrow write format.
+    """
     if format_choice not in _ARROW_WRITE_FORMATS:
         msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
-        raise ValueError(msg)
+        raise StorageCapabilityError(
+            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+        )
 
 
 def _validate_row_write_format(format_choice: StorageFormat) -> None:
+    """Reject row writes for formats that cannot carry a row payload.
+
+    Args:
+        format_choice: Requested storage format.
+
+    Raises:
+        StorageCapabilityError: If the format is not a row write format.
+    """
     if format_choice not in _ROW_WRITE_FORMATS:
         msg = "Row storage writes support only JSON and JSONL formats"
-        raise ValueError(msg)
+        raise StorageCapabilityError(
+            msg, capability="row_write", remediation="Write Arrow tables with the Arrow storage APIs instead."
+        )
 
 
 def _encode_arrow_payload(

@@ -11,15 +11,33 @@ Write and read formats
 
 Row-oriented writes accept only ``json`` and newline-delimited ``jsonl``.
 Arrow-table writes accept only ``parquet``, ``arrow-ipc``, and ``csv``. The
-pipeline rejects mismatched formats before encoding or storage I/O, so it
-cannot write one payload type under another format label. Read APIs retain the
-full format set because they decode all five formats into Arrow tables.
+pipeline raises :class:`~sqlspec.exceptions.StorageCapabilityError` for a
+mismatched format before encoding or storage I/O, so it cannot write one payload
+type under another format label. Read APIs retain the full format set because
+they decode all five formats into Arrow tables.
 
 JSONL reads use PyArrow's native JSON reader. Its type inference applies to the
 result, including conversion of date-like strings to Arrow timestamps. This
-avoids Python per-line decoding and ``Table.from_pylist()`` copies. It does not
-make ``load_from_storage()`` bounded-memory: that API reads the complete object
-payload before decoding it.
+avoids Python per-line decoding and ``Table.from_pylist()`` copies. The reader
+block is sized to the payload, so individual rows may exceed PyArrow's default
+1 MiB block. It does not make ``load_from_storage()`` bounded-memory: that API
+reads the complete object payload before decoding it.
+
+Parquet Batch Streaming
+=======================
+
+The ``stream_arrow_sync()`` and ``stream_arrow_async()`` backend methods stream
+Parquet files in file and row-group order. They accept a keyword-only
+``batch_size`` (default ``65_536``) which controls the maximum rows in each
+record batch. Each read is restricted to one Parquet row group, so the I/O bound
+is one row group rather than one record batch. Choose the Parquet row-group size
+when writing files according to the memory bound required while reading them.
+
+These methods intentionally support only ``file_format="parquet"`` and raise
+:class:`~sqlspec.exceptions.StorageCapabilityError` for any other format. Use
+the regular Arrow read APIs for CSV, Arrow IPC, JSON, and JSONL payloads.
+Closing a sync generator or calling ``aclose()`` on its async iterator closes
+the active storage reader.
 
 Pipelines
 =========

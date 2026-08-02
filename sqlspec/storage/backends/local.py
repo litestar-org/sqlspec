@@ -8,12 +8,13 @@ import shutil
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
+from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import strip_windows_drive_prefix
 from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
@@ -284,12 +285,15 @@ class LocalStore:
             path=str(resolved),
         )
 
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> Iterator["ArrowRecordBatch"]:
+    def stream_arrow_sync(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> Iterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from files matching pattern synchronously.
 
         Yields:
             Arrow record batches from matching files.
         """
+        validate_parquet_stream_options(pattern, file_format, batch_size)
         pq = import_pyarrow_parquet()
         files = self.glob_sync(pattern)
         for file_path in files:
@@ -301,7 +305,7 @@ class LocalStore:
                 operation="stream_arrow",
                 path=resolved_str,
             )
-            yield from parquet_file.iter_batches()  # pyright: ignore[reportUnknownMemberType]
+            yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
 
     @property
     def supports_signing(self) -> bool:
@@ -409,17 +413,23 @@ class LocalStore:
         """
         await async_(self.write_arrow_sync)(path, table, **kwargs)
 
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    def stream_arrow_async(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches asynchronously.
 
         Args:
             pattern: Glob pattern to match files.
+            file_format: Storage format. Only Parquet supports bounded batch streaming.
+            batch_size: Maximum number of rows in each yielded record batch.
             **kwargs: Additional arguments passed to stream_arrow_sync().
 
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        return AsyncArrowBatchIterator(self.stream_arrow_sync(pattern, **kwargs))
+        return AsyncArrowBatchIterator(
+            self.stream_arrow_sync(pattern, file_format=file_format, batch_size=batch_size, **kwargs)
+        )
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...

@@ -11,12 +11,14 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
+from typing_extensions import Self
 
 from sqlspec.exceptions import StorageOperationFailedError
+from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import is_file_destination, resolve_storage_path
 from sqlspec.storage._utils import _log_storage_event, import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
@@ -37,6 +39,56 @@ _SIGNABLE_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az",
 __all__ = ("ObStoreBackend",)
 
 
+class _ObStoreFileProxy:
+    """Complete obstore's seekable reader interface for PyArrow."""
+
+    __slots__ = ("_closed", "_reader")
+
+    def __init__(self, reader: Any) -> None:
+        self._reader = reader
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def readable(self) -> bool:
+        return not self._closed
+
+    def seekable(self) -> bool:
+        return not self._closed and bool(self._reader.seekable())
+
+    def writable(self) -> bool:
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            return cast("bytes", self._reader.readall())
+        return cast("bytes", self._reader.read(size))
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return cast("int", self._reader.seek(offset, whence))
+
+    def tell(self) -> int:
+        return cast("int", self._reader.tell())
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._reader.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObStoreBackend:
     """Object storage backend using obstore.
@@ -54,8 +106,8 @@ class ObStoreBackend:
           whereas cloud stores use base_path as a prefix.
         - Native Streaming: Uses obstore's native streaming yielding Buffer objects, which
           are converted to bytes.
-        - Seekable Streams: PyArrow's ParquetFile requires a seekable file, so we wrap
-          the buffered stream accordingly (e.g. using io.BytesIO).
+        - Seekable Streams: PyArrow's ParquetFile reads through obstore's seekable
+          ``open_reader`` interface without draining the object into memory.
         - Thread Offloading: Uses async_() with a storage limiter to offload blocking
           PyArrow serialization/parsing to a thread pool, preventing event loop blocking.
     """
@@ -329,7 +381,11 @@ class ObStoreBackend:
         Lists all objects and filters them client-side using the pattern.
         """
 
-        resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
+        resolved_pattern = (
+            pattern
+            if self._is_local_store
+            else resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
+        )
         all_objects = self.list_objects_sync(recursive=True, **kwargs)
 
         if "**" in pattern:
@@ -486,32 +542,32 @@ class ObStoreBackend:
         for chunk in result.stream(min_chunk_size=chunk_size):
             yield bytes(chunk)
 
-    def stream_arrow_sync(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
+    def stream_arrow_sync(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> "Iterator[ArrowRecordBatch]":
         """Stream Arrow record batches using obstore's native streaming synchronously.
 
-        For each matching file, streams data through a buffered wrapper
-        that PyArrow can read directly without loading the entire file.
+        For each matching file, PyArrow reads through obstore's seekable reader.
 
         Yields:
-            Chunks of bytes from the file, with size determined by chunk_size (default: 65536 bytes).
+            Arrow record batches in file and row-group order.
         """
+        from obstore import open_reader
+
+        validate_parquet_stream_options(pattern, file_format, batch_size)
         pq = import_pyarrow_parquet()
-        for obj_path in self.glob_sync(pattern, **kwargs):
-            resolved_path = resolve_storage_path(obj_path, self.base_path, self.protocol, strip_file_scheme=True)
-            result = execute_sync_storage_operation(
-                partial(self.store.get, resolved_path),
+        for obj_path in self.glob_sync(pattern):
+            reader = execute_sync_storage_operation(
+                partial(open_reader, self.store, obj_path),
                 backend=self.backend_type,
-                operation="stream_arrow",
-                path=resolved_path,
+                operation="stream_open",
+                path=obj_path,
             )
-
-            buffer = io.BytesIO()
-            for chunk in result.stream():
-                buffer.write(chunk)
-            buffer.seek(0)
-
-            parquet_file = pq.ParquetFile(buffer)
-            yield from parquet_file.iter_batches()
+            with _ObStoreFileProxy(reader) as stream:
+                parquet_file = execute_sync_storage_operation(
+                    partial(pq.ParquetFile, stream), backend=self.backend_type, operation="stream_arrow", path=obj_path
+                )
+                yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
 
     @property
     def supports_signing(self) -> bool:
@@ -837,17 +893,23 @@ class ObStoreBackend:
             path=resolved_path,
         )
 
-    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator["ArrowRecordBatch"]:
+    def stream_arrow_async(
+        self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
+    ) -> AsyncIterator["ArrowRecordBatch"]:
         """Stream Arrow record batches from storage asynchronously.
 
         Args:
             pattern: Glob pattern to match files.
+            file_format: Storage format. Only Parquet supports bounded batch streaming.
+            batch_size: Maximum number of rows in each yielded record batch.
             **kwargs: Additional arguments passed to stream_arrow_sync().
 
         Returns:
             AsyncIterator yielding Arrow record batches.
         """
-        return AsyncArrowBatchIterator(self.stream_arrow_sync(pattern, **kwargs))
+        return AsyncArrowBatchIterator(
+            self.stream_arrow_sync(pattern, file_format=file_format, batch_size=batch_size, **kwargs)
+        )
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
