@@ -151,3 +151,64 @@ database_config = config
     assert "path_test" in result.output
     assert "custom_migrations" in result.output
     assert "Migration Enabled" in result.output or "migrations enabled" in result.output
+
+
+def test_module_reference_reports_its_config_attributes(
+    tmp_path: Path, cleanup_test_modules: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pointing --config at a module names the module:attribute reference to use."""
+    runner = CliRunner()
+
+    config_module = """
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+database_config = SqliteConfig(
+    bind_key="app",
+    connection_config={"database": ":memory:"},
+    migration_config={"script_location": "migrations"},
+)
+"""
+    module_name = _create_module(tmp_path, config_module)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(add_migration_commands(), ["--config", module_name, "show-config"])
+
+    assert result.exit_code == 1
+    normalized = " ".join(result.output.split())
+    assert "names a module, not a database configuration" in normalized
+    assert f"{module_name}:database_config" in normalized
+
+
+def test_unknown_migration_config_key_is_reported_without_a_traceback(
+    tmp_path: Path, cleanup_test_modules: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A misspelled migration_config key surfaces as a CLI error, not a stack trace."""
+    runner = CliRunner()
+
+    config_module = """
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+database_config = SqliteConfig(
+    bind_key="app",
+    connection_config={"database": ":memory:"},
+    migration_config={"script_location": "migrations", "version_table": "_schema_versions"},
+)
+"""
+    module_name = _create_module(tmp_path, config_module)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}:database_config", "show-config"])
+
+    assert result.exit_code == 1
+    assert "Did you mean 'version_table_name'?" in " ".join(result.output.split())
+    assert "Traceback" not in result.output
+
+
+def test_missing_config_help_shows_the_pyproject_section_name() -> None:
+    """The pyproject hint renders literally instead of being consumed as console markup."""
+    runner = CliRunner()
+
+    result = runner.invoke(add_migration_commands(), ["show-config"], env={"SQLSPEC_CONFIG": ""})
+
+    assert result.exit_code == 1
+    assert "[tool.sqlspec]" in result.output

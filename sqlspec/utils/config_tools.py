@@ -10,6 +10,7 @@ import inspect
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
@@ -152,11 +153,20 @@ def _normalize_config_path(config_path: str) -> str:
 
     Returns:
         A dotted path accepted by :func:`import_string`.
+
+    Raises:
+        ConfigResolverError: If the path uses ``:`` but is not ``module:attribute``.
     """
     module_path, separator, attribute_path = config_path.partition(":")
-    if separator and module_path and attribute_path and ":" not in attribute_path:
-        return f"{module_path}.{attribute_path}"
-    return config_path
+    if not separator:
+        return config_path
+    if not module_path or not attribute_path or ":" in attribute_path:
+        msg = (
+            f"Config path '{config_path}' is not a valid reference. "
+            "Use 'module:attribute' with a single ':', or dotted 'module.attribute'."
+        )
+        raise ConfigResolverError(msg)
+    return f"{module_path}.{attribute_path}"
 
 
 async def resolve_config_async(
@@ -243,6 +253,9 @@ def _validate_config_result(
     Raises:
         ConfigResolverError: If config result is invalid.
     """
+    if isinstance(config_result, ModuleType):
+        raise ConfigResolverError(_describe_module_reference(config_result, config_path))
+
     if config_result is None:
         msg = f"Config '{config_path}' resolved to None. Expected config instance or list of configs."
         raise ConfigResolverError(msg)
@@ -257,13 +270,85 @@ def _validate_config_result(
                 msg = f"Config '{config_path}' returned invalid config at index {i}. Expected database config instance."
                 raise ConfigResolverError(msg)
 
-        return cast("list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]", list(config_result))  # pyright: ignore
+        return cast(
+            "list[AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]]",
+            [_unwrap_nested_config(config) for config in config_result],  # pyright: ignore
+        )
 
     if not _is_valid_config(config_result):
         msg = f"Config '{config_path}' returned invalid type '{type(config_result).__name__}'. Expected database config instance or list."
         raise ConfigResolverError(msg)
 
-    return cast("AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", config_result)
+    return cast(
+        "AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]", _unwrap_nested_config(config_result)
+    )
+
+
+def _is_direct_config(config: Any) -> bool:
+    """Check whether an object is itself a database config rather than a wrapper.
+
+    Args:
+        config: Object to inspect.
+
+    Returns:
+        True if the object carries migration and connection configuration itself.
+    """
+    if isinstance(config, type) or not has_migration_config(config) or config.migration_config is None:
+        return False
+    return has_connection_config(config) or has_database_url_and_bind_key(config)
+
+
+def _unwrap_nested_config(config: Any) -> Any:
+    """Return the database config held by a wrapper object.
+
+    Args:
+        config: Resolved object, either a config or a wrapper exposing ``.config``.
+
+    Returns:
+        The nested config when the object only wraps one, otherwise the object itself.
+    """
+    if _is_direct_config(config):
+        return config
+    if has_config_attribute(config) and has_migration_config(config.config):
+        return config.config
+    return config
+
+
+def _describe_module_reference(module: "ModuleType", config_path: str) -> str:
+    """Build an actionable error message for a config path that names a module.
+
+    Args:
+        module: Module the config path resolved to.
+        config_path: Original config path supplied by the user.
+
+    Returns:
+        Error message naming the configurations the module exports, when it has any.
+    """
+    candidates = sorted(
+        name
+        for name, value in vars(module).items()
+        if not name.startswith("_")
+        and (
+            _is_valid_config(value)
+            or (
+                isinstance(value, Sequence)
+                and not isinstance(value, str)
+                and bool(value)
+                and all(_is_valid_config(item) for item in value)
+            )
+        )
+    )
+    if candidates:
+        examples = ", ".join(f"'{config_path}:{name}'" for name in candidates)
+        return (
+            f"Config '{config_path}' names a module, not a database configuration. "
+            f"Point at the configuration itself, for example {examples}."
+        )
+    return (
+        f"Config '{config_path}' names a module that exports no database configuration. "
+        "Point at a config instance, a list of configs, or a factory returning them, "
+        "using 'module:attribute' or 'module.attribute'."
+    )
 
 
 def _is_valid_config(config: Any) -> bool:

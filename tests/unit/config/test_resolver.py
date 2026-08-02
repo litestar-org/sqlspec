@@ -1,13 +1,15 @@
 """Tests for configuration resolver functionality."""
 
+import uuid
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from unittest.mock import Mock, NonCallableMock, patch
 
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.exceptions import ConfigResolverError
+from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.utils.config_tools import _is_valid_config, resolve_config_async, resolve_config_sync
 
@@ -57,6 +59,53 @@ def test_resolve_config_sync_accepts_colon_path() -> None:
 
     assert result is mock_config
     import_mock.assert_called_once_with("myapp.config.database_config")
+
+
+@pytest.mark.parametrize("config_path", ["myapp:config:extra", ":database_config", "myapp.config:"])
+def test_resolve_config_rejects_malformed_reference(config_path: str) -> None:
+    """Test that a reference using ':' incorrectly reports the accepted syntax."""
+    with pytest.raises(ConfigResolverError, match="is not a valid reference"):
+        resolve_config_sync(config_path)
+
+
+def test_resolve_config_rejects_module_and_names_its_configs() -> None:
+    """Test that pointing at a module reports the module:attribute references it exports."""
+    module = ModuleType("myapp.database")
+    module.database_config = _create_mock_config()  # type: ignore[attr-defined]
+    module.other_config = _create_mock_config(bind_key="other")  # type: ignore[attr-defined]
+    module.not_a_config = "sqlite:///test.db"  # type: ignore[attr-defined]
+
+    with patch("sqlspec.utils.config_tools.import_string", return_value=module):
+        with pytest.raises(ConfigResolverError) as exc_info:
+            resolve_config_sync("myapp.database")
+
+    message = str(exc_info.value)
+    assert "names a module, not a database configuration" in message
+    assert "'myapp.database:database_config'" in message
+    assert "'myapp.database:other_config'" in message
+    assert "not_a_config" not in message
+
+
+def test_resolve_config_rejects_module_without_configs() -> None:
+    """Test that a module exporting no config explains what to point at instead."""
+    module = ModuleType("myapp.empty")
+
+    with patch("sqlspec.utils.config_tools.import_string", return_value=module):
+        with pytest.raises(ConfigResolverError, match="exports no database configuration"):
+            resolve_config_sync("myapp.empty")
+
+
+def test_resolve_config_unwraps_nested_config_holder() -> None:
+    """Test that a wrapper exposing .config resolves to the config it holds."""
+    nested = _create_mock_config()
+
+    class _Holder:
+        config = nested
+
+    with patch("sqlspec.utils.config_tools.import_string", return_value=_Holder()):
+        result = resolve_config_sync("myapp.config.plugin")
+
+    assert result is nested
 
 
 async def test_resolve_config_list() -> None:
@@ -305,3 +354,35 @@ def test_assert_guards_default_serializer_raises_runtime_error_if_fallback_does_
     monkeypatch.setattr(json_module, "StandardLibSerializer", lambda: None)
     with pytest.raises(RuntimeError, match="No JSON serializer available"):
         json_module.get_default_serializer()
+
+
+def test_import_string_preserves_sqlspec_errors_from_the_imported_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SQLSpec error raised while importing a config module keeps its type and message."""
+    from sqlspec.utils.module_loader import import_string
+
+    module_name = f"resolver_error_module_{uuid.uuid4().hex}"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from sqlspec.exceptions import ImproperConfigurationError\n\nraise ImproperConfigurationError('bad key')\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ImproperConfigurationError, match="bad key"):
+        import_string(f"{module_name}.database_config")
+
+
+def test_import_string_reports_missing_dependency_as_import_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing dependency stays an ImportError so existing handlers keep working."""
+    from sqlspec.utils.module_loader import import_string
+
+    module_name = f"resolver_missing_dep_{uuid.uuid4().hex}"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from sqlspec.exceptions import MissingDependencyError\n\nraise MissingDependencyError('somepkg')\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ImportError):
+        import_string(f"{module_name}.database_config")
