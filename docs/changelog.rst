@@ -42,6 +42,13 @@ v0.58.0 - Configuration and storage correctness
   and closes readers deterministically when a stream is closed early.
 * Decoding a JSONL payload containing a row larger than 1 MiB no longer fails
   with ``ArrowInvalid: straddling object straddles two block boundaries``.
+* ADBC PostgreSQL connections recover after a failed statement. The aborted
+  transaction is now cleared through the connection rather than by sending a
+  ``ROLLBACK`` statement on a cursor, which the driver rejects on a connection
+  that is already in an error state. Every later statement on that connection
+  previously failed with ``INVALID_STATE: [libpq] cannot start transaction``.
+  Uncommitted work in the aborted transaction is discarded, as PostgreSQL
+  requires; commit before a statement whose failure you intend to recover from.
 * Pointing ``--config`` at a module rather than a configuration object now
   reports the ``module:attribute`` references that module exports, instead of
   failing later with ``AttributeError: module has no attribute 'bind_key'``.

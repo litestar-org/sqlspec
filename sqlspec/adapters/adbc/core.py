@@ -3,7 +3,7 @@
 import datetime
 import decimal
 from collections.abc import Sized
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
@@ -464,19 +464,51 @@ def is_postgres_dialect(dialect_name: str) -> bool:
 
 
 def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = None) -> None:
-    """Execute rollback for PostgreSQL after transaction failure.
+    """Clear an aborted PostgreSQL transaction after a statement failure.
+
+    The connection-level rollback is preferred because the driver refuses to
+    start a transaction on an errored connection, which a cursor needs in order
+    to issue a ``ROLLBACK`` statement.
 
     Args:
         dialect: Active dialect identifier.
-        cursor: Database cursor to execute rollback.
+        cursor: Database cursor whose connection should be rolled back.
         logger: Optional logger for diagnostics.
     """
     if not is_postgres_dialect(dialect):
         return
-    try:
-        cursor.execute("ROLLBACK")
-    except Exception:
+
+    connection = getattr(cursor, "connection", None)
+    if connection is not None and _try_rollback(connection.rollback):
+        _log_rollback(logger)
         return
+
+    if _try_rollback(partial(cursor.execute, "ROLLBACK")):
+        _log_rollback(logger)
+
+
+def _try_rollback(rollback: "Callable[[], Any]") -> bool:
+    """Run a rollback callable and report whether it succeeded.
+
+    Args:
+        rollback: Zero-argument callable performing the rollback.
+
+    Returns:
+        True if the rollback completed without raising.
+    """
+    try:
+        rollback()
+    except Exception:
+        return False
+    return True
+
+
+def _log_rollback(logger: "Any | None") -> None:
+    """Record that a PostgreSQL rollback completed.
+
+    Args:
+        logger: Optional logger for diagnostics.
+    """
     if logger is not None:
         logger.debug("PostgreSQL rollback executed after transaction failure")
 
