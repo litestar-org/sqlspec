@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_parquet
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_json, import_pyarrow_parquet
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
@@ -56,13 +56,14 @@ def decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arrow
     if format_choice == "csv":
         pa_csv = import_pyarrow_csv()
         return cast("ArrowTable", pa_csv.read_csv(pa.BufferReader(payload)))
-    text_payload = payload.decode()
     if format_choice == "json":
-        data = from_json(text_payload)
+        data = from_json(payload.decode())
         rows = data if isinstance(data, list) else [data]
         return cast("ArrowTable", pa.Table.from_pylist(rows))
     if format_choice == "jsonl":
-        rows = [from_json(line) for line in text_payload.splitlines() if line.strip()]
-        return cast("ArrowTable", pa.Table.from_pylist(rows))
+        if payload == b"":
+            return cast("ArrowTable", pa.table({}))
+        pa_json = import_pyarrow_json()
+        return cast("ArrowTable", pa_json.read_json(pa.BufferReader(payload)))
     msg = f"Unsupported storage format for Arrow decoding: {format_choice}"
     raise ValueError(msg)
