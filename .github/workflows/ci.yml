@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci-scope:
     runs-on: ubuntu-latest
@@ -20,8 +23,9 @@ jobs:
       ci_required: ${{ steps.scope.outputs.ci_required }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Detect CI scope
@@ -83,10 +87,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -95,7 +101,7 @@ jobs:
         run: uv python install 3.11
 
       - name: Cache uv-managed virtualenv
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-quality-${{ runner.os }}-py3.11-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -105,27 +111,27 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Install Pre-Commit hooks
-        run: uv run pre-commit install
+      - name: Install Prek hooks
+        run: uv run prek install
 
-      - name: Load cached Pre-Commit Dependencies
-        id: cached-pre-commit-dependencies
-        uses: actions/cache@v6
+      - name: Load cached Prek dependencies
+        id: cached-prek-dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ~/.cache/pre-commit/
-          key: pre-commit|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+          path: ~/.cache/prek/
+          key: prek|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
       # Each subsequent step uses `if: always()` so a failing earlier step
       # does not stop the others — a single failed run still reports every
       # tool's output, matching the parallel-jobs behavior of the old
       # validate/mypy/pyright/slotscheck split.
-      - name: Execute Pre-Commit
-        id: pre_commit
-        run: uv run pre-commit run --show-diff-on-failure --color=always --all-files
+      - name: Execute Prek
+        id: prek
+        run: uv run prek run --show-diff-on-failure --color=always --all-files
 
       - name: Run mypy
         id: mypy
-        if: always() && steps.pre_commit.conclusion != 'skipped' && steps.pre_commit.conclusion != 'cancelled'
+        if: always() && steps.prek.conclusion != 'skipped' && steps.prek.conclusion != 'cancelled'
         run: uv run mypy
 
       - name: Run pyright
@@ -134,8 +140,15 @@ jobs:
         run: uv run pyright
 
       - name: Run slotscheck
+        id: slotscheck
         if: always() && steps.pyright.conclusion != 'skipped' && steps.pyright.conclusion != 'cancelled'
         run: uv run slotscheck sqlspec
+
+      - name: Audit GitHub Actions workflows
+        if: always() && steps.slotscheck.conclusion != 'skipped' && steps.slotscheck.conclusion != 'cancelled'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run zizmor --strict-collection .github/workflows
 
   # test-unit: fast tier — no Docker, runs tests/unit only.
   # Acts as a gate for test-integration: a broken unit test cancels the
@@ -157,10 +170,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -169,7 +184,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Cache uv-managed virtualenv
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -194,7 +209,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always()
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           files: coverage-unit.xml
           flags: unit,py${{ matrix.python-version }}
@@ -212,10 +227,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -243,10 +260,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -255,7 +274,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Cache uv-managed virtualenv
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -323,7 +342,7 @@ jobs:
 
       - name: Cache docker images
         id: docker-image-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/docker-images
           key: docker-images-v2-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -387,7 +406,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always() && steps.pytest.outcome != 'skipped'
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           files: coverage-integration.xml
           flags: integration,py${{ matrix.python-version }}
@@ -478,10 +497,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock

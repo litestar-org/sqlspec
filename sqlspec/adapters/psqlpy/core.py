@@ -55,8 +55,6 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import ParameterStyleConfig, StatementConfig
-
 __all__ = (
     "PsqlpyStreamSource",
     "apply_driver_features",

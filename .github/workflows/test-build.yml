@@ -35,7 +35,6 @@ on:
 
 permissions:
   contents: read
-  checks: read
 
 # Cancel in-flight runs of this workflow on the same ref when a newer
 # commit lands. Saves runner minutes during a churn of PR pushes. Not
@@ -52,8 +51,9 @@ jobs:
       matrix_mode: ${{ steps.detect.outputs.matrix_mode }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # workflow_dispatch with test_matrix=full always wins. Otherwise,
@@ -90,6 +90,8 @@ jobs:
     name: Wait for quality and unit checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      checks: read
     steps:
       - name: Skip wait for manual runs
         if: github.event_name != 'pull_request'
@@ -169,10 +171,12 @@ jobs:
     needs: [wait-for-cheap-ci]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -187,7 +191,7 @@ jobs:
         run: uv build --sdist
 
       - name: Upload source artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: source-dist
           path: dist/*.tar.gz
@@ -198,10 +202,12 @@ jobs:
     needs: [wait-for-cheap-ci]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -216,7 +222,7 @@ jobs:
         run: uv build --wheel
 
       - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-standard
           path: dist/*.whl
@@ -233,15 +239,17 @@ jobs:
           - ${{ github.event.inputs.python_version || '3.12' }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -250,7 +258,7 @@ jobs:
         run: uv export --frozen --no-emit-project --no-hashes --format requirements.txt --output-file build-constraints.txt
 
       - name: Cache pip downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cache/pip
@@ -262,7 +270,7 @@ jobs:
 
       - name: Cache mypyc build dir
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/sqlspec-mypyc-build
           key: mypyc-${{ matrix.os }}-py${{ matrix.python-version }}-${{ hashFiles('sqlspec/**/*.py', 'pyproject.toml') }}
@@ -341,7 +349,7 @@ jobs:
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
 
       - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
@@ -360,7 +368,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # PR builds have no release tag — derive expected version from
       # pyproject.toml so the version assertion below has something to check.
@@ -371,22 +381,24 @@ jobs:
           echo "SQLSPEC_EXPECTED_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
       - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: uv python install "$PYTHON_VERSION"
 
       - name: Download standard wheel artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: wheels-standard
           path: dist-standard/
 
       - name: Download mypyc wheel artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: wheels-mypyc-*
           merge-multiple: true
@@ -394,8 +406,10 @@ jobs:
 
       - name: Test standard wheel installation
         shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          uv venv test-standard --python ${{ matrix.python-version }}
+          uv venv test-standard --python "$PYTHON_VERSION"
           uv pip install --python test-standard --no-index --no-deps --find-links dist-standard/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
           uv pip install --python test-standard "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-standard/
           uv run --no-project --python test-standard python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
@@ -403,8 +417,10 @@ jobs:
 
       - name: Test mypyc wheel installation
         shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          uv venv test-mypyc --python ${{ matrix.python-version }}
+          uv venv test-mypyc --python "$PYTHON_VERSION"
           uv pip install --python test-mypyc --no-index --no-deps --find-links dist-mypyc/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
           uv pip install --python test-mypyc "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-mypyc/
           uv run --no-project --python test-mypyc python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
@@ -416,13 +432,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: "*"
           merge-multiple: true

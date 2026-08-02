@@ -1,6 +1,13 @@
 default_language_version:
   python: "3"
 repos:
+  - repo: local
+    hooks:
+      - id: no-future-annotations
+        name: Disallow future annotations in package code
+        entry: python tools/hooks/no_future_annotations.py
+        language: python
+        files: ^sqlspec/.*\.py$
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:
@@ -12,14 +19,15 @@ repos:
       - id: check-ast
       - id: check-case-conflict
       - id: check-toml
+      - id: check-yaml
       - id: debug-statements
       - id: end-of-file-fixer
       - id: mixed-line-ending
       - id: trailing-whitespace
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.16.1"
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.16.0"
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: ["--fix"]
       - id: ruff-format
   - repo: https://github.com/codespell-project/codespell

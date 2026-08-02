@@ -5,7 +5,7 @@ Setting up the environment
 --------------------------
 
 1. Run ``make install-uv`` to install `uv <https://docs.astral.sh/uv/>`_ if not already installed
-1. Run ``make install`` to install all dependencies and pre-commit hooks
+1. Run ``make install`` to install all dependencies and the Prek ``pre-commit`` and ``commit-msg`` hooks
 
 
 Code contributions
@@ -36,7 +36,10 @@ Guidelines for writing code
 - All code should be fully `typed <https://peps.python.org/pep-0484/>`_. This is enforced via
   `mypy <https://mypy.readthedocs.io/en/stable/>`_.
 - All code should be tested. This is enforced via `pytest <https://docs.pytest.org/en/stable/>`_.
-- All code should be properly formatted. This is enforced via `black <https://black.readthedocs.io/en/stable/>`_ and `Ruff <https://docs.astral.sh/ruff/>`_.
+- All code should be properly formatted. This is enforced via `Ruff <https://docs.astral.sh/ruff/>`_.
+- Package modules must not import ``__future__.annotations``. Prek checks this with an AST-based local hook.
+- ``make lint`` applies Ruff fixes and formatting, runs every Prek hook, checks types and slots, and audits workflows with zizmor.
+- Dependency resolution uses a seven-day cooldown by default, with Litestar ecosystem packages exempt so coordinated releases remain testable.
 
 Logging
 ++++++++

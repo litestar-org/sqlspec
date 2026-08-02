@@ -94,14 +94,14 @@ def test_transform_dict_keys_with_pascalize() -> None:
 
 def test_transform_dict_keys_empty_dict() -> None:
     """Test transformation of empty dictionary."""
-    data = {}  # type: dict[str, str]
+    data: dict[str, str] = {}
     result = transform_dict_keys(data, camelize)
     assert result == {}
 
 
 def test_transform_dict_keys_empty_list() -> None:
     """Test transformation of empty list."""
-    data = []  # type: list[dict[str, str]]
+    data: list[dict[str, str]] = []
     result = transform_dict_keys(data, camelize)
     assert result == []
 

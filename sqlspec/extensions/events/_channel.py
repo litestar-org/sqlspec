@@ -847,6 +847,9 @@ def _event_span(
 
     Starts a span, ends it with ``error`` when the wrapped operation raises,
     and ends it with ``result`` when the operation completes.
+
+    Yields:
+        The active event span.
     """
     span = _start_event_span(runtime, operation, backend_name, adapter_name, channel, mode=mode)
     try:

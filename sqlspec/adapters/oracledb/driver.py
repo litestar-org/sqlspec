@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.core.stack import StackOperation
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
