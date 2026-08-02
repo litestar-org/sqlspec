@@ -387,6 +387,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Set up Python ${{ matrix.python-version }}
+        shell: bash
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: uv python install "$PYTHON_VERSION"
