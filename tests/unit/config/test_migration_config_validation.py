@@ -5,11 +5,17 @@ runtime and silently ignored, leaving the corresponding setting at its default.
 These tests pin the validate-and-raise behavior and the suggestion text.
 """
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import MIGRATION_CONFIG_KEYS, MigrationConfig, validate_migration_config_keys
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.migrations.utils import create_migration_file
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_known_keys_cover_every_typed_dict_field() -> None:
@@ -78,3 +84,108 @@ def test_valid_config_is_unchanged() -> None:
     )
 
     assert config.migration_config["version_table_name"] == "_schema_versions"
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("templates", {"sql": {"header": "-- {title} [ACME]"}}), ("title", "Acme Migration"), ("default_format", "py")],
+)
+def test_template_keys_are_accepted(key: str, value: object) -> None:
+    """Keys read by build_template_settings must survive validation."""
+    config = SqliteConfig(connection_config={"database": ":memory:"}, migration_config={key: value})
+
+    assert config.migration_config[key] == value
+
+
+def test_template_keys_are_declared() -> None:
+    """The template settings reader consumes these keys, so they must be declared."""
+    assert {"templates", "title", "default_format"} <= MIGRATION_CONFIG_KEYS
+
+
+def test_unknown_template_section_key_is_reported() -> None:
+    """A typo directly under templates names the dotted path and the intended key."""
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        validate_migration_config_keys({"templates": {"sqll": {}}})
+
+    message = str(exc_info.value)
+    assert "Unknown migration_config key 'templates.sqll'" in message
+    assert "Did you mean 'sql'?" in message
+
+
+@pytest.mark.parametrize(
+    ("section", "bad_key", "suggestion"),
+    [("sql", "headers", "header"), ("sql", "bodyy", "body"), ("py", "docstrings", "docstring")],
+)
+def test_unknown_template_fragment_key_is_reported(section: str, bad_key: str, suggestion: str) -> None:
+    """A typo inside a template fragment is caught at construction, not at render time."""
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        validate_migration_config_keys({"templates": {section: {bad_key: "x"}}})
+
+    message = str(exc_info.value)
+    assert f"Unknown migration_config key 'templates.{section}.{bad_key}'" in message
+    assert f"Did you mean {suggestion!r}?" in message
+
+
+def test_description_key_is_the_accepted_fragment_spelling() -> None:
+    """The singular description_key is declared; the resolved plural form is not a config key."""
+    validate_migration_config_keys({"templates": {"sql": {"description_key": "Summary"}}})
+
+    with pytest.raises(ImproperConfigurationError, match="Did you mean 'description_key'"):
+        validate_migration_config_keys({"templates": {"sql": {"description_keys": "Summary"}}})
+
+
+@pytest.mark.parametrize("path", ["templates", "templates.sql"])
+def test_non_mapping_template_value_reports_the_type(path: str) -> None:
+    """A non-mapping override raises a clear message instead of a TypeError at render time."""
+    payload: dict[str, object] = (
+        {"templates": ["not", "a", "mapping"]} if path == "templates" else {"templates": {"sql": "not a mapping"}}
+    )
+
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        validate_migration_config_keys(payload)
+
+    assert f"'{path}' must be a mapping" in str(exc_info.value)
+
+
+def test_nested_typo_fails_at_config_construction() -> None:
+    """Nested validation runs through the real config setter."""
+    with pytest.raises(ImproperConfigurationError, match=r"templates\.sql\.headerr"):
+        SqliteConfig(
+            connection_config={"database": ":memory:"}, migration_config={"templates": {"sql": {"headerr": "-- x"}}}
+        )
+
+
+def test_valid_nested_template_config_is_accepted() -> None:
+    """A fully populated template override passes validation."""
+    validate_migration_config_keys({
+        "title": "Acme",
+        "default_format": "py",
+        "templates": {
+            "title": "Acme Fallback",
+            "sql": {"header": "-- {title}", "metadata": ["-- {author}"], "body": "", "description_key": "Desc"},
+            "py": {"docstring": "{title}", "body": "", "imports": [], "description_key": ["Desc"]},
+        },
+    })
+
+
+def test_template_overrides_reach_the_rendered_migration(tmp_path: "Path") -> None:
+    """A customized template configured on a real config renders through to disk."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={
+            "author": "Acme Ops",
+            "title": "Acme Migration",
+            "default_format": "py",
+            "templates": {"sql": {"header": "-- {title} [ACME]", "metadata": ["-- Owner: {author}"]}},
+        },
+    )
+
+    sql_path = create_migration_file(migrations_dir, "0001", "custom", "sql", config=config)
+    default_path = create_migration_file(migrations_dir, "0002", "defaulted", None, config=config)
+
+    content = sql_path.read_text()
+    assert "-- Acme Migration [ACME]" in content
+    assert "-- Owner: Acme Ops" in content
+    assert default_path.suffix == ".py"
