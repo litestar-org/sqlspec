@@ -9,6 +9,34 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.58.1 - Migration template configuration
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* ``migration_config`` accepts the three keys that customize generated
+  migration files: ``templates``, ``default_format``, and ``title``. The
+  key validation added in v0.58.0 did not recognize them, so any configuration
+  using a customized migration template raised
+  :class:`~sqlspec.exceptions.ImproperConfigurationError` at construction.
+  ``default_format`` was additionally reported with a suggestion to use
+  ``default_schema``, an unrelated setting.
+* Template overrides are validated when the configuration is built rather than
+  when a migration is generated. A misspelling inside ``templates.sql`` or
+  ``templates.py`` reports its full path and the closest valid key, and an
+  override that is not a mapping is named along with the type supplied.
+* :class:`~sqlspec.config.MigrationConfig` documents the real default for
+  ``version_table_name``, which is ``ddl_migrations``.
+
+**Added:**
+
+* :class:`~sqlspec.config.MigrationTemplates`,
+  :class:`~sqlspec.config.SQLTemplateOverride`, and
+  :class:`~sqlspec.config.PythonTemplateOverride` describe the template
+  override shape, so type checkers now cover it.
+* The migrations guide documents template customization, including the
+  placeholders available to each fragment.
+
 v0.58.0 - Configuration and storage correctness
 ------------------------------------------------------------------------------
 

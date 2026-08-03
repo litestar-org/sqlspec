@@ -135,7 +135,7 @@ Common keys
    * - ``script_location``
      - Migrations directory. Defaults to ``migrations``.
    * - ``version_table_name``
-     - Tracking table name. Defaults to ``sqlspec_migrations``.
+     - Tracking table name. Defaults to ``ddl_migrations``.
    * - ``enabled``
      - Set ``False`` to exclude this configuration from CLI operations.
    * - ``strict_ordering``
@@ -304,6 +304,65 @@ configuration is built does not re-run discovery.
    A package shipping migrations must include the directory as package data. If
    it compiles its own modules, the migration sources must remain on disk, since
    Python migrations are read and compiled at runtime.
+
+Migration File Templates
+------------------------
+
+``create-migration`` renders new files from a built-in template. Three
+``migration_config`` keys adjust what it writes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Key
+     - Purpose
+   * - ``default_format``
+     - Format used when the command is run without ``--file-type``. Either
+       ``sql`` or ``py``. Defaults to ``sql``.
+   * - ``title``
+     - Title rendered into generated files. Defaults to ``SQLSpec Migration``.
+   * - ``templates``
+     - Fragment overrides for the ``sql`` and ``py`` templates.
+
+Overrides replace individual fragments; anything omitted keeps its default:
+
+.. code-block:: python
+
+    config = DuckDBConfig(
+        connection_config={"database": "/tmp/analytics.db"},
+        migration_config={
+            "title": "Acme Migration",
+            "default_format": "py",
+            "templates": {
+                "sql": {
+                    "header": "-- {title} [{adapter}]",
+                    "metadata": ["-- Version: {version}", "-- Owner: {author}"],
+                }
+            },
+        },
+    )
+
+Every fragment is rendered with ``str.format``, so these placeholders are
+available: ``title``, ``version``, ``message``, ``description``, ``created_at``,
+``author``, ``adapter``, ``project_slug``, and ``slug`` (the filename-safe form
+of the message). An unknown placeholder raises
+:class:`~sqlspec.migrations.templates.TemplateValidationError` when the file is
+generated.
+
+The SQL template accepts ``header``, ``metadata``, ``body``, and
+``description_key``; the Python template accepts ``docstring``, ``imports``,
+``body``, and ``description_key``. ``description_key`` names the label the
+description is read back from, and takes a string or a list of strings.
+
+.. note::
+
+   A body override owns the whole migration body, including the
+   ``-- name: migrate-{version}-up`` and ``-- name: migrate-{version}-down``
+   markers for SQL, or the ``up``/``down`` functions for Python. SQLSpec does
+   not merge fragments into a replaced body.
+
+See :class:`~sqlspec.config.MigrationTemplates` for the full override shape.
 
 Output and Logging
 ------------------

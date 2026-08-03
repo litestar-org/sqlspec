@@ -147,11 +147,15 @@ def test_non_mapping_template_value_reports_the_type(path: str) -> None:
     assert f"'{path}' must be a mapping" in str(exc_info.value)
 
 
+MISSPELLED_FRAGMENT_KEY = "headerr"  # codespell:ignore headerr
+
+
 def test_nested_typo_fails_at_config_construction() -> None:
     """Nested validation runs through the real config setter."""
-    with pytest.raises(ImproperConfigurationError, match=r"templates\.sql\.headerr"):
+    with pytest.raises(ImproperConfigurationError, match=rf"templates\.sql\.{MISSPELLED_FRAGMENT_KEY}"):
         SqliteConfig(
-            connection_config={"database": ":memory:"}, migration_config={"templates": {"sql": {"headerr": "-- x"}}}
+            connection_config={"database": ":memory:"},
+            migration_config={"templates": {"sql": {MISSPELLED_FRAGMENT_KEY: "-- x"}}},
         )
 
 
