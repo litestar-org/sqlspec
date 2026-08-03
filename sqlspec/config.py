@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "MIGRATION_CONFIG_KEYS",
+    "MIGRATION_TEMPLATES_KEYS",
     "ADKConfig",
     "AsyncConfigT",
     "AsyncDatabaseConfig",
@@ -62,11 +63,14 @@ __all__ = (
     "LifecycleConfig",
     "LitestarConfig",
     "MigrationConfig",
+    "MigrationTemplates",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "OpenTelemetryConfig",
     "PoolT",
     "PrometheusConfig",
+    "PythonTemplateOverride",
+    "SQLTemplateOverride",
     "SanicConfig",
     "StarletteConfig",
     "SyncConfigT",
@@ -114,6 +118,55 @@ class LifecycleConfig(TypedDict):
     on_error: NotRequired[list[Callable[[Exception, str, dict[str, Any]], None]]]
 
 
+class SQLTemplateOverride(TypedDict):
+    """Overrides for the SQL migration template."""
+
+    header: NotRequired[str]
+    """First line of the generated file. Supports the migration template placeholders."""
+
+    metadata: NotRequired["list[str]"]
+    """Comment lines rendered beneath the header."""
+
+    body: NotRequired[str]
+    """Migration body containing the up and down named statements."""
+
+    description_key: NotRequired["str | list[str]"]
+    """Metadata label(s) the description is read back from. Defaults to 'Description'."""
+
+
+class PythonTemplateOverride(TypedDict):
+    """Overrides for the Python migration template."""
+
+    docstring: NotRequired[str]
+    """Module docstring contents. Supports the migration template placeholders."""
+
+    body: NotRequired[str]
+    """Module body defining the up and down functions."""
+
+    imports: NotRequired["list[str]"]
+    """Import lines rendered between the docstring and the body."""
+
+    description_key: NotRequired["str | list[str]"]
+    """Docstring label(s) the description is read back from. Defaults to 'Description'."""
+
+
+class MigrationTemplates(TypedDict):
+    """Template overrides applied when generating migration files.
+
+    Placeholders available to every fragment: ``title``, ``version``, ``message``,
+    ``description``, ``created_at``, ``author``, ``adapter``, and ``project_slug``.
+    """
+
+    sql: NotRequired[SQLTemplateOverride]
+    """Overrides for generated ``.sql`` migrations."""
+
+    py: NotRequired[PythonTemplateOverride]
+    """Overrides for generated ``.py`` migrations."""
+
+    title: NotRequired[str]
+    """Title used when ``MigrationConfig.title`` is omitted."""
+
+
 class MigrationConfig(TypedDict):
     """Configuration options for database migrations.
 
@@ -124,7 +177,7 @@ class MigrationConfig(TypedDict):
     """Path to the migrations directory. Accepts string or Path object. Defaults to 'migrations'."""
 
     version_table_name: NotRequired[str]
-    """Name of the table used to track applied migrations. Defaults to 'sqlspec_migrations'."""
+    """Name of the table used to track applied migrations. Defaults to 'ddl_migrations'."""
 
     default_schema: NotRequired[str]
     """Schema applied to migration sessions before user migration SQL runs, when supported by the adapter."""
@@ -198,8 +251,74 @@ class MigrationConfig(TypedDict):
     Defaults to False.
     """
 
+    default_format: NotRequired["Literal['sql', 'py']"]
+    """File format used by ``create-migration`` when none is requested. Defaults to 'sql'."""
+
+    title: NotRequired[str]
+    """Title rendered into generated migration files. Defaults to 'SQLSpec Migration'."""
+
+    templates: NotRequired[MigrationTemplates]
+    """Template fragment overrides applied when generating migration files."""
+
 
 MIGRATION_CONFIG_KEYS: "frozenset[str]" = MigrationConfig.__required_keys__ | MigrationConfig.__optional_keys__
+MIGRATION_TEMPLATES_KEYS: "frozenset[str]" = MigrationTemplates.__required_keys__ | MigrationTemplates.__optional_keys__
+_TEMPLATE_FRAGMENT_KEYS: "dict[str, frozenset[str]]" = {
+    "sql": SQLTemplateOverride.__required_keys__ | SQLTemplateOverride.__optional_keys__,
+    "py": PythonTemplateOverride.__required_keys__ | PythonTemplateOverride.__optional_keys__,
+}
+
+
+def _report_unknown_keys(
+    mapping: "Mapping[str, Any]", valid_keys: "frozenset[str]", prefix: str, scope: str
+) -> "list[str]":
+    """Describe keys a configuration scope does not declare.
+
+    Args:
+        mapping: Mapping to check.
+        valid_keys: Keys the scope accepts.
+        prefix: Dotted path prepended to each reported key.
+        scope: Scope name used in the valid-key summary, empty for the top level.
+
+    Returns:
+        Report lines, empty when every key is recognized.
+    """
+    unknown = sorted(key for key in mapping if key not in valid_keys)
+    if not unknown:
+        return []
+
+    lines = []
+    for key in unknown:
+        suggestions = get_close_matches(key, valid_keys, n=1, cutoff=0.6)
+        hint = f" Did you mean {suggestions[0]!r}?" if suggestions else ""
+        lines.append(f"Unknown migration_config key {f'{prefix}{key}'!r}.{hint}")
+    lines.append(f"Valid {scope}keys: {', '.join(sorted(valid_keys))}.")
+    return lines
+
+
+def _report_template_keys(templates: Any) -> "list[str]":
+    """Describe unrecognized keys nested under ``templates``.
+
+    Args:
+        templates: Value configured for the ``templates`` key.
+
+    Returns:
+        Report lines, empty when the overrides are recognized.
+    """
+    if not isinstance(templates, Mapping):
+        return [f"migration_config key 'templates' must be a mapping, got {type(templates).__name__}."]
+
+    lines = _report_unknown_keys(templates, MIGRATION_TEMPLATES_KEYS, "templates.", "'templates' ")
+    for section, fragment_keys in _TEMPLATE_FRAGMENT_KEYS.items():
+        overrides = templates.get(section)
+        if overrides is None:
+            continue
+        path = f"templates.{section}"
+        if not isinstance(overrides, Mapping):
+            lines.append(f"migration_config key '{path}' must be a mapping, got {type(overrides).__name__}.")
+            continue
+        lines.extend(_report_unknown_keys(overrides, fragment_keys, f"{path}.", f"'{path}' "))
+    return lines
 
 
 def validate_migration_config_keys(migration_config: "Mapping[str, Any]") -> None:
@@ -211,17 +330,12 @@ def validate_migration_config_keys(migration_config: "Mapping[str, Any]") -> Non
     Raises:
         ImproperConfigurationError: If the mapping contains an unrecognized key.
     """
-    unknown = sorted(key for key in migration_config if key not in MIGRATION_CONFIG_KEYS)
-    if not unknown:
-        return
-
-    lines = []
-    for key in unknown:
-        suggestions = get_close_matches(key, MIGRATION_CONFIG_KEYS, n=1, cutoff=0.6)
-        hint = f" Did you mean {suggestions[0]!r}?" if suggestions else ""
-        lines.append(f"Unknown migration_config key {key!r}.{hint}")
-    lines.append(f"Valid keys: {', '.join(sorted(MIGRATION_CONFIG_KEYS))}.")
-    raise ImproperConfigurationError(" ".join(lines))
+    lines = _report_unknown_keys(migration_config, MIGRATION_CONFIG_KEYS, "", "")
+    templates = migration_config.get("templates")
+    if templates is not None:
+        lines.extend(_report_template_keys(templates))
+    if lines:
+        raise ImproperConfigurationError(" ".join(lines))
 
 
 class FlaskConfig(TypedDict):

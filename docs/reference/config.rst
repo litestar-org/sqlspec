@@ -53,6 +53,18 @@ Extension Configuration Types
    :members:
    :show-inheritance:
 
+.. autoclass:: MigrationTemplates
+   :members:
+   :show-inheritance:
+
+.. autoclass:: SQLTemplateOverride
+   :members:
+   :show-inheritance:
+
+.. autoclass:: PythonTemplateOverride
+   :members:
+   :show-inheritance:
+
 .. autoclass:: EventsConfig
    :members:
    :show-inheritance:

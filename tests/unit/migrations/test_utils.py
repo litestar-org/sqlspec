@@ -10,12 +10,12 @@ Tests for migration utilities including:
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.config import DatabaseConfigProtocol
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.templates import TemplateValidationError
 from sqlspec.migrations.utils import (
     _get_git_config,
@@ -255,15 +255,11 @@ def test_create_migration_file_slugifies_message(tmp_path: Path) -> None:
 def test_create_migration_file_respects_default_format(tmp_path: Path) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-
-    class DummyConfig:
-        migration_config = {"default_format": "py", "author": "Static"}
-        bind_key: str | None = None
-        driver_type: type | None = None
-
-    file_path = create_migration_file(
-        migrations_dir, "0001", "custom", None, config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"default_format": "py", "author": "Static"}
     )
+
+    file_path = create_migration_file(migrations_dir, "0001", "custom", None, config=config)
 
     assert file_path.suffix == ".py"
 
@@ -291,25 +287,46 @@ def test_quote_identifier_escapes_embedded_quotes() -> None:
 def test_create_migration_file_uses_custom_sql_template(tmp_path: Path) -> None:
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
-
-    class DummyConfig:
-        migration_config = {
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={
             "author": "Acme Ops",
             "title": "Acme Migration",
             "templates": {
                 "sql": {"header": "-- {title} [ACME]", "metadata": ["-- Owner: {author}"], "body": "-- custom body"}
             },
-        }
-        bind_key: str | None = None
-        driver_type: type | None = None
-
-    file_path = create_migration_file(
-        migrations_dir, "0001", "custom", "sql", config=cast(DatabaseConfigProtocol[Any, Any, Any], DummyConfig())
+        },
     )
+
+    file_path = create_migration_file(migrations_dir, "0001", "custom", "sql", config=config)
     content = file_path.read_text()
 
     assert "-- Acme Migration [ACME]" in content
     assert "-- Owner: Acme Ops" in content
+
+
+def test_create_migration_file_uses_custom_python_template(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={
+            "author": "Acme Ops",
+            "templates": {
+                "py": {
+                    "docstring": "{title} :: {message}",
+                    "imports": ["from typing import Iterable"],
+                    "body": "def up() -> str:\n    return 'SELECT 1'",
+                }
+            },
+        },
+    )
+
+    file_path = create_migration_file(migrations_dir, "0001", "custom", "py", config=config)
+    content = file_path.read_text()
+
+    assert '"""SQLSpec Migration :: custom"""' in content
+    assert "def up() -> str:" in content
 
 
 def test_python_template_includes_down_and_context(tmp_path: Path) -> None:
