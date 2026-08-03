@@ -94,7 +94,7 @@ def test_template_keys_are_accepted(key: str, value: object) -> None:
     """Keys read by build_template_settings must survive validation."""
     config = SqliteConfig(connection_config={"database": ":memory:"}, migration_config={key: value})
 
-    assert config.migration_config[key] == value
+    assert dict(config.migration_config)[key] == value
 
 
 def test_template_keys_are_declared() -> None:
