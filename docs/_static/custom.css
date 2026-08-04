@@ -412,14 +412,10 @@ html.dark .only-light {
   margin-bottom: 3em;
 }
 
-/* -----------------------------------------------------------------------------
-   Mermaid Diagrams (Dark Mode Fix)
-   ----------------------------------------------------------------------------- */
-html.dark .mermaid svg,
-html[data-theme="dark"] .mermaid svg {
-  background-color: white;
-  padding: 1em;
-  border-radius: 8px;
+/* Mermaid renders a native dark theme; Shibuya's inversion would undo it. */
+html.dark pre.mermaid > svg,
+html[data-theme="dark"] pre.mermaid > svg {
+  filter: none;
 }
 
 /* -----------------------------------------------------------------------------

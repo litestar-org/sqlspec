@@ -208,19 +208,14 @@ html_sidebars = {"**": []}
 
 
 # Mermaid configuration
-mermaid_version = "11.2.0"
-mermaid_init_js = """
-mermaid.initialize({
-    startOnLoad: true,
-    theme: 'default',
-    securityLevel: 'loose',
-    flowchart: {
-        useMaxWidth: true,
-        htmlLabels: true,
-        curve: 'basis'
-    }
-});
-"""
+mermaid_version = "11.12.1"
+mermaid_light_theme = "default"
+mermaid_dark_theme = "dark"
+mermaid_init_config = {
+    "startOnLoad": False,
+    "securityLevel": "loose",
+    "flowchart": {"useMaxWidth": True, "htmlLabels": True, "curve": "basis"},
+}
 
 html_theme_options = {
     "logo_target": "/",
