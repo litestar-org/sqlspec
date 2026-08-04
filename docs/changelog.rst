@@ -9,6 +9,18 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.58.2 - SQL file parameter diagnostics
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Malformed ``-- param:`` directives now produce actionable warnings that name
+  the SQL file, line number, and malformed directive. Structured log records
+  expose the numeric ``line_number`` and textual ``directive`` separately.
+  Non-strict loading continues to warn and skip malformed directives, while
+  strict loading continues to raise
+  :class:`~sqlspec.exceptions.SQLFileParseError`.
+
 v0.58.1 - Migration template configuration
 ------------------------------------------------------------------------------
 
