@@ -406,15 +406,19 @@ class SQLFileLoader:
                 params.append(_parse_parameter_declaration(param_match))
                 continue
             if PARAM_PREFIX_PATTERN.match(stripped):
+                line_number = base_line + idx + 1
                 if strict:
                     raise SQLFileParseError(
-                        file_path,
-                        file_path,
-                        ValueError(f"Malformed -- param: directive: {stripped}"),
-                        line=base_line + idx + 1,
+                        file_path, file_path, ValueError(f"Malformed -- param: directive: {stripped}"), line=line_number
                     )
                 log_with_context(
-                    logger, logging.WARNING, "sql.parse.param", file_path=file_path, line=stripped, status="malformed"
+                    logger,
+                    logging.WARNING,
+                    f"sql.parse.param: malformed parameter directive in {file_path} at line {line_number}: {stripped}",
+                    file_path=file_path,
+                    line_number=line_number,
+                    directive=stripped,
+                    status="malformed",
                 )
         return dialect, tuple(params), "\n".join(raw_lines[body_start:])
 

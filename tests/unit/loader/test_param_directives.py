@@ -81,7 +81,14 @@ def test_malformed_param_warns_and_skips_by_default(caplog: pytest.LogCaptureFix
         statements = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["q"].parameters == ()
     assert statements["q"].sql == "select 1"
-    assert any("malformed" in r.message or "param" in r.message.lower() for r in caplog.records)
+    record = caplog.records[-1]
+    assert record.message == "sql.parse.param: malformed parameter directive in test.sql at line 2: -- param: oops"
+    assert record.__dict__["extra_fields"] == {
+        "file_path": "test.sql",
+        "line_number": 2,
+        "directive": "-- param: oops",
+        "status": "malformed",
+    }
 
 
 def test_malformed_param_raises_in_strict_mode() -> None:
