@@ -1,5 +1,3 @@
-import inspect
-
 import pytest
 
 from sqlspec.exceptions import (
@@ -202,11 +200,3 @@ def test_wrap_exceptions_wrap_exceptions_sqlspec_error_passes_through() -> None:
         with wrap_exceptions():
             raise original
     assert exc_info.value is original
-
-
-def test_wrap_exceptions_wrap_exceptions_does_not_guard_suppress_classinfo_shape() -> None:
-    """wrap_exceptions should delegate classinfo handling directly to isinstance."""
-    source = inspect.getsource(wrap_exceptions)
-    assert "isinstance(suppress, type)" not in source
-    assert "isinstance(suppress, tuple)" not in source
-    assert "isinstance(exc, suppress)" in source

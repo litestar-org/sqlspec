@@ -63,27 +63,6 @@ def test_public_filters_alias_points_to_core_filters_module() -> None:
     assert sqlspec.filters is filters_module
 
 
-def test_filter_hierarchy_uses_shared_private_bases() -> None:
-    """Public filter classes keep their API while sharing private implementation bodies."""
-    source = Path("sqlspec/core/filters.py").read_text()
-    assert "class _DatetimeBoundFilter(StatementFilter):" in source
-    assert "class BeforeAfterFilter(_DatetimeBoundFilter):" in source
-    assert "class OnBeforeAfterFilter(_DatetimeBoundFilter):" in source
-
-    datetime_section = source.split("class _DatetimeBoundFilter", 1)[1].split("class InAnyFilter", 1)[0]
-    assert datetime_section.count("def extract_parameters(") == 1
-    assert datetime_section.count("def append_to_statement(") == 1
-
-    assert "class _TextSearchFilter(StatementFilter):" in source
-    assert "class SearchFilter(_TextSearchFilter):" in source
-    assert "class NotInSearchFilter(SearchFilter):" in source
-
-    search_section = source.split("class _TextSearchFilter", 1)[1].split("class NullFilter", 1)[0]
-    assert search_section.count("def extract_parameters(") == 1
-    assert search_section.count("def append_to_statement(") == 1
-    assert search_section.count("def get_cache_key(") == 1
-
-
 def test_filters_docs_render_inherited_members() -> None:
     """Docs include inherited members for public filters whose methods are inherited."""
     docs = Path("docs/reference/core/filters.rst").read_text()

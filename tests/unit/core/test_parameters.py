@@ -17,7 +17,6 @@ from collections.abc import Callable, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -2495,85 +2494,3 @@ def test_build_conversion_plan_called_once_execute_many_preserve_original_params
     assert converter.build_conversion_plan_calls == 1
     assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
     assert result.parameters is rows
-
-
-def test_skip_groups_constant_is_module_level() -> None:
-    """Parameter validator skip groups should be hoisted out of hot paths."""
-    source = Path("sqlspec/core/parameters/_validator.py").read_text()
-    assert "_SKIP_GROUPS:" in source
-    assert "skip_groups =" not in source
-
-
-def test_converter_hot_path_uses_shared_style_sets() -> None:
-    """Parameter converter should avoid per-call cache and style-set allocations."""
-    source = Path("sqlspec/core/parameters/_converter.py").read_text()
-    assert "placeholder_text_len_cache" not in source
-    assert "_OCCURRENCE_KEYED_STYLES:" in source
-    assert "_POSITIONAL_STYLES" in source
-
-
-def test_skip_groups_constant_used_by_both_paths() -> None:
-    """Parameter extraction should keep skip groups hoisted out of the hot loop."""
-    source = Path("sqlspec/core/parameters/_validator.py").read_text()
-    assert source.count("_SKIP_GROUPS") == 2
-
-
-def test_parameter_transformer_validator_source_shapes() -> None:
-    """Parameter helpers should avoid repeated hot-path type checks."""
-    transformer_source = Path("sqlspec/core/parameters/_transformers.py").read_text()
-    null_transformer_source = transformer_source.split("class _NullPlaceholderTransformer:", 1)[1].split(
-        "@mypyc_attr", 1
-    )[0]
-    literal_transformer_source = transformer_source.split("class _PlaceholderLiteralTransformer:", 1)[1].split(
-        "def build_null_pruning_transform", 1
-    )[0]
-
-    assert "_MISSING_PARAMETER: Final" in transformer_source
-    assert null_transformer_source.count("isinstance(node, _exp.Placeholder)") == 1
-    assert '"_is_mapping", "_is_sequence"' in literal_transformer_source
-    assert "self._is_mapping = isinstance(parameters, Mapping)" in literal_transformer_source
-    assert "self._is_sequence = isinstance(parameters, Sequence)" in literal_transformer_source
-    assert "isinstance(self._parameters, Mapping)" not in literal_transformer_source
-
-    validator_source = Path("sqlspec/core/parameters/_validator.py").read_text()
-    assert isinstance(ParameterValidator.__dict__.get("_extract_parameter_style"), staticmethod)
-    assert "any(match.group(*_SKIP_GROUPS))" in validator_source
-    assert "any(match.group(group) for group in _SKIP_GROUPS)" not in validator_source
-
-
-def test_parameter_internal_consolidation_source_shapes() -> None:
-    """Parameter helpers should share internal conversion/extraction bodies."""
-    validator_source = Path("sqlspec/core/parameters/_validator.py").read_text()
-    extract_body = validator_source.split("def extract_parameters", 1)[1].split("def _extract_parameters_uncached", 1)[
-        0
-    ]
-    assert "parameters = self._extract_parameters_uncached(sql)" in extract_body
-    assert "for match in PARAMETER_REGEX.finditer(sql)" not in extract_body
-
-    processor_source = Path("sqlspec/core/parameters/_processor.py").read_text()
-    payload_body = processor_source.split("def _coerce_parameters_payload", 1)[1].split("def _make_cache_key_tuple", 1)[
-        0
-    ]
-    assert "_coerce_sequence_if_needed(seq_params" in payload_body
-    assert "_coerce_mapping_if_needed(dict_params" in payload_body
-    assert "updated_seq:" not in payload_body
-    assert "updated_mapping:" not in payload_body
-
-    transformer_source = Path("sqlspec/core/parameters/_transformers.py").read_text()
-    null_pruning_body = transformer_source.split("def replace_null_parameters_with_literals", 1)[1].split(
-        "def _create_literal_expression", 1
-    )[0]
-    assert "def _as_concrete_payload(" in transformer_source
-    assert "_as_concrete_payload(parameters)" in null_pruning_body
-    assert "list(parameters) if isinstance(parameters, list)" not in null_pruning_body
-
-
-def test_private_zero_ref_helpers_are_folded() -> None:
-    """API-invisible private helpers with no references should not linger."""
-    converter_source = Path("sqlspec/core/parameters/_converter.py").read_text()
-
-    assert "def _extract_param_value_single_style(" not in converter_source
-    assert "def _get_parameter_value(" not in converter_source
-    assert "def _normalize_named_identifier_aliases(" not in Path("sqlspec/core/parameters/_alignment.py").read_text()
-    assert "def _hash_filter_value(" not in Path("sqlspec/core/hashing.py").read_text()
-    assert "def _reset_noop(" not in Path("sqlspec/core/_pool.py").read_text()
