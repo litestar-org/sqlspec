@@ -15,7 +15,7 @@ import os
 import sys
 import threading
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from typing_extensions import ParamSpec
 
@@ -301,9 +301,19 @@ def async_(
     return _AsyncWrapper(function, limiter, executor)
 
 
+@overload
+def ensure_async_(
+    function: "Callable[ParamSpecT, Awaitable[ReturnT]]",
+) -> "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]": ...
+
+
+@overload
 def ensure_async_(
     function: "Callable[ParamSpecT, Awaitable[ReturnT] | ReturnT]",
-) -> "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]":
+) -> "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]": ...
+
+
+def ensure_async_(function: "Callable[ParamSpecT, Any]") -> "Callable[ParamSpecT, Coroutine[Any, Any, Any]]":
     """Convert a function to an async one if it is not already.
 
     Args:
