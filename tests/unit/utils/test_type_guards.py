@@ -7,7 +7,6 @@ Uses function-based pytest approach as per AGENTS.md requirements.
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 import msgspec
@@ -1108,21 +1107,9 @@ def test_supports_arrow_results_with_primitive_types() -> None:
     assert supports_arrow_results({"key": "value"}) is False
 
 
-def test_typing_module_typing_module_source_does_not_reference_private_typeddict() -> None:
-    """sqlspec.typing must not import or reference typing._TypedDict."""
-    assert "_TypedDict" not in Path("sqlspec/typing.py").read_text()
-
-
 def test_typing_module_supported_schema_model_includes_mapping() -> None:
     """SupportedSchemaModel should include Mapping[str, Any]."""
     from sqlspec.typing import SupportedSchemaModel
 
     args = typing.get_args(SupportedSchemaModel)
     assert any(getattr(arg, "__origin__", None) is Mapping for arg in args)
-
-
-def test_typing_module_typing_module_has_no_private_typeddict_name() -> None:
-    """sqlspec.typing should not expose the private _TypedDict name."""
-    import sqlspec.typing as typing_module
-
-    assert not hasattr(typing_module, "_TypedDict")

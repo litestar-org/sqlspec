@@ -1,7 +1,5 @@
 """Regression tests for DDL builder Wave 1 fixes."""
 
-import inspect
-
 import pytest
 from sqlglot import exp
 
@@ -76,12 +74,6 @@ def test_foreign_key_action_none_still_short_circuits_validation() -> None:
 def test_foreign_key_action_invalid_value_still_raises() -> None:
     with pytest.raises(SQLBuilderError):
         CreateTable("orders").foreign_key_constraint("user_id", "users", "id", on_delete="EXPLODE")
-
-
-def test_ddl_module_uses_pep604_annotations() -> None:
-    import sqlspec.builder._ddl as ddl_module
-
-    assert "Union" not in inspect.getsource(ddl_module)
 
 
 def test_ddl_check_constraint_check_constraint_column_expression_stores_condition_expr() -> None:

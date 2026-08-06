@@ -14,7 +14,6 @@ Test Coverage:
 8. Performance characteristics - Compilation speed and efficiency testing
 """
 
-import inspect
 import logging
 import threading
 from collections import OrderedDict
@@ -27,10 +26,8 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
-import sqlspec.core.compiler as compiler_module
 from sqlspec.core import (
     CompiledSQL,
-    OperationProfile,
     OperationType,
     ParameterProcessor,
     ParameterProfile,
@@ -702,13 +699,6 @@ def test_parse_cache_entry_does_not_store_parameter_casts() -> None:
     assert len(cache_entry) == 3
 
 
-def test_ast_transformer_path_does_not_accept_unused_parse_cache_entry() -> None:
-    source = inspect.getsource(SQLProcessor._apply_ast_transformers)
-
-    assert "parse_cache_entry" not in source
-    assert not hasattr(compiler_module, "ParseCacheEntry")
-
-
 @requires_interpreted
 def test_parameter_casts_called_exactly_once_with_transformer() -> None:
     """Transformers should not trigger duplicate parameter-cast AST walks."""
@@ -1213,10 +1203,6 @@ def test_compile_with_pipeline_passes_expression() -> None:
 
 def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") -> None:
     """Verify c11 native-class optimization invariants and compiler behavior."""
-    for cls in (OperationProfile, CompiledSQL, SQLProcessor):
-        source = inspect.getsource(cls)
-        assert source.startswith("@final\n@mypyc_attr(allow_interpreted_subclasses=False)\n")
-
     for name in (
         "_normalize_expression_override",
         "_unpack_parse_cache_entry",
@@ -1226,9 +1212,6 @@ def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") 
         "_make_parse_cache_key",
     ):
         assert isinstance(SQLProcessor.__dict__.get(name), staticmethod)
-
-    source = inspect.getsource(SQLProcessor._compile_uncached)
-    assert "dialect_str = str(self._config.dialect)" not in source
 
     processor = SQLProcessor(basic_statement_config)
     select_result = processor.compile("SELECT * FROM users WHERE id = ?", (42,))

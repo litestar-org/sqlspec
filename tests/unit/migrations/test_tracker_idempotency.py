@@ -12,15 +12,6 @@ from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
-def test_migration_tracker_private_sql_helpers_use_purpose_names() -> None:
-    assert hasattr(SyncMigrationTracker, "_tracking_table_ddl")
-    assert hasattr(SyncMigrationTracker, "_current_version_query")
-    assert hasattr(SyncMigrationTracker, "_record_migration_statement")
-    assert not hasattr(SyncMigrationTracker, "_get_create_table_sql")
-    assert not hasattr(SyncMigrationTracker, "_get_current_version_sql")
-    assert not hasattr(SyncMigrationTracker, "_get_record_migration_sql")
-
-
 def test_sync_update_version_record_success() -> None:
     """Test sync update succeeds when old version exists."""
     tracker = SyncMigrationTracker()

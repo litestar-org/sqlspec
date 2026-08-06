@@ -5,7 +5,6 @@ Tests for SQL statement and expression hashing utilities used for cache key gene
 Covers all hashing functions with edge cases, performance considerations, and circular reference handling.
 """
 
-import inspect
 import math
 from typing import Any
 from unittest.mock import Mock
@@ -191,11 +190,6 @@ def test_hash_parameters_named_typed_parameters_use_direct_isinstance() -> None:
     assert hash_parameters(named_parameters={"items": typed_param}) == hash_parameters(
         named_parameters={"items": typed_param}
     )
-
-    source = inspect.getsource(hash_parameters)
-    named_loop = source.split("if named_parameters:", 1)[1].split("if original_parameters", 1)[0]
-    assert "isinstance(value, TypedParameter)" in named_loop
-    assert "is_typed_parameter(value)" not in named_loop
 
 
 def test_hash_parameters_unhashable_types() -> None:

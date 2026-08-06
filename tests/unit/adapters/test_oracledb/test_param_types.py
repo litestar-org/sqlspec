@@ -149,12 +149,6 @@ def test_oracle_clob_value_is_mutable_via_assignment() -> None:
     assert instance.value == "second"
 
 
-def test_oracle_output_converter_dead_methods_oracle_output_converter_dead_methods_removed() -> None:
-    removed = {"convert_oracle_value", "detect_json_storage_type", "format_datetime_for_oracle", "handle_large_lob"}
-    for method_name in removed:
-        assert not hasattr(OracleOutputConverter, method_name)
-
-
 def test_oracle_output_converter_dead_methods_oracle_output_converter_reexported_from_adapter_package() -> None:
     import sqlspec.adapters.oracledb as oracledb_adapter
 

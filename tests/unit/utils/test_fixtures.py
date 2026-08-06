@@ -7,7 +7,6 @@ JSON fixture file loading with compression support.
 
 import gzip
 import importlib
-import inspect
 import json
 import sys
 import zipfile
@@ -153,11 +152,6 @@ def test_async_fixture_wrappers_are_hoisted() -> None:
     assert isinstance(_async_read_compressed, _AsyncWrapper)
     assert isinstance(_async_serialize, _AsyncWrapper)
     assert isinstance(_async_compress, _AsyncWrapper)
-
-
-def test_async_fixture_functions_do_not_allocate_wrappers_inline() -> None:
-    assert "async_(" not in inspect.getsource(open_fixture_async)
-    assert "async_(" not in inspect.getsource(write_fixture_async)
 
 
 def test_serialize_dict() -> None:

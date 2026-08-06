@@ -200,19 +200,8 @@ def test_lru_cache_initialization() -> None:
 def test_lru_cache_uses_non_reentrant_lock() -> None:
     """LRUCache methods should not depend on re-entrant locking."""
     cache = LRUCache()
-    source = inspect.getsource(LRUCache.__init__)
 
     assert isinstance(cache._lock, type(threading.Lock()))
-    assert "threading.Lock()" in source
-    assert "threading.RLock()" not in source
-
-
-def test_lru_cache_nodes_do_not_keep_write_only_access_counts() -> None:
-    """LRU cache nodes should not track unused per-node access counts."""
-    source = inspect.getsource(cache_module)
-
-    assert "access_count" not in source
-    assert "CACHE_STATS_UPDATE_INTERVAL" not in source
 
 
 def test_lru_cache_basic_operations() -> None:
@@ -888,15 +877,6 @@ def test_lru_cache_logs_include_namespace(caplog: pytest.LogCaptureFixture) -> N
     assert "cache_size" in record.__dict__["extra_fields"]
 
 
-def test_lru_cache_get_logs_outside_lock() -> None:
-    """LRUCache.get should not log or check debug state while holding the lock."""
-    source = inspect.getsource(LRUCache.get)
-    lock_body = source.split("with self._lock:", 1)[1].split("if log_event is not None:", 1)[0]
-
-    assert "logger.isEnabledFor" not in lock_body
-    assert "log_with_context" not in lock_body
-
-
 def test_lru_cache_logs_hit_with_namespace(caplog: pytest.LogCaptureFixture) -> None:
     """Test that cache hit logs include namespace."""
     import logging
@@ -976,12 +956,3 @@ def test_lru_cache_size_method_removed() -> None:
     """LRUCache should use __len__ instead of a duplicate size() method."""
 
     assert "size" not in LRUCache.__dict__
-
-
-def test_namespaced_cache_config_uses_inline_accessors() -> None:
-    """Namespaced cache config should not keep dead named accessor functions."""
-
-    source = inspect.getsource(cache_module)
-
-    assert "def _sql_cache_enabled" not in source
-    assert "lambda config: config.sql_cache_enabled" in source

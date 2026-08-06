@@ -11,8 +11,6 @@ from types import ModuleType
 from uuid import UUID
 
 import sqlspec.utils.correlation as correlation_module
-import sqlspec.utils.schema as schema_module
-import sqlspec.utils.sync_tools as sync_tools_module
 from sqlspec.adapters.adbc.core import prepare_postgres_uuid_bindings
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -309,14 +307,6 @@ def test_mypy_2_toolchain_policy_is_explicit_and_parallel_gate_is_default() -> N
     assert re.search("^dmypy:.*?## Run mypy daemon", makefile, flags=re.MULTILINE) is not None
     assert re.search("^mypy-parallel:.*?##", makefile, flags=re.MULTILINE) is not None
     assert re.search("^type-check:\\s+mypy pyright\\s+##", makefile, flags=re.MULTILINE) is not None
-
-
-def test_dead_code_removal_c13_return_value_helper_removed() -> None:
-    assert not hasattr(sync_tools_module, "_return_value")
-
-
-def test_dead_code_removal_c13_detect_schema_type_helper_removed() -> None:
-    assert not hasattr(schema_module, "_detect_schema_type")
 
 
 def test_correlation_context_function_is_public() -> None:

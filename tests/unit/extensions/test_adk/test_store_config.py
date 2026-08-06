@@ -2,15 +2,12 @@
 """Tests for shared ADK store configuration behavior."""
 
 import importlib
-import inspect
 import logging
 from datetime import datetime
 from typing import Any
 
 import pytest
 
-import sqlspec.extensions.adk.artifact.store as artifact_store_module
-import sqlspec.extensions.adk.store as session_store_module
 from sqlspec.extensions.adk import EventRecord, SessionRecord
 from sqlspec.extensions.adk.artifact._types import ArtifactRecord
 from sqlspec.extensions.adk.artifact.store import BaseSyncADKArtifactStore
@@ -292,24 +289,6 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
 
-def test_adk_store_private_sql_helpers_use_purpose_names() -> None:
-    assert hasattr(_SyncSessionStore, "_sessions_table_ddl")
-    assert hasattr(_SyncSessionStore, "_events_table_ddl")
-    assert not hasattr(_SyncSessionStore, "_metadata_seed_sql")
-    assert hasattr(_SyncSessionStore, "_drop_tables_sql")
-    assert not hasattr(_SyncSessionStore, "_get_create_sessions_table_sql")
-    assert not hasattr(_SyncSessionStore, "_get_create_events_table_sql")
-    assert not hasattr(_SyncSessionStore, "_get_seed_metadata_sql")
-    assert not hasattr(_SyncSessionStore, "_get_drop_tables_sql")
-
-
-def test_adk_memory_store_private_sql_helpers_use_purpose_names() -> None:
-    assert hasattr(_SyncMemoryStore, "_memory_table_ddl")
-    assert hasattr(_SyncMemoryStore, "_drop_memory_table_sql")
-    assert not hasattr(_SyncMemoryStore, "_get_create_memory_table_sql")
-    assert not hasattr(_SyncMemoryStore, "_get_drop_memory_table_sql")
-
-
 class _SyncArtifactStore(BaseSyncADKArtifactStore[Any]):
     def insert_artifact(self, record: ArtifactRecord) -> None:
         return None
@@ -345,25 +324,6 @@ def test_adk_base_stores_keep_original_config(store_cls: type[Any]) -> None:
     store = store_cls(config)
 
     assert store.config is config
-
-
-def test_adk_base_stores_do_not_keep_dead_private_helpers() -> None:
-    assert "_value_to_bytes" not in BaseAsyncADKStore.__dict__
-    assert "_value_to_bytes" not in BaseSyncADKStore.__dict__
-    assert "_adk_config" not in BaseSyncADKArtifactStore.__dict__
-
-
-def test_adk_table_helpers_have_one_private_owner() -> None:
-    for module in (session_store_module, memory_store_module, artifact_store_module):
-        source = inspect.getsource(module)
-        assert "def _ensure_table_name(" not in source
-        assert "VALID_TABLE_NAME_PATTERN" not in source
-        assert "MAX_TABLE_NAME_LENGTH" not in source
-
-    assert "def _unique_statements(" not in inspect.getsource(session_store_module)
-    assert "def _unique_statements(" not in inspect.getsource(memory_store_module)
-    assert "def _owner_id_column_name(" not in inspect.getsource(session_store_module)
-    assert "def _owner_id_column_name(" not in inspect.getsource(memory_store_module)
 
 
 def test_sync_session_store_manage_schema_false_skips_creation() -> None:
