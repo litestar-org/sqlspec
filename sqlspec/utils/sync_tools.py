@@ -303,7 +303,7 @@ def async_(
 
 def ensure_async_(
     function: "Callable[ParamSpecT, Awaitable[ReturnT] | ReturnT]",
-) -> "Callable[ParamSpecT, Awaitable[ReturnT]]":
+) -> "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]":
     """Convert a function to an async one if it is not already.
 
     Args:
