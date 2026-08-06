@@ -1,12 +1,13 @@
 """Schema transformation utilities for converting data to various schema types."""
 
 import datetime
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
-from typing import Any, Final, TypeGuard, cast, overload
+from types import UnionType
+from typing import Annotated, Any, Final, TypeGuard, Union, cast, get_args, get_origin, overload
 from uuid import UUID
 
 from typing_extensions import TypeVar
@@ -15,12 +16,9 @@ from sqlspec.data_dictionary import ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import CATTRS_INSTALLED, NUMPY_INSTALLED, MsgspecValidationError, SchemaT, convert, get_type_adapter
 from sqlspec.utils.dispatch import TypeDispatcher
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
-from sqlspec.utils.text import camelize, kebabize, pascalize
 from sqlspec.utils.type_guards import (
-    get_msgspec_rename_config,
     is_attrs_instance,
     is_attrs_schema,
     is_dataclass,
@@ -46,16 +44,12 @@ __all__ = (
 DataT = TypeVar("DataT", default=dict[str, Any])
 ValueT = TypeVar("ValueT")
 
-logger = get_logger(__name__)
-
 _DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
 _DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
-_MSGSPEC_RENAME_CONVERTERS: Final[dict[str, Callable[[str], str]]] = {
-    "camel": camelize,
-    "kebab": kebabize,
-    "pascal": pascalize,
-}
+_MAPPING_TYPE_ARGUMENT_COUNT: Final = 2
+_MSGSPEC_FIELD_CACHE: "dict[type, tuple[tuple[tuple[str, str, Any], ...], frozenset[str], frozenset[str]]]" = {}
 _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
+_NULLABLE_UNION_ARGUMENT_COUNT: Final = 2
 
 
 # =============================================================================
@@ -356,20 +350,11 @@ def _get_numpy_recursive_dispatcher() -> "TypeDispatcher[Callable[[Any], Any]]":
 
 def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     """Convert data to msgspec Struct."""
-    rename_config = get_msgspec_rename_config(schema_type)
-
-    transformed_data = data
-    if (rename_config and is_dict(data)) or (isinstance(data, Sequence) and data and is_dict(data[0])):
-        try:
-            converter = _MSGSPEC_RENAME_CONVERTERS.get(rename_config) if rename_config else None
-            if converter:
-                transformed_data = (
-                    [transform_dict_keys(item, converter) if is_dict(item) else item for item in data]
-                    if isinstance(data, Sequence)
-                    else (transform_dict_keys(data, converter) if is_dict(data) else data)
-                )
-        except Exception as e:
-            logger.debug("Field name transformation failed for msgspec schema: %s", e)
+    transformed_data = (
+        [_normalize_msgspec_input(item, schema_type) for item in data]
+        if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray))
+        else _normalize_msgspec_input(data, schema_type)
+    )
 
     target_type = list[schema_type] if isinstance(transformed_data, Sequence) else schema_type
 
@@ -384,6 +369,98 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
         return convert(
             obj=transformed_data, type=target_type, from_attributes=True, dec_hook=_DEFAULT_MSGSPEC_DESERIALIZER
         )
+
+
+def _normalize_msgspec_input(data: Any, target_type: Any) -> Any:
+    """Normalize Struct field aliases according to the declared target type."""
+    target_type = _unwrap_msgspec_target(target_type)
+    if target_type is None:
+        return data
+
+    if is_msgspec_struct(target_type):
+        return _normalize_msgspec_struct(data, cast("type", target_type))
+
+    origin = get_origin(target_type)
+    args = get_args(target_type)
+    if origin is None or not args:
+        return data
+
+    if _is_mapping_origin(origin):
+        if not isinstance(data, Mapping) or len(args) < _MAPPING_TYPE_ARGUMENT_COUNT:
+            return data
+        value_type = args[1]
+        return {key: _normalize_msgspec_input(value, value_type) for key, value in data.items()}
+
+    if _is_sequence_origin(origin):
+        if not isinstance(data, Sequence) or isinstance(data, (str, bytes, bytearray)):
+            return data
+        if origin is tuple and len(args) > 1 and args[1] is not Ellipsis:
+            return [
+                _normalize_msgspec_input(value, args[index]) if index < len(args) else value
+                for index, value in enumerate(data)
+            ]
+        item_type = next(iter(args), Any)
+        return [_normalize_msgspec_input(value, item_type) for value in data]
+
+    return data
+
+
+def _normalize_msgspec_struct(data: Any, schema_type: type) -> Any:
+    if not isinstance(data, Mapping):
+        return data
+
+    fields, python_names, encoded_names = _msgspec_field_plan(schema_type)
+    normalized = {key: value for key, value in data.items() if key not in python_names and key not in encoded_names}
+
+    for name, encode_name, field_type in fields:
+        if encode_name in data:
+            normalized[encode_name] = _normalize_msgspec_input(data[encode_name], field_type)
+        elif name in data:
+            normalized[encode_name] = _normalize_msgspec_input(data[name], field_type)
+
+    return normalized
+
+
+def _msgspec_field_plan(schema_type: type) -> "tuple[tuple[tuple[str, str, Any], ...], frozenset[str], frozenset[str]]":
+    try:
+        return _MSGSPEC_FIELD_CACHE[schema_type]
+    except KeyError:
+        from msgspec import structs
+
+        fields = tuple(
+            (field.name, field.encode_name, field.type) for field in structs.fields(cast("Any", schema_type))
+        )
+        plan = fields, frozenset(field[0] for field in fields), frozenset(field[1] for field in fields)
+        _MSGSPEC_FIELD_CACHE[schema_type] = plan
+        return plan
+
+
+def _unwrap_msgspec_target(target_type: Any) -> Any:
+    while get_origin(target_type) is Annotated:
+        target_type = get_args(target_type)[0]
+
+    origin = get_origin(target_type)
+    if origin is Union or origin is UnionType:
+        args = get_args(target_type)
+        non_null = tuple(arg for arg in args if arg is not type(None))
+        if len(args) == _NULLABLE_UNION_ARGUMENT_COUNT and len(non_null) == 1:
+            return _unwrap_msgspec_target(non_null[0])
+        return None
+    return target_type
+
+
+def _is_mapping_origin(origin: Any) -> bool:
+    try:
+        return issubclass(origin, Mapping)
+    except TypeError:
+        return False
+
+
+def _is_sequence_origin(origin: Any) -> bool:
+    try:
+        return issubclass(origin, Sequence)
+    except TypeError:
+        return False
 
 
 def _convert_pydantic(data: Any, schema_type: Any) -> Any:
