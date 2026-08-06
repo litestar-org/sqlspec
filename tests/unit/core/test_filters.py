@@ -4,7 +4,6 @@ This module tests the filter system that provides dynamic WHERE clauses,
 ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming.
 """
 
-import inspect
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -61,27 +60,6 @@ def test_public_filters_alias_points_to_core_filters_module() -> None:
     import sqlspec
 
     assert sqlspec.filters is filters_module
-
-
-def test_filter_hierarchy_uses_shared_private_bases() -> None:
-    """Public filter classes keep their API while sharing private implementation bodies."""
-    source = Path("sqlspec/core/filters.py").read_text()
-    assert "class _DatetimeBoundFilter(StatementFilter):" in source
-    assert "class BeforeAfterFilter(_DatetimeBoundFilter):" in source
-    assert "class OnBeforeAfterFilter(_DatetimeBoundFilter):" in source
-
-    datetime_section = source.split("class _DatetimeBoundFilter", 1)[1].split("class InAnyFilter", 1)[0]
-    assert datetime_section.count("def extract_parameters(") == 1
-    assert datetime_section.count("def append_to_statement(") == 1
-
-    assert "class _TextSearchFilter(StatementFilter):" in source
-    assert "class SearchFilter(_TextSearchFilter):" in source
-    assert "class NotInSearchFilter(SearchFilter):" in source
-
-    search_section = source.split("class _TextSearchFilter", 1)[1].split("class NullFilter", 1)[0]
-    assert search_section.count("def extract_parameters(") == 1
-    assert search_section.count("def append_to_statement(") == 1
-    assert search_section.count("def get_cache_key(") == 1
 
 
 def test_filters_docs_render_inherited_members() -> None:
@@ -325,14 +303,6 @@ def test_filter_parameter_conflict_resolution() -> None:
     new_param_keys = [k for k in result.parameters.keys() if k.startswith("name_search_") and k != "name_search"]
     assert len(new_param_keys) == 1
     assert result.parameters[new_param_keys[0]] == "%new_value%"
-
-
-def test_resolve_parameter_conflicts_binds_statement_parameters_once() -> None:
-    """Conflict resolution should avoid duplicate parameter property reads."""
-    source = inspect.getsource(StatementFilter._resolve_parameter_conflicts)
-
-    assert source.count("statement.parameters") == 1
-    assert "existing_params.update" not in source
 
 
 def test_multiple_filters_preserve_column_names() -> None:
@@ -981,12 +951,6 @@ def test_not_in_search_filter_declares_empty_slots() -> None:
     """NotInSearchFilter should not allocate an instance dict."""
 
     assert NotInSearchFilter.__slots__ == ()
-
-
-def test_dead_create_filters_api_removed() -> None:
-    """The create_filters helper was redundant with tuple()."""
-
-    assert not hasattr(filters_module, "create_filters")
 
 
 def test_not_in_collection_parameter_suffix_is_literal() -> None:

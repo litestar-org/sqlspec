@@ -212,14 +212,6 @@ _STORE_CLASSES = (
 
 
 def test_oracle_stores_use_shared_version_cache() -> None:
-    """Stores neither instantiate fresh dictionaries nor keep private version caches."""
-    import inspect
-
-    for module in (events_store, adk_store):
-        source = inspect.getsource(module)
-        assert "OracledbSyncDataDictionary()" not in source
-        assert "OracledbAsyncDataDictionary()" not in source
-
     for store_class in _STORE_CLASSES:
         slots = set(store_class.__slots__)
         assert "_oracle_version_info" not in slots

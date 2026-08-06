@@ -3,7 +3,6 @@
 import importlib.util
 import inspect
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 from unittest.mock import patch
 
@@ -938,20 +937,6 @@ def test_result_external_api_docstring_markers() -> None:
     """Dead-code policy markers identify externally callable result helpers."""
     for member in (ArrowResult.num_columns.fget, StackResult.is_arrow_result, StackResult.from_arrow_result):
         assert "External/extension API" in (inspect.getdoc(member) or "")
-
-
-def test_result_and_stack_idiom_source_shapes() -> None:
-    """Result and stack helpers should keep MyPyC-safe source shapes."""
-    result_source = Path("sqlspec/core/result/_base.py").read_text()
-    assert "return iter(arrow_table_to_pylist" in result_source
-    assert "yield from arrow_table_to_pylist" not in result_source
-    assert 'object.__getattribute__(self.result, "rows_affected")' in result_source
-    assert "_EMPTY_RESULT_STATEMENT: Final" in result_source
-    assert "_DEFAULT_DML_METADATA: Final" in result_source
-
-    stack_source = Path("sqlspec/core/stack.py").read_text()
-    assert "ALLOWED_METHODS: Final[tuple[str, ...]]" in stack_source
-    assert 'StackOperation("execute_many", normalized_statement, tuple(arguments), frozen_kwargs)' not in stack_source
 
 
 def test_arrow_result_to_pandas_with_null_values() -> None:

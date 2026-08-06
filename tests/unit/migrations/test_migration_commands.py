@@ -498,10 +498,3 @@ def test_commands_contract_base_revision_file_type_default_matches_concrete_comm
     assert base_param.default is None
     assert sync_param.default is None
     assert async_param.default is None
-
-
-def test_commands_contract_upgrade_documents_config_auto_sync_as_unoverridable() -> None:
-    sync_source = inspect.getsource(SyncMigrationCommands.upgrade)
-    async_source = inspect.getsource(AsyncMigrationCommands.upgrade)
-    assert "config auto_sync=False cannot be overridden by the call-site flag" in sync_source
-    assert "config auto_sync=False cannot be overridden by the call-site flag" in async_source

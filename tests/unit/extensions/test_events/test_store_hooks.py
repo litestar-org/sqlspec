@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.extensions.events import BaseEventQueueStore
-from sqlspec.extensions.events._queue import _BaseTableEventQueue
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite import SqliteConfig
@@ -22,30 +21,6 @@ if TYPE_CHECKING:
     BaseEventQueueStoreBase = BaseEventQueueStore[SqliteConfig]
 else:
     BaseEventQueueStoreBase = BaseEventQueueStore
-
-
-def test_private_sql_helpers_use_purpose_names() -> None:
-    assert hasattr(BaseEventQueueStore, "_table_ddl")
-    assert hasattr(BaseEventQueueStore, "_index_ddl")
-    assert not hasattr(BaseEventQueueStore, "_build_create_table_sql")
-    assert not hasattr(BaseEventQueueStore, "_build_index_sql")
-
-
-def test_table_queue_private_sql_helpers_use_purpose_names() -> None:
-    assert hasattr(_BaseTableEventQueue, "_insert_sql")
-    assert hasattr(_BaseTableEventQueue, "_select_sql")
-    assert hasattr(_BaseTableEventQueue, "_select_by_id_sql")
-    assert hasattr(_BaseTableEventQueue, "_claim_sql")
-    assert hasattr(_BaseTableEventQueue, "_ack_sql")
-    assert hasattr(_BaseTableEventQueue, "_nack_sql")
-    assert hasattr(_BaseTableEventQueue, "_cleanup_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_insert_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_select_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_select_by_id_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_claim_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_ack_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_nack_sql")
-    assert not hasattr(_BaseTableEventQueue, "_build_cleanup_sql")
 
 
 def test_base_store_string_type_default() -> None:

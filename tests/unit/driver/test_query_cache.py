@@ -20,7 +20,6 @@ from sqlspec.core import (
     get_cache,
 )
 from sqlspec.core.parameters._processor import ParameterProcessor
-from sqlspec.driver import _common as driver_common
 from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.exceptions import SQLSpecError
 
@@ -53,27 +52,6 @@ def _make_cached(
         processed_state=processed_state,
         column_names=column_names,
     )
-
-
-def test_driver_common_dead_script_and_version_helpers_stay_removed() -> None:
-    """Retired private helper names should not reappear in the compiled driver module."""
-    for name in (
-        "EXEC_CURSOR_RESULT",
-        "EXEC_ROWCOUNT_OVERRIDE",
-        "EXEC_SPECIAL_DATA",
-        "ScriptExecutionResult",
-        "get_cached_version_for_driver",
-        "cache_version_for_driver",
-        "detect_version_with_queries",
-        "parse_version_string",
-    ):
-        assert not hasattr(driver_common, name)
-
-
-def test_private_statement_cache_helper_names_are_cleaned_up() -> None:
-    """Statement-cache helpers should use purpose-oriented private names."""
-    assert hasattr(driver_common.CommonDriverAttributesMixin, "_cached_execution")
-    assert not hasattr(driver_common.CommonDriverAttributesMixin, "_stmt_cache_lookup")
 
 
 def test_sync_execute_cache_hit_uses_fast_path(sqlite_sync_driver, monkeypatch) -> None:

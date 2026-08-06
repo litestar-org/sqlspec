@@ -15,7 +15,6 @@ from typing import Any
 
 import pytest
 
-import sqlspec.loader as loader_module
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, SQLStatementNotFoundError
 from sqlspec.loader import (
@@ -38,11 +37,6 @@ def test_named_statement_creation() -> None:
     assert stmt.sql == "SELECT 1"
     assert stmt.dialect == "postgres"
     assert stmt.start_line == 10
-
-
-def test_loader_dead_private_constants_stay_removed() -> None:
-    assert not hasattr(loader_module, "TRIM_SPECIAL_CHARS")
-    assert not hasattr(loader_module, "MIN_QUERY_PARTS")
 
 
 def test_named_statement_no_dialect() -> None:

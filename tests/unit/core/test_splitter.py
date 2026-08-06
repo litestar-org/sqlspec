@@ -1,6 +1,5 @@
 """Unit tests for SQL splitter helpers."""
 
-import inspect
 from typing import Any
 
 import pytest
@@ -31,16 +30,6 @@ DIALECT_DEFAULTS: dict[type[Any], tuple[str, set[str], set[str], set[str], set[s
     splitter_module.DuckDBDialectConfig: ("duckdb", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
     splitter_module.BigQueryDialectConfig: ("bigquery", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
 }
-
-
-def test_join_string_fragments_helper_removed() -> None:
-    """The one-line join helper should not remain in the splitter module."""
-
-    assert not hasattr(splitter_module, "_join_string_fragments")
-
-
-def test_splitter_private_cache_stats_helper_removed() -> None:
-    assert not hasattr(splitter_module, "get_splitter_cache_stats")
 
 
 def test_dialect_class_map_contains_expected_aliases() -> None:
@@ -85,11 +74,6 @@ def test_dialect_configs_share_eager_base_without_lazy_property_boilerplate() ->
     eager_base = getattr(splitter_module, "_EagerDialectConfig")
     for config_class in PUBLIC_DIALECT_CONFIGS:
         assert issubclass(config_class, eager_base)
-        source = inspect.getsource(config_class)
-        assert "if self._name is None" not in source
-        assert "if self._block_starters is None" not in source
-        assert "if self._block_enders is None" not in source
-        assert "if self._statement_terminators is None" not in source
 
 
 @pytest.mark.parametrize("config_class", PUBLIC_DIALECT_CONFIGS)

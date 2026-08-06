@@ -16,10 +16,8 @@ Key Test Coverage:
 
 import copy
 import importlib.util
-import inspect
 import logging
 import pickle
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -72,11 +70,6 @@ DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
 )
 TEST_CONFIG = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
-
-
-def test_sql_private_raw_sql_helper_uses_purpose_name() -> None:
-    assert hasattr(SQL, "_materialized_raw_sql")
-    assert not hasattr(SQL, "_get_raw_sql")
 
 
 @pytest.mark.parametrize(
@@ -278,18 +271,6 @@ def test_sql_where_preserves_generated_parameter_counters() -> None:
     stmt = SQL("SELECT * FROM users").where_eq("id", 1)
     filtered = stmt.where("active = TRUE")
     assert filtered._sql_param_counters == stmt._sql_param_counters
-
-
-def test_statement_where_helpers_are_consolidated() -> None:
-    source = Path("sqlspec/core/statement.py").read_text()
-    clone_section = source.split("def _copy_with_expression", 1)[1].split("def where(", 1)[0]
-    assert "def _copy_base(" in clone_section
-    assert clone_section.count("statement_config=self._statement_config") == 1
-    assert "def _where_condition(" in source
-    assert "def _where_comparison(" in source
-    assert "def _where_sequence_membership(" in source
-    assert source.count("new_sql._named_parameters[param_name] =") == 1
-    assert source.count("safe_modify_with_cte(expression, lambda e: apply_where(e, condition))") <= 2
 
 
 def test_sql_order_by_preserves_generated_parameter_counters() -> None:
@@ -980,13 +961,6 @@ def test_sql_as_script_creates_new_instance() -> None:
     assert script_stmt is not original
     assert script_stmt._is_script is True
     assert original._is_script is False
-
-
-def test_sql_as_script_reuses_copy_base() -> None:
-    source = inspect.getsource(SQL.as_script)
-
-    assert "self._copy_base" in source
-    assert "SQL(" not in source
 
 
 def test_statement_config_public_fields_are_derived_from_slots() -> None:

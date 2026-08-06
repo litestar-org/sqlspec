@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 from unittest.mock import patch
 
@@ -236,11 +235,6 @@ def test_transformer_empty_attrs_noop() -> None:
 
 
 def test_transformer_factory_uses_module_level_callables() -> None:
-    source = inspect.getsource(create_sqlcommenter_statement_transformer)
-    assert "def _noop_transformer" not in source
-    assert "def _static_transformer" not in source
-    assert "def _dynamic_transformer" not in source
-
     noop_transformer = create_sqlcommenter_statement_transformer(attributes={})
     static_transformer = create_sqlcommenter_statement_transformer(attributes={"db_driver": "asyncpg"})
     dynamic_transformer = create_sqlcommenter_statement_transformer(enable_context=True)

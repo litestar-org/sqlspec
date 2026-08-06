@@ -1,580 +1,206 @@
 # pyright: reportPrivateUsage=false
-"""Tests for fetch* method aliases in SyncDriverAdapterBase and AsyncDriverAdapterBase.
-
-Tests that all 16 fetch* methods (8 sync + 8 async) exist, have matching signatures,
-and delegate correctly to their corresponding select* methods.
-
-Uses function-based pytest approach as per AGENTS.md requirements.
-"""
+"""Tests for the fetch method compatibility aliases."""
 
 import inspect
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
 
-# Test method existence and signature equivalence
-
-
-def test_sync_fetch_method_exists() -> None:
-    """Test that fetch() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch"))
-
-
-def test_sync_fetch_one_method_exists() -> None:
-    """Test that fetch_one() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_one")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_one"))
-
-
-def test_sync_fetch_one_or_none_method_exists() -> None:
-    """Test that fetch_one_or_none() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_one_or_none")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_one_or_none"))
-
-
-def test_sync_fetch_value_method_exists() -> None:
-    """Test that fetch_value() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_value")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_value"))
-
-
-def test_sync_fetch_value_or_none_method_exists() -> None:
-    """Test that fetch_value_or_none() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_value_or_none")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_value_or_none"))
-
-
-def test_sync_fetch_to_arrow_method_exists() -> None:
-    """Test that fetch_to_arrow() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_to_arrow")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_to_arrow"))
-
-
-def test_sync_fetch_stream_method_exists() -> None:
-    """Test that fetch_stream() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_stream")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_stream"))
-
-
-def test_sync_fetch_with_total_method_exists() -> None:
-    """Test that fetch_with_total() method exists on SyncDriverAdapterBase."""
-    assert hasattr(SyncDriverAdapterBase, "fetch_with_total")
-    assert callable(getattr(SyncDriverAdapterBase, "fetch_with_total"))
-
-
-def test_async_fetch_method_exists() -> None:
-    """Test that fetch() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch"))
-
-
-def test_async_fetch_one_method_exists() -> None:
-    """Test that fetch_one() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_one")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_one"))
-
-
-def test_async_fetch_one_or_none_method_exists() -> None:
-    """Test that fetch_one_or_none() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_one_or_none")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_one_or_none"))
-
-
-def test_async_fetch_value_method_exists() -> None:
-    """Test that fetch_value() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_value")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_value"))
-
-
-def test_async_fetch_value_or_none_method_exists() -> None:
-    """Test that fetch_value_or_none() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_value_or_none")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_value_or_none"))
-
-
-def test_async_fetch_to_arrow_method_exists() -> None:
-    """Test that fetch_to_arrow() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_to_arrow")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_to_arrow"))
-
-
-def test_async_fetch_stream_method_exists() -> None:
-    """Test that fetch_stream() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_stream")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_stream"))
-
-
-def test_async_fetch_with_total_method_exists() -> None:
-    """Test that fetch_with_total() method exists on AsyncDriverAdapterBase."""
-    assert hasattr(AsyncDriverAdapterBase, "fetch_with_total")
-    assert callable(getattr(AsyncDriverAdapterBase, "fetch_with_total"))
-
-
-# Test signature equivalence between fetch* and select* methods
-
-
-def test_sync_fetch_signature_matches_select() -> None:
-    """Test that fetch() signature matches select() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select)
-
-    # Parameters should be identical
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_one_signature_matches_select_one() -> None:
-    """Test that fetch_one() signature matches select_one() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_one)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_one)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_one_or_none_signature_matches_select_one_or_none() -> None:
-    """Test that fetch_one_or_none() signature matches select_one_or_none() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_one_or_none)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_one_or_none)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_value_signature_matches_select_value() -> None:
-    """Test that fetch_value() signature matches select_value() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_value)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_value)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_value_or_none_signature_matches_select_value_or_none() -> None:
-    """Test that fetch_value_or_none() signature matches select_value_or_none() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_value_or_none)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_value_or_none)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_to_arrow_signature_matches_select_to_arrow() -> None:
-    """Test that fetch_to_arrow() signature matches select_to_arrow() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_to_arrow)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_to_arrow)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_stream_signature_matches_select_stream() -> None:
-    """Test that fetch_stream() signature matches select_stream() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_stream)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_stream)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_sync_fetch_with_total_signature_matches_select_with_total() -> None:
-    """Test that fetch_with_total() signature matches select_with_total() signature."""
-    fetch_sig = inspect.signature(SyncDriverAdapterBase.fetch_with_total)
-    select_sig = inspect.signature(SyncDriverAdapterBase.select_with_total)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_signature_matches_select() -> None:
-    """Test that async fetch() signature matches async select() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_one_signature_matches_select_one() -> None:
-    """Test that async fetch_one() signature matches async select_one() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_one)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_one)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_one_or_none_signature_matches_select_one_or_none() -> None:
-    """Test that async fetch_one_or_none() signature matches async select_one_or_none() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_one_or_none)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_one_or_none)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_value_signature_matches_select_value() -> None:
-    """Test that async fetch_value() signature matches async select_value() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_value)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_value)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_value_or_none_signature_matches_select_value_or_none() -> None:
-    """Test that async fetch_value_or_none() signature matches async select_value_or_none() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_value_or_none)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_value_or_none)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_to_arrow_signature_matches_select_to_arrow() -> None:
-    """Test that async fetch_to_arrow() signature matches async select_to_arrow() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_to_arrow)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_to_arrow)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_stream_signature_matches_select_stream() -> None:
-    """Test that async fetch_stream() signature matches async select_stream() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_stream)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_stream)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-def test_async_fetch_with_total_signature_matches_select_with_total() -> None:
-    """Test that async fetch_with_total() signature matches async select_with_total() signature."""
-    fetch_sig = inspect.signature(AsyncDriverAdapterBase.fetch_with_total)
-    select_sig = inspect.signature(AsyncDriverAdapterBase.select_with_total)
-
-    assert fetch_sig.parameters == select_sig.parameters
-
-
-# Test delegation behavior using mocks
+_ALIAS_PAIRS = (
+    ("fetch", "select"),
+    ("fetch_one", "select_one"),
+    ("fetch_one_or_none", "select_one_or_none"),
+    ("fetch_value", "select_value"),
+    ("fetch_value_or_none", "select_value_or_none"),
+    ("fetch_to_arrow", "select_to_arrow"),
+    ("fetch_stream", "select_stream"),
+    ("fetch_with_total", "select_with_total"),
+)
+
+_DELEGATION_CASES = (
+    (
+        "fetch",
+        "select",
+        ("SELECT * FROM users", {"id": 1}),
+        {"schema_type": None, "statement_config": None},
+        {"schema_type": None, "statement_config": None},
+        [{"id": 1}],
+    ),
+    (
+        "fetch_one",
+        "select_one",
+        ("SELECT * FROM users WHERE id = ?", {"id": 1}),
+        {"schema_type": None, "statement_config": None},
+        {"schema_type": None, "statement_config": None},
+        {"id": 1},
+    ),
+    (
+        "fetch_one_or_none",
+        "select_one_or_none",
+        ("SELECT * FROM users WHERE id = ?", {"id": 999}),
+        {"schema_type": None, "statement_config": None},
+        {"schema_type": None, "statement_config": None},
+        None,
+    ),
+    (
+        "fetch_value",
+        "select_value",
+        ("SELECT COUNT(*) FROM users",),
+        {"statement_config": None},
+        {"value_type": None, "statement_config": None},
+        42,
+    ),
+    (
+        "fetch_value_or_none",
+        "select_value_or_none",
+        ("SELECT MAX(id) FROM empty_table",),
+        {"statement_config": None},
+        {"value_type": None, "statement_config": None},
+        None,
+    ),
+    (
+        "fetch_to_arrow",
+        "select_to_arrow",
+        ("SELECT * FROM users",),
+        {
+            "statement_config": None,
+            "return_format": "table",
+            "native_only": False,
+            "batch_size": None,
+            "arrow_schema": None,
+        },
+        {
+            "statement_config": None,
+            "return_format": "table",
+            "native_only": False,
+            "batch_size": None,
+            "arrow_schema": None,
+        },
+        object(),
+    ),
+    (
+        "fetch_stream",
+        "select_stream",
+        ("SELECT * FROM users",),
+        {"schema_type": None, "statement_config": None, "chunk_size": 25, "native_only": False},
+        {"schema_type": None, "statement_config": None, "chunk_size": 25, "native_only": False},
+        object(),
+    ),
+    (
+        "fetch_with_total",
+        "select_with_total",
+        ("SELECT * FROM users LIMIT 2",),
+        {"schema_type": None, "statement_config": None},
+        {"schema_type": None, "statement_config": None, "count_with_window": False},
+        ([{"id": 1}, {"id": 2}], 100),
+    ),
+)
+
+
+@pytest.mark.parametrize("base", (SyncDriverAdapterBase, AsyncDriverAdapterBase), ids=("sync", "async"))
+@pytest.mark.parametrize(("alias_name", "target_name"), _ALIAS_PAIRS)
+def test_fetch_alias_matches_select_signature(base: type[Any], alias_name: str, target_name: str) -> None:
+    alias = getattr(base, alias_name)
+    target = getattr(base, target_name)
+
+    assert callable(alias)
+    assert inspect.signature(alias).parameters == inspect.signature(target).parameters
 
 
 @requires_interpreted
-def test_sync_fetch_delegates_to_select() -> None:
-    """Test that fetch() delegates to select() with identical arguments."""
-    # Create mock driver with mocked select method
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_driver.select = Mock(return_value=[{"id": 1}])
+@pytest.mark.parametrize(
+    ("alias_name", "target_name", "args", "call_kwargs", "expected_kwargs", "expected"), _DELEGATION_CASES
+)
+def test_sync_fetch_alias_delegates(
+    alias_name: str,
+    target_name: str,
+    args: tuple[Any, ...],
+    call_kwargs: dict[str, Any],
+    expected_kwargs: dict[str, Any],
+    expected: Any,
+) -> None:
+    driver = Mock(spec=SyncDriverAdapterBase)
+    target = Mock(return_value=expected)
+    setattr(driver, target_name, target)
 
-    # Call the real fetch method implementation
-    result = SyncDriverAdapterBase.fetch(
-        mock_driver, "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
-    )
+    result = getattr(SyncDriverAdapterBase, alias_name)(driver, *args, **call_kwargs)
 
-    # Verify select was called with same arguments
-    mock_driver.select.assert_called_once_with(
-        "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
-    )
-    assert result == [{"id": 1}]
-
-
-@requires_interpreted
-def test_sync_fetch_one_delegates_to_select_one() -> None:
-    """Test that fetch_one() delegates to select_one() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_driver.select_one = Mock(return_value={"id": 1})
-
-    result = SyncDriverAdapterBase.fetch_one(
-        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
-    )
-
-    mock_driver.select_one.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
-    )
-    assert result == {"id": 1}
+    target.assert_called_once_with(*args, **expected_kwargs)
+    assert result is expected
 
 
 @requires_interpreted
-def test_sync_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
-    """Test that fetch_one_or_none() delegates to select_one_or_none() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_driver.select_one_or_none = Mock(return_value=None)
+@pytest.mark.parametrize(
+    ("alias_name", "target_name", "args", "call_kwargs", "expected_kwargs", "expected"),
+    tuple(case for case in _DELEGATION_CASES if case[0] != "fetch_stream"),
+)
+async def test_async_fetch_alias_delegates(
+    alias_name: str,
+    target_name: str,
+    args: tuple[Any, ...],
+    call_kwargs: dict[str, Any],
+    expected_kwargs: dict[str, Any],
+    expected: Any,
+) -> None:
+    driver = AsyncMock(spec=AsyncDriverAdapterBase)
+    target = AsyncMock(return_value=expected)
+    setattr(driver, target_name, target)
 
-    result = SyncDriverAdapterBase.fetch_one_or_none(
-        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
-    )
+    result = await getattr(AsyncDriverAdapterBase, alias_name)(driver, *args, **call_kwargs)
 
-    mock_driver.select_one_or_none.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
-    )
-    assert result is None
-
-
-@requires_interpreted
-def test_sync_fetch_value_delegates_to_select_value() -> None:
-    """Test that fetch_value() delegates to select_value() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_driver.select_value = Mock(return_value=42)
-
-    result = SyncDriverAdapterBase.fetch_value(mock_driver, "SELECT COUNT(*) FROM users", statement_config=None)
-
-    mock_driver.select_value.assert_called_once_with(
-        "SELECT COUNT(*) FROM users", value_type=None, statement_config=None
-    )
-    assert result == 42
+    target.assert_awaited_once_with(*args, **expected_kwargs)
+    assert result is expected
 
 
 @requires_interpreted
-def test_sync_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
-    """Test that fetch_value_or_none() delegates to select_value_or_none() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_driver.select_value_or_none = Mock(return_value=None)
-
-    result = SyncDriverAdapterBase.fetch_value_or_none(
-        mock_driver, "SELECT MAX(id) FROM empty_table", statement_config=None
-    )
-
-    mock_driver.select_value_or_none.assert_called_once_with(
-        "SELECT MAX(id) FROM empty_table", value_type=None, statement_config=None
-    )
-    assert result is None
-
-
-@requires_interpreted
-def test_sync_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
-    """Test that fetch_to_arrow() delegates to select_to_arrow() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_arrow_result = Mock()
-    mock_driver.select_to_arrow = Mock(return_value=mock_arrow_result)
-
-    result = SyncDriverAdapterBase.fetch_to_arrow(
-        mock_driver,
-        "SELECT * FROM users",
-        statement_config=None,
-        return_format="table",
-        native_only=False,
-        batch_size=None,
-        arrow_schema=None,
-    )
-
-    mock_driver.select_to_arrow.assert_called_once_with(
-        "SELECT * FROM users",
-        statement_config=None,
-        return_format="table",
-        native_only=False,
-        batch_size=None,
-        arrow_schema=None,
-    )
-    assert result == mock_arrow_result
-
-
-@requires_interpreted
-def test_sync_fetch_stream_delegates_to_select_stream() -> None:
-    """Test that fetch_stream() delegates to select_stream() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_stream = Mock()
-    mock_driver.select_stream = Mock(return_value=mock_stream)
-
-    result = SyncDriverAdapterBase.fetch_stream(
-        mock_driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
-    )
-
-    mock_driver.select_stream.assert_called_once_with(
-        "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
-    )
-    assert result == mock_stream
-
-
-@requires_interpreted
-def test_sync_fetch_with_total_delegates_to_select_with_total() -> None:
-    """Test that fetch_with_total() delegates to select_with_total() with identical arguments."""
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    mock_driver.select_with_total = Mock(return_value=([{"id": 1}, {"id": 2}], 100))
-
-    result = SyncDriverAdapterBase.fetch_with_total(
-        mock_driver, "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
-    )
-
-    mock_driver.select_with_total.assert_called_once_with(
-        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None, count_with_window=False
-    )
-    assert result == ([{"id": 1}, {"id": 2}], 100)
-
-
-@requires_interpreted
-async def test_async_fetch_delegates_to_select() -> None:
-    """Test that async fetch() delegates to async select() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_driver.select = AsyncMock(return_value=[{"id": 1}])
-
-    result = await AsyncDriverAdapterBase.fetch(
-        mock_driver, "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
-    )
-
-    mock_driver.select.assert_called_once_with(
-        "SELECT * FROM users", {"id": 1}, schema_type=None, statement_config=None
-    )
-    assert result == [{"id": 1}]
-
-
-@requires_interpreted
-async def test_async_fetch_one_delegates_to_select_one() -> None:
-    """Test that async fetch_one() delegates to async select_one() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_driver.select_one = AsyncMock(return_value={"id": 1})
-
-    result = await AsyncDriverAdapterBase.fetch_one(
-        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
-    )
-
-    mock_driver.select_one.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?", {"id": 1}, schema_type=None, statement_config=None
-    )
-    assert result == {"id": 1}
-
-
-@requires_interpreted
-async def test_async_fetch_one_or_none_delegates_to_select_one_or_none() -> None:
-    """Test that async fetch_one_or_none() delegates to async select_one_or_none() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_driver.select_one_or_none = AsyncMock(return_value=None)
-
-    result = await AsyncDriverAdapterBase.fetch_one_or_none(
-        mock_driver, "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
-    )
-
-    mock_driver.select_one_or_none.assert_called_once_with(
-        "SELECT * FROM users WHERE id = ?", {"id": 999}, schema_type=None, statement_config=None
-    )
-    assert result is None
-
-
-@requires_interpreted
-async def test_async_fetch_value_delegates_to_select_value() -> None:
-    """Test that async fetch_value() delegates to async select_value() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_driver.select_value = AsyncMock(return_value=42)
-
-    result = await AsyncDriverAdapterBase.fetch_value(mock_driver, "SELECT COUNT(*) FROM users", statement_config=None)
-
-    mock_driver.select_value.assert_called_once_with(
-        "SELECT COUNT(*) FROM users", value_type=None, statement_config=None
-    )
-    assert result == 42
-
-
-@requires_interpreted
-async def test_async_fetch_value_or_none_delegates_to_select_value_or_none() -> None:
-    """Test that async fetch_value_or_none() delegates to async select_value_or_none() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_driver.select_value_or_none = AsyncMock(return_value=None)
-
-    result = await AsyncDriverAdapterBase.fetch_value_or_none(
-        mock_driver, "SELECT MAX(id) FROM empty_table", statement_config=None
-    )
-
-    mock_driver.select_value_or_none.assert_called_once_with(
-        "SELECT MAX(id) FROM empty_table", value_type=None, statement_config=None
-    )
-    assert result is None
-
-
-@requires_interpreted
-async def test_async_fetch_to_arrow_delegates_to_select_to_arrow() -> None:
-    """Test that async fetch_to_arrow() delegates to async select_to_arrow() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_arrow_result = Mock()
-    mock_driver.select_to_arrow = AsyncMock(return_value=mock_arrow_result)
-
-    result = await AsyncDriverAdapterBase.fetch_to_arrow(
-        mock_driver,
-        "SELECT * FROM users",
-        statement_config=None,
-        return_format="table",
-        native_only=False,
-        batch_size=None,
-        arrow_schema=None,
-    )
-
-    mock_driver.select_to_arrow.assert_called_once_with(
-        "SELECT * FROM users",
-        statement_config=None,
-        return_format="table",
-        native_only=False,
-        batch_size=None,
-        arrow_schema=None,
-    )
-    assert result == mock_arrow_result
-
-
-@requires_interpreted
-def test_async_fetch_stream_delegates_to_select_stream() -> None:
-    """Test that async fetch_stream() delegates to async select_stream() with identical arguments."""
-    mock_driver = Mock(spec=AsyncDriverAdapterBase)
-    mock_stream = Mock()
-    mock_driver.select_stream = Mock(return_value=mock_stream)
+def test_async_fetch_stream_delegates_without_awaiting() -> None:
+    driver = Mock(spec=AsyncDriverAdapterBase)
+    stream = object()
+    driver.select_stream = Mock(return_value=stream)
 
     result = AsyncDriverAdapterBase.fetch_stream(
-        mock_driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
+        driver, "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
     )
 
-    mock_driver.select_stream.assert_called_once_with(
+    driver.select_stream.assert_called_once_with(
         "SELECT * FROM users", schema_type=None, statement_config=None, chunk_size=25, native_only=False
     )
-    assert result == mock_stream
+    assert result is stream
 
 
 @requires_interpreted
-async def test_async_fetch_with_total_delegates_to_select_with_total() -> None:
-    """Test that async fetch_with_total() delegates to async select_with_total() with identical arguments."""
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    mock_driver.select_with_total = AsyncMock(return_value=([{"id": 1}, {"id": 2}], 100))
-
-    result = await AsyncDriverAdapterBase.fetch_with_total(
-        mock_driver, "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None
-    )
-
-    mock_driver.select_with_total.assert_called_once_with(
-        "SELECT * FROM users LIMIT 2", schema_type=None, statement_config=None, count_with_window=False
-    )
-    assert result == ([{"id": 1}, {"id": 2}], 100)
-
-
-# Test that fetch methods preserve schema_type argument handling
-
-
-@requires_interpreted
-def test_sync_fetch_with_schema_type_argument() -> None:
-    """Test that fetch() correctly passes schema_type to select()."""
-
+def test_sync_fetch_preserves_schema_type() -> None:
     class UserSchema:
-        """Sample schema class."""
+        pass
 
-        def __init__(self, **kwargs: Any) -> None:
-            self.id = kwargs.get("id")
-            self.name = kwargs.get("name")
+    driver = Mock(spec=SyncDriverAdapterBase)
+    expected = [UserSchema()]
+    driver.select = Mock(return_value=expected)
 
-    mock_driver = Mock(spec=SyncDriverAdapterBase)
-    expected_result = [UserSchema(id=1, name="Alice")]
-    mock_driver.select = Mock(return_value=expected_result)
+    result = SyncDriverAdapterBase.fetch(driver, "SELECT * FROM users", schema_type=UserSchema, statement_config=None)
 
-    result = SyncDriverAdapterBase.fetch(
-        mock_driver, "SELECT * FROM users", schema_type=UserSchema, statement_config=None
-    )
-
-    mock_driver.select.assert_called_once_with("SELECT * FROM users", schema_type=UserSchema, statement_config=None)
-    assert result == expected_result
+    driver.select.assert_called_once_with("SELECT * FROM users", schema_type=UserSchema, statement_config=None)
+    assert result is expected
 
 
 @requires_interpreted
-async def test_async_fetch_one_with_schema_type_argument() -> None:
-    """Test that async fetch_one() correctly passes schema_type to select_one()."""
-
+async def test_async_fetch_one_preserves_schema_type() -> None:
     class UserSchema:
-        """Sample schema class."""
+        pass
 
-        def __init__(self, **kwargs: Any) -> None:
-            self.id = kwargs.get("id")
-            self.name = kwargs.get("name")
-
-    mock_driver = AsyncMock(spec=AsyncDriverAdapterBase)
-    expected_result = UserSchema(id=1, name="Alice")
-    mock_driver.select_one = AsyncMock(return_value=expected_result)
+    driver = AsyncMock(spec=AsyncDriverAdapterBase)
+    expected = UserSchema()
+    driver.select_one = AsyncMock(return_value=expected)
 
     result = await AsyncDriverAdapterBase.fetch_one(
-        mock_driver, "SELECT * FROM users WHERE id = 1", schema_type=UserSchema, statement_config=None
+        driver, "SELECT * FROM users WHERE id = 1", schema_type=UserSchema, statement_config=None
     )
 
-    mock_driver.select_one.assert_called_once_with(
+    driver.select_one.assert_awaited_once_with(
         "SELECT * FROM users WHERE id = 1", schema_type=UserSchema, statement_config=None
     )
-    assert result == expected_result
+    assert result is expected

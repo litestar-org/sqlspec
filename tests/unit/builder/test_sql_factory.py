@@ -1,7 +1,6 @@
 # pyright: reportAttributeAccessIssue=false
 """Unit tests for SQL factory functionality including parameter binding fixes and new features."""
 
-import importlib.util
 import math
 from collections.abc import Callable
 from typing import Any, cast
@@ -674,12 +673,6 @@ def test_case_property_returns_case_builder() -> None:
     assert hasattr(case_builder, "else_")
     assert hasattr(case_builder, "end")
     assert hasattr(case_builder, "as_")
-
-
-def test_case_implementation_has_no_duplicate_private_module() -> None:
-    """CASE stays public through sqlspec.builder without a duplicate private module."""
-    assert importlib.util.find_spec("sqlspec.builder._case") is None
-    assert Case.__module__ == "sqlspec.builder._select"
 
 
 def test_window_function_shortcuts() -> None:

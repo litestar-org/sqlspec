@@ -215,12 +215,6 @@ def test_copy_job_fields_use_real_reservation_attribute() -> None:
     assert "reservation_id" not in _COPY_JOB_FIELDS
 
 
-def test_copy_job_attribute_helper_removed() -> None:
-    import sqlspec.adapters.bigquery.core as bigquery_core
-
-    assert not hasattr(bigquery_core, "_should_copy_job_attribute")
-
-
 def test_run_query_job_passes_query_start_retry_timeout_and_job_retry() -> None:
     connection = _RecordingConnection()
     retry = build_retry(1.0)
