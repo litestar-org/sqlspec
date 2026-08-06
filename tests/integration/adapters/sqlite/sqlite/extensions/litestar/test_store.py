@@ -10,6 +10,8 @@ import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
+from litestar.stores.base import Store
+from litestar.stores.registry import StoreRegistry
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
@@ -46,3 +48,15 @@ async def test_sync_to_thread_concurrency(sqlite_store: SQLiteStore) -> None:
 
     for i, result in enumerate(results):
         assert result == f"data_{i}".encode()
+
+
+async def test_store_implements_litestar_store_contract(sqlite_store: SQLiteStore) -> None:
+    """SQLite stores satisfy Litestar's nominal store and registry contract."""
+    registry = StoreRegistry()
+
+    assert isinstance(sqlite_store, Store)
+    registry.register("sessions", sqlite_store)
+    assert registry.get("sessions") is sqlite_store
+
+    async with sqlite_store as value:
+        assert value is None
