@@ -12,10 +12,11 @@ import contextvars
 import inspect
 import threading
 import time
+from collections.abc import Coroutine
 from typing import Any, cast
 
 import pytest
-from typing_extensions import Self
+from typing_extensions import Self, assert_type
 
 # Detect whether the sync_tools module is mypyc-compiled.
 # When compiled, `patch.object` / `patch()` on C-extension modules is a no-op,
@@ -467,8 +468,10 @@ async def test_ensure_async_with_async_function() -> None:
     async def already_async(x: int) -> int:
         return x * 6
 
-    ensured: Any = ensure_async_(already_async)
-    result = await ensured(2)
+    ensured = ensure_async_(already_async)
+    result_coroutine = assert_type(ensured(2), Coroutine[Any, Any, int])
+    assert isinstance(result_coroutine, Coroutine)
+    result = await result_coroutine
     assert result == 12
 
 
@@ -479,7 +482,9 @@ async def test_ensure_async_with_sync_function() -> None:
         return x * 7
 
     ensured = ensure_async_(sync_function)
-    result = await ensured(3)
+    result_coroutine = assert_type(ensured(3), Coroutine[Any, Any, int])
+    assert isinstance(result_coroutine, Coroutine)
+    result = await result_coroutine
     assert result == 21
 
 
