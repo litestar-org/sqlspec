@@ -1,9 +1,11 @@
 """Base session store classes for Litestar integration."""
 
 import re
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
+from typing import Any, ClassVar, Final, Generic, TypeVar, cast
+
+from litestar.stores.base import Store
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
@@ -11,11 +13,6 @@ from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
-
-if TYPE_CHECKING:
-    from types import TracebackType
-
-    from typing_extensions import Self
 
 __all__ = ("BaseSQLSpecStore",)
 
@@ -30,11 +27,11 @@ VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63
 
 
-class BaseSQLSpecStore(ABC, Generic[ConfigT]):
+class BaseSQLSpecStore(Store, Generic[ConfigT]):
     """Base class for SQLSpec-backed Litestar session stores.
 
-    Implements the litestar.stores.base.Store protocol for server-side session
-    storage using SQLSpec database adapters.
+    Inherits Litestar's ``Store`` abstract base class for server-side session
+    storage backed by SQLSpec database adapters.
 
     This abstract base class provides common functionality for all database-specific
     store implementations including:
@@ -81,16 +78,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         self._table_name = self._table_name_from_config()
         self._ensure_table_name(self._table_name)
 
-    async def __aenter__(self) -> "Self":
-        """Enter context manager."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> None:
-        """Exit context manager."""
-        return
-
     @property
     def config(self) -> ConfigT:
         """Return the database configuration."""
@@ -106,70 +93,6 @@ class BaseSQLSpecStore(ABC, Generic[ConfigT]):
         """Return whether adapter-level creation should run."""
         manage_schema, create_schema = self._schema_management_flags()
         return manage_schema and create_schema
-
-    @abstractmethod
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        """Get a session value by key.
-
-        Args:
-            key: Session ID to retrieve.
-            renew_for: If given and the value had an initial expiry time set, renew the
-                expiry time for ``renew_for`` seconds. If the value has not been set
-                with an expiry time this is a no-op.
-
-        Returns:
-            Session data as bytes if found and not expired, None otherwise.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Store a session value.
-
-        Args:
-            key: Session ID.
-            value: Session data (will be converted to bytes if string).
-            expires_in: Time in seconds or timedelta before expiration.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def delete(self, key: str) -> None:
-        """Delete a session by key.
-
-        Args:
-            key: Session ID to delete.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def delete_all(self) -> None:
-        """Delete all sessions from the store."""
-        raise NotImplementedError
-
-    @abstractmethod
-    async def exists(self, key: str) -> bool:
-        """Check if a session key exists and is not expired.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            True if the session exists and is not expired.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def expires_in(self, key: str) -> "int | None":
-        """Get the time in seconds until the session expires.
-
-        Args:
-            key: Session ID to check.
-
-        Returns:
-            Seconds until expiration, or None if no expiry or key doesn't exist.
-        """
-        raise NotImplementedError
 
     @abstractmethod
     async def delete_expired(self) -> int:
