@@ -295,6 +295,19 @@ Both forms record the extension under ``extension_config`` and opt it into
 ``get_migration_commands()`` -- mutating ``extension_config`` directly after the
 configuration is built does not re-run discovery.
 
+SQL files inside a registered extension directory use their filename-local
+version in named-query directives. For example,
+``migrations/0001_create_queue.sql`` declares ``migrate-0001-up`` and
+``migrate-0001-down``. SQLSpec still records that migration as
+``ext_litestar_queues_0001`` when the registered extension name is
+``litestar_queues``.
+
+An extension migration stored in the application's main migration directory
+instead carries the prefix in its filename, such as
+``ext_litestar_queues_0001_create_queue.sql``, and therefore declares
+``migrate-ext_litestar_queues_0001-up`` and
+``migrate-ext_litestar_queues_0001-down``.
+
 .. note::
 
    Extension migrations are versioned under an ``ext_{name}_`` prefix, and that

@@ -556,18 +556,8 @@ CREATE TABLE users (
 """
     migration_file.write_text(migration_content)
 
-    runner = MockMigrationRunner(migrations_path)
-
-    runner.loader.clear_cache = Mock()
-    runner.loader.load_sql = Mock()
-    runner.loader.has_query = Mock(side_effect=lambda query: query.endswith("-up"))
-
-    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
-        mock_loader = Mock()
-        mock_loader.validate_migration_file = Mock()
-        mock_get_loader.return_value = mock_loader
-
-        metadata = runner.load_migration(migration_file)
+    runner = SyncMigrationRunner(migrations_path)
+    metadata = runner.load_migration(migration_file)
 
     assert metadata["has_upgrade"] is True
     assert metadata["has_downgrade"] is False

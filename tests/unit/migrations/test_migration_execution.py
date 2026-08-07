@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from sqlspec.driver import ExecutionResult
+from sqlspec.migrations import MigrationLoadError
 from sqlspec.migrations.base import AppliedMigrationRecord, BaseMigrationTracker, LoadedMigrationMetadata
 from sqlspec.migrations.runner import SyncMigrationRunner
 
@@ -389,8 +390,6 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
 
 def test_migration_with_no_downgrade(temp_workspace_with_migrations: Path) -> None:
     """Test migration execution when no downgrade is available."""
-    from unittest.mock import AsyncMock
-
     migrations_dir = temp_workspace_with_migrations / "migrations"
 
     migration_file = migrations_dir / "0001_irreversible.sql"
@@ -403,38 +402,16 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
 
     runner = MockMigrationRunner(migrations_dir)
     mock_driver = Mock()
+    migration = runner.load_migration(migration_file)
 
-    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
-        mock_loader = Mock()
-        mock_loader.validate_migration_file = Mock()
-        mock_get_loader.return_value = mock_loader
+    assert migration["has_upgrade"] is True
+    assert migration["has_downgrade"] is False
 
-        with (
-            patch.object(type(runner.loader), "clear_cache"),
-            patch.object(type(runner.loader), "load_sql"),
-            patch.object(type(runner.loader), "has_query", side_effect=lambda q: q.endswith("-up")),
-        ):
-            migration = runner.load_migration(migration_file)
+    result = runner.execute_upgrade(mock_driver, migration)
+    assert result is not None
 
-            assert migration["has_upgrade"] is True
-            assert migration["has_downgrade"] is False
-
-    with patch.object(migration["loader"], "get_up_sql", new_callable=AsyncMock) as mock_get_up_sql:
-        mock_get_up_sql.return_value = [
-            "CREATE TABLE irreversible_data AS SELECT DISTINCT column1, column2 FROM legacy_table;"
-        ]
-
-        result = runner.execute_upgrade(mock_driver, migration)
-        assert result is not None
-
-    with (
-        patch.object(migration["loader"], "get_down_sql", new_callable=AsyncMock) as mock_get_down_sql,
-        patch("sqlspec.migrations.runner.logger"),
-    ):
-        mock_get_down_sql.return_value = []
-        result = runner.execute_downgrade(mock_driver, migration)
-
-        assert result is not None
+    result = runner.execute_downgrade(mock_driver, migration)
+    assert result is not None
 
 
 def test_migration_state_recording() -> None:
@@ -572,27 +549,9 @@ DROP TABLE legacy_table;
     migration_file.write_text(migration_content)
 
     runner = MockMigrationRunner(migrations_dir)
-    mock_driver = Mock()
 
-    with patch("sqlspec.migrations.runner.get_migration_loader") as mock_get_loader:
-        mock_loader = Mock()
-        mock_loader.validate_migration_file = Mock()
-        mock_get_loader.return_value = mock_loader
-
-        with (
-            patch.object(type(runner.loader), "clear_cache"),
-            patch.object(type(runner.loader), "load_sql"),
-            patch.object(type(runner.loader), "has_query", side_effect=lambda q: q.endswith("-down")),
-        ):
-            migration = runner.load_migration(migration_file)
-
-            assert migration["has_upgrade"] is False
-            assert migration["has_downgrade"] is True
-
-    with pytest.raises(ValueError) as exc_info:
-        runner.execute_upgrade(mock_driver, migration)
-
-    assert "has no upgrade query" in str(exc_info.value)
+    with pytest.raises(MigrationLoadError, match="missing required 'up' query"):
+        runner.load_migration(migration_file)
 
 
 def test_corrupted_migration_file(temp_workspace_with_migrations: Path) -> None:
