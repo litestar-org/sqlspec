@@ -414,8 +414,8 @@ DROP TABLE {table_name};
 def test_upgrade_applies_third_party_extension_migrations(tmp_path: Path) -> None:
     """A package outside sqlspec.extensions applies migrations through the public API.
 
-    Covers both extension migration layouts: a file inside the extension's own directory,
-    and an ``ext_``-prefixed file sitting in the main migrations directory.
+    Covers Python and SQL files inside the extension's own directory and an
+    ``ext_``-prefixed SQL file sitting in the main migrations directory.
     """
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
@@ -442,11 +442,19 @@ def down(context: "object | None" = None) -> "list[str]":
     """Return the downgrade statements."""
     return ["DROP TABLE queue_tasks"]
 ''')
-    (migrations_dir / "ext_litestar_queues_0002_add_index.sql").write_text(
-        """-- name: migrate-ext_litestar_queues_0002-up
+    (vendor_dir / "0002_create_queue_metadata.sql").write_text(
+        """-- name: migrate-0002-up
+CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY);
+
+-- name: migrate-0002-down
+DROP TABLE queue_metadata;
+"""
+    )
+    (migrations_dir / "ext_litestar_queues_0003_add_index.sql").write_text(
+        """-- name: migrate-ext_litestar_queues_0003-up
 CREATE INDEX queue_tasks_id_idx ON queue_tasks (id);
 
--- name: migrate-ext_litestar_queues_0002-down
+-- name: migrate-ext_litestar_queues_0003-down
 DROP INDEX queue_tasks_id_idx;
 """
     )
@@ -466,8 +474,10 @@ DROP INDEX queue_tasks_id_idx;
             tables = session.execute("SELECT name FROM sqlite_master WHERE type = 'table'").get_data()
 
         versions = [row["version_num"] for row in applied]
-        assert versions == ["0001", "ext_litestar_queues_0001", "ext_litestar_queues_0002"]
-        assert "queue_tasks" in {row["name"] for row in tables}
+        assert versions == ["0001", "ext_litestar_queues_0001", "ext_litestar_queues_0002", "ext_litestar_queues_0003"]
+        table_names = {row["name"] for row in tables}
+        assert "queue_tasks" in table_names
+        assert "queue_metadata" in table_names
 
         commands.downgrade(revision="base")
         assert commands.current() is None

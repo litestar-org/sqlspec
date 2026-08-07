@@ -535,13 +535,7 @@ SELECT 1;
     )
 
     runner = create_migration_runner_with_metadata(tmp_path)
-
-    with (
-        patch.object(type(runner.loader), "clear_cache"),
-        patch.object(type(runner.loader), "load_sql"),
-        patch.object(type(runner.loader), "has_query", return_value=True),
-    ):
-        metadata = runner.load_migration(migration_file)
+    metadata = runner.load_migration(migration_file)
 
     assert metadata["description"] == "Custom summary"
 
@@ -566,6 +560,82 @@ def test_load_migration_metadata_prefers_python_docstring(tmp_path: Path) -> Non
         metadata = runner.load_migration(migration_file)
 
     assert metadata["description"] == "Add feature"
+
+
+def test_sync_loads_sql_from_registered_extension_directory(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    extension_dir = tmp_path / "widgets"
+    extension_dir.mkdir()
+    migration_file = extension_dir / "0001_create_widgets.sql"
+    _write_basic_sql(migration_file, "0001", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    runner = SyncMigrationRunner(migrations_dir, {"widgets": extension_dir})
+
+    version, discovered_file = runner.get_migration_files()[0]
+    migration = runner.load_migration(discovered_file, version)
+
+    assert migration["version"] == "ext_widgets_0001"
+    assert migration["has_upgrade"] is True
+    assert migration["has_downgrade"] is True
+    assert runner._migration_sql(migration, "up") == [  # pyright: ignore[reportPrivateUsage]
+        "CREATE TABLE widgets (id INTEGER PRIMARY KEY);"
+    ]
+
+
+@pytest.mark.anyio
+async def test_async_loads_sql_from_registered_extension_directory(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    extension_dir = tmp_path / "widgets"
+    extension_dir.mkdir()
+    migration_file = extension_dir / "0001_create_widgets.sql"
+    _write_basic_sql(migration_file, "0001", "CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    runner = AsyncMigrationRunner(migrations_dir, {"widgets": extension_dir})
+
+    version, discovered_file = (await runner.get_migration_files())[0]
+    migration = await runner.load_migration(discovered_file, version)
+
+    assert migration["version"] == "ext_widgets_0001"
+    assert migration["has_upgrade"] is True
+    assert migration["has_downgrade"] is True
+    assert await runner._migration_sql(migration, "up") == [  # pyright: ignore[reportPrivateUsage]
+        "CREATE TABLE widgets (id INTEGER PRIMARY KEY);"
+    ]
+
+
+def test_sync_load_all_migrations_isolates_registered_extension_queries(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    alpha_dir = tmp_path / "alpha"
+    alpha_dir.mkdir()
+    beta_dir = tmp_path / "beta"
+    beta_dir.mkdir()
+    _write_basic_sql(alpha_dir / "0001_create_alpha.sql", "0001", "SELECT 'alpha';")
+    _write_basic_sql(beta_dir / "0001_create_beta.sql", "0001", "SELECT 'beta';")
+    runner = SyncMigrationRunner(migrations_dir, {"alpha": alpha_dir, "beta": beta_dir})
+
+    queries = runner.load_all_migrations()
+
+    assert queries["migrate-ext_alpha_0001-up"].raw_sql == "SELECT 'alpha';"
+    assert queries["migrate-ext_beta_0001-up"].raw_sql == "SELECT 'beta';"
+
+
+@pytest.mark.anyio
+async def test_async_load_all_migrations_isolates_registered_extension_queries(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    alpha_dir = tmp_path / "alpha"
+    alpha_dir.mkdir()
+    beta_dir = tmp_path / "beta"
+    beta_dir.mkdir()
+    _write_basic_sql(alpha_dir / "0001_create_alpha.sql", "0001", "SELECT 'alpha';")
+    _write_basic_sql(beta_dir / "0001_create_beta.sql", "0001", "SELECT 'beta';")
+    runner = AsyncMigrationRunner(migrations_dir, {"alpha": alpha_dir, "beta": beta_dir})
+
+    queries = await runner.load_all_migrations()
+
+    assert queries["migrate-ext_alpha_0001-up"].raw_sql == "SELECT 'alpha';"
+    assert queries["migrate-ext_beta_0001-up"].raw_sql == "SELECT 'beta';"
 
 
 def test_sync_load_all_migrations_skips_load_sql_when_query_is_loaded(

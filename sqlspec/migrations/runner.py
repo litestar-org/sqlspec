@@ -87,6 +87,7 @@ class BaseMigrationRunner:
         self.extension_migrations = extension_migrations or {}
         self.runtime = runtime
         self.loader = SQLFileLoader(runtime=runtime)
+        self._extension_sql_loaders: dict[str, SQLFileLoader] = {}
         self.project_root: Path | None = None
         self.context = context
         self.extension_configs = extension_configs or {}
@@ -618,6 +619,22 @@ class BaseMigrationRunner:
             return cast("list[str]", sql_statements)
         return None
 
+    def _migration_sql_loader(self, file_path: Path, version: "str | None") -> SQLFileLoader:
+        """Return the isolated core SQL loader for an extension migration."""
+        extension = parse_extension_stem(version) if version else None
+        if file_path.suffix != ".sql" or extension is None:
+            return self.loader
+
+        extension_name, _ = extension
+        if self.extension_migrations.get(extension_name) != file_path.parent:
+            return self.loader
+
+        loader = self._extension_sql_loaders.get(extension_name)
+        if loader is None:
+            loader = SQLFileLoader(runtime=self.runtime)
+            self._extension_sql_loaders[extension_name] = loader
+        return loader
+
 
 class SyncMigrationRunner(BaseMigrationRunner):
     """Synchronous migration runner with pure sync methods."""
@@ -643,15 +660,16 @@ class SyncMigrationRunner(BaseMigrationRunner):
         metadata = self._load_metadata(file_path, version)
         context_to_use = self._migration_context(file_path)
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
+        sql_loader = self._migration_sql_loader(file_path, metadata["version"])
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, sql_loader)
         loader.validate_migration_file(file_path)
 
         has_upgrade, has_downgrade = True, False
 
         if file_path.suffix == ".sql":
-            version = metadata["version"]
-            up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
+            partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
+            has_upgrade = bool(self._migration_sql(partial, "up"))
+            has_downgrade = bool(self._migration_sql(partial, "down"))
         else:
             try:
                 partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
@@ -827,6 +845,15 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
+                if self._migration_sql_loader(file_path, version) is not self.loader:
+                    migration = self.load_migration(file_path, version)
+                    up_sql = self._migration_sql(migration, "up")
+                    down_sql = self._migration_sql(migration, "down")
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
+                    continue
                 if not self.loader.has_query(f"migrate-{version}-up"):
                     self.loader.load_sql(file_path)
                 for query_name in self.loader.list_queries():
@@ -877,15 +904,16 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         metadata = self._load_metadata(file_path, version)
         context_to_use = self._migration_context(file_path)
 
-        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, self.loader)
+        sql_loader = self._migration_sql_loader(file_path, metadata["version"])
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root, context_to_use, sql_loader)
         loader.validate_migration_file(file_path)
 
         has_upgrade, has_downgrade = True, False
 
         if file_path.suffix == ".sql":
-            version = metadata["version"]
-            up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
-            has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
+            partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
+            has_upgrade = bool(await self._migration_sql(partial, "up"))
+            has_downgrade = bool(await self._migration_sql(partial, "down"))
         else:
             try:
                 partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
@@ -1062,6 +1090,15 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         for version, file_path in migrations:
             if file_path.suffix == ".sql":
+                if self._migration_sql_loader(file_path, version) is not self.loader:
+                    migration = await self.load_migration(file_path, version)
+                    up_sql = await self._migration_sql(migration, "up")
+                    down_sql = await self._migration_sql(migration, "down")
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
+                    continue
                 if not self.loader.has_query(f"migrate-{version}-up"):
                     await async_(self.loader.load_sql)(file_path)
                 for query_name in self.loader.list_queries():
