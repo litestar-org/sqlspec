@@ -75,9 +75,13 @@ class DataDictionaryLoader:
         """
         if dialect in self._loaded_dialects:
             return
-        sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
-        if not sql_root.is_dir():
-            raise SQLFileNotFoundError(str(sql_root))
+        try:
+            sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
+            if not sql_root.is_dir():
+                raise SQLFileNotFoundError(str(sql_root))
+        except (ModuleNotFoundError, FileNotFoundError) as err:
+            msg = f"sqlspec.data_dictionary.dialects.{dialect}"
+            raise SQLFileNotFoundError(msg) from err
         with as_file(sql_root) as sql_path:
             for item in sql_path.iterdir():
                 if item.is_file() and item.name.endswith(".sql"):
@@ -136,7 +140,10 @@ class DataDictionaryLoader:
         self, dialect: str, domain: str, mode: str | None
     ) -> "tuple[tuple[str | None, Traversable], ...]":
         """Return candidate resource paths for a domain query pack."""
-        sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
+        try:
+            sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
+        except (ModuleNotFoundError, FileNotFoundError):
+            return ()
         if mode is None:
             return ((None, sql_root.joinpath(f"{domain}.sql")), (None, sql_root.joinpath(domain)))
         return (
@@ -384,10 +391,17 @@ class DataDictionaryLoader:
         Returns:
             List of dialect names with SQL directories.
         """
-        sql_root = _sql_resource_root()
-        if not sql_root.is_dir():
+        try:
+            dialects_root = resources.files("sqlspec.data_dictionary.dialects")
+        except (ModuleNotFoundError, FileNotFoundError):
             return []
-        return sorted([path.name for path in sql_root.iterdir() if path.is_dir()])
+        if not dialects_root.is_dir():
+            return []
+        return sorted([
+            path.name
+            for path in dialects_root.iterdir()
+            if path.is_dir() and path.name != "__pycache__" and path.joinpath("sql").is_dir()
+        ])
 
 
 _loader_instance: DataDictionaryLoader | None = None
