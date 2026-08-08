@@ -1,4 +1,4 @@
-"""SQL Server replacement data-dictionary metadata tests."""
+"""SQL Server data-dictionary metadata tests."""
 
 from typing import Any, cast
 

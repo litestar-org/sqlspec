@@ -165,7 +165,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
     def get_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None, *, mode: str | None = None
     ) -> "MetadataCapabilityProfile":
-        """Get Spanner replacement data-dictionary capability profile."""
+        """Get Spanner data-dictionary capability profile."""
         _ = driver
         requested_domains = tuple(domains) if domains is not None else _DEFAULT_METADATA_DOMAINS
         normalized_mode = _normalize_spanner_metadata_mode(mode)

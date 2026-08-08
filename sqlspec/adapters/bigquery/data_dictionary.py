@@ -262,7 +262,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
     def get_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
     ) -> "MetadataCapabilityProfile":
-        """Get BigQuery replacement data-dictionary capability profile."""
+        """Get BigQuery data-dictionary capability profile."""
         _ = driver
         requested_domains = tuple(domains) if domains is not None else _DEFAULT_METADATA_DOMAINS
         capabilities = tuple(_bigquery_capability_for_domain(domain) for domain in requested_domains)

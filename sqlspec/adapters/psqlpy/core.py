@@ -37,11 +37,11 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    _classify_timeout_or_cancellation,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.dispatch import TypeDispatcher
@@ -416,7 +416,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Mapped Exceptions:
         * Integrity constraint violations (UniqueViolationError, ForeignKeyViolationError, etc.)
         * Transaction/serialization errors (DeadlockError, SerializationConflictError)
-        * QueryTimeoutError: cancellations, timeouts
+        * QueryTimeoutError and OperationCancelledError
         * PermissionDeniedError: permission denied, authentication failed
         * ConnectionTimeoutError / DatabaseConnectionError: connection errors
         * SQLParsingError: syntax/parse errors
@@ -447,8 +447,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "serialization failure" in error_msg or "could not serialize" in error_msg:
         return _create_postgres_error(error, SerializationConflictError, "serialization failure")
 
-    if "cancel" in error_msg or "timeout" in error_msg or "statement timeout" in error_msg:
-        return _create_postgres_error(error, QueryTimeoutError, "query canceled or timed out")
+    if error_class := _classify_timeout_or_cancellation(error_msg):
+        return _create_postgres_error(error, error_class, "query terminated")
 
     if "permission denied" in error_msg or "insufficient privilege" in error_msg:
         return _create_postgres_error(error, PermissionDeniedError, "permission denied")

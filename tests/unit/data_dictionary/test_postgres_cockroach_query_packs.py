@@ -1,4 +1,4 @@
-"""PostgreSQL-family replacement data-dictionary query-pack contracts."""
+"""PostgreSQL-family data-dictionary query-pack contracts."""
 
 import pytest
 

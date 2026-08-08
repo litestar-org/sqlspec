@@ -1,4 +1,4 @@
-"""Tests for replacement data-dictionary metadata contracts."""
+"""Tests for data-dictionary metadata contracts."""
 
 from typing import cast
 

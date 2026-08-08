@@ -1834,7 +1834,7 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
     def get_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
     ) -> "MetadataCapabilityProfile":
-        """Get replacement data-dictionary capability profile.
+        """Get data-dictionary capability profile.
 
         Args:
             driver: Sync database driver instance.
