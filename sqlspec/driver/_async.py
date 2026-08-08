@@ -1677,6 +1677,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         cursor_entered = False
         exit_suppressed = False
         error: Exception | None = None
+        execution_result: ExecutionResult | None = None
         result: SQLResult | None = None
         try:
             cursor = await cursor_manager.__aenter__()
@@ -1694,6 +1695,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             else:
                 execution_result = await self.dispatch_execute(cursor, statement)
             if special_result is None:
+                assert execution_result is not None
                 result = self.build_statement_result(statement, execution_result)
         except Exception as exc:
             error = exc
