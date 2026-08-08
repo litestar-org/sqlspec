@@ -40,7 +40,7 @@ Asynchronous Driver
 Data Dictionary
 ===============
 
-The shared data dictionary base classes define the replacement metadata
+The shared data dictionary base classes define the metadata
 contract used by adapter-local dictionaries. User-facing examples and the
 support matrix live in :doc:`../usage/data_dictionary`. In short:
 

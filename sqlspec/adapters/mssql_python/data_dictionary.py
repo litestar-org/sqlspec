@@ -146,7 +146,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
     def get_metadata_capabilities(
         self, driver: "MssqlPythonDriver", domains: "Sequence[str] | None" = None
     ) -> "MetadataCapabilityProfile":
-        """Get SQL Server replacement data-dictionary capability profile."""
+        """Get SQL Server data-dictionary capability profile."""
         return build_mssql_metadata_capability_profile(type(self).__name__, domains)
 
     def get_system_metadata_capabilities(

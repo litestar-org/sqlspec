@@ -180,7 +180,7 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     def get_metadata_capabilities(
         self, driver: "PsycopgSyncDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
-        """Get PostgreSQL replacement data-dictionary capability profile."""
+        """Get PostgreSQL data-dictionary capability profile."""
         return _postgres_metadata_profile(type(self).__name__, domains)
 
     def get_system_metadata_capabilities(
@@ -457,7 +457,7 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_metadata_capabilities(
         self, driver: "PsycopgAsyncDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
-        """Get PostgreSQL replacement data-dictionary capability profile."""
+        """Get PostgreSQL data-dictionary capability profile."""
         return _postgres_metadata_profile(type(self).__name__, domains)
 
     async def get_system_metadata_capabilities(

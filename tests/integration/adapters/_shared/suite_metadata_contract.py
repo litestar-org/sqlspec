@@ -59,7 +59,7 @@ def test_sync_data_dictionary_contract(sync_capability_driver_case: DriverCaseCo
     "sync_capability_driver_case", sync_driver_params_with("supports_data_dictionary"), indirect=True
 )
 def test_sync_data_dictionary_capability_contract(sync_capability_driver_case: DriverCaseContext) -> None:
-    """Sync data dictionaries expose truthful replacement metadata capability tiers."""
+    """Sync data dictionaries expose truthful metadata capability tiers."""
     case = sync_capability_driver_case.case
 
     assert isinstance(case.supports_data_dictionary_core, bool)
@@ -82,7 +82,7 @@ async def test_async_data_dictionary_contract(async_capability_driver_case: Driv
     "async_capability_driver_case", async_driver_params_with("supports_data_dictionary"), indirect=True
 )
 async def test_async_data_dictionary_capability_contract(async_capability_driver_case: DriverCaseContext) -> None:
-    """Async data dictionaries expose truthful replacement metadata capability tiers."""
+    """Async data dictionaries expose truthful metadata capability tiers."""
     case = async_capability_driver_case.case
 
     assert isinstance(case.supports_data_dictionary_core, bool)

@@ -279,7 +279,7 @@ SQLSpec does not define a portable SQL statistics contract. It wraps
 ``adbc_get_statistics`` directly; unsupported drivers raise
 :exc:`sqlspec.exceptions.OperationalError`.
 
-In the replacement data dictionary, ADBC statistics are also exposed through the
+In the data dictionary, ADBC statistics are also exposed through the
 opt-in system metadata namespace as transport metadata. This does not make ADBC
 a lossless DDL or dependency source; dialect query packs remain canonical for
 DDL-grade metadata.

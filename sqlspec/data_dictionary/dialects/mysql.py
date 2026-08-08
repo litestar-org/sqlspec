@@ -187,7 +187,7 @@ def parse_mysql_engine_version(version_text: str) -> MySQLEngineVersion | None:
 def build_mysql_metadata_capability_profile(
     dialect: str, adapter: str | None, domains: "tuple[str, ...] | None" = None
 ) -> MetadataCapabilityProfile:
-    """Build the replacement metadata capability profile for MySQL-family adapters."""
+    """Build the metadata capability profile for MySQL-family adapters."""
     requested_domains = MYSQL_METADATA_DOMAINS if domains is None else domains
     capabilities = tuple(_mysql_metadata_capability(domain) for domain in requested_domains)
     return MetadataCapabilityProfile(dialect=dialect, adapter=adapter, capabilities=capabilities)

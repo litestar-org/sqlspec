@@ -38,6 +38,23 @@ class ADBCOutputConverter:
             return to_json(value)
         return value
 
+    def convert_sequence(self, value: "list[Any] | tuple[Any, ...]") -> "list[Any]":
+        """Convert sequence/array parameter values with dialect awareness.
+
+        Preserves None elements within sequence parameters instead of converting
+        them to empty strings for PostgreSQL-family dialects.
+
+        Args:
+            value: Sequence to convert.
+
+        Returns:
+            Converted list parameter appropriate for the dialect.
+        """
+        items = list(value)
+        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb"}:
+            return [item if item is not None else None for item in items]
+        return items
+
 
 def get_adbc_type_converter(dialect: str) -> ADBCOutputConverter:
     """Factory function to create dialect-specific ADBC type converter.

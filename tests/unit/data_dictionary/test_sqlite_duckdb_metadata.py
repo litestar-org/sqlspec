@@ -1,4 +1,4 @@
-"""SQLite and DuckDB data-dictionary replacement metadata tests."""
+"""SQLite and DuckDB data-dictionary metadata tests."""
 
 import sqlite3
 from typing import cast
