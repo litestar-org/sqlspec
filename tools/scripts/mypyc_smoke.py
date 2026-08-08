@@ -3,6 +3,7 @@
 import argparse
 import importlib
 import json
+import subprocess
 import sys
 from collections.abc import Sequence
 from typing import Any, NamedTuple
@@ -173,6 +174,87 @@ def _check_statement_cache_rebind(*, require_compiled: bool = False) -> dict[str
         assert isinstance(expression, sqlglot_exp.Expr)
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _check_aiosqlite_exception_mapping(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise mapped aiosqlite statement errors in isolated child processes."""
+    result = _new_smoke_result(
+        name="aiosqlite_exception_mapping",
+        module="sqlspec.driver._async",
+        attribute="AsyncDriverAdapterBase",
+        compiled_required=require_compiled,
+    )
+    try:
+        async_driver_module = importlib.import_module("sqlspec.driver._async")
+        importlib.import_module("aiosqlite")
+    except ModuleNotFoundError as exc:
+        if _is_missing_optional_dependency(exc.name or "", "aiosqlite"):
+            result["skipped"] = True
+            result["skip_reason"] = "optional dependency missing: aiosqlite"
+            return result
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(async_driver_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+
+    child_script = """
+import asyncio
+import sys
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.exceptions import SQLSpecError
+
+
+async def main() -> None:
+    config = AiosqliteConfig()
+    spec = SQLSpec()
+    spec.add_config(config)
+    try:
+        async with spec.provide_session(config) as driver:
+            await driver.execute("CREATE TABLE smoke_items (id INTEGER PRIMARY KEY)")
+            operation = getattr(driver, sys.argv[1])
+            try:
+                await operation("SELECT missing_column FROM smoke_items")
+            except SQLSpecError as exc:
+                if "missing_column" not in str(exc):
+                    raise
+            else:
+                raise AssertionError("invalid statement did not raise SQLSpecError")
+    finally:
+        await config.close_pool()
+
+
+asyncio.run(main())
+print(f"{sys.argv[1]}:SQLSpecError")
+"""
+    for operation_name in ("select", "execute"):
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-I", "-c", child_script, operation_name],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            result["error"] = f"{operation_name} exception subprocess timed out"
+            return result
+        expected_marker = f"{operation_name}:SQLSpecError"
+        if completed.returncode != 0 or expected_marker not in completed.stdout:
+            result["error"] = (
+                f"{operation_name} exception subprocess failed with return code {completed.returncode}; "
+                f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+            )
+            return result
     return result
 
 
@@ -349,6 +431,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_sqlspec_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
         _check_fastapi_filter_construction(require_compiled=require_compiled),
         _check_litestar_filter_construction(require_compiled=require_compiled),
     ]
