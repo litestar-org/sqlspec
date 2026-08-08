@@ -75,12 +75,20 @@ class DataDictionaryLoader:
         """
         if dialect in self._loaded_dialects:
             return
-        dialect_resource = _sql_resource_root().joinpath(dialect)
-        if not dialect_resource.is_dir():
-            raise SQLFileNotFoundError(str(dialect_resource))
-        loader = self._get_loader(dialect)
-        with as_file(dialect_resource) as dialect_path:
-            loader.load_sql(dialect_path)
+        sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
+        if not sql_root.is_dir():
+            raise SQLFileNotFoundError(str(sql_root))
+        with as_file(sql_root) as sql_path:
+            for item in sql_path.iterdir():
+                if item.is_file() and item.name.endswith(".sql"):
+                    domain = item.stem
+                    key = (dialect, domain, None)
+                    loader = self._domain_loaders.get(key)
+                    if loader is None:
+                        loader = SQLFileLoader()
+                        self._domain_loaders[key] = loader
+                    loader.load_sql(item)
+                    self._loaded_domain_paths.add(key)
         self._loaded_dialects.add(dialect)
 
     def get_query(self, dialect: str, query_name: str) -> "SQL":
@@ -94,8 +102,10 @@ class DataDictionaryLoader:
             SQL object for the named query.
         """
         self._ensure_dialect_loaded(dialect)
-        loader = self._get_loader(dialect)
-        return loader.get_sql(query_name)
+        for (d, _domain, _mode), loader in self._domain_loaders.items():
+            if d == dialect and loader.has_query(query_name):
+                return loader.get_sql(query_name)
+        return self._get_loader(dialect).get_sql(query_name)
 
     def get_query_text(self, dialect: str, query_name: str) -> str:
         """Get raw SQL text for a specific dialect and operation.
@@ -108,8 +118,10 @@ class DataDictionaryLoader:
             Raw SQL text for the named query.
         """
         self._ensure_dialect_loaded(dialect)
-        loader = self._get_loader(dialect)
-        return loader.get_query_text(query_name)
+        for (d, _domain, _mode), loader in self._domain_loaders.items():
+            if d == dialect and loader.has_query(query_name):
+                return loader.get_query_text(query_name)
+        return self._get_loader(dialect).get_query_text(query_name)
 
     def _get_domain_loader(self, dialect: str, domain: str, mode: str | None) -> "SQLFileLoader":
         """Return or create a SQL loader for a dialect/domain/mode pack."""
@@ -124,12 +136,13 @@ class DataDictionaryLoader:
         self, dialect: str, domain: str, mode: str | None
     ) -> "tuple[tuple[str | None, Traversable], ...]":
         """Return candidate resource paths for a domain query pack."""
-        dialect_resource = _sql_resource_root().joinpath(dialect)
+        sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
         if mode is None:
-            return ((None, dialect_resource.joinpath(domain)),)
+            return ((None, sql_root.joinpath(f"{domain}.sql")), (None, sql_root.joinpath(domain)))
         return (
-            (mode, dialect_resource.joinpath(domain).joinpath(mode)),
-            (mode, dialect_resource.joinpath(mode).joinpath(domain)),
+            (mode, sql_root.joinpath(mode).joinpath(f"{domain}.sql")),
+            (mode, sql_root.joinpath(domain).joinpath(f"{mode}.sql")),
+            (mode, sql_root.joinpath(domain).joinpath(mode)),
         )
 
     def _ensure_domain_loaded(self, dialect: str, domain: str, mode: str | None) -> bool:
@@ -148,14 +161,20 @@ class DataDictionaryLoader:
             return True
 
         for resolved_mode, domain_resource in self._domain_path_candidates(dialect, domain, mode):
-            if not domain_resource.is_dir():
-                continue
-            loader = self._get_domain_loader(dialect, domain, resolved_mode)
-            with as_file(domain_resource) as domain_path:
-                loader.load_sql(domain_path)
-            self._loaded_domain_paths.add((dialect, domain, resolved_mode))
-            if resolved_mode == mode:
-                return True
+            if domain_resource.is_file():
+                loader = self._get_domain_loader(dialect, domain, resolved_mode)
+                with as_file(domain_resource) as file_path:
+                    loader.load_sql(file_path)
+                self._loaded_domain_paths.add((dialect, domain, resolved_mode))
+                if resolved_mode == mode:
+                    return True
+            elif domain_resource.is_dir():
+                loader = self._get_domain_loader(dialect, domain, resolved_mode)
+                with as_file(domain_resource) as domain_path:
+                    loader.load_sql(domain_path)
+                self._loaded_domain_paths.add((dialect, domain, resolved_mode))
+                if resolved_mode == mode:
+                    return True
         return False
 
     def _unsupported_domain_query(
@@ -274,10 +293,17 @@ class DataDictionaryLoader:
             )
 
         loader = self._get_domain_loader(normalized_dialect, normalized_domain, normalized_mode)
-        if not loader.has_query(normalized_query):
-            return self._unsupported_domain_query(
-                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
-            )
+        statement_name = normalized_query
+        if not loader.has_query(statement_name):
+            alt_name = f"{normalized_domain}_{normalized_query}"
+            if loader.has_query(alt_name):
+                statement_name = alt_name
+            elif loader.has_query(query_name):
+                statement_name = query_name
+            else:
+                return self._unsupported_domain_query(
+                    normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
+                )
 
         capability = MetadataCapability(
             domain=normalized_domain,
@@ -288,10 +314,10 @@ class DataDictionaryLoader:
         return MetadataQuery(
             dialect=normalized_dialect,
             domain=normalized_domain,
-            name=normalized_query,
+            name=query_name,
             mode=normalized_mode,
-            sql=loader.get_sql(normalized_query),
             capability=capability,
+            sql=loader.get_sql(statement_name),
         )
 
     def get_domain_queries(
