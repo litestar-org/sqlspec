@@ -135,6 +135,7 @@ def test_spanner_uuid_conversion_disabled() -> None:
     params = {"stdlib_id": stdlib_uuid, "utils_id": utils_uuid}
 
     coerced = coerce_params_for_spanner(params, enable_uuid_conversion=False)
+    assert coerced is not None
     assert coerced is params
     assert coerced["stdlib_id"] is stdlib_uuid
     assert coerced["utils_id"] is utils_uuid
