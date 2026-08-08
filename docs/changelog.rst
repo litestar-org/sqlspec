@@ -9,6 +9,14 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased - Compiled async exception handling
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Async statement errors from mypyc-compiled drivers are translated into
+  :class:`~sqlspec.exceptions.SQLSpecError` instead of terminating the process.
+
 v0.58.2 - SQL file parameter diagnostics
 ------------------------------------------------------------------------------
 

@@ -230,24 +230,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             # FAST PATH: Skip all instrumentation if runtime is absent or idle.
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                async with exc_handler, self.with_cursor(connection) as cursor:
-                    special_result = await self.dispatch_special_handling(cursor, statement)
-                    if special_result is not None:
-                        result = special_result
-                    elif statement.is_script:
-                        execution_result = await self.dispatch_execute_script(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
-                    elif statement.is_many:
-                        if execution_parameters:
-                            execution_result = await self.dispatch_execute_many(cursor, statement)
-                        else:
-                            execution_result = self.create_execution_result(
-                                cursor, rowcount_override=0, is_many_result=True
-                            )
-                        result = self.build_statement_result(statement, execution_result)
-                    else:
-                        execution_result = await self.dispatch_execute(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
+                async with exc_handler:
+                    result = await self._dispatch_statement_with_cursor(
+                        connection, statement, has_execution_parameters=bool(execution_parameters)
+                    )
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
@@ -272,24 +258,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
             exc_handler = self.handle_database_exceptions()
             try:
-                async with exc_handler, self.with_cursor(connection) as cursor:
-                    special_result = await self.dispatch_special_handling(cursor, statement)
-                    if special_result is not None:
-                        result = special_result
-                    elif statement.is_script:
-                        execution_result = await self.dispatch_execute_script(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
-                    elif statement.is_many:
-                        if execution_parameters:
-                            execution_result = await self.dispatch_execute_many(cursor, statement)
-                        else:
-                            execution_result = self.create_execution_result(
-                                cursor, rowcount_override=0, is_many_result=True
-                            )
-                        result = self.build_statement_result(statement, execution_result)
-                    else:
-                        execution_result = await self.dispatch_execute(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
+                async with exc_handler:
+                    result = await self._dispatch_statement_with_cursor(
+                        connection, statement, has_execution_parameters=bool(execution_parameters)
+                    )
             except Exception as exc:  # pragma: no cover
                 pending_exception = exc_handler.pending_exception
                 if pending_exception is not None:
@@ -459,76 +431,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult or DMLResult.
         """
-        direct_statement: SQL | None = None
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
-        try:
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                execute = getattr(cursor, "execute", None)
-                fetchall = getattr(cursor, "fetchall", None)
-                can_use_cursor_fast_path = execute is not None and (
-                    (cached.operation_profile.returns_rows and fetchall is not None)
-                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
-                )
-                if can_use_cursor_fast_path:
-                    assert execute is not None
-                    try:
-                        execute_result = execute(cached.compiled_sql, params)
-                        if isawaitable(execute_result):
-                            await execute_result
-                            if cached.operation_profile.returns_rows:
-                                assert fetchall is not None
-                                fetched_data = fetchall()
-                                if isawaitable(fetched_data):
-                                    fetched_data = await fetched_data
-                                data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-                                execution_result = self.create_execution_result(
-                                    cursor,
-                                    selected_data=data,
-                                    column_names=column_names,
-                                    data_row_count=row_count,
-                                    is_select_result=True,
-                                    row_format="tuple",
-                                )
-                                direct_statement = self._cached_statement(
-                                    sql,
-                                    params,
-                                    cached,
-                                    params,
-                                    params_are_simple=True,
-                                    compiled_sql=cached.compiled_sql,
-                                )
-                                result = self.build_statement_result(direct_statement, execution_result)
-                            else:
-                                affected_rows = self.resolve_rowcount(cursor)
-                                result = DMLResult(cached.operation_type, affected_rows)
-                    except (AttributeError, NotImplementedError):
-                        pass
-
-                if result is None:
-                    direct_statement = self._cached_statement(
-                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                    )
-                    execution_result = await self.dispatch_execute(cursor, direct_statement)
-
-                    if cached.operation_profile.returns_rows:
-                        result = self.build_statement_result(direct_statement, execution_result)
-                    else:
-                        # DML path: use DMLResult to bypass full SQLResult construction
-                        affected_rows = (
-                            execution_result.rowcount_override
-                            if execution_result.rowcount_override is not None
-                            and execution_result.rowcount_override >= 0
-                            else 0
-                        )
-                        result = DMLResult(cached.operation_type, affected_rows)
-
-            self._check_pending_exception(exc_handler)
-            assert result is not None
-            return result
-        finally:
-            if direct_statement is not None:
-                self._release_pooled_statement(direct_statement)
+        async with exc_handler:
+            result = await self._execute_cache_hit_with_cursor(sql, params, cached)
+        self._check_pending_exception(exc_handler)
+        assert result is not None
+        return result
 
     async def _cached_execution(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
@@ -556,9 +465,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                execution_result = await self.dispatch_execute(cursor, statement)
-                result = self.build_statement_result(statement, execution_result)
+            async with exc_handler:
+                result = await self._execute_cached_statement_with_cursor(statement)
 
             self._check_pending_exception(exc_handler)
             assert result is not None
@@ -1760,6 +1668,123 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
+
+    async def _dispatch_statement_with_cursor(
+        self, connection: Any, statement: "SQL", *, has_execution_parameters: bool
+    ) -> "SQLResult":
+        """Execute a statement while owning only the cursor context."""
+        cursor_manager = self.with_cursor(connection)
+        cursor_entered = False
+        exit_suppressed = False
+        error: Exception | None = None
+        execution_result: ExecutionResult | None = None
+        result: SQLResult | None = None
+        try:
+            cursor = await cursor_manager.__aenter__()
+            cursor_entered = True
+            special_result = await self.dispatch_special_handling(cursor, statement)
+            if special_result is not None:
+                result = special_result
+            elif statement.is_script:
+                execution_result = await self.dispatch_execute_script(cursor, statement)
+            elif statement.is_many:
+                if has_execution_parameters:
+                    execution_result = await self.dispatch_execute_many(cursor, statement)
+                else:
+                    execution_result = self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+            else:
+                execution_result = await self.dispatch_execute(cursor, statement)
+            if special_result is None:
+                assert execution_result is not None
+                result = self.build_statement_result(statement, execution_result)
+        except Exception as exc:
+            error = exc
+        finally:
+            if cursor_entered:
+                if error is None:
+                    await cursor_manager.__aexit__(None, None, None)
+                else:
+                    exit_suppressed = bool(await cursor_manager.__aexit__(type(error), error, error.__traceback__))
+        if error is not None and not exit_suppressed:
+            raise error
+        assert result is not None
+        return result
+
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute a cached query while owning only the cursor context."""
+        direct_statement: SQL | None = None
+        result: SQLResult | None = None
+        try:
+            async with self.with_cursor(self.connection) as cursor:
+                execute = getattr(cursor, "execute", None)
+                fetchall = getattr(cursor, "fetchall", None)
+                can_use_cursor_fast_path = execute is not None and (
+                    (cached.operation_profile.returns_rows and fetchall is not None)
+                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
+                )
+                if can_use_cursor_fast_path:
+                    assert execute is not None
+                    try:
+                        execute_result = execute(cached.compiled_sql, params)
+                        if isawaitable(execute_result):
+                            await execute_result
+                            if cached.operation_profile.returns_rows:
+                                assert fetchall is not None
+                                fetched_data = fetchall()
+                                if isawaitable(fetched_data):
+                                    fetched_data = await fetched_data
+                                data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                                execution_result = self.create_execution_result(
+                                    cursor,
+                                    selected_data=data,
+                                    column_names=column_names,
+                                    data_row_count=row_count,
+                                    is_select_result=True,
+                                    row_format="tuple",
+                                )
+                                direct_statement = self._cached_statement(
+                                    sql,
+                                    params,
+                                    cached,
+                                    params,
+                                    params_are_simple=True,
+                                    compiled_sql=cached.compiled_sql,
+                                )
+                                result = self.build_statement_result(direct_statement, execution_result)
+                            else:
+                                affected_rows = self.resolve_rowcount(cursor)
+                                result = DMLResult(cached.operation_type, affected_rows)
+                    except (AttributeError, NotImplementedError):
+                        pass
+
+                if result is None:
+                    direct_statement = self._cached_statement(
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                    )
+                    execution_result = await self.dispatch_execute(cursor, direct_statement)
+                    if cached.operation_profile.returns_rows:
+                        result = self.build_statement_result(direct_statement, execution_result)
+                    else:
+                        affected_rows = (
+                            execution_result.rowcount_override
+                            if execution_result.rowcount_override is not None
+                            and execution_result.rowcount_override >= 0
+                            else 0
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows)
+            assert result is not None
+            return result
+        finally:
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
+
+    async def _execute_cached_statement_with_cursor(self, statement: "SQL") -> "SQLResult":
+        """Execute a prepared statement while owning only the cursor context."""
+        async with self.with_cursor(self.connection) as cursor:
+            execution_result = await self.dispatch_execute(cursor, statement)
+            return self.build_statement_result(statement, execution_result)
 
     async def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
