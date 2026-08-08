@@ -13,6 +13,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     NotFoundError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -281,7 +282,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     # Query timeout/cancellation
     if isinstance(error, api_exceptions.Cancelled):
-        return _create_spanner_error(error, QueryTimeoutError, "operation cancelled")
+        return _create_spanner_error(error, OperationCancelledError, "operation cancelled")
     if isinstance(error, api_exceptions.DeadlineExceeded):
         return _create_spanner_error(error, QueryTimeoutError, "deadline exceeded")
 

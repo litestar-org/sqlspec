@@ -131,6 +131,18 @@ Execution
    :members:
    :show-inheritance:
 
+.. autoclass:: OperationCancelledError
+   :members:
+   :show-inheritance:
+
+``OperationCancelledError`` and ``QueryTimeoutError`` are sibling operational
+errors. Catch ``OperationCancelledError`` for explicit caller or operator
+cancellation, and ``QueryTimeoutError`` for elapsed statement timeouts and
+deadlines. ADBC ``CANCELLED`` and ``TIMEOUT`` statuses follow this distinction.
+Callers that previously caught ``QueryTimeoutError`` for cancellation should
+catch both exceptions during migration, or catch ``OperationalError`` when the
+distinction is not relevant.
+
 .. autoclass:: DataError
    :members:
    :show-inheritance:
@@ -223,6 +235,7 @@ Inheritance Tree
    +-- DataError
    +-- OperationalError
    |   +-- QueryTimeoutError
+   |   +-- OperationCancelledError
    +-- StackExecutionError
    +-- StorageOperationFailedError
    |   +-- FileNotFoundInStorageError

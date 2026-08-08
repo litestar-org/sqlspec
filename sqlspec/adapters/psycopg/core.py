@@ -28,12 +28,14 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
@@ -542,7 +544,7 @@ def _register_exception_mappings() -> None:
         pg_errors.IntegrityError: ("23000", IntegrityError, "integrity constraint violation"),
         pg_errors.DeadlockDetected: ("40P01", DeadlockError, "deadlock detected"),
         pg_errors.SerializationFailure: ("40001", SerializationConflictError, "serialization failure"),
-        pg_errors.QueryCanceled: ("57014", QueryTimeoutError, "query canceled"),
+        pg_errors.QueryCanceled: ("57014", OperationCancelledError, "query canceled"),
         pg_errors.InsufficientPrivilege: ("42501", PermissionDeniedError, "insufficient privilege"),
         pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
     })
@@ -598,12 +600,18 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         mapped_error = _resolve_exception_mapping(error_type)
     if mapped_error is not None:
         mapped_error_code, error_class, description = mapped_error
+        if mapped_error_code == "57014":
+            termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
+            return _create_postgres_error(error, mapped_error_code, termination_class, description)
         return _create_postgres_error(error, mapped_error_code, error_class, description)
 
     # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     error_code = sqlstate_attr if sqlstate_attr is not None else None
     if error_code:
+        if error_code == "57014":
+            termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
+            return _create_postgres_error(error, error_code, termination_class, "query terminated")
         exc_class = map_sqlstate_to_exception(error_code)
         if exc_class:
             return _create_postgres_error(error, error_code, exc_class, "database error")

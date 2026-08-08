@@ -32,12 +32,15 @@ from sqlspec.exceptions import (
     ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
@@ -565,6 +568,12 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
+    status_code = getattr(error, "status_code", None)
+    status_name = getattr(status_code, "name", str(status_code)).upper()
+    if status_name == "TIMEOUT":
+        return _create_adbc_error(error, QueryTimeoutError, "query timeout")
+    if status_name == "CANCELLED":
+        return _create_adbc_error(error, OperationCancelledError, "operation cancelled")
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     sqlstate = sqlstate_attr if sqlstate_attr is not None else None
 
@@ -585,9 +594,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if sqlstate == "40001":
             return _create_adbc_error(error, SerializationConflictError, "serialization failure")
 
-        # Query timeout/cancellation
         if sqlstate == "57014":
-            return _create_adbc_error(error, QueryTimeoutError, "query canceled")
+            termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
+            return _create_adbc_error(error, termination_class, "query terminated")
 
         # Permission errors
         if sqlstate == "42501":
@@ -625,9 +634,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "serialization" in error_msg or "concurrent update" in error_msg:
         return _create_adbc_error(error, DeadlockError, "serialization failure")
 
-    # Timeout/cancellation patterns
-    if "timeout" in error_msg or "cancel" in error_msg or "interrupt" in error_msg:
-        return _create_adbc_error(error, QueryTimeoutError, "query timeout")
+    if message_class := _classify_timeout_or_cancellation(error_msg):
+        return _create_adbc_error(error, message_class, "query terminated")
 
     # Permission patterns
     if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:

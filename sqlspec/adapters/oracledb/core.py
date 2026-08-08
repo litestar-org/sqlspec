@@ -30,8 +30,8 @@ from sqlspec.exceptions import (
     IntegrityError,
     NotNullViolationError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
@@ -128,7 +128,7 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     60: (DeadlockError, "deadlock detected"),
     8176: (TransactionError, "consistent read failure"),
     # Query timeout/cancellation
-    1013: (QueryTimeoutError, "user requested cancel"),
+    1013: (OperationCancelledError, "user requested cancel"),
     # Data errors
     1722: (DataError, "invalid number"),
     1858: (DataError, "invalid character"),

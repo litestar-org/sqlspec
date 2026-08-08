@@ -19,8 +19,8 @@ from sqlspec.exceptions import (
     NotFoundError,
     NotNullViolationError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -50,7 +50,7 @@ def _make_native(name: str, message: str) -> tuple[type[BaseException], BaseExce
         ("ParserException", "syntax error at line 1", SQLParsingError),
         ("BinderException", "column not found", SQLParsingError),
         ("PermissionException", "access denied to resource", PermissionDeniedError),
-        ("InterruptException", "query interrupted", QueryTimeoutError),
+        ("InterruptException", "query interrupted", OperationCancelledError),
         ("IOException", "disk read failure", OperationalError),
         ("ConversionException", "could not convert string", DataError),
     ],
@@ -99,7 +99,14 @@ def test_create_mapped_exception_substring_fallback_interrupt_message() -> None:
 
     error: BaseException = _Generic("statement was canceled by user")
     mapped = create_mapped_exception(error)
-    assert isinstance(mapped, QueryTimeoutError)
+    assert isinstance(mapped, OperationCancelledError)
+
+
+def test_create_mapped_exception_type_name_fallback_interrupt() -> None:
+    class InterruptException(Exception):
+        pass
+
+    assert isinstance(create_mapped_exception(InterruptException("query stopped")), OperationCancelledError)
 
 
 def test_create_mapped_exception_substring_fallback_type_mismatch_message() -> None:

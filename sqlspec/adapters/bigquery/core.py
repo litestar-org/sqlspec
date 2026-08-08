@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import sqlglot
+from google.api_core import exceptions as api_exceptions
 from sqlglot import exp
 
 from sqlspec.core import (
@@ -23,13 +24,14 @@ from sqlspec.exceptions import (
     DataError,
     NotFoundError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     StorageCapabilityError,
     StorageOperationFailedError,
     UniqueViolationError,
+    _classify_timeout_or_cancellation,
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
@@ -688,7 +690,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Mapped Statuses:
         * UniqueViolationError: HTTP 409 (Conflict) or "already exists" in message
         * NotFoundError: HTTP 404 (Not Found) or "not found" in message
-        * QueryTimeoutError: "timeout", "deadline exceeded", or "cancelled" in message
+        * QueryTimeoutError or OperationCancelledError for terminated queries
         * SQLParsingError / DataError / SQLSpecError: HTTP 400 (Bad Request)
         * PermissionDeniedError: HTTP 403 (Forbidden) or "access denied" / "permission denied" in message
         * OperationalError: HTTP 500+ (Server error)
@@ -713,8 +715,11 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if status_code == HTTP_NOT_FOUND or "not found" in error_msg:
         return _create_bigquery_error(error, status_code, NotFoundError, "resource not found")
 
-    if "timeout" in error_msg or "deadline exceeded" in error_msg or "cancelled" in error_msg:
-        return _create_bigquery_error(error, status_code, QueryTimeoutError, "query timeout or cancelled")
+    if isinstance(error, api_exceptions.Cancelled):
+        return _create_bigquery_error(error, status_code, OperationCancelledError, "query cancelled")
+
+    if error_class := _classify_timeout_or_cancellation(error_msg):
+        return _create_bigquery_error(error, status_code, error_class, "query terminated")
 
     if status_code == HTTP_BAD_REQUEST:
         if "syntax" in error_msg or "invalid query" in error_msg:
