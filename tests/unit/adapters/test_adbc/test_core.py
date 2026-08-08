@@ -17,7 +17,13 @@ from sqlspec.adapters.adbc.core import (
     resolve_column_names,
     resolve_many_rowcount,
 )
-from sqlspec.exceptions import DeadlockError, SerializationConflictError
+from sqlspec.exceptions import (
+    DeadlockError,
+    OperationalError,
+    OperationCancelledError,
+    QueryTimeoutError,
+    SerializationConflictError,
+)
 
 
 def test_create_mapped_exception_maps_40001_to_serialization_conflict() -> None:
@@ -37,6 +43,32 @@ def test_create_mapped_exception_still_maps_40p01_to_deadlock() -> None:
     mapped = adbc_core.create_mapped_exception(error)
 
     assert isinstance(mapped, DeadlockError)
+
+
+def test_create_mapped_exception_maps_cancelled_status_to_operation_cancelled() -> None:
+    error = DatabaseError("operation cancelled", status_code=AdbcStatusCode.CANCELLED)
+
+    assert isinstance(adbc_core.create_mapped_exception(error), OperationCancelledError)
+
+
+def test_create_mapped_exception_maps_timeout_status_to_query_timeout() -> None:
+    error = DatabaseError("operation timed out", status_code=AdbcStatusCode.TIMEOUT)
+
+    assert isinstance(adbc_core.create_mapped_exception(error), QueryTimeoutError)
+
+
+def test_create_mapped_exception_maps_ambiguous_57014_to_operational_error() -> None:
+    error = DatabaseError("query failed", status_code=AdbcStatusCode.UNKNOWN, sqlstate="57014")
+
+    assert type(adbc_core.create_mapped_exception(error)) is OperationalError
+
+
+def test_create_mapped_exception_prefers_timeout_marker_over_cancel_marker() -> None:
+    error = DatabaseError(
+        "canceling statement due to statement timeout", status_code=AdbcStatusCode.UNKNOWN, sqlstate="57014"
+    )
+
+    assert isinstance(adbc_core.create_mapped_exception(error), QueryTimeoutError)
 
 
 def test_prepare_postgres_parameters_fast_path_without_casts() -> None:

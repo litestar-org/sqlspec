@@ -21,6 +21,7 @@ __all__ = (
     "MultipleResultsFoundError",
     "NotFoundError",
     "NotNullViolationError",
+    "OperationCancelledError",
     "OperationalError",
     "OutOfOrderMigrationError",
     "PermissionDeniedError",
@@ -262,14 +263,16 @@ class OperationalError(SQLSpecError):
 
 
 class QueryTimeoutError(OperationalError):
-    """Query execution timed out or was canceled.
+    """Query execution exceeded a timeout or deadline.
 
     Raised when:
-        - Statement timeout exceeded (SQLSTATE 57014)
-        - Query canceled by user/operator
         - Lock wait timeout exceeded (MySQL 1205)
-        - Oracle user requested cancel (ORA-01013)
+        - Statement or service deadline exceeded
     """
+
+
+class OperationCancelledError(OperationalError):
+    """Database operation was explicitly cancelled by a caller or operator."""
 
 
 class StorageOperationFailedError(SQLSpecError):
@@ -393,7 +396,7 @@ SQLSTATE_EXCEPTION_MAP: Final[dict[str, type[SQLSpecError]]] = {
     "23514": CheckViolationError,
     "40001": SerializationConflictError,
     "40P01": DeadlockError,
-    "57014": QueryTimeoutError,
+    "57014": OperationalError,
     # Class-level matches (2 characters) - broader categories
     "02": NotFoundError,
     "08": DatabaseConnectionError,
@@ -437,6 +440,17 @@ def map_sqlstate_to_exception(sqlstate: str | None) -> type[SQLSpecError] | None
     if len(sqlstate) >= SQLSTATE_CLASS_CODE_LEN and (exc_class := exc_map.get(sqlstate[:SQLSTATE_CLASS_CODE_LEN])):
         return exc_class
 
+    return None
+
+
+def _classify_timeout_or_cancellation(message: str) -> "type[OperationalError] | None":
+    error_msg = message.lower()
+    timeout_markers = ("timeout", "timed out", "deadline exceeded", "deadline_exceeded")
+    if any(marker in error_msg for marker in timeout_markers):
+        return QueryTimeoutError
+    cancellation_markers = ("cancel", "interrupt")
+    if any(marker in error_msg for marker in cancellation_markers):
+        return OperationCancelledError
     return None
 
 

@@ -9,8 +9,19 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased - Compiled async exception handling
-------------------------------------------------------------------------------
+Unreleased
+-------------------------------------------------------------------------------
+
+**Changed:**
+
+* Explicit database cancellation now raises
+  :class:`~sqlspec.exceptions.OperationCancelledError`, while elapsed timeouts
+  and deadlines continue to raise
+  :class:`~sqlspec.exceptions.QueryTimeoutError`. The two exceptions are
+  siblings under :class:`~sqlspec.exceptions.OperationalError`. Applications
+  that used ``QueryTimeoutError`` for both outcomes should catch both exception
+  types, or catch ``OperationalError`` when they do not need to distinguish
+  cancellation from timeout.
 
 **Fixed:**
 
