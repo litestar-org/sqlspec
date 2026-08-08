@@ -59,10 +59,10 @@ def test_sqlite_interrupt_maps_to_operation_cancelled() -> None:
 
 
 def test_bigquery_errors_distinguish_native_cancellation_and_timeout() -> None:
-    assert isinstance(map_bigquery_error(api_exceptions.Cancelled("cancelled")), OperationCancelledError)
+    assert isinstance(map_bigquery_error(api_exceptions.Cancelled("cancelled")), OperationCancelledError)  # type: ignore[no-untyped-call]
     assert isinstance(map_bigquery_error(Exception("deadline exceeded")), QueryTimeoutError)
 
 
 def test_spanner_errors_distinguish_native_cancellation_and_deadline() -> None:
-    assert isinstance(map_spanner_error(api_exceptions.Cancelled("cancelled")), OperationCancelledError)
-    assert isinstance(map_spanner_error(api_exceptions.DeadlineExceeded("deadline exceeded")), QueryTimeoutError)
+    assert isinstance(map_spanner_error(api_exceptions.Cancelled("cancelled")), OperationCancelledError)  # type: ignore[no-untyped-call]
+    assert isinstance(map_spanner_error(api_exceptions.DeadlineExceeded("deadline exceeded")), QueryTimeoutError)  # type: ignore[no-untyped-call]
