@@ -141,6 +141,7 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
 
     assert all(result["imported"] or result["skipped"] for result in results)
     assert {result["name"] for result in results} == {
+        "aiosqlite_exception_mapping",
         "fastapi_filter_construction",
         "litestar_filter_construction",
         "statement_cache_rebind",

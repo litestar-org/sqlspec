@@ -132,7 +132,7 @@ jobs:
           # hatchling versions track the locked dev environment.
           CIBW_BEFORE_BUILD: "pip install -c {project}/build-constraints.txt hatch-mypyc hatchling"
 
-          CIBW_TEST_REQUIRES: "cloud-sql-python-connector google-cloud-alloydb-connector"
+          CIBW_TEST_REQUIRES: "aiosqlite cloud-sql-python-connector google-cloud-alloydb-connector"
           CIBW_TEST_COMMAND: >-
             python {project}/tools/scripts/mypyc_smoke.py --require-compiled
 
