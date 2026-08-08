@@ -583,7 +583,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return False
 
     def _coerce_params(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any] | None":
-        return coerce_params(params, json_serializer=self.driver_features.get("json_serializer"))
+        return coerce_params(
+            params,
+            json_serializer=self.driver_features.get("json_serializer"),
+            enable_uuid_conversion=self.driver_features.get("enable_uuid_conversion", True),
+        )
 
     def _infer_param_types(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any]":
         return infer_param_types(params)

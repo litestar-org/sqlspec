@@ -166,7 +166,7 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
     def get_metadata_capabilities(
         self, driver: "CockroachPsycopgSyncDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
-        """Get CockroachDB replacement data-dictionary capability profile."""
+        """Get CockroachDB data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
 
     def get_system_metadata_capabilities(
@@ -401,7 +401,7 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_metadata_capabilities(
         self, driver: "CockroachPsycopgAsyncDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
-        """Get CockroachDB replacement data-dictionary capability profile."""
+        """Get CockroachDB data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
 
     async def get_system_metadata_capabilities(

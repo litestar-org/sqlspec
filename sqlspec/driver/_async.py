@@ -1897,7 +1897,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
     async def get_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
     ) -> "MetadataCapabilityProfile":
-        """Get replacement data-dictionary capability profile.
+        """Get data-dictionary capability profile.
 
         Args:
             driver: Async database driver instance.

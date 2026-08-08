@@ -261,7 +261,7 @@ def list_mssql_available_features(config: "DialectConfig | None" = None) -> list
 def build_mssql_metadata_capability_profile(
     adapter: str | None, domains: "Sequence[str] | None" = None
 ) -> MetadataCapabilityProfile:
-    """Build SQL Server replacement data-dictionary capability metadata."""
+    """Build SQL Server data-dictionary capability metadata."""
     requested_domains = tuple(domains) if domains is not None else MSSQL_REPLACEMENT_DOMAINS
     capabilities: list[MetadataCapability] = []
     for domain in requested_domains:

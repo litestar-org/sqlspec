@@ -541,6 +541,13 @@ def prepare_postgres_parameters(
 ) -> Any:
     """Prepare Postgres parameters with cast-aware coercion."""
     postgres_compatible = normalize_postgres_empty_parameters(dialect, parameters)
+    converter = get_adbc_type_converter(dialect)
+    if isinstance(postgres_compatible, (list, tuple)) and hasattr(converter, "convert_sequence"):
+        seq = [
+            converter.convert_sequence(item) if isinstance(item, (list, tuple)) else item
+            for item in postgres_compatible
+        ]
+        postgres_compatible = tuple(seq) if isinstance(postgres_compatible, tuple) else seq
     if not parameter_casts:
         return postgres_compatible
     return prepare_parameters_with_casts(
@@ -1234,6 +1241,20 @@ def _prepare_parameter_sequence_with_casts(
                 result.append(param)
         elif isinstance(param, dict):
             result.append(converter.convert_dict(param))
+        elif isinstance(param, (list, tuple)):
+            if type_map and dispatcher is not None:
+                exact_converter = type_map.get(type(param))
+                if exact_converter is not None:
+                    param = exact_converter(param)
+                else:
+                    converter_func = dispatcher.get(param)
+                    if converter_func is not None:
+                        param = converter_func(param)
+                    elif hasattr(converter, "convert_sequence"):
+                        param = converter.convert_sequence(param)
+            elif hasattr(converter, "convert_sequence"):
+                param = converter.convert_sequence(param)
+            result.append(param)
         else:
             if type_map and dispatcher is not None:
                 exact_converter = type_map.get(type(param))

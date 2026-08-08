@@ -1,4 +1,4 @@
-"""PostgreSQL-family replacement data-dictionary adapter contracts."""
+"""PostgreSQL-family data-dictionary adapter contracts."""
 
 from typing import Any, cast
 
