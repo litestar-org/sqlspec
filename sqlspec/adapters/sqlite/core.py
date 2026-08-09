@@ -22,8 +22,8 @@ from sqlspec.exceptions import (
     IntegrityError,
     NotNullViolationError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -351,9 +351,9 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
 
     # Query interruption (timeout-like behavior)
     if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
-        return _create_sqlite_error(error, error_code, QueryTimeoutError, "query interrupted")
+        return _create_sqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
-        return _create_sqlite_error(error, error_code or 0, QueryTimeoutError, "query interrupted")
+        return _create_sqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
     # Permission errors
     if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":

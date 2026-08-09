@@ -3,7 +3,7 @@
 import sqlite3
 
 from sqlspec.adapters.aiosqlite.core import create_mapped_exception
-from sqlspec.exceptions import DeadlockError, PermissionDeniedError, QueryTimeoutError
+from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError
 
 
 class _SqliteError(sqlite3.OperationalError):
@@ -47,21 +47,21 @@ def test_busy_text_heuristic_maps_to_deadlock() -> None:
     assert isinstance(result, DeadlockError)
 
 
-def test_interrupt_error_code_maps_to_query_timeout() -> None:
+def test_interrupt_error_code_maps_to_operation_cancelled() -> None:
     err = _SqliteError("interrupted", 9, "SQLITE_INTERRUPT")
     result = create_mapped_exception(err)
-    assert isinstance(result, QueryTimeoutError)
+    assert isinstance(result, OperationCancelledError)
     assert result.__cause__ is err
 
 
-def test_interrupt_error_name_maps_to_query_timeout() -> None:
+def test_interrupt_error_name_maps_to_operation_cancelled() -> None:
     result = create_mapped_exception(_SqliteError("query was interrupted", None, "SQLITE_INTERRUPT"))
-    assert isinstance(result, QueryTimeoutError)
+    assert isinstance(result, OperationCancelledError)
 
 
-def test_interrupt_text_heuristic_maps_to_query_timeout() -> None:
+def test_interrupt_text_heuristic_maps_to_operation_cancelled() -> None:
     result = create_mapped_exception(sqlite3.OperationalError("query was interrupted by application"))
-    assert isinstance(result, QueryTimeoutError)
+    assert isinstance(result, OperationCancelledError)
 
 
 def test_perm_error_code_maps_to_permission_denied() -> None:

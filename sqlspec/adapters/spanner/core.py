@@ -13,6 +13,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     NotFoundError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -178,11 +179,14 @@ def coerce_params(
     params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None",
     *,
     json_serializer: "Callable[[Any], str] | None" = None,
+    enable_uuid_conversion: bool = True,
 ) -> "dict[str, Any] | None":
     """Coerce Python types to Spanner-compatible formats."""
     if not isinstance(params, dict):
         return None
-    return coerce_params_for_spanner(params, json_serializer=json_serializer)
+    return coerce_params_for_spanner(
+        params, json_serializer=json_serializer, enable_uuid_conversion=enable_uuid_conversion
+    )
 
 
 def collect_rows(
@@ -281,7 +285,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     # Query timeout/cancellation
     if isinstance(error, api_exceptions.Cancelled):
-        return _create_spanner_error(error, QueryTimeoutError, "operation cancelled")
+        return _create_spanner_error(error, OperationCancelledError, "operation cancelled")
     if isinstance(error, api_exceptions.DeadlineExceeded):
         return _create_spanner_error(error, QueryTimeoutError, "deadline exceeded")
 

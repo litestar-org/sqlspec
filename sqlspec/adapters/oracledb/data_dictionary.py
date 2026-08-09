@@ -274,7 +274,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         include_diagnostics: bool = False,
         acknowledge_diagnostics_license: bool = False,
     ) -> MetadataCapabilityProfile:
-        """Report Oracle replacement metadata capabilities and scope gates."""
+        """Report Oracle metadata capabilities and scope gates."""
 
         _ = driver
         return _oracle_capability_profile(
@@ -670,7 +670,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         include_diagnostics: bool = False,
         acknowledge_diagnostics_license: bool = False,
     ) -> MetadataCapabilityProfile:
-        """Report Oracle replacement metadata capabilities and scope gates."""
+        """Report Oracle metadata capabilities and scope gates."""
 
         _ = driver
         return _oracle_capability_profile(

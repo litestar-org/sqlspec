@@ -80,7 +80,7 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
     async def get_metadata_capabilities(
         self, driver: "AiomysqlDriver", domains: "Sequence[str] | None" = None
     ) -> "MetadataCapabilityProfile":
-        """Get replacement data-dictionary capability profile."""
+        """Get data-dictionary capability profile."""
         engine_version = await self._get_engine_version(driver)
         dialect = engine_version.engine_family if engine_version is not None else type(self).dialect
         requested_domains = None if domains is None else tuple(domains)

@@ -1,4 +1,4 @@
-"""Unit tests for BigQuery and Spanner replacement metadata packs."""
+"""Unit tests for BigQuery and Spanner metadata packs."""
 
 from typing import Any, cast
 

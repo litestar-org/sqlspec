@@ -168,12 +168,14 @@ def spanner_json(value: Any) -> Any:
 
 
 def coerce_params_for_spanner(
-    params: "dict[str, Any] | None", json_serializer: "Callable[[Any], str] | None" = None
+    params: "dict[str, Any] | None",
+    json_serializer: "Callable[[Any], str] | None" = None,
+    enable_uuid_conversion: bool = True,
 ) -> "dict[str, Any] | None":
     """Coerce Python types to Spanner-compatible formats.
 
     Handles:
-        - UUID → base64-encoded bytes
+        - UUID → 36-character string (when enable_uuid_conversion is active)
         - bytes → base64-encoded bytes
         - datetime timezone awareness
         - dict → JsonObject for JSON columns
@@ -182,6 +184,7 @@ def coerce_params_for_spanner(
     Args:
         params: Parameter dictionary or None.
         json_serializer: Optional JSON serializer (unused for JSON dicts).
+        enable_uuid_conversion: Enable automatic UUID string conversion.
 
     Returns:
         Coerced parameter dictionary or None.
@@ -197,9 +200,11 @@ def coerce_params_for_spanner(
             value = value.value
             changed = True
         if isinstance(value, _UUID_TYPES):
-            std_uuid = value if isinstance(value, UUID) else uuid_from_bytes(value.bytes)
-            coerced[key] = bytes_to_spanner(uuid_to_spanner(std_uuid))
-            changed = True
+            if enable_uuid_conversion:
+                coerced[key] = str(value)
+                changed = True
+            else:
+                coerced[key] = value
         elif isinstance(value, bytes):
             coerced[key] = bytes_to_spanner(value)
             changed = True

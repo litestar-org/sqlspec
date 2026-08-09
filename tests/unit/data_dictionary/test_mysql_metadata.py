@@ -1,4 +1,4 @@
-"""Unit tests for MySQL-family replacement data-dictionary metadata."""
+"""Unit tests for MySQL-family data-dictionary metadata."""
 
 from importlib import import_module
 from typing import Any, cast

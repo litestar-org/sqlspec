@@ -14,8 +14,8 @@ from sqlspec.exceptions import (
     NotFoundError,
     NotNullViolationError,
     OperationalError,
+    OperationCancelledError,
     PermissionDeniedError,
-    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -229,7 +229,7 @@ def _register_duckdb_exception_mappings() -> None:
         ("ParserException", (SQLParsingError, "SQL parsing error")),
         ("BinderException", (SQLParsingError, "SQL parsing error")),
         ("PermissionException", (PermissionDeniedError, "permission denied")),
-        ("InterruptException", (QueryTimeoutError, "query interrupted")),
+        ("InterruptException", (OperationCancelledError, "query interrupted")),
         ("IOException", (OperationalError, "operational error")),
         ("ConversionException", (DataError, "data error")),
     )
@@ -312,7 +312,7 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     if "permissionexception" in exc_name:
         return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
     if "interruptexception" in exc_name:
-        return _create_duckdb_error(error, QueryTimeoutError, "query interrupted")
+        return _create_duckdb_error(error, OperationCancelledError, "query interrupted")
     if "ioexception" in exc_name:
         return _create_duckdb_error(error, OperationalError, "operational error")
     if "conversionexception" in exc_name:
@@ -322,7 +322,7 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     if "permission denied" in error_msg or "access denied" in error_msg:
         return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
     if "interrupt" in error_msg or "cancel" in error_msg:
-        return _create_duckdb_error(error, QueryTimeoutError, "query canceled")
+        return _create_duckdb_error(error, OperationCancelledError, "query canceled")
     if "type mismatch" in error_msg:
         return _create_duckdb_error(error, DataError, "data error")
 

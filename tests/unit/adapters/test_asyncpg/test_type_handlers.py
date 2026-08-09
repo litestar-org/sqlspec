@@ -7,7 +7,7 @@ import pytest
 
 from sqlspec.adapters.asyncpg.config import register_json_codecs, register_pgvector_support
 from sqlspec.adapters.asyncpg.core import create_mapped_exception
-from sqlspec.exceptions import PermissionDeniedError, UniqueViolationError
+from sqlspec.exceptions import OperationCancelledError, PermissionDeniedError, QueryTimeoutError, UniqueViolationError
 from sqlspec.utils.serializers import from_json, to_json
 
 
@@ -109,3 +109,15 @@ def test_create_mapped_exception_uses_registered_permission_dispatch() -> None:
 
     assert isinstance(result, PermissionDeniedError)
     assert result.__cause__ is error
+
+
+def test_create_mapped_exception_distinguishes_user_cancel_from_statement_timeout() -> None:
+    cancelled = create_mapped_exception(
+        asyncpg.exceptions.QueryCanceledError("canceling statement due to user request")
+    )
+    timed_out = create_mapped_exception(
+        asyncpg.exceptions.QueryCanceledError("canceling statement due to statement timeout")
+    )
+
+    assert isinstance(cancelled, OperationCancelledError)
+    assert isinstance(timed_out, QueryTimeoutError)
