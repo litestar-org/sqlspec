@@ -13,7 +13,6 @@ from sqlspec.data_dictionary._types import (
     MetadataSource,
     MetadataSupport,
 )
-from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.utils.text import slugify
 
@@ -26,7 +25,6 @@ if TYPE_CHECKING:
     else:
         from importlib.abc import Traversable
 
-    from sqlspec.core.statement import SQL
     from sqlspec.data_dictionary._types import DialectConfig, VersionInfo
 
 __all__ = ("DataDictionaryLoader", "get_data_dictionary_loader")
@@ -40,92 +38,12 @@ SQL_RESOURCE_NAME = "sql"
 class DataDictionaryLoader:
     """Loads and manages data dictionary SQL for all dialects."""
 
-    __slots__ = ("_domain_loaders", "_loaded_dialects", "_loaded_domain_paths", "_sql_loaders")
+    __slots__ = ("_domain_loaders", "_loaded_domain_paths")
 
     def __init__(self) -> None:
         """Initialize the data dictionary loader."""
-        self._sql_loaders: dict[str, SQLFileLoader] = {}
         self._domain_loaders: dict[tuple[str, str, str | None], SQLFileLoader] = {}
-        self._loaded_dialects: set[str] = set()
         self._loaded_domain_paths: set[tuple[str, str, str | None]] = set()
-
-    def _get_loader(self, dialect: str) -> "SQLFileLoader":
-        """Return or create a SQL loader for a dialect.
-
-        Args:
-            dialect: Dialect name.
-
-        Returns:
-            SQLFileLoader instance.
-        """
-        loader = self._sql_loaders.get(dialect)
-        if loader is None:
-            loader = SQLFileLoader()
-            self._sql_loaders[dialect] = loader
-        return loader
-
-    def _ensure_dialect_loaded(self, dialect: str) -> None:
-        """Lazy load SQL files for a dialect.
-
-        Args:
-            dialect: Dialect name.
-
-        Raises:
-            SQLFileNotFoundError: When the dialect SQL directory is missing.
-        """
-        if dialect in self._loaded_dialects:
-            return
-        try:
-            sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
-            if not sql_root.is_dir():
-                raise SQLFileNotFoundError(str(sql_root))
-        except (ModuleNotFoundError, FileNotFoundError) as err:
-            msg = f"sqlspec.data_dictionary.dialects.{dialect}"
-            raise SQLFileNotFoundError(msg) from err
-        with as_file(sql_root) as sql_path:
-            for item in sql_path.iterdir():
-                if item.is_file() and item.name.endswith(".sql"):
-                    domain = item.stem
-                    key = (dialect, domain, None)
-                    loader = self._domain_loaders.get(key)
-                    if loader is None:
-                        loader = SQLFileLoader()
-                        self._domain_loaders[key] = loader
-                    loader.load_sql(item)
-                    self._loaded_domain_paths.add(key)
-        self._loaded_dialects.add(dialect)
-
-    def get_query(self, dialect: str, query_name: str) -> "SQL":
-        """Get SQL query for a specific dialect and operation.
-
-        Args:
-            dialect: Dialect name.
-            query_name: Query name to fetch.
-
-        Returns:
-            SQL object for the named query.
-        """
-        self._ensure_dialect_loaded(dialect)
-        for (d, _domain, _mode), loader in self._domain_loaders.items():
-            if d == dialect and loader.has_query(query_name):
-                return loader.get_sql(query_name)
-        return self._get_loader(dialect).get_sql(query_name)
-
-    def get_query_text(self, dialect: str, query_name: str) -> str:
-        """Get raw SQL text for a specific dialect and operation.
-
-        Args:
-            dialect: Dialect name.
-            query_name: Query name to fetch.
-
-        Returns:
-            Raw SQL text for the named query.
-        """
-        self._ensure_dialect_loaded(dialect)
-        for (d, _domain, _mode), loader in self._domain_loaders.items():
-            if d == dialect and loader.has_query(query_name):
-                return loader.get_query_text(query_name)
-        return self._get_loader(dialect).get_query_text(query_name)
 
     def _get_domain_loader(self, dialect: str, domain: str, mode: str | None) -> "SQLFileLoader":
         """Return or create a SQL loader for a dialect/domain/mode pack."""
@@ -300,17 +218,10 @@ class DataDictionaryLoader:
             )
 
         loader = self._get_domain_loader(normalized_dialect, normalized_domain, normalized_mode)
-        statement_name = normalized_query
-        if not loader.has_query(statement_name):
-            alt_name = f"{normalized_domain}_{normalized_query}"
-            if loader.has_query(alt_name):
-                statement_name = alt_name
-            elif loader.has_query(query_name):
-                statement_name = query_name
-            else:
-                return self._unsupported_domain_query(
-                    normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
-                )
+        if not loader.has_query(normalized_query):
+            return self._unsupported_domain_query(
+                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
+            )
 
         capability = MetadataCapability(
             domain=normalized_domain,
@@ -324,7 +235,7 @@ class DataDictionaryLoader:
             name=query_name,
             mode=normalized_mode,
             capability=capability,
-            sql=loader.get_sql(statement_name),
+            sql=loader.get_sql(normalized_query),
         )
 
     def get_domain_queries(

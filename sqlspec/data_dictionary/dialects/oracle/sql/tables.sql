@@ -1,4 +1,4 @@
--- name: by_owner
+-- name: by_schema
 -- dialect: oracle
 SELECT
     t.owner AS schema_name,
@@ -39,25 +39,7 @@ WHERE t.owner = COALESCE(:schema_name, USER)
   AND (:table_name IS NULL OR t.table_name = :table_name)
 ORDER BY t.owner, t.table_name;
 
--- name: tables_by_schema
--- dialect: oracle
-SELECT
-    table_name,
-    MAX(LEVEL) AS dependency_level
-FROM all_constraints
-WHERE owner = COALESCE(:schema_name, USER)
-START WITH table_name NOT IN (
-    SELECT table_name
-    FROM all_constraints
-    WHERE constraint_type = 'R'
-      AND owner = COALESCE(:schema_name, USER)
-)
-CONNECT BY NOCYCLE PRIOR constraint_name = r_constraint_name
-    AND PRIOR owner = owner
-GROUP BY table_name
-ORDER BY dependency_level, table_name;
-
--- name: all_tables_by_schema
+-- name: names_by_schema
 -- dialect: oracle
 SELECT
     table_name

@@ -49,7 +49,7 @@ WHERE (:schema_name IS NULL OR table_schema = :schema_name)
   AND (:table_name IS NULL OR table_name = :table_name)
 ORDER BY table_schema, table_name;
 
--- name: tables_by_schema
+-- name: by_schema
 -- dialect: bigquery
 WITH RECURSIVE dependency_tree AS (
     SELECT

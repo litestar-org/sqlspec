@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: cockroachdb
 SELECT
     tc.constraint_name::text AS constraint_name,
@@ -19,7 +19,7 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
   AND tc.table_name = :table_name
 ORDER BY tc.constraint_name, kcu.column_name;
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: cockroachdb
 SELECT
     tc.constraint_name::text AS constraint_name,

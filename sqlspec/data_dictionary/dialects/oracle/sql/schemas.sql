@@ -1,4 +1,4 @@
--- name: by_owner
+-- name: by_schema
 -- dialect: oracle
 SELECT
     username AS schema_name,

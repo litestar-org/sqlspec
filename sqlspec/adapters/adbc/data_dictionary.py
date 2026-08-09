@@ -357,7 +357,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         try:
             version_query_dialect = "mysql" if dialect == "mariadb" else dialect
-            version_value = driver.select_value_or_none(self._get_query(version_query_dialect, "version"))
+            version_value = driver.select_value_or_none(self._get_query(version_query_dialect, "version", "current"))
         except Exception:
             self._log_version_unavailable(dialect, "query_failed")
             self.cache_version(driver_id, None)
@@ -450,18 +450,18 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         if dialect == "bigquery":
             tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(schema_name)
-            query_text = self._get_query_text(dialect, "tables_by_schema").format(
+            query_text = self._get_query_text(dialect, "tables", "by_schema").format(
                 tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
             )
             return driver.select(query_text, schema_type=TableMetadata)
 
         if dialect == "sqlite":
             schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
-            query_text = self._get_query_text(dialect, "tables_by_schema").format(schema_prefix=schema_prefix)
+            query_text = self._get_query_text(dialect, "tables", "by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_type=TableMetadata)
 
         return driver.select(
-            self._get_query(dialect, "tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
 
     def get_columns(
@@ -484,30 +484,30 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if dialect == "bigquery":
             schema_prefix = format_bigquery_schema_prefix(schema_name)
             if table is None:
-                query_text = self._get_query_text(dialect, "columns_by_schema").format(schema_prefix=schema_prefix)
+                query_text = self._get_query_text(dialect, "columns", "by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
-            query_text = self._get_query_text(dialect, "columns_by_table").format(schema_prefix=schema_prefix)
+            query_text = self._get_query_text(dialect, "columns", "by_table").format(schema_prefix=schema_prefix)
             table_name = self._resolve_identifier(dialect, table)
             return driver.select(query_text, table_name=table_name, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if dialect == "sqlite":
             schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
             if table is None:
-                query_text = self._get_query_text(dialect, "columns_by_schema").format(schema_prefix=schema_prefix)
+                query_text = self._get_query_text(dialect, "columns", "by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_type=ColumnMetadata)
             table_identifier = f"{schema_name}.{table}" if schema_name else table
-            query_text = self._get_query_text(dialect, "columns_by_table").format(
+            query_text = self._get_query_text(dialect, "columns", "by_table").format(
                 table_name=format_identifier(table_identifier)
             )
             return driver.select(query_text, schema_type=ColumnMetadata)
 
         if table is None:
             return driver.select(
-                self._get_query(dialect, "columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self._get_query(dialect, "columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
         table_name = self._resolve_identifier(dialect, table)
         return driver.select(
-            self._get_query(dialect, "columns_by_table"),
+            self._get_query(dialect, "columns", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ColumnMetadata,
@@ -537,7 +537,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
             table_name = table
             table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
-            index_list_sql = self._get_query_text(dialect, "indexes_by_table").format(
+            index_list_sql = self._get_query_text(dialect, "indexes", "by_table").format(
                 table_name=format_identifier(table_identifier)
             )
             index_list_rows = driver.select(index_list_sql)
@@ -547,7 +547,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 if not index_name:
                     continue
                 index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
-                columns_sql = self._get_query_text(dialect, "index_columns_by_index").format(
+                columns_sql = self._get_query_text(dialect, "indexes", "columns_by_index").format(
                     index_name=format_identifier(index_identifier)
                 )
                 columns_rows = driver.select(columns_sql)
@@ -567,17 +567,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return index_metadata_list
 
         if dialect == "duckdb":
-            query_name = "indexes_by_schema" if table is None else "indexes_by_table"
-            return driver.select(self._get_query(dialect, query_name), schema_type=IndexMetadata)
+            operation = "by_schema" if table is None else "by_table"
+            return driver.select(self._get_query(dialect, "indexes", operation), schema_type=IndexMetadata)
 
         if table is None:
             return driver.select(
-                self._get_query(dialect, "indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self._get_query(dialect, "indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
         table_name = self._resolve_identifier(dialect, table)
         return driver.select(
-            self._get_query(dialect, "indexes_by_table"),
+            self._get_query(dialect, "indexes", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=IndexMetadata,
@@ -603,11 +603,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if dialect == "bigquery":
             _, kcu_table, rc_table = format_bigquery_information_schema_tables(schema_name)
             if table is None:
-                query_text = self._get_query_text(dialect, "foreign_keys_by_schema").format(
+                query_text = self._get_query_text(dialect, "foreign_keys", "by_schema").format(
                     kcu_table=kcu_table, rc_table=rc_table
                 )
                 return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
-            query_text = self._get_query_text(dialect, "foreign_keys_by_table").format(
+            query_text = self._get_query_text(dialect, "foreign_keys", "by_table").format(
                 kcu_table=kcu_table, rc_table=rc_table
             )
             table_name = self._resolve_identifier(dialect, table)
@@ -618,23 +618,25 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if dialect == "sqlite":
             if table is None:
                 schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
-                query_text = self._get_query_text(dialect, "foreign_keys_by_schema").format(schema_prefix=schema_prefix)
+                query_text = self._get_query_text(dialect, "foreign_keys", "by_schema").format(
+                    schema_prefix=schema_prefix
+                )
                 return driver.select(query_text, schema_type=ForeignKeyMetadata)
             table_label = table.replace("'", "''")
             table_identifier = f"{schema_name}.{table}" if schema_name else table
-            query_text = self._get_query_text(dialect, "foreign_keys_by_table").format(
+            query_text = self._get_query_text(dialect, "foreign_keys", "by_table").format(
                 table_name=format_identifier(table_identifier), table_label=table_label
             )
             return driver.select(query_text, schema_type=ForeignKeyMetadata)
 
         if table is None:
-            query_text_optional = self._get_query_text_or_none(dialect, "foreign_keys_by_schema")
+            query_text_optional = self._get_query_text_or_none(dialect, "foreign_keys", "by_schema")
             if query_text_optional is not None:
                 return driver.select(query_text_optional, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
         resolved_table_name = self._resolve_identifier(dialect, table) if table is not None else None
         return driver.select(
-            self._get_query(dialect, "foreign_keys_by_table"),
+            self._get_query(dialect, "foreign_keys", "by_table"),
             schema_name=schema_name,
             table_name=resolved_table_name,
             schema_type=ForeignKeyMetadata,
@@ -782,17 +784,20 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         dialect_value = str(driver.dialect)
         return normalize_dialect_name(dialect_value)
 
-    def _get_query(self, dialect: str, name: str) -> "SQL":
+    def _get_query(self, dialect: str, domain: str, operation: str) -> "SQL":
         loader = get_data_dictionary_loader()
-        return loader.get_query(dialect, name)
+        query = loader.get_domain_query(dialect, domain, operation)
+        if query.sql is None:
+            msg = f"No data-dictionary query found for {dialect}/{domain}/{operation}"
+            raise SQLFileNotFoundError(msg)
+        return query.sql
 
-    def _get_query_text(self, dialect: str, name: str) -> str:
-        loader = get_data_dictionary_loader()
-        return loader.get_query_text(dialect, name)
+    def _get_query_text(self, dialect: str, domain: str, operation: str) -> str:
+        return self._get_query(dialect, domain, operation).raw_sql
 
-    def _get_query_text_or_none(self, dialect: str, name: str) -> "str | None":
+    def _get_query_text_or_none(self, dialect: str, domain: str, operation: str) -> "str | None":
         try:
-            return self._get_query_text(dialect, name)
+            return self._get_query_text(dialect, domain, operation)
         except SQLFileNotFoundError:
             return None
 
@@ -920,7 +925,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return self._transport_capability(domain)
         if domain in {"schemas", "objects", "tables"} and (probes["objects"] or probes["table_types"]):
             return self._transport_capability(domain)
-        if domain == "indexes" and self._has_query(dialect, "indexes_by_schema"):
+        if domain == "indexes" and self._has_query(dialect, "indexes", "by_schema"):
             return MetadataCapability(
                 domain=domain,
                 support=MetadataSupport.SUPPORTED,
@@ -945,9 +950,9 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             warnings=(_ADBC_TRANSPORT_WARNING,),
         )
 
-    def _has_query(self, dialect: str, name: str) -> bool:
+    def _has_query(self, dialect: str, domain: str, operation: str) -> bool:
         try:
-            self._get_query(dialect, name)
+            self._get_query(dialect, domain, operation)
         except SQLFileNotFoundError:
             return False
         return True

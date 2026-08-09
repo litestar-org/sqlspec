@@ -1,3 +1,3 @@
--- name: version
+-- name: current
 -- dialect: duckdb
 SELECT version() AS version;

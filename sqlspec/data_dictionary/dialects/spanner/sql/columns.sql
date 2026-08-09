@@ -1,4 +1,4 @@
--- name: columns_by_table
+-- name: by_table
 -- dialect: spanner
 SELECT
     column_name,
@@ -10,7 +10,7 @@ WHERE table_name = :table_name
   AND (CAST(:schema_name AS STRING) IS NULL OR table_schema = :schema_name)
 ORDER BY ordinal_position;
 
--- name: columns_by_schema
+-- name: by_schema
 -- dialect: spanner
 SELECT
     table_name,

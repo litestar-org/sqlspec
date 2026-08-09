@@ -1,4 +1,4 @@
--- name: version
+-- name: current
 -- dialect: oracle
 SELECT
     product AS "product",

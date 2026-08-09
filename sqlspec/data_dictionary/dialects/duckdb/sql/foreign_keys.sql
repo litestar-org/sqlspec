@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: duckdb
 SELECT
     kcu.table_name,
@@ -17,7 +17,7 @@ JOIN information_schema.key_column_usage pk_kcu
 WHERE kcu.table_schema = COALESCE(:schema_name, current_schema())
   AND kcu.table_name = :table_name;
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: duckdb
 SELECT
     kcu.table_name,

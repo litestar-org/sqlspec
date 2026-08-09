@@ -38,7 +38,7 @@ WHERE (:schema_name IS NULL OR vi.index_schema = :schema_name)
 GROUP BY vi.index_catalog, vi.table_name, vi.index_name
 ORDER BY vi.table_name, vi.index_name;
 
--- name: indexes_by_table
+-- name: by_table
 -- dialect: bigquery
 SELECT
     NULL AS index_name,
@@ -48,7 +48,7 @@ SELECT
     NULL AS columns
 WHERE FALSE;
 
--- name: indexes_by_schema
+-- name: by_schema
 -- dialect: bigquery
 SELECT
     NULL AS index_name,

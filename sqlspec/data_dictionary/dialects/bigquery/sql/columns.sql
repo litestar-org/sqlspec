@@ -38,7 +38,7 @@ WHERE (:schema_name IS NULL OR table_schema = :schema_name)
   AND (:table_name IS NULL OR table_name = :table_name)
 ORDER BY table_schema, table_name, field_path;
 
--- name: columns_by_table
+-- name: by_table
 -- dialect: bigquery
 SELECT
     column_name,
@@ -50,7 +50,7 @@ WHERE table_name = :table_name
   AND (:schema_name IS NULL OR table_schema = :schema_name)
 ORDER BY ordinal_position;
 
--- name: columns_by_schema
+-- name: by_schema
 -- dialect: bigquery
 SELECT
     table_name,

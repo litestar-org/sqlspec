@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: mysql
 SELECT
     table_name AS `table_name`,
@@ -13,7 +13,7 @@ WHERE referenced_table_name IS NOT NULL
   AND table_name = :table_name
   AND table_schema = COALESCE(:schema_name, DATABASE());
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: mysql
 SELECT
     table_name AS `table_name`,

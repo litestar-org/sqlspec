@@ -1,3 +1,3 @@
--- name: database_list
+-- name: list
 -- dialect: sqlite
 PRAGMA database_list;

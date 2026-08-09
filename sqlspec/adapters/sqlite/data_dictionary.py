@@ -55,7 +55,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
             return self._version_cache.get(driver_id)
         # Not cached, fetch from database
 
-        version_value = driver.select_value_or_none(self.get_query("version"))
+        version_value = driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -154,11 +154,11 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            query_text = self._get_domain_query_text("constraints", "foreign_keys_by_schema")
+            query_text = self._get_domain_query_text("foreign_keys", "by_schema")
             return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
-        query_text = self._get_domain_query_text("constraints", "foreign_keys_by_table")
+        query_text = self._get_domain_query_text("foreign_keys", "by_table")
         return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
     def _get_domain_query_text(self, domain: str, query_name: str) -> str:

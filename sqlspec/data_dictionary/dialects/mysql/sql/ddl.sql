@@ -1,23 +1,23 @@
--- name: show_create_event
+-- name: event_by_name
 -- dialect: mysql
 SELECT 'SHOW CREATE EVENT' AS statement_template;
 
--- name: show_create_function
+-- name: function_by_name
 -- dialect: mysql
 SELECT 'SHOW CREATE FUNCTION' AS statement_template;
 
--- name: show_create_procedure
+-- name: procedure_by_name
 -- dialect: mysql
 SELECT 'SHOW CREATE PROCEDURE' AS statement_template;
 
--- name: show_create_table
+-- name: table_by_name
 -- dialect: mysql
 SELECT 'SHOW CREATE TABLE' AS statement_template;
 
--- name: show_create_trigger
+-- name: trigger_by_name
 -- dialect: mysql
 SELECT 'SHOW CREATE TRIGGER' AS statement_template;
 
--- name: show_create_view
+-- name: view_by_name
 -- dialect: mysql
 SELECT 'SHOW CREATE VIEW' AS statement_template;

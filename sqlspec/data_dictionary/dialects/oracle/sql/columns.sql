@@ -1,4 +1,4 @@
--- name: by_owner
+-- name: by_schema
 -- dialect: oracle
 SELECT
     c.owner AS schema_name,
@@ -29,7 +29,7 @@ WHERE c.owner = COALESCE(:schema_name, USER)
   AND (:table_name IS NULL OR c.table_name = :table_name)
 ORDER BY c.owner, c.table_name, c.internal_column_id;
 
--- name: columns_by_table
+-- name: by_table
 -- dialect: oracle
 SELECT
     column_name AS column_name,
@@ -44,19 +44,3 @@ FROM all_tab_cols
 WHERE owner = COALESCE(:schema_name, USER)
   AND table_name = :table_name
 ORDER BY column_id;
-
--- name: columns_by_schema
--- dialect: oracle
-SELECT
-    table_name,
-    column_name AS column_name,
-    data_type AS data_type,
-    nullable AS is_nullable,
-    data_default AS column_default,
-    column_id AS ordinal_position,
-    hidden_column,
-    virtual_column,
-    identity_column
-FROM all_tab_cols
-WHERE owner = COALESCE(:schema_name, USER)
-ORDER BY table_name, column_id;

@@ -1,4 +1,4 @@
--- name: version
+-- name: current
 -- dialect: mssql
 SELECT
     @@VERSION AS version_string,

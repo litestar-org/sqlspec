@@ -110,7 +110,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         """Get tables using INFORMATION_SCHEMA."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        return driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata)
+        return driver.select(self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata)
 
     def get_columns(
         self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
@@ -120,12 +120,12 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return driver.select(
-                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self.get_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return driver.select(
-            self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
+            self.get_query("columns", "by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
         )
 
     def get_indexes(
@@ -136,12 +136,12 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
-                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return driver.select(
-            self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
+            self.get_query("indexes", "by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
         )
 
     def get_foreign_keys(
@@ -152,11 +152,11 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,

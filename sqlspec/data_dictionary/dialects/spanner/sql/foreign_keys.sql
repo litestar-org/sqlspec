@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: spanner
 WITH fk_constraints AS (
     SELECT
@@ -34,7 +34,7 @@ JOIN fk_columns pk
 WHERE (CAST(:table_name AS STRING) IS NULL OR fk.table_name = :table_name)
 ORDER BY fk.table_name, fk.ordinal_position;
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: spanner
 WITH fk_constraints AS (
     SELECT

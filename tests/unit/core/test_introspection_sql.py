@@ -8,6 +8,8 @@ Verifies that all data dictionary SQL files:
 """
 
 import re
+from importlib import resources
+from typing import Any
 
 import pytest
 
@@ -30,19 +32,27 @@ _STRAY_SPACE_BIND = re.compile(r"(?<!=):\s+\w+")
 """Detects ``: param`` where a space was inserted after the colon."""
 
 
-def _get_all_dialect_queries() -> list[tuple[str, str]]:
-    """Return (dialect, query_name) pairs for every loadable query."""
-    loader = DataDictionaryLoader()
-    pairs: list[tuple[str, str]] = []
-    for dialect in loader.list_dialects():
-        # Load the dialect first to populate query list
-        try:
-            loader._ensure_dialect_loaded(dialect)
-        except Exception:
+def _get_all_dialect_queries() -> list[tuple[str, str, str | None, str]]:
+    """Return exact dialect/domain/mode/query identities for every SQL statement."""
+    identities: list[tuple[str, str, str | None, str]] = []
+    dialects_root = resources.files("sqlspec.data_dictionary.dialects")
+    for dialect_path in dialects_root.iterdir():
+        sql_root = dialect_path.joinpath("sql")
+        if not sql_root.is_dir():
             continue
-        inner = loader._get_loader(dialect)
-        pairs.extend((dialect, qname) for qname in inner.list_queries())
-    return pairs
+        pending: list[tuple[Any, str | None]] = [(sql_root, None)]
+        while pending:
+            current, mode = pending.pop()
+            for child in current.iterdir():
+                if child.is_dir():
+                    pending.append((child, child.name))
+                elif child.name.endswith(".sql"):
+                    domain = child.name.removesuffix(".sql")
+                    identities.extend(
+                        (dialect_path.name, domain, mode, operation)
+                        for operation in re.findall(r"^-- name: (\S+)", child.read_text(), re.MULTILINE)
+                    )
+    return identities
 
 
 ALL_QUERIES = _get_all_dialect_queries()
@@ -53,22 +63,28 @@ ALL_QUERIES = _get_all_dialect_queries()
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("dialect", "query_name"), ALL_QUERIES, ids=[f"{d}/{q}" for d, q in ALL_QUERIES])
-def test_raw_sql_has_no_mangled_casts(dialect: str, query_name: str) -> None:
+@pytest.mark.parametrize(
+    ("dialect", "domain", "mode", "operation"),
+    ALL_QUERIES,
+    ids=[f"{d}/{m + '/' if m else ''}{domain}/{op}" for d, domain, m, op in ALL_QUERIES],
+)
+def test_raw_sql_has_no_mangled_casts(dialect: str, domain: str, mode: str | None, operation: str) -> None:
     """Raw SQL text must not contain ``:: text`` (space inside cast)."""
     loader = DataDictionaryLoader()
-    raw = loader.get_query_text(dialect, query_name)
+    raw = loader.get_domain_query_text(dialect, domain, operation, mode=mode)
+    assert raw is not None
     matches = _MANGLED_CAST.findall(raw)
-    assert not matches, f"Mangled cast(s) in {dialect}/{query_name}: {matches}"
+    assert not matches, f"Mangled cast(s) in {dialect}/{domain}/{operation}: {matches}"
 
 
-@pytest.mark.parametrize(("dialect", "query_name"), ALL_QUERIES, ids=[f"{d}/{q}" for d, q in ALL_QUERIES])
-def test_raw_sql_has_no_stray_space_binds(dialect: str, query_name: str) -> None:
+@pytest.mark.parametrize(("dialect", "domain", "mode", "operation"), ALL_QUERIES)
+def test_raw_sql_has_no_stray_space_binds(dialect: str, domain: str, mode: str | None, operation: str) -> None:
     """Raw SQL must not have ``: param`` with a space after the colon."""
     loader = DataDictionaryLoader()
-    raw = loader.get_query_text(dialect, query_name)
+    raw = loader.get_domain_query_text(dialect, domain, operation, mode=mode)
+    assert raw is not None
     matches = _STRAY_SPACE_BIND.findall(raw)
-    assert not matches, f"Stray space bind(s) in {dialect}/{query_name}: {matches}"
+    assert not matches, f"Stray space bind(s) in {dialect}/{domain}/{operation}: {matches}"
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +92,13 @@ def test_raw_sql_has_no_stray_space_binds(dialect: str, query_name: str) -> None
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("dialect", "query_name"), ALL_QUERIES, ids=[f"{d}/{q}" for d, q in ALL_QUERIES])
-def test_sql_compiles_without_error(dialect: str, query_name: str) -> None:
+@pytest.mark.parametrize(("dialect", "domain", "mode", "operation"), ALL_QUERIES)
+def test_sql_compiles_without_error(dialect: str, domain: str, mode: str | None, operation: str) -> None:
     """Every introspection query must compile through the SQL pipeline."""
     loader = DataDictionaryLoader()
-    sql_obj = loader.get_query(dialect, query_name)
+    query = loader.get_domain_query(dialect, domain, operation, mode=mode)
+    assert query.sql is not None
+    sql_obj = query.sql
     assert isinstance(sql_obj, SQL)
     compiled_sql, _params = sql_obj.compile()
     assert isinstance(compiled_sql, str)
@@ -88,25 +106,27 @@ def test_sql_compiles_without_error(dialect: str, query_name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("dialect", "query_name"),
-    [(d, q) for d, q in ALL_QUERIES if d in ("postgres", "cockroachdb")],
-    ids=[f"{d}/{q}" for d, q in ALL_QUERIES if d in ("postgres", "cockroachdb")],
+    ("dialect", "domain", "mode", "operation"),
+    [identity for identity in ALL_QUERIES if identity[0] in ("postgres", "cockroachdb")],
 )
-def test_compiled_sql_preserves_pg_casts(dialect: str, query_name: str) -> None:
+def test_compiled_sql_preserves_pg_casts(dialect: str, domain: str, mode: str | None, operation: str) -> None:
     """Compiled SQL for PG-family dialects must preserve ``::type`` casts."""
     loader = DataDictionaryLoader()
-    raw = loader.get_query_text(dialect, query_name)
+    raw = loader.get_domain_query_text(dialect, domain, operation, mode=mode)
+    assert raw is not None
     if "::" not in raw:
         pytest.skip("No casts in this query")
 
-    sql_obj = loader.get_query(dialect, query_name)
+    query = loader.get_domain_query(dialect, domain, operation, mode=mode)
+    assert query.sql is not None
+    sql_obj = query.sql
     compiled_sql, _ = sql_obj.compile()
     # Count casts in raw vs compiled — they should match
     raw_casts = re.findall(r"::\w+", raw)
     compiled_casts = re.findall(r"::\w+", compiled_sql)
     # The compiled SQL may rewrite identifiers, but cast count must be stable
     assert len(compiled_casts) >= len(raw_casts), (
-        f"Casts lost in {dialect}/{query_name}: raw={len(raw_casts)}, compiled={len(compiled_casts)}"
+        f"Casts lost in {dialect}/{domain}/{operation}: raw={len(raw_casts)}, compiled={len(compiled_casts)}"
     )
 
 
@@ -159,7 +179,8 @@ def test_parameter_validator_skips_pg_casts() -> None:
 def test_parameter_validator_handles_postgres_introspection_sql() -> None:
     """Validate the actual postgres columns_by_table query."""
     loader = DataDictionaryLoader()
-    raw = loader.get_query_text("postgres", "columns_by_table")
+    raw = loader.get_domain_query_text("postgres", "columns", "by_table")
+    assert raw is not None
     validator = ParameterValidator()
     params = validator.extract_parameters(raw)
     param_names = [p.name for p in params]
@@ -172,7 +193,8 @@ def test_parameter_validator_handles_postgres_introspection_sql() -> None:
 def test_parameter_validator_handles_mixed_cast_bind_pattern() -> None:
     """Validate the postgres foreign_keys pattern with ``:param::text``."""
     loader = DataDictionaryLoader()
-    raw = loader.get_query_text("postgres", "foreign_keys_by_table")
+    raw = loader.get_domain_query_text("postgres", "foreign_keys", "by_table")
+    assert raw is not None
     validator = ParameterValidator()
     params = validator.extract_parameters(raw)
     param_names = [p.name for p in params]
@@ -189,7 +211,9 @@ def test_compiled_sql_no_mangled_casts_or_binds() -> None:
     was allegedly being transformed to ``c.relname =: table_name``.
     """
     loader = DataDictionaryLoader()
-    sql_obj = loader.get_query("postgres", "columns_by_table")
+    query = loader.get_domain_query("postgres", "columns", "by_table")
+    assert query.sql is not None
+    sql_obj = query.sql
     compiled_sql, _ = sql_obj.compile()
     # Must not have mangled casts like ":: text"
     assert ":: text" not in compiled_sql, f"Mangled cast found in compiled SQL: {compiled_sql}"
@@ -205,7 +229,9 @@ def test_compiled_foreign_keys_preserves_cast_bind_adjacency() -> None:
     The ``::text`` cast immediately after ``:schema_name`` is the trickiest pattern.
     """
     loader = DataDictionaryLoader()
-    sql_obj = loader.get_query("postgres", "foreign_keys_by_table")
+    query = loader.get_domain_query("postgres", "foreign_keys", "by_table")
+    assert query.sql is not None
+    sql_obj = query.sql
     compiled_sql, _ = sql_obj.compile()
     # The cast must survive compilation
     assert "::text" in compiled_sql or ":: TEXT" in compiled_sql or "CAST(" in compiled_sql, (

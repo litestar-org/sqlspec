@@ -136,8 +136,8 @@ def test_spanner_nullable_schema_queries_cast_bind_as_string() -> None:
     """Spanner must not infer a nullable schema bind as both INT64 and STRING."""
     dictionary = SpannerDataDictionary()
 
-    for query_name in ("tables_by_schema", "columns_by_schema", "indexes_by_schema", "foreign_keys_by_schema"):
-        query_text = dictionary.get_query_text(query_name)
+    for domain in ("tables", "columns", "indexes", "foreign_keys"):
+        query_text = dictionary.get_query_text(domain, "by_schema")
 
         assert "CAST(:schema_name AS STRING) IS NULL" in query_text
         assert ":schema_name IS NULL" not in query_text

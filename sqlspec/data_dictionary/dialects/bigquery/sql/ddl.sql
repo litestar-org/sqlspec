@@ -1,4 +1,4 @@
--- name: table_ddl_by_dataset
+-- name: by_object
 -- dialect: bigquery
 SELECT
     table_catalog,

@@ -1,4 +1,4 @@
--- name: indexes_by_table
+-- name: by_table
 -- dialect: spanner
 SELECT
     i.index_name,
@@ -14,7 +14,7 @@ WHERE i.table_name = :table_name
   AND (CAST(:schema_name AS STRING) IS NULL OR i.table_schema = :schema_name)
 GROUP BY i.index_name, i.table_name, i.is_unique, i.is_primary_key;
 
--- name: indexes_by_schema
+-- name: by_schema
 -- dialect: spanner
 SELECT
     i.index_name,

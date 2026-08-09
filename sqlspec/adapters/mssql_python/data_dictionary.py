@@ -163,7 +163,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         if driver_id in self._version_fetch_attempted:
             return cast("MssqlVersionInfo | None", self._version_cache.get(driver_id))
 
-        row = driver.select_one_or_none(self.get_query_text("version"))
+        row = driver.select_one_or_none(self.get_query_text("version", "current"))
         if not row:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -275,7 +275,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
             return cast(
                 "list[ForeignKeyMetadata]",
                 driver.select(
-                    self.get_domain_query("constraints", "foreign_keys_by_schema"),
+                    self.get_domain_query("foreign_keys", "by_schema"),
                     schema_name=schema_name,
                     schema_type=ForeignKeyMetadata,
                 ),
@@ -284,7 +284,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         return cast(
             "list[ForeignKeyMetadata]",
             driver.select(
-                self.get_domain_query("constraints", "foreign_keys_by_table"),
+                self.get_domain_query("foreign_keys", "by_table"),
                 schema_name=schema_name,
                 table_name=table,
                 schema_type=ForeignKeyMetadata,

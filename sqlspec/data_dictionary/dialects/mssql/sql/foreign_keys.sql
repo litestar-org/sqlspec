@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: mssql
 SELECT
     OBJECT_SCHEMA_NAME(fk.parent_object_id) AS schema_name,
@@ -18,7 +18,7 @@ WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = :schema_name
   AND OBJECT_NAME(fk.parent_object_id) = :table_name
 ORDER BY fk.name, fkc.constraint_column_id;
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: mssql
 SELECT
     OBJECT_SCHEMA_NAME(fk.parent_object_id) AS schema_name,

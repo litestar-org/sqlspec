@@ -1,22 +1,35 @@
--- name: foreign_keys_by_table
+-- name: by_schema
 -- dialect: sqlite
 SELECT
-    '{table_label}' AS table_name,
+    tl.schema AS schema_name,
+    tl.name AS table_name,
     fk."from" AS column_name,
     fk."table" AS referenced_table_name,
     fk."to" AS referenced_column_name,
-    fk.id AS constraint_name
-FROM pragma_foreign_key_list({table_name}) AS fk;
+    fk.id AS constraint_name,
+    fk.seq AS ordinal_position,
+    fk.on_update,
+    fk.on_delete,
+    fk.match
+FROM pragma_table_list AS tl
+JOIN pragma_foreign_key_list(tl.name, COALESCE(:schema_name, 'main')) AS fk
+WHERE tl.schema = COALESCE(:schema_name, 'main')
+  AND tl.type IN ('table', 'virtual')
+  AND tl.name NOT LIKE 'sqlite_%'
+ORDER BY tl.name, fk.id, fk.seq;
 
--- name: foreign_keys_by_schema
+-- name: by_table
 -- dialect: sqlite
 SELECT
-    m.name AS table_name,
+    :schema_name AS schema_name,
+    :table_name AS table_name,
     fk."from" AS column_name,
     fk."table" AS referenced_table_name,
     fk."to" AS referenced_column_name,
-    fk.id AS constraint_name
-FROM {schema_prefix}sqlite_schema m
-JOIN pragma_foreign_key_list(m.name) AS fk
-WHERE m.type = 'table'
-  AND m.name NOT LIKE 'sqlite_%';
+    fk.id AS constraint_name,
+    fk.seq AS ordinal_position,
+    fk.on_update,
+    fk.on_delete,
+    fk.match
+FROM pragma_foreign_key_list(:table_name, :schema_name) AS fk
+ORDER BY fk.id, fk.seq;

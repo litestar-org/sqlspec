@@ -321,7 +321,7 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
             return self._version_cache.get(driver_id)
         # Not cached, fetch from database
 
-        version_value = driver.select_value_or_none(self.get_query("version"))
+        version_value = driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -433,12 +433,12 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
@@ -600,7 +600,7 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
             return self._version_cache.get(driver_id)
         # Not cached, fetch from database
 
-        version_value = await driver.select_value_or_none(self.get_query("version"))
+        version_value = await driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -712,12 +712,12 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return await driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return await driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ForeignKeyMetadata,

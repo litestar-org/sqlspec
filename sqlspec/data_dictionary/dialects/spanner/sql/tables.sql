@@ -1,4 +1,4 @@
--- name: tables_by_schema
+-- name: by_schema
 -- dialect: spanner
 SELECT
     table_name,

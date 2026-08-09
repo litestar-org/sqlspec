@@ -46,7 +46,7 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
-        version_value = driver.select_value_or_none(self.get_query("version"))
+        version_value = driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -92,7 +92,7 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         """Get tables sorted by topological dependency order using DuckDB catalog."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        return driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata)
+        return driver.select(self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata)
 
     def get_columns(
         self, driver: "DuckDBDriver", table: "str | None" = None, schema: "str | None" = None
@@ -137,12 +137,12 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,

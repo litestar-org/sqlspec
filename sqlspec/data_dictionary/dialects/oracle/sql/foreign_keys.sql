@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: oracle
 SELECT
     c.table_name,
@@ -23,7 +23,7 @@ WHERE c.constraint_type = 'R'
   AND c.owner = COALESCE(:schema_name, USER)
   AND (:table_name IS NULL OR c.table_name = :table_name);
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: oracle
 SELECT
     c.table_name,

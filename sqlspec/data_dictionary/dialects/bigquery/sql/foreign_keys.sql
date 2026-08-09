@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: bigquery
 SELECT
     kcu.table_name,
@@ -16,7 +16,7 @@ JOIN {kcu_table} pk_kcu
 WHERE kcu.table_name = :table_name
   AND (:schema_name IS NULL OR kcu.table_schema = :schema_name);
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: bigquery
 SELECT
     kcu.table_name,

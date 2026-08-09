@@ -1,4 +1,4 @@
--- name: tables_by_schema
+-- name: by_schema
 -- dialect: duckdb
 WITH RECURSIVE dependency_tree AS (
     SELECT

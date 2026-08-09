@@ -1,4 +1,4 @@
--- name: foreign_keys_by_table
+-- name: by_table
 -- dialect: postgres
 SELECT
     kcu.table_name,
@@ -19,7 +19,7 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
   AND (:schema_name::text IS NULL OR tc.table_schema = :schema_name)
   AND (:table_name::text IS NULL OR tc.table_name = :table_name);
 
--- name: foreign_keys_by_schema
+-- name: by_schema
 -- dialect: postgres
 SELECT
     kcu.table_name,

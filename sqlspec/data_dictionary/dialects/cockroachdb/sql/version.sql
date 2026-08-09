@@ -1,3 +1,3 @@
--- name: version
+-- name: current
 -- dialect: cockroachdb
 SELECT version();
