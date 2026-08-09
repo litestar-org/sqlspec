@@ -103,14 +103,14 @@ def test_pyproject_mypyc_include_patterns_cover_smoke_critical_modules() -> None
         "sqlspec/storage/backends/fsspec.py",
         "sqlspec/storage/backends/obstore.py",
         "sqlspec/data_dictionary/_loader.py",
-        "sqlspec/data_dictionary/dialects/bigquery.py",
-        "sqlspec/data_dictionary/dialects/cockroachdb.py",
-        "sqlspec/data_dictionary/dialects/duckdb.py",
-        "sqlspec/data_dictionary/dialects/mysql.py",
-        "sqlspec/data_dictionary/dialects/oracle.py",
-        "sqlspec/data_dictionary/dialects/postgres.py",
-        "sqlspec/data_dictionary/dialects/spanner.py",
-        "sqlspec/data_dictionary/dialects/sqlite.py",
+        "sqlspec/data_dictionary/dialects/bigquery/config.py",
+        "sqlspec/data_dictionary/dialects/cockroachdb/config.py",
+        "sqlspec/data_dictionary/dialects/duckdb/config.py",
+        "sqlspec/data_dictionary/dialects/mysql/config.py",
+        "sqlspec/data_dictionary/dialects/oracle/config.py",
+        "sqlspec/data_dictionary/dialects/postgres/config.py",
+        "sqlspec/data_dictionary/dialects/spanner/config.py",
+        "sqlspec/data_dictionary/dialects/sqlite/config.py",
         "sqlspec/dialects/postgres/_generators.py",
         "sqlspec/dialects/postgres/_operators.py",
         "sqlspec/dialects/spanner/_generators.py",
@@ -151,14 +151,14 @@ def test_inventory_records_rest_of_mypyc_boundary_decisions() -> None:
     assert "sqlspec/storage/backends/local.py" in payload["compiled_modules"]
     assert "sqlspec/storage/backends/obstore.py" in payload["compiled_modules"]
     assert "sqlspec/data_dictionary/_loader.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/bigquery.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/cockroachdb.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/duckdb.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/mysql.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/oracle.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/postgres.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/spanner.py" in payload["compiled_modules"]
-    assert "sqlspec/data_dictionary/dialects/sqlite.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/bigquery/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/cockroachdb/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/duckdb/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/mysql/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/oracle/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/postgres/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/spanner/config.py" in payload["compiled_modules"]
+    assert "sqlspec/data_dictionary/dialects/sqlite/config.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/postgres/_generators.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/postgres/_operators.py" in payload["compiled_modules"]
     assert "sqlspec/dialects/spanner/_generators.py" in payload["compiled_modules"]

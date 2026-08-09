@@ -81,12 +81,12 @@ def test_mariadb_is_registered_as_distinct_dialect() -> None:
         ("mysql", "schemas", "list", "information_schema.schemata"),
         ("mysql", "objects", "by_schema", "information_schema.events"),
         ("mysql", "constraints", "by_schema", "information_schema.check_constraints"),
-        ("mysql", "ddl", "show_create_table", "SHOW CREATE TABLE"),
+        ("mysql", "ddl", "table_by_name", "SHOW CREATE TABLE"),
         ("mysql", "system", "performance_schema_tables", "performance_schema"),
         ("mariadb", "schemas", "list", "information_schema.schemata"),
         ("mariadb", "objects", "by_schema", "SEQUENCE"),
         ("mariadb", "plugins", "list", "information_schema.plugins"),
-        ("mariadb", "ddl", "show_create_sequence", "SHOW CREATE SEQUENCE"),
+        ("mariadb", "ddl", "sequence_by_name", "SHOW CREATE SEQUENCE"),
     ),
 )
 def test_mysql_and_mariadb_domain_query_packs(

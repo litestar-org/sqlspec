@@ -392,20 +392,23 @@ class DataDictionaryDialectMixin:
         """Return the dialect configuration for this data dictionary."""
         return get_dialect_config(type(self).dialect)
 
-    def get_query(self, name: str) -> "SQL":
-        """Return a named SQL query for this dialect."""
+    def get_query(self, domain: str, operation: str, *, mode: str | None = None) -> "SQL":
+        """Return an exact domain query for this dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query(type(self).dialect, name)
+        query = loader.get_domain_query(type(self).dialect, domain, operation, mode=mode)
+        if query.sql is None:
+            msg = f"No data-dictionary query found for {type(self).dialect}/{domain}/{operation}"
+            raise SQLFileNotFoundError(msg)
+        return query.sql
 
-    def get_query_text(self, name: str) -> str:
-        """Return raw SQL text for a named query for this dialect."""
-        loader = get_data_dictionary_loader()
-        return loader.get_query_text(type(self).dialect, name)
+    def get_query_text(self, domain: str, operation: str, *, mode: str | None = None) -> str:
+        """Return raw SQL text for an exact domain query."""
+        return self.get_query(domain, operation, mode=mode).raw_sql
 
-    def get_query_text_or_none(self, name: str) -> "str | None":
+    def get_query_text_or_none(self, domain: str, operation: str, *, mode: str | None = None) -> "str | None":
         """Return raw SQL text for a named query or None if missing."""
         try:
-            return self.get_query_text(name)
+            return self.get_query_text(domain, operation, mode=mode)
         except SQLFileNotFoundError:
             return None
 

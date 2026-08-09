@@ -20,15 +20,15 @@ def test_direct_sqlite_duckdb_domain_query_packs_cover_c7_domains() -> None:
     """C7 query packs should use direct dialect/domain paths without v2 namespaces."""
     loader = DataDictionaryLoader()
     expected_queries = (
-        ("sqlite", "schemas", "database_list"),
+        ("sqlite", "schemas", "list"),
         ("sqlite", "objects", "by_schema"),
         ("sqlite", "tables", "by_schema"),
         ("sqlite", "columns", "by_table"),
-        ("sqlite", "constraints", "foreign_keys_by_table"),
+        ("sqlite", "foreign_keys", "by_table"),
         ("sqlite", "indexes", "by_schema"),
         ("sqlite", "views", "by_schema"),
         ("sqlite", "triggers", "by_schema"),
-        ("sqlite", "native_sql", "by_object"),
+        ("sqlite", "ddl", "by_object"),
         ("sqlite", "functions", "list"),
         ("sqlite", "modules", "list"),
         ("sqlite", "compile_options", "list"),

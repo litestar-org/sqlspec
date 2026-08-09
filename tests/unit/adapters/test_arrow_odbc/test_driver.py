@@ -215,8 +215,8 @@ def test_get_columns_probes_arrow_schema_when_query_missing(monkeypatch: pytest.
 
     connection.read_arrow_batches = read_arrow_batches  # type: ignore[assignment]
 
-    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
-        raise SQLFileNotFoundError(name)
+    def fail_get_query(self: ArrowOdbcDataDictionary, domain: str, operation: str) -> Any:
+        raise SQLFileNotFoundError(f"{domain}/{operation}")
 
     monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
 
@@ -238,8 +238,8 @@ def test_get_columns_probe_quotes_schema(monkeypatch: pytest.MonkeyPatch) -> Non
 
     connection.read_arrow_batches = read_arrow_batches  # type: ignore[assignment]
 
-    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
-        raise SQLFileNotFoundError(name)
+    def fail_get_query(self: ArrowOdbcDataDictionary, domain: str, operation: str) -> Any:
+        raise SQLFileNotFoundError(f"{domain}/{operation}")
 
     monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
 
@@ -254,8 +254,8 @@ def test_get_columns_schema_wide_does_not_probe(monkeypatch: pytest.MonkeyPatch)
     connection = FakeConnection()
     driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
 
-    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
-        raise SQLFileNotFoundError(name)
+    def fail_get_query(self: ArrowOdbcDataDictionary, domain: str, operation: str) -> Any:
+        raise SQLFileNotFoundError(f"{domain}/{operation}")
 
     monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
 
@@ -270,8 +270,8 @@ def test_get_columns_probe_failure_returns_empty(monkeypatch: pytest.MonkeyPatch
     connection = ErrorConnection()
     driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"chunk_size": 2})
 
-    def fail_get_query(self: ArrowOdbcDataDictionary, name: str) -> Any:
-        raise SQLFileNotFoundError(name)
+    def fail_get_query(self: ArrowOdbcDataDictionary, domain: str, operation: str) -> Any:
+        raise SQLFileNotFoundError(f"{domain}/{operation}")
 
     monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
 

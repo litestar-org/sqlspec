@@ -57,7 +57,7 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
             return self._version_cache.get(driver_id)
         # Not cached, fetch from database
 
-        version_value = driver.select_value_or_none(self.get_query("version"))
+        version_value = driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -154,7 +154,7 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
         """Get native SHOW CREATE output and replay-sensitive context for a table."""
         _ = include_dependencies, prefer_native, redact
         schema_name = self._resolve_metadata_schema(schema)
-        raw_version = driver.select_value_or_none(self.get_query_text("version"))
+        raw_version = driver.select_value_or_none(self.get_query_text("version", "current"))
         sql_mode = driver.select_value_or_none("SELECT @@sql_mode")
         sql_quote_show_create = driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema_name, object_type)
@@ -210,7 +210,7 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
         """Get tables sorted by topological dependency order using the MySQL catalog."""
         schema_name = self._resolve_metadata_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        return driver.select(self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata)
+        return driver.select(self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata)
 
     def get_columns(
         self, driver: "MysqlConnectorSyncDriver", table: "str | None" = None, schema: "str | None" = None
@@ -220,12 +220,12 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return driver.select(
-                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self.get_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return driver.select(
-            self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
+            self.get_query("columns", "by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
         )
 
     def get_indexes(
@@ -236,12 +236,12 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
-                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return driver.select(
-            self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
+            self.get_query("indexes", "by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
         )
 
     def get_foreign_keys(
@@ -252,12 +252,12 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
@@ -269,7 +269,7 @@ class MysqlConnectorSyncDataDictionary(SyncDataDictionaryBase):
 
     def _get_engine_version(self, driver: "MysqlConnectorSyncDriver") -> "MySQLEngineVersion | None":
         try:
-            version_value = driver.select_value_or_none(self.get_query_text("version"))
+            version_value = driver.select_value_or_none(self.get_query_text("version", "current"))
         except Exception:
             return None
         if version_value is None:
@@ -318,7 +318,7 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
             return self._version_cache.get(driver_id)
         # Not cached, fetch from database
 
-        version_value = await driver.select_value_or_none(self.get_query("version"))
+        version_value = await driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -415,7 +415,7 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
         """Get native SHOW CREATE output and replay-sensitive context for a table."""
         _ = include_dependencies, prefer_native, redact
         schema_name = self._resolve_metadata_schema(schema)
-        raw_version = await driver.select_value_or_none(self.get_query_text("version"))
+        raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
         sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
         sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema_name, object_type)
@@ -474,7 +474,7 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
         schema_name = self._resolve_metadata_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         return await driver.select(
-            self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
 
     async def get_columns(
@@ -485,12 +485,12 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return await driver.select(
-                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self.get_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return await driver.select(
-            self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
+            self.get_query("columns", "by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
         )
 
     async def get_indexes(
@@ -501,12 +501,12 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return await driver.select(
-                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return await driver.select(
-            self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
+            self.get_query("indexes", "by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
         )
 
     async def get_foreign_keys(
@@ -517,12 +517,12 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return await driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return await driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
@@ -534,7 +534,7 @@ class MysqlConnectorAsyncDataDictionary(AsyncDataDictionaryBase):
 
     async def _get_engine_version(self, driver: "MysqlConnectorAsyncDriver") -> "MySQLEngineVersion | None":
         try:
-            version_value = await driver.select_value_or_none(self.get_query_text("version"))
+            version_value = await driver.select_value_or_none(self.get_query_text("version", "current"))
         except Exception:
             return None
         if version_value is None:

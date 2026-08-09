@@ -311,7 +311,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         owner = self.resolve_schema(schema)
         normalized_name = self.resolve_identifier(object_name)
         normalized_type = object_type.upper()
-        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "dbms_metadata")
+        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "by_object")
         if not query.is_supported or query.sql is None:
             return _oracle_ddl_metadata_result(
                 object_type=normalized_type, object_name=normalized_name, owner=owner, ddl_text=None
@@ -471,7 +471,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         capabilities = _unsupported_storage_capabilities()
         reason: str | None = None
         try:
-            rows = driver.select(self.get_query_text("storage_options"))
+            rows = driver.select(self.get_query_text("version", "storage_options"))
             capabilities = _storage_capabilities_from_rows(rows)
             if not rows:
                 reason = "options_not_reported"
@@ -512,10 +512,10 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered_rows = driver.select(
-            self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "by_schema"), schema_name=schema_name, table_name=None, schema_type=TableMetadata
         )
         all_rows = driver.select(
-            self.get_query("all_tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "names_by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
         return merge_oracle_table_lists(ordered_rows, all_rows)
 
@@ -527,12 +527,12 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return driver.select(
-                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self.get_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
         return driver.select(
-            self.get_query("columns_by_table"),
+            self.get_query("columns", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ColumnMetadata,
@@ -546,12 +546,12 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
-                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
         return driver.select(
-            self.get_query("indexes_by_table"),
+            self.get_query("indexes", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=IndexMetadata,
@@ -565,12 +565,12 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
@@ -587,7 +587,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
 
     def _select_domain(
-        self, driver: "OracleSyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
+        self, driver: "OracleSyncDriver", domain: str, *, query_name: str = "by_schema", **binds: object
     ) -> MetadataResult:
         query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
         if not query.is_supported or query.sql is None:
@@ -597,7 +597,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
 
     def _get_compatible_value(self, driver: "OracleSyncDriver") -> "str | None":
-        query_text = self.get_query_text("compatible")
+        query_text = self.get_query_text("version", "compatible")
         try:
             value = driver.select_value(query_text)
             if value is None:
@@ -607,7 +607,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             return None
 
     def _is_autonomous(self, driver: "OracleSyncDriver") -> bool:
-        query_text = self.get_query_text("autonomous_service")
+        query_text = self.get_query_text("version", "autonomous_service")
         try:
             return bool(driver.select_value_or_none(query_text))
         except Exception:
@@ -615,7 +615,7 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
 
     def _fetch_version(self, driver: "OracleSyncDriver") -> "OracleVersionInfo | None":
         """Query the server for its version, compatible level, and autonomous flag."""
-        version_row = driver.select_one_or_none(self.get_query_text("version"))
+        version_row = driver.select_one_or_none(self.get_query_text("version", "current"))
         if not version_row:
             self._log_version_unavailable(type(self).dialect, "missing")
             return None
@@ -707,7 +707,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         owner = self.resolve_schema(schema)
         normalized_name = self.resolve_identifier(object_name)
         normalized_type = object_type.upper()
-        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "dbms_metadata")
+        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "by_object")
         if not query.is_supported or query.sql is None:
             return _oracle_ddl_metadata_result(
                 object_type=normalized_type, object_name=normalized_name, owner=owner, ddl_text=None
@@ -869,7 +869,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         capabilities = _unsupported_storage_capabilities()
         reason: str | None = None
         try:
-            rows = await driver.select(self.get_query_text("storage_options"))
+            rows = await driver.select(self.get_query_text("version", "storage_options"))
             capabilities = _storage_capabilities_from_rows(rows)
             if not rows:
                 reason = "options_not_reported"
@@ -910,10 +910,10 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered_rows = await driver.select(
-            self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "by_schema"), schema_name=schema_name, table_name=None, schema_type=TableMetadata
         )
         all_rows = await driver.select(
-            self.get_query("all_tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "names_by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
         return merge_oracle_table_lists(ordered_rows, all_rows)
 
@@ -925,12 +925,12 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return await driver.select(
-                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self.get_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
         return await driver.select(
-            self.get_query("columns_by_table"),
+            self.get_query("columns", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ColumnMetadata,
@@ -944,12 +944,12 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return await driver.select(
-                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
         return await driver.select(
-            self.get_query("indexes_by_table"),
+            self.get_query("indexes", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=IndexMetadata,
@@ -963,12 +963,12 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return await driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
         table_name = self.resolve_identifier(table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
         return await driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             schema_name=schema_name,
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
@@ -985,7 +985,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         return OracleVersionInfo(parts[0], parts[1], parts[2], compatible=compatible, is_autonomous=is_autonomous)
 
     async def _select_domain(
-        self, driver: "OracleAsyncDriver", domain: str, *, query_name: str = "by_owner", **binds: object
+        self, driver: "OracleAsyncDriver", domain: str, *, query_name: str = "by_schema", **binds: object
     ) -> MetadataResult:
         query = get_data_dictionary_loader().get_domain_query("oracle", domain, query_name)
         if not query.is_supported or query.sql is None:
@@ -995,7 +995,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         return _oracle_domain_metadata_result(domain, cast("list[object]", rows))
 
     async def _get_compatible_value(self, driver: "OracleAsyncDriver") -> "str | None":
-        query_text = self.get_query_text("compatible")
+        query_text = self.get_query_text("version", "compatible")
         try:
             value = await driver.select_value(query_text)
             if value is None:
@@ -1005,7 +1005,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             return None
 
     async def _is_autonomous(self, driver: "OracleAsyncDriver") -> bool:
-        query_text = self.get_query_text("autonomous_service")
+        query_text = self.get_query_text("version", "autonomous_service")
         try:
             return bool(await driver.select_value_or_none(query_text))
         except Exception:
@@ -1013,7 +1013,7 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
 
     async def _fetch_version(self, driver: "OracleAsyncDriver") -> "OracleVersionInfo | None":
         """Query the server for its version, compatible level, and autonomous flag."""
-        version_row = await driver.select_one_or_none(self.get_query_text("version"))
+        version_row = await driver.select_one_or_none(self.get_query_text("version", "current"))
         if not version_row:
             self._log_version_unavailable(type(self).dialect, "missing")
             return None

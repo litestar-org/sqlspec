@@ -271,8 +271,8 @@ def test_oracle_columns_uses_all_tab_cols_for_hidden_columns() -> None:
 
     data_dictionary = OracledbSyncDataDictionary()
 
-    columns_by_schema = data_dictionary.get_query_text("columns_by_schema").lower()
-    columns_by_table = data_dictionary.get_query_text("columns_by_table").lower()
+    columns_by_schema = data_dictionary.get_query_text("columns", "by_schema").lower()
+    columns_by_table = data_dictionary.get_query_text("columns", "by_table").lower()
 
     assert "all_tab_cols" in columns_by_schema
     assert "all_tab_columns" not in columns_by_schema
@@ -285,25 +285,25 @@ def test_oracle_domain_query_packs_cover_c5_sources() -> None:
 
     loader = get_data_dictionary_loader()
     expected_sources = {
-        "objects": ("by_owner", "ALL_OBJECTS"),
-        "schemas": ("by_owner", "ALL_USERS"),
-        "tables": ("by_owner", "ALL_TABLES"),
-        "columns": ("by_owner", "ALL_TAB_COLS"),
-        "constraints": ("by_owner", "ALL_CONSTRAINTS"),
-        "indexes": ("by_owner", "ALL_IND_EXPRESSIONS"),
-        "views": ("by_owner", "ALL_VIEWS"),
-        "materialized_views": ("by_owner", "ALL_MVIEWS"),
-        "sequences": ("by_owner", "ALL_SEQUENCES"),
-        "routines": ("by_owner", "ALL_PROCEDURES"),
-        "arguments": ("by_owner", "ALL_ARGUMENTS"),
-        "source": ("by_owner", "ALL_SOURCE"),
-        "triggers": ("by_owner", "ALL_TRIGGERS"),
-        "comments": ("by_owner", "ALL_COL_COMMENTS"),
-        "grants": ("by_owner", "ALL_TAB_PRIVS"),
-        "dependencies": ("by_owner", "ALL_DEPENDENCIES"),
-        "partitions": ("by_owner", "ALL_TAB_PARTITIONS"),
-        "lob_storage": ("by_owner", "ALL_LOBS"),
-        "ddl": ("dbms_metadata", "DBMS_METADATA.GET_DDL"),
+        "objects": ("by_schema", "ALL_OBJECTS"),
+        "schemas": ("by_schema", "ALL_USERS"),
+        "tables": ("by_schema", "ALL_TABLES"),
+        "columns": ("by_schema", "ALL_TAB_COLS"),
+        "constraints": ("by_schema", "ALL_CONSTRAINTS"),
+        "indexes": ("by_schema", "ALL_IND_EXPRESSIONS"),
+        "views": ("by_schema", "ALL_VIEWS"),
+        "materialized_views": ("by_schema", "ALL_MVIEWS"),
+        "sequences": ("by_schema", "ALL_SEQUENCES"),
+        "routines": ("by_schema", "ALL_PROCEDURES"),
+        "arguments": ("by_schema", "ALL_ARGUMENTS"),
+        "source": ("by_schema", "ALL_SOURCE"),
+        "triggers": ("by_schema", "ALL_TRIGGERS"),
+        "comments": ("by_schema", "ALL_COL_COMMENTS"),
+        "grants": ("by_schema", "ALL_TAB_PRIVS"),
+        "dependencies": ("by_schema", "ALL_DEPENDENCIES"),
+        "partitions": ("by_schema", "ALL_TAB_PARTITIONS"),
+        "lob_storage": ("by_schema", "ALL_LOBS"),
+        "ddl": ("by_object", "DBMS_METADATA.GET_DDL"),
         "system": ("no_diagnostics", "diagnostics_enabled"),
     }
 

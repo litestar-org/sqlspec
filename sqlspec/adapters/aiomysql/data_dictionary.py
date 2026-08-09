@@ -56,7 +56,7 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
-        version_value = await driver.select_value_or_none(self.get_query("version"))
+        version_value = await driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -153,7 +153,7 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         """Get native SHOW CREATE output and replay-sensitive context for a table."""
         _ = include_dependencies, prefer_native, redact
         schema_name = self._resolve_metadata_schema(schema)
-        raw_version = await driver.select_value_or_none(self.get_query_text("version"))
+        raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
         sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
         sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema_name, object_type)
@@ -210,7 +210,7 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         schema_name = self._resolve_metadata_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         return await driver.select(
-            self.get_query("tables_by_schema"), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
         )
 
     async def get_columns(
@@ -221,12 +221,12 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return await driver.select(
-                self.get_query("columns_by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+                self.get_query("columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return await driver.select(
-            self.get_query("columns_by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
+            self.get_query("columns", "by_table"), table_name=table, schema_name=schema_name, schema_type=ColumnMetadata
         )
 
     async def get_indexes(
@@ -237,12 +237,12 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return await driver.select(
-                self.get_query("indexes_by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return await driver.select(
-            self.get_query("indexes_by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
+            self.get_query("indexes", "by_table"), table_name=table, schema_name=schema_name, schema_type=IndexMetadata
         )
 
     async def get_foreign_keys(
@@ -253,12 +253,12 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return await driver.select(
-                self.get_query("foreign_keys_by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return await driver.select(
-            self.get_query("foreign_keys_by_table"),
+            self.get_query("foreign_keys", "by_table"),
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
@@ -270,7 +270,7 @@ class AiomysqlDataDictionary(AsyncDataDictionaryBase):
 
     async def _get_engine_version(self, driver: "AiomysqlDriver") -> "MySQLEngineVersion | None":
         try:
-            version_value = await driver.select_value_or_none(self.get_query_text("version"))
+            version_value = await driver.select_value_or_none(self.get_query_text("version", "current"))
         except Exception:
             return None
         if version_value is None:

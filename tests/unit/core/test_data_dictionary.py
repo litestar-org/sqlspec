@@ -1,6 +1,8 @@
 """Unit tests for the data dictionary registry and loader."""
 
-from typing import cast
+import re
+from importlib import resources
+from typing import Any, cast
 
 import pytest
 
@@ -15,7 +17,6 @@ from sqlspec.data_dictionary import (
     list_registered_dialects,
     normalize_dialect_name,
 )
-from sqlspec.exceptions import SQLFileNotFoundError
 
 
 def test_data_dictionary_loader_lists_known_dialects() -> None:
@@ -26,27 +27,60 @@ def test_data_dictionary_loader_lists_known_dialects() -> None:
     assert "sqlite" in dialects
 
 
-def test_data_dictionary_loader_get_query_text() -> None:
+def test_data_dictionary_loader_get_domain_query_text() -> None:
     """Ensure loader returns SQL text for named queries."""
     loader = DataDictionaryLoader()
-    query_text = loader.get_query_text("postgres", "tables_by_schema")
+    query_text = loader.get_domain_query_text("postgres", "tables", "by_schema")
+    assert query_text is not None
     assert "dependency_tree" in query_text
-    assert "information_schema" in query_text
+    assert "pg_catalog" in query_text
 
 
-def test_data_dictionary_loader_get_query() -> None:
+def test_data_dictionary_loader_get_domain_query() -> None:
     """Ensure loader returns SQL objects for named queries."""
     loader = DataDictionaryLoader()
-    query = loader.get_query("postgres", "tables_by_schema")
-    assert isinstance(query, SQL)
-    assert query.raw_sql is not None
+    query = loader.get_domain_query("postgres", "tables", "by_schema")
+    assert isinstance(query.sql, SQL)
+    assert query.sql.raw_sql is not None
 
 
-def test_data_dictionary_loader_unknown_dialect_raises() -> None:
-    """Ensure missing dialect paths raise SQLFileNotFoundError."""
+def test_data_dictionary_loader_unknown_dialect_is_unsupported() -> None:
+    """Ensure missing dialect paths return an unsupported domain query."""
     loader = DataDictionaryLoader()
-    with pytest.raises(SQLFileNotFoundError):
-        loader.get_query_text("not-a-dialect", "tables_by_schema")
+    query = loader.get_domain_query("not-a-dialect", "tables", "by_schema")
+    assert query.is_supported is False
+
+
+def test_data_dictionary_query_names_are_domain_relative() -> None:
+    """Ensure query names do not repeat the domain supplied by their file."""
+    dialects_root = resources.files("sqlspec.data_dictionary.dialects")
+    violations: list[str] = []
+    for dialect_path in dialects_root.iterdir():
+        sql_root = dialect_path.joinpath("sql")
+        if not sql_root.is_dir():
+            continue
+        for sql_file in _iter_sql_resources(sql_root):
+            domain = sql_file.name.removesuffix(".sql")
+            violations.extend(
+                f"{dialect_path.name}/{domain}/{query_name}"
+                for query_name in re.findall(r"^-- name: (\S+)", sql_file.read_text(), re.MULTILINE)
+                if query_name.startswith(f"{domain}_")
+            )
+    assert violations == []
+
+
+def _iter_sql_resources(root: Any) -> list[Any]:
+    """Return SQL resources below a traversable root."""
+    resources_to_visit = [root]
+    sql_files = []
+    while resources_to_visit:
+        current = resources_to_visit.pop()
+        for child in current.iterdir():
+            if child.is_dir():
+                resources_to_visit.append(child)
+            elif child.name.endswith(".sql"):
+                sql_files.append(child)
+    return sql_files
 
 
 def test_get_data_dictionary_loader_singleton() -> None:

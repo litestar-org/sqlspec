@@ -104,15 +104,18 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         """Return the runtime dialect configuration for this data dictionary."""
         return get_dialect_config(self._dialect)
 
-    def get_query(self, name: str) -> "SQL":
-        """Return a named SQL query for the runtime dialect."""
+    def get_query(self, domain: str, operation: str, *, mode: str | None = None) -> "SQL":
+        """Return an exact domain query for the runtime dialect."""
         loader = get_data_dictionary_loader()
-        return loader.get_query(self._dialect, name)
+        query = loader.get_domain_query(self._dialect, domain, operation, mode=mode)
+        if query.sql is None:
+            msg = f"No data-dictionary query found for {self._dialect}/{domain}/{operation}"
+            raise SQLFileNotFoundError(msg)
+        return query.sql
 
-    def get_query_text(self, name: str) -> str:
-        """Return raw SQL text for a named runtime dialect query."""
-        loader = get_data_dictionary_loader()
-        return loader.get_query_text(self._dialect, name)
+    def get_query_text(self, domain: str, operation: str, *, mode: str | None = None) -> str:
+        """Return raw SQL text for an exact runtime dialect query."""
+        return self.get_query(domain, operation, mode=mode).raw_sql
 
     def get_metadata_capabilities(
         self, driver: "ArrowOdbcDriver", domains: "Sequence[str] | None" = None
@@ -166,7 +169,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
             return self._version_cache.get(driver_id)
 
         try:
-            version_value = driver.select_value_or_none(self.get_query("version"))
+            version_value = driver.select_value_or_none(self.get_query("version", "current"))
         except SQLFileNotFoundError:
             self._log_version_unavailable(self._dialect, "no_query")
             self.cache_version(driver_id, None)
@@ -203,7 +206,9 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         """Get table metadata for dialects with bundled catalog queries."""
         try:
             return driver.select(
-                self.get_query("tables_by_schema"), schema_name=self.resolve_schema(schema), schema_type=TableMetadata
+                self.get_query("tables", "by_schema"),
+                schema_name=self.resolve_schema(schema),
+                schema_type=TableMetadata,
             )
         except SQLFileNotFoundError:
             return []
@@ -212,14 +217,14 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         self, driver: "ArrowOdbcDriver", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get column metadata for dialects with bundled catalog queries."""
-        query_name = "columns_by_table" if table is not None else "columns_by_schema"
+        operation = "by_table" if table is not None else "by_schema"
         resolved_schema = self.resolve_schema(schema)
         resolved_table = self.resolve_identifier(table) if table is not None else None
         parameters: dict[str, Any] = {"schema_name": resolved_schema}
         if table is not None:
             parameters["table_name"] = resolved_table
         try:
-            rows = driver.select(self.get_query(query_name), schema_type=ColumnMetadata, **parameters)
+            rows = driver.select(self.get_query("columns", operation), schema_type=ColumnMetadata, **parameters)
         except SQLFileNotFoundError:
             rows = []
         if rows or resolved_table is None:
@@ -230,12 +235,12 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         self, driver: "ArrowOdbcDriver", table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get index metadata for dialects with bundled catalog queries."""
-        query_name = "indexes_by_table" if table is not None else "indexes_by_schema"
+        operation = "by_table" if table is not None else "by_schema"
         parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
         if table is not None:
             parameters["table_name"] = self.resolve_identifier(table)
         try:
-            return driver.select(self.get_query(query_name), schema_type=IndexMetadata, **parameters)
+            return driver.select(self.get_query("indexes", operation), schema_type=IndexMetadata, **parameters)
         except SQLFileNotFoundError:
             return []
 
@@ -243,12 +248,14 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         self, driver: "ArrowOdbcDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign-key metadata for dialects with bundled catalog queries."""
-        query_name = "foreign_keys_by_table" if table is not None else "foreign_keys_by_schema"
+        operation = "by_table" if table is not None else "by_schema"
         parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
         if table is not None:
             parameters["table_name"] = self.resolve_identifier(table)
         try:
-            return driver.select(self.get_query(query_name), schema_type=ForeignKeyMetadata, **parameters)
+            return driver.select(
+                self.get_query("foreign_keys", operation), schema_type=ForeignKeyMetadata, **parameters
+            )
         except SQLFileNotFoundError:
             return []
 
@@ -302,13 +309,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
                 source=MetadataSource.DRIVER_METADATA,
                 warnings=(_ODBC_COLUMN_PARTIAL_WARNING,),
             )
-        query_by_domain = {
-            "tables": "tables_by_schema",
-            "indexes": "indexes_by_schema",
-            "foreign_keys": "foreign_keys_by_schema",
-        }
-        query_name = query_by_domain.get(domain)
-        if query_name is not None and self._has_query(query_name):
+        if domain in {"tables", "indexes", "foreign_keys"} and self._has_query(domain, "by_schema"):
             return MetadataCapability(
                 domain=domain,
                 support=MetadataSupport.SUPPORTED,
@@ -323,9 +324,9 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
             warnings=(_ODBC_CATALOG_UNAVAILABLE_WARNING,),
         )
 
-    def _has_query(self, name: str) -> bool:
+    def _has_query(self, domain: str, operation: str) -> bool:
         try:
-            self.get_query(name)
+            self.get_query(domain, operation)
         except SQLFileNotFoundError:
             return False
         return True

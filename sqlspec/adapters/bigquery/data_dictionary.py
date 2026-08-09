@@ -188,7 +188,7 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="tables")
         tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(schema)
 
-        query_text = self.get_query_text("tables_by_schema").format(
+        query_text = self.get_query_text("tables", "by_schema").format(
             tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
         )
         return driver.select(query_text, schema_name=scope.schema_name, schema_type=TableMetadata)
@@ -201,11 +201,11 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         schema_prefix = format_bigquery_schema_prefix(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="columns")
-            query_text = self.get_query_text("columns_by_schema").format(schema_prefix=schema_prefix)
+            query_text = self.get_query_text("columns", "by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_name=scope.schema_name, schema_type=ColumnMetadata)
 
         self._log_table_describe(driver, schema_name=scope.schema_name, table_name=table, operation="columns")
-        query_text = self.get_query_text("columns_by_table").format(schema_prefix=schema_prefix)
+        query_text = self.get_query_text("columns", "by_table").format(schema_prefix=schema_prefix)
         return driver.select(query_text, table_name=table, schema_name=scope.schema_name, schema_type=ColumnMetadata)
 
     def get_indexes(
@@ -251,10 +251,10 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         rc_table = scope.dataset_information_schema_table("REFERENTIAL_CONSTRAINTS")
 
         if table is None:
-            query_text = self.get_query_text("foreign_keys_by_schema").format(kcu_table=kcu_table, rc_table=rc_table)
+            query_text = self.get_query_text("foreign_keys", "by_schema").format(kcu_table=kcu_table, rc_table=rc_table)
             return driver.select(query_text, schema_name=scope.schema_name, schema_type=ForeignKeyMetadata)
 
-        query_text = self.get_query_text("foreign_keys_by_table").format(kcu_table=kcu_table, rc_table=rc_table)
+        query_text = self.get_query_text("foreign_keys", "by_table").format(kcu_table=kcu_table, rc_table=rc_table)
         return driver.select(
             query_text, table_name=table, schema_name=scope.schema_name, schema_type=ForeignKeyMetadata
         )

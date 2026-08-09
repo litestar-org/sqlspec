@@ -13,7 +13,6 @@ from sqlspec.data_dictionary._types import (
     MetadataSource,
     MetadataSupport,
 )
-from sqlspec.exceptions import SQLFileNotFoundError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.utils.text import slugify
 
@@ -26,7 +25,6 @@ if TYPE_CHECKING:
     else:
         from importlib.abc import Traversable
 
-    from sqlspec.core.statement import SQL
     from sqlspec.data_dictionary._types import DialectConfig, VersionInfo
 
 __all__ = ("DataDictionaryLoader", "get_data_dictionary_loader")
@@ -40,76 +38,12 @@ SQL_RESOURCE_NAME = "sql"
 class DataDictionaryLoader:
     """Loads and manages data dictionary SQL for all dialects."""
 
-    __slots__ = ("_domain_loaders", "_loaded_dialects", "_loaded_domain_paths", "_sql_loaders")
+    __slots__ = ("_domain_loaders", "_loaded_domain_paths")
 
     def __init__(self) -> None:
         """Initialize the data dictionary loader."""
-        self._sql_loaders: dict[str, SQLFileLoader] = {}
         self._domain_loaders: dict[tuple[str, str, str | None], SQLFileLoader] = {}
-        self._loaded_dialects: set[str] = set()
         self._loaded_domain_paths: set[tuple[str, str, str | None]] = set()
-
-    def _get_loader(self, dialect: str) -> "SQLFileLoader":
-        """Return or create a SQL loader for a dialect.
-
-        Args:
-            dialect: Dialect name.
-
-        Returns:
-            SQLFileLoader instance.
-        """
-        loader = self._sql_loaders.get(dialect)
-        if loader is None:
-            loader = SQLFileLoader()
-            self._sql_loaders[dialect] = loader
-        return loader
-
-    def _ensure_dialect_loaded(self, dialect: str) -> None:
-        """Lazy load SQL files for a dialect.
-
-        Args:
-            dialect: Dialect name.
-
-        Raises:
-            SQLFileNotFoundError: When the dialect SQL directory is missing.
-        """
-        if dialect in self._loaded_dialects:
-            return
-        dialect_resource = _sql_resource_root().joinpath(dialect)
-        if not dialect_resource.is_dir():
-            raise SQLFileNotFoundError(str(dialect_resource))
-        loader = self._get_loader(dialect)
-        with as_file(dialect_resource) as dialect_path:
-            loader.load_sql(dialect_path)
-        self._loaded_dialects.add(dialect)
-
-    def get_query(self, dialect: str, query_name: str) -> "SQL":
-        """Get SQL query for a specific dialect and operation.
-
-        Args:
-            dialect: Dialect name.
-            query_name: Query name to fetch.
-
-        Returns:
-            SQL object for the named query.
-        """
-        self._ensure_dialect_loaded(dialect)
-        loader = self._get_loader(dialect)
-        return loader.get_sql(query_name)
-
-    def get_query_text(self, dialect: str, query_name: str) -> str:
-        """Get raw SQL text for a specific dialect and operation.
-
-        Args:
-            dialect: Dialect name.
-            query_name: Query name to fetch.
-
-        Returns:
-            Raw SQL text for the named query.
-        """
-        self._ensure_dialect_loaded(dialect)
-        loader = self._get_loader(dialect)
-        return loader.get_query_text(query_name)
 
     def _get_domain_loader(self, dialect: str, domain: str, mode: str | None) -> "SQLFileLoader":
         """Return or create a SQL loader for a dialect/domain/mode pack."""
@@ -124,12 +58,16 @@ class DataDictionaryLoader:
         self, dialect: str, domain: str, mode: str | None
     ) -> "tuple[tuple[str | None, Traversable], ...]":
         """Return candidate resource paths for a domain query pack."""
-        dialect_resource = _sql_resource_root().joinpath(dialect)
+        try:
+            sql_root = resources.files(f"sqlspec.data_dictionary.dialects.{dialect}").joinpath("sql")
+        except (ModuleNotFoundError, FileNotFoundError):
+            return ()
         if mode is None:
-            return ((None, dialect_resource.joinpath(domain)),)
+            return ((None, sql_root.joinpath(f"{domain}.sql")), (None, sql_root.joinpath(domain)))
         return (
-            (mode, dialect_resource.joinpath(domain).joinpath(mode)),
-            (mode, dialect_resource.joinpath(mode).joinpath(domain)),
+            (mode, sql_root.joinpath(mode).joinpath(f"{domain}.sql")),
+            (mode, sql_root.joinpath(domain).joinpath(f"{mode}.sql")),
+            (mode, sql_root.joinpath(domain).joinpath(mode)),
         )
 
     def _ensure_domain_loaded(self, dialect: str, domain: str, mode: str | None) -> bool:
@@ -148,14 +86,20 @@ class DataDictionaryLoader:
             return True
 
         for resolved_mode, domain_resource in self._domain_path_candidates(dialect, domain, mode):
-            if not domain_resource.is_dir():
-                continue
-            loader = self._get_domain_loader(dialect, domain, resolved_mode)
-            with as_file(domain_resource) as domain_path:
-                loader.load_sql(domain_path)
-            self._loaded_domain_paths.add((dialect, domain, resolved_mode))
-            if resolved_mode == mode:
-                return True
+            if domain_resource.is_file():
+                loader = self._get_domain_loader(dialect, domain, resolved_mode)
+                with as_file(domain_resource) as file_path:
+                    loader.load_sql(file_path)
+                self._loaded_domain_paths.add((dialect, domain, resolved_mode))
+                if resolved_mode == mode:
+                    return True
+            elif domain_resource.is_dir():
+                loader = self._get_domain_loader(dialect, domain, resolved_mode)
+                with as_file(domain_resource) as domain_path:
+                    loader.load_sql(domain_path)
+                self._loaded_domain_paths.add((dialect, domain, resolved_mode))
+                if resolved_mode == mode:
+                    return True
         return False
 
     def _unsupported_domain_query(
@@ -288,10 +232,10 @@ class DataDictionaryLoader:
         return MetadataQuery(
             dialect=normalized_dialect,
             domain=normalized_domain,
-            name=normalized_query,
+            name=query_name,
             mode=normalized_mode,
-            sql=loader.get_sql(normalized_query),
             capability=capability,
+            sql=loader.get_sql(normalized_query),
         )
 
     def get_domain_queries(
@@ -358,10 +302,17 @@ class DataDictionaryLoader:
         Returns:
             List of dialect names with SQL directories.
         """
-        sql_root = _sql_resource_root()
-        if not sql_root.is_dir():
+        try:
+            dialects_root = resources.files("sqlspec.data_dictionary.dialects")
+        except (ModuleNotFoundError, FileNotFoundError):
             return []
-        return sorted([path.name for path in sql_root.iterdir() if path.is_dir()])
+        if not dialects_root.is_dir():
+            return []
+        return sorted([
+            path.name
+            for path in dialects_root.iterdir()
+            if path.is_dir() and path.name != "__pycache__" and path.joinpath("sql").is_dir()
+        ])
 
 
 _loader_instance: DataDictionaryLoader | None = None
