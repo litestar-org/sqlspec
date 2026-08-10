@@ -111,6 +111,21 @@ class FSSpecBackend:
     def base_uri(self) -> str:
         return self._fs_uri
 
+    def resolve_uri(self, path: str | Path) -> str:
+        """Resolve a backend-relative path to an unsigned address.
+
+        Args:
+            path: The same backend-relative path accepted by read and write methods.
+
+        Returns:
+            An absolute filesystem path for ``file`` or a protocol-qualified URI
+            for other filesystems. The target does not need to exist.
+        """
+        resolved_path = self._resolve_path(path)
+        if self.protocol == "file":
+            return str(Path(resolved_path).resolve())
+        return str(self.fs.unstrip_protocol(resolved_path))
+
     def _resolve_path(self, path: str | Path) -> str:
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
 

@@ -485,6 +485,23 @@ def test_backend_consistency(request: pytest.FixtureRequest, backend_name: str) 
             backend.sign_sync(test_path, expires_in=3600)
 
 
+def test_s3_backend_resolved_uri_consistency(
+    fsspec_s3_backend_optional: "ObjectStoreProtocol",
+    obstore_s3_backend_optional: "ObjectStoreProtocol",
+    rustfs_bucket_name: str,
+) -> None:
+    """Fsspec and obstore expose the same URI after equivalent S3 operations."""
+    test_path = "resolved_uri_consistency.txt"
+
+    for backend in (fsspec_s3_backend_optional, obstore_s3_backend_optional):
+        backend.write_text_sync(test_path, TEST_TEXT_CONTENT)
+        assert backend.read_text_sync(test_path) == TEST_TEXT_CONTENT
+
+    expected = f"s3://{rustfs_bucket_name}/{test_path}"
+    assert fsspec_s3_backend_optional.resolve_uri(test_path) == expected
+    assert obstore_s3_backend_optional.resolve_uri(test_path) == expected
+
+
 @pytest.mark.parametrize("backend_name", ["local_backend", "fsspec_s3_backend_optional", "obstore_s3_backend_optional"])
 async def test_backend_async_consistency(request: pytest.FixtureRequest, backend_name: str) -> None:
     """Test that all backends provide consistent async behavior."""

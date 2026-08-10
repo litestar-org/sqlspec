@@ -39,6 +39,26 @@ the regular Arrow read APIs for CSV, Arrow IPC, JSON, and JSONL payloads.
 Closing a sync generator or calling ``aclose()`` on its async iterator closes
 the active storage reader.
 
+Resolve portable storage addresses
+==================================
+
+Use ``backend.resolve_uri(path)`` when another component needs the address of
+an object. The method accepts the same backend-relative path as the read and
+write methods. It does not perform storage I/O, require the target to exist, or
+change the backend's configured path prefixes.
+
+For example, fsspec and obstore both resolve ``data.parquet`` against
+``s3://bucket/prefix`` with ``base_path="workspaces"`` as
+``s3://bucket/prefix/workspaces/data.parquet``. Local, fsspec-file, and
+obstore-file backends return the equivalent absolute filesystem path. Consumers
+should use this method instead of joining ``base_path``, ``base_uri``, or
+``store_uri`` themselves.
+
+The returned address is unsigned. Use ``sign_sync()`` or ``sign_async()`` when
+a caller needs a time-limited access grant. ``resolve_uri()`` does not sign,
+percent-encode, or validate the address, and its argument is an object key rather
+than an already-qualified remote URI.
+
 Pipelines
 =========
 

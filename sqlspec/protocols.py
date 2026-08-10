@@ -481,6 +481,10 @@ class ObjectStoreProtocol(Protocol):
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
 
+    def resolve_uri(self, path: "str | Path") -> str:
+        """Resolve a backend-relative path to its unsigned address."""
+        return ""
+
     def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from an object synchronously."""
         return b""
