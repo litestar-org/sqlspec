@@ -9,7 +9,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Final, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 from mypy_extensions import mypyc_attr
 
@@ -126,11 +126,11 @@ class StorageRegistry:
                 file_path = strip_windows_drive_prefix(unquote(parsed.path))
 
                 path_obj = Path(file_path).expanduser().resolve()
-                base_uri = f"file://{path_obj.parent}" if is_file_destination(path_obj) else f"file://{path_obj}"
+                base_uri = _local_backend_uri(path_obj)
         elif is_local_path(path_str):
             scheme = "file"
             path_obj = Path(path_str).expanduser().resolve()
-            base_uri = f"file://{path_obj.parent}" if is_file_destination(path_obj) else f"file://{path_obj}"
+            base_uri = _local_backend_uri(path_obj)
         else:
             msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
             raise ImproperConfigurationError(msg)
@@ -314,3 +314,11 @@ class StorageRegistry:
 
 
 storage_registry = StorageRegistry()
+
+
+def _local_backend_uri(path: Path) -> str:
+    root_path = path.parent if is_file_destination(path) else path
+    uri_path = root_path.as_posix()
+    if root_path.drive and not uri_path.startswith("/"):
+        uri_path = f"/{uri_path}"
+    return urlunparse(("file", "", uri_path, "", "", ""))

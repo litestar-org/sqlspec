@@ -148,6 +148,8 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
         "statement_sentinel_identity",
         "sqlspec_construction",
     }
+    sqlspec_result = next(result for result in results if result["name"] == "sqlspec_construction")
+    assert sqlspec_result["error"] is None
 
 
 def test_statement_construction_checks_pass_without_requiring_compilation() -> None:

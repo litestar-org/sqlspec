@@ -5,10 +5,12 @@ and .resolve() causing symlink mismatches on macOS (/var vs /private/var).
 """
 
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from typing import cast
 
 from sqlspec import SQLSpec
 from sqlspec.storage.backends.obstore import ObStoreBackend
+from sqlspec.storage.registry import _local_backend_uri
 
 
 def test_storage_registry_file_path_resolution_load_single_file_by_str_path() -> None:
@@ -26,13 +28,21 @@ def test_storage_registry_file_path_resolution_load_single_file_by_str_path() ->
 def test_storage_registry_file_path_resolution_load_single_file_by_path_object() -> None:
     """Loading a single SQL file by Path object should work."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        sql_file = Path(tmpdir) / "hello.sql"
+        sql_file = Path(tmpdir) / "nested" / "sql" / "hello.sql"
+        sql_file.parent.mkdir(parents=True)
         sql_file.write_text("-- name: hello_world\nSELECT 1;\n")
         s = SQLSpec()
         s.load_sql_files(sql_file)
         result = s.get_sql("hello_world")
         assert result is not None
         assert "SELECT 1" in str(result)
+
+
+def test_storage_registry_file_path_resolution_builds_windows_file_uri() -> None:
+    """Windows drive paths should produce file URIs with an empty authority."""
+    sql_file = PureWindowsPath("C:/project/queries/nested/hello.sql")
+
+    assert _local_backend_uri(cast("Path", sql_file)) == "file:///C:/project/queries/nested"
 
 
 def test_storage_registry_file_path_resolution_load_from_directory() -> None:
