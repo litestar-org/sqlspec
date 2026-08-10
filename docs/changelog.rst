@@ -9,24 +9,39 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
--------------------------------------------------------------------------------
+v0.59.0 - Data dictionary and loader access
+------------------------------------------------------------------------------
+
+**Added:**
+
+* :attr:`SQLSpec.loader <sqlspec.base.SQLSpec.loader>` gives read-only access to
+  the registry's SQL file loader. SQLSpec creates the loader on first access
+  when one was not supplied.
 
 **Changed:**
 
 * Explicit database cancellation now raises
-  :class:`~sqlspec.exceptions.OperationCancelledError`, while elapsed timeouts
-  and deadlines continue to raise
-  :class:`~sqlspec.exceptions.QueryTimeoutError`. The two exceptions are
-  siblings under :class:`~sqlspec.exceptions.OperationalError`. Applications
-  that used ``QueryTimeoutError`` for both outcomes should catch both exception
-  types, or catch ``OperationalError`` when they do not need to distinguish
-  cancellation from timeout.
+  :class:`~sqlspec.exceptions.OperationCancelledError`. Timeouts and deadlines
+  still raise :class:`~sqlspec.exceptions.QueryTimeoutError`. Both exceptions
+  inherit from :class:`~sqlspec.exceptions.OperationalError`. Applications that
+  caught ``QueryTimeoutError`` for both outcomes must catch both exceptions, or
+  catch ``OperationalError``.
+* Data dictionary SQL files now live beside each dialect package. SQLSpec loads
+  these files through package resources.
+* Data dictionary query helpers now use separate ``domain`` and ``operation``
+  names. ``mode`` is optional. Update direct calls that pass one flat query
+  name.
+* Spanner now sends UUID values as 36-character text, not base64 bytes. To keep
+  UUID objects unchanged, set
+  ``driver_features={"enable_uuid_conversion": False}``. Text is the new
+  default.
 
 **Fixed:**
 
 * Async statement errors from mypyc-compiled drivers are translated into
   :class:`~sqlspec.exceptions.SQLSpecError` instead of terminating the process.
+* ADBC adapters for PostgreSQL now keep ``None`` in arrays. Each value binds as
+  SQL ``NULL``. This keeps null values in place.
 
 v0.58.2 - SQL file parameter diagnostics
 ------------------------------------------------------------------------------

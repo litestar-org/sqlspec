@@ -17,6 +17,13 @@ Load SQL Files
    :dedent: 4
    :no-upgrade:
 
+Advanced Loader Access
+----------------------
+
+Use SQLSpec methods for named queries. Use ``spec.loader`` when you need the
+:class:`~sqlspec.loader.SQLFileLoader` itself. It returns the given loader. If
+none was given, SQLSpec makes one on first use.
+
 Named Queries
 -------------
 
