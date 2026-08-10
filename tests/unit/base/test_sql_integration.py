@@ -28,7 +28,18 @@ def test_init_with_loader() -> None:
     """Test SQLSpec initialization with a provided loader."""
     loader = SQLFileLoader()
     sql_spec = SQLSpec(loader=loader)
-    assert sql_spec._loader is loader
+    assert sql_spec.loader is loader
+
+
+def test_loader_property_initializes_and_reuses_loader() -> None:
+    """Test that loader access initializes and reuses the configured runtime."""
+    sql_spec = SQLSpec()
+
+    loader = sql_spec.loader
+
+    assert isinstance(loader, SQLFileLoader)
+    assert sql_spec.loader is loader
+    assert loader._runtime is sql_spec._loader_runtime
 
 
 def test_lazy_loader_initialization() -> None:

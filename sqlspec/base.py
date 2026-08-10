@@ -102,6 +102,15 @@ class SQLSpec:
         """
         return self._configs
 
+    @property
+    def loader(self) -> SQLFileLoader:
+        """Access the SQL file loader.
+
+        Returns:
+            The configured or lazily initialized SQL file loader.
+        """
+        return self._ensure_loader()
+
     @overload
     def get_connection(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
