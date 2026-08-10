@@ -38,6 +38,8 @@ v0.59.0 - Data dictionary and loader access
 
 **Fixed:**
 
+* SQL files supplied with Windows drive paths now resolve from their requested
+  directory instead of the process working directory.
 * Async statement errors from mypyc-compiled drivers are translated into
   :class:`~sqlspec.exceptions.SQLSpecError` instead of terminating the process.
 * ADBC adapters for PostgreSQL now keep ``None`` in arrays. Each value binds as

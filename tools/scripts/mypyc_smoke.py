@@ -5,7 +5,9 @@ import importlib
 import json
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, NamedTuple
 
 __all__ = ("SMOKE_IMPORTS", "SmokeImport", "is_compiled_module", "main", "run_construction_checks", "run_smoke")
@@ -106,6 +108,12 @@ def _check_sqlspec_construction() -> dict[str, Any]:
     result["compiled"] = is_compiled_module(base_module)
     try:
         manager = sqlspec_cls(loader=sql_file_loader_cls())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sql_file = Path(tmpdir) / "nested" / "sql" / "smoke.sql"
+            sql_file.parent.mkdir(parents=True)
+            sql_file.write_text("-- name: mypyc_smoke_query\nSELECT 1;\n")
+            manager.load_sql_files(sql_file)
+            manager.get_sql("mypyc_smoke_query")
         config = manager.add_config(sqlite_config_cls(connection_config={"database": ":memory:"}))
         manager.event_channel(config)
         manager.telemetry_snapshot()
