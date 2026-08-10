@@ -17,6 +17,10 @@ v0.59.0 - Data dictionary and loader access
 * :attr:`SQLSpec.loader <sqlspec.base.SQLSpec.loader>` gives read-only access to
   the registry's SQL file loader. SQLSpec creates the loader on first access
   when one was not supplied.
+* Object storage backends expose ``resolve_uri(path)`` to format one
+  backend-relative path as an absolute local path or protocol-qualified remote
+  URI without storage I/O. Custom backends that implement
+  ``ObjectStoreProtocol`` must define it too.
 
 **Changed:**
 

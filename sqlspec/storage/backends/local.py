@@ -76,6 +76,17 @@ class LocalStore:
 
         self.protocol = "file"
 
+    def resolve_uri(self, path: "str | Path") -> str:
+        """Resolve a backend-relative path to an absolute filesystem path.
+
+        Args:
+            path: The same backend-relative path accepted by read and write methods.
+
+        Returns:
+            The absolute filesystem path. The target does not need to exist.
+        """
+        return str(self._resolve_path(path).resolve())
+
     def _resolve_path(self, path: "str | Path") -> Path:
         """Resolve path relative to base_path.
 

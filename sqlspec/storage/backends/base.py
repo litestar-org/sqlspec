@@ -12,6 +12,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import Self
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from types import TracebackType
 
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
@@ -166,6 +167,11 @@ class ObjectStoreBase:
     """
 
     __slots__ = ()
+
+    @abstractmethod
+    def resolve_uri(self, path: "str | Path") -> str:
+        """Resolve a backend-relative path to its unsigned address."""
+        raise NotImplementedError
 
     @abstractmethod
     def read_bytes_sync(self, path: str, **kwargs: Any) -> bytes:

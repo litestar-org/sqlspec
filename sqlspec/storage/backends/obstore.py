@@ -199,6 +199,30 @@ class ObStoreBackend:
 
         return cls(uri=store_uri, **kwargs)
 
+    def resolve_uri(self, path: "str | Path") -> str:
+        """Resolve a backend-relative path to an unsigned address.
+
+        Args:
+            path: The same backend-relative path accepted by read and write methods.
+
+        Returns:
+            An absolute filesystem path for local stores or a protocol-qualified
+            URI for remote stores. The target does not need to exist.
+        """
+        resolved_path = self._resolve_path(path)
+        if self._is_local_store:
+            return str((Path(self._local_store_root) / resolved_path).resolve())
+
+        parsed = urlparse(self.store_uri)
+        joined_path = "/".join(part.strip("/") for part in (parsed.path, resolved_path) if part.strip("/"))
+        authority = f"{parsed.scheme}://{parsed.netloc}"
+        address = f"{authority}/{joined_path}" if parsed.netloc else f"{authority}{joined_path}"
+        if parsed.query:
+            address = f"{address}?{parsed.query}"
+        if parsed.fragment:
+            address = f"{address}#{parsed.fragment}"
+        return address
+
     def _resolve_path(self, path: "str | Path") -> str:
         if self._is_local_store:
             return self._local_store_path(path)
