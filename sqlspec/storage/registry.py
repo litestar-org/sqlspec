@@ -318,4 +318,7 @@ storage_registry = StorageRegistry()
 
 def _local_backend_uri(path: Path) -> str:
     root_path = path.parent if is_file_destination(path) else path
-    return urlunparse(("file", "", root_path.as_posix(), "", "", ""))
+    uri_path = root_path.as_posix()
+    if root_path.drive and not uri_path.startswith("/"):
+        uri_path = f"/{uri_path}"
+    return urlunparse(("file", "", uri_path, "", "", ""))
