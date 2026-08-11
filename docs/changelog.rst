@@ -9,6 +9,38 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.60.0 - Queue limits
+------------------------------------------------------------------------------
+
+**Added:**
+
+* The new ``listener_queue_capacity`` setting caps each PostgreSQL listener
+  queue. It works with asyncpg, psqlpy, and sync or async psycopg listeners.
+  The default has no limit. Bad values raise
+  :class:`~sqlspec.exceptions.ImproperConfigurationError`.
+* :class:`~sqlspec.extensions.litestar.channels.SQLSpecChannelsBackend` accepts
+  ``output_queue_capacity``. It caps decoded messages from any async event
+  transport, including PostgreSQL, Oracle, and polling channels. The default
+  has no limit. Bad values raise ``ValueError``.
+* ``output_queue_depth`` shows the current Litestar backlog.
+  ``dropped_message_count`` shows the total number of overflow drops.
+* PostgreSQL listener metrics now track ``events.listener.queue.depth`` and the
+  total ``events.listener.queue.dropped`` count for the hub.
+
+**Changed:**
+
+* A full capped queue drops its oldest item before it adds the new one. Each
+  PostgreSQL consumer has its own queue. Shutdown clears queued items and sets
+  depth to zero. Drop counts stay in place after a restart.
+* An overflow in PostgreSQL ``notify`` drops transient data. With
+  ``notify_queue``, it drops only a wake-up marker. The durable row stays in the
+  table and can be found by the next scan.
+* Oracle AQ and TxEventQ still read from their native queues. They do not add a
+  listener queue. Table-backed ``poll_queue`` stores check
+  ``listener_queue_capacity``, but the setting does not change how they poll.
+* Bad Litestar channel payloads are logged and acknowledged. They do not increase
+  ``dropped_message_count``.
+
 v0.59.0 - Data dictionary and loader access
 ------------------------------------------------------------------------------
 
@@ -48,6 +80,25 @@ v0.59.0 - Data dictionary and loader access
   :class:`~sqlspec.exceptions.SQLSpecError` instead of terminating the process.
 * ADBC adapters for PostgreSQL now keep ``None`` in arrays. Each value binds as
   SQL ``NULL``. This keeps null values in place.
+
+v0.58.3 - Data and store fixes
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Nested msgspec structs now use their own encoded field names. This works for
+  optional fields, annotations, lists, tuples, and maps. Mixed rename rules no
+  longer reuse the outer struct's rule. Keys in plain maps stay unchanged.
+* ``ensure_async_()`` now has a
+  :class:`collections.abc.Coroutine` return type. This matches the value it has
+  always returned at run time and removes the need for a cast.
+* SQLSpec Litestar session stores now inherit
+  :class:`litestar.stores.base.Store`. They keep its async context manager and
+  work with ``StoreRegistry``.
+* Each extension now loads its SQL migration query names on its own. A file
+  such as ``0001_create_table.sql`` can use ``migrate-0001-up`` and
+  ``migrate-0001-down`` with no clash across extensions. SQLSpec still stores
+  the prefixed tracker version.
 
 v0.58.2 - SQL file parameter diagnostics
 ------------------------------------------------------------------------------
