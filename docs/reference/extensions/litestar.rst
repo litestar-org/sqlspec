@@ -22,6 +22,16 @@ Configuration
 Channels Backend
 ================
 
+``SQLSpecChannelsBackend`` buffers decoded output from every asynchronous
+``EventChannel`` transport. Pass ``output_queue_capacity`` to bound that buffer;
+the default ``None`` remains unbounded. When full, the backend discards the
+oldest decoded message before acknowledging and retaining the newest one.
+``output_queue_depth`` reports the current pending count and
+``dropped_message_count`` reports cumulative overflow drops for the backend
+instance. Malformed payloads are acknowledged and logged without increasing the
+overflow count. Shutdown clears pending output while preserving the cumulative
+drop diagnostic for lifecycle reuse.
+
 .. autoclass:: sqlspec.extensions.litestar.SQLSpecChannelsBackend
    :members:
    :show-inheritance:

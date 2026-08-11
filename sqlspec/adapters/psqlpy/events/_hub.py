@@ -18,6 +18,7 @@ from weakref import WeakKeyDictionary
 
 from sqlspec.core import SQL
 from sqlspec.extensions.events import normalize_event_channel_name
+from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import is_notification
 from sqlspec.utils.uuids import uuid4
@@ -79,6 +80,7 @@ class PsqlpyListenerHub:
         "_callbacks",
         "_config",
         "_listener",
+        "_listener_queue_capacity",
         "_listener_started",
         "_lock",
         "_pool_destroying_registered",
@@ -91,6 +93,7 @@ class PsqlpyListenerHub:
         self._backend_name = backend_name
         self._config = config
         self._lock = asyncio.Lock()
+        self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._callbacks: dict[str, _PsqlpyHubCallback] = {}
         self._ready_events: dict[str, dict[str, asyncio.Event]] = {}
@@ -134,9 +137,12 @@ class PsqlpyListenerHub:
         if queue is None:
             return None
         try:
-            return await asyncio.wait_for(queue.get(), timeout=poll_interval)
+            payload = await asyncio.wait_for(queue.get(), timeout=poll_interval)
         except asyncio.TimeoutError:
             return None
+        else:
+            self._record_queue_depth()
+            return payload
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -149,6 +155,7 @@ class PsqlpyListenerHub:
             self._queues.clear()
             self._callbacks.clear()
             self._ready_events.clear()
+            self._record_queue_depth()
             self._listener = None
             self._listener_started = False
         if listener is not None:
@@ -178,7 +185,7 @@ class PsqlpyListenerHub:
             return None
         queue = queues.get(task)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = asyncio.Queue(maxsize=self._listener_queue_capacity or 0)
             queues[task] = queue
         return queue
 
@@ -194,7 +201,7 @@ class PsqlpyListenerHub:
         queues: WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]] = WeakKeyDictionary()
         consumer_queue: asyncio.Queue[str] | None = None
         if consumer_task is not None:
-            consumer_queue = asyncio.Queue()
+            consumer_queue = asyncio.Queue(maxsize=self._listener_queue_capacity or 0)
             queues[consumer_task] = consumer_queue
         self._queues[channel] = queues
         self._callbacks[channel] = callback
@@ -284,7 +291,13 @@ class PsqlpyListenerHub:
         if queues is None:
             return
         for queue in list(queues.values()):
-            queue.put_nowait(payload)
+            if enqueue_with_capacity(queue, payload, self._listener_queue_capacity, empty_error=asyncio.QueueEmpty):
+                self._config.get_observability_runtime().increment_metric("events.listener.queue.dropped")
+        self._record_queue_depth()
+
+    def _record_queue_depth(self) -> None:
+        depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
+        self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
 
 
 def _record_listener_lifecycle(config: "PsqlpyConfig", backend_name: str, status: str) -> None:

@@ -75,22 +75,28 @@ class _AsyncpgConnection:
 
 class _StubRuntime:
     def __init__(self) -> None:
-        self.metrics: list[str] = []
+        self.metrics: list[str | tuple[str, float]] = []
         self.registered: list[tuple[str, Any]] = []
 
     def increment_metric(self, metric: str) -> None:
         self.metrics.append(metric)
+
+    def record_metric(self, metric: str, value: float) -> None:
+        self.metrics.append((metric, value))
 
     def register_lifecycle_hook(self, event: str, callback: Any) -> None:
         self.registered.append((event, callback))
 
 
 class _AsyncpgConfig:
-    def __init__(self, connection: _AsyncpgConnection, *replacement_connections: _AsyncpgConnection) -> None:
+    def __init__(
+        self, connection: _AsyncpgConnection, *replacement_connections: _AsyncpgConnection, capacity: int | None = None
+    ) -> None:
         self.connections = [connection, *replacement_connections]
         self.connection_enters = 0
         self.connection_exits = 0
         self._runtime = _StubRuntime()
+        self.extension_config = {"events": {"listener_queue_capacity": capacity}} if capacity is not None else {}
 
     def provide_connection(self) -> _AsyncConnectionContext:
         connection = self.connections[min(self.connection_enters, len(self.connections) - 1)]
@@ -158,10 +164,16 @@ class _PsqlpyPool:
 
 
 class _PsqlpyConfig:
-    def __init__(self, listener_handle: _PsqlpyListener | None = None, *replacement_listeners: _PsqlpyListener) -> None:
+    def __init__(
+        self,
+        listener_handle: _PsqlpyListener | None = None,
+        *replacement_listeners: _PsqlpyListener,
+        capacity: int | None = None,
+    ) -> None:
         self.listener_handle = listener_handle or _PsqlpyListener()
         self.pool = _PsqlpyPool(self.listener_handle, *replacement_listeners)
         self._runtime = _StubRuntime()
+        self.extension_config = {"events": {"listener_queue_capacity": capacity}} if capacity is not None else {}
 
     async def provide_pool(self) -> _PsqlpyPool:
         return self.pool
@@ -220,11 +232,17 @@ class _PsycopgAsyncConnection:
 
 
 class _PsycopgAsyncConfig:
-    def __init__(self, connection: _PsycopgAsyncConnection, *replacement_connections: _PsycopgAsyncConnection) -> None:
+    def __init__(
+        self,
+        connection: _PsycopgAsyncConnection,
+        *replacement_connections: _PsycopgAsyncConnection,
+        capacity: int | None = None,
+    ) -> None:
         self.connections = [connection, *replacement_connections]
         self.connection_enters = 0
         self.connection_exits = 0
         self._runtime = _StubRuntime()
+        self.extension_config = {"events": {"listener_queue_capacity": capacity}} if capacity is not None else {}
 
     def provide_connection(self) -> _AsyncConnectionContext:
         connection = self.connections[min(self.connection_enters, len(self.connections) - 1)]
@@ -250,11 +268,17 @@ class _PsycopgSyncConnection:
 
 
 class _PsycopgSyncConfig:
-    def __init__(self, connection: _PsycopgSyncConnection, *replacement_connections: _PsycopgSyncConnection) -> None:
+    def __init__(
+        self,
+        connection: _PsycopgSyncConnection,
+        *replacement_connections: _PsycopgSyncConnection,
+        capacity: int | None = None,
+    ) -> None:
         self.connections = [connection, *replacement_connections]
         self.connection_enters = 0
         self.connection_exits = 0
         self._runtime = _StubRuntime()
+        self.extension_config = {"events": {"listener_queue_capacity": capacity}} if capacity is not None else {}
 
     def provide_connection(self) -> _SyncConnectionContext:
         connection = self.connections[min(self.connection_enters, len(self.connections) - 1)]
@@ -632,6 +656,31 @@ async def test_psycopg_async_listener_hub_broadcasts_to_same_channel_consumers()
     await hub.shutdown()
 
 
+@pytest.mark.parametrize("hub_kind", ["asyncpg", "psqlpy", "psycopg"])
+async def test_async_postgres_listener_hubs_drop_oldest_per_consumer(hub_kind: str) -> None:
+    if hub_kind == "asyncpg":
+        config = _AsyncpgConfig(_AsyncpgConnection(), capacity=2)
+        hub = AsyncpgListenerHub(config)  # type: ignore[arg-type]
+    elif hub_kind == "psqlpy":
+        config = _PsqlpyConfig(capacity=2)
+        hub = PsqlpyListenerHub(config)  # type: ignore[arg-type]
+    else:
+        config = _PsycopgAsyncConfig(_PsycopgAsyncConnection(), capacity=2)
+        hub = PsycopgAsyncListenerHub(config)  # type: ignore[arg-type]
+
+    await hub.subscribe("alerts")
+    assert hub._get_consumer_queue("alerts") is not None
+    hub._dispatch("alerts", "first")
+    hub._dispatch("alerts", "second")
+    hub._dispatch("alerts", "third")
+
+    assert await hub.dequeue("alerts", 0.01) == "second"
+    assert await hub.dequeue("alerts", 0.01) == "third"
+    assert "events.listener.queue.dropped" in config.get_observability_runtime().metrics
+    await hub.shutdown()
+    assert ("events.listener.queue.depth", 0) in config.get_observability_runtime().metrics
+
+
 async def test_asyncpg_listener_hub_reconnects_and_releases_listener_contexts() -> None:
     first = _AsyncpgConnection()
     replacement = _AsyncpgConnection()
@@ -693,6 +742,23 @@ def test_psycopg_sync_listener_hub_broadcasts_to_same_channel_consumers() -> Non
 
     assert results == [payload, payload]
     hub.shutdown()
+
+
+def test_psycopg_sync_listener_hub_drops_oldest_per_consumer() -> None:
+    config = _PsycopgSyncConfig(_PsycopgSyncConnection(), capacity=2)
+    hub = PsycopgSyncListenerHub(config)  # type: ignore[arg-type]
+    hub.subscribe("alerts")
+    assert hub._get_consumer_queue("alerts") is not None
+
+    hub._dispatch("alerts", "first")
+    hub._dispatch("alerts", "second")
+    hub._dispatch("alerts", "third")
+
+    assert hub.dequeue("alerts", 0.01) == "second"
+    assert hub.dequeue("alerts", 0.01) == "third"
+    assert "events.listener.queue.dropped" in config.get_observability_runtime().metrics
+    hub.shutdown()
+    assert ("events.listener.queue.depth", 0) in config.get_observability_runtime().metrics
 
 
 def test_psycopg_sync_listener_hub_reconnects_and_releases_listener_contexts() -> None:
@@ -866,7 +932,7 @@ def test_oracle_aq_options_round_subsecond_wait_up_to_one_second() -> None:
 
 
 def test_psycopg_sync_shutdown_submits_stop_before_setting_stop_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    hub = PsycopgSyncListenerHub(object())  # type: ignore[arg-type]
+    hub = PsycopgSyncListenerHub(_PsycopgSyncConfig(_PsycopgSyncConnection()))  # type: ignore[arg-type]
     thread = _Thread()
     stop_states: list[bool] = []
 

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
 from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
 
@@ -39,6 +40,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         "create_schema",
         "event_poll_interval",
         "lease_seconds",
+        "listener_queue_capacity",
         "manage_schema",
         "migrations_path",
         "poll_interval",
@@ -115,6 +117,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
             keys = ", ".join(repr(key) for key in unsupported)
             msg = f"Unsupported events configuration key(s) for {adapter}: {keys}"
             raise ImproperConfigurationError(msg)
+        validate_queue_capacity(self._extension_settings.get("listener_queue_capacity"), name="listener_queue_capacity")
 
     def _schema_management_flags(self) -> "tuple[bool, bool]":
         """Return automatic-management and missing-table creation flags."""

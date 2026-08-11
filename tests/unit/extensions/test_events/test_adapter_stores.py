@@ -1,6 +1,9 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event queue stores and DDL generation."""
 
+import importlib
+import inspect
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -14,6 +17,25 @@ if TYPE_CHECKING:
     BaseEventQueueStoreBase = BaseEventQueueStore[SqliteConfig]
 else:
     BaseEventQueueStoreBase = BaseEventQueueStore
+
+
+def test_all_adapter_event_stores_declare_listener_queue_capacity_behavior() -> None:
+    adapter_root = Path(__file__).parents[4] / "sqlspec" / "adapters"
+    store_paths = sorted(adapter_root.glob("*/events/store.py"))
+    discovered: set[str] = set()
+
+    for store_path in store_paths:
+        adapter_name = store_path.parents[1].name
+        module = importlib.import_module(f"sqlspec.adapters.{adapter_name}.events.store")
+        for _, store_type in inspect.getmembers(module, inspect.isclass):
+            if store_type is BaseEventQueueStore or not issubclass(store_type, BaseEventQueueStore):
+                continue
+            if store_type.__module__ != module.__name__:
+                continue
+            discovered.add(adapter_name)
+            assert "listener_queue_capacity" in store_type.extension_config_options
+
+    assert discovered == {path.parents[1].name for path in store_paths}
 
 
 def test_asyncmy_store_column_types() -> None:

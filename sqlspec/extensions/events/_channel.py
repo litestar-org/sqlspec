@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_event_channel_name
@@ -194,6 +195,7 @@ class SyncEventChannel:
             msg = "SyncEventChannel requires a sync configuration"
             raise ImproperConfigurationError(msg)
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
+        validate_queue_capacity(extension_settings.get("listener_queue_capacity"), name="listener_queue_capacity")
         self._adapter_name = resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
         self._event_poll_interval = resolve_event_poll_interval(
@@ -463,6 +465,7 @@ class AsyncEventChannel:
             msg = "AsyncEventChannel requires an async configuration"
             raise ImproperConfigurationError(msg)
         extension_settings: dict[str, Any] = dict(config.extension_config.get("events", {}))
+        validate_queue_capacity(extension_settings.get("listener_queue_capacity"), name="listener_queue_capacity")
         self._adapter_name = resolve_adapter_name(config)
         hints = get_runtime_hints(self._adapter_name, config)
         self._event_poll_interval = resolve_event_poll_interval(

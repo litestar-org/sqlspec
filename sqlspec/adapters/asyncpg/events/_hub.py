@@ -17,6 +17,7 @@ from weakref import WeakKeyDictionary
 
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import normalize_event_channel_name
+from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_add_listener
 
@@ -39,6 +40,7 @@ class AsyncpgListenerHub:
         "_config",
         "_connection",
         "_connection_cm",
+        "_listener_queue_capacity",
         "_lock",
         "_pool_destroying_registered",
         "_queues",
@@ -49,6 +51,7 @@ class AsyncpgListenerHub:
         self._backend_name = backend_name
         self._config = config
         self._lock = asyncio.Lock()
+        self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._callbacks: dict[str, Callable[..., None]] = {}
         self._connection_cm: Any | None = None
@@ -106,9 +109,12 @@ class AsyncpgListenerHub:
         if queue is None:
             return None
         try:
-            return await asyncio.wait_for(queue.get(), timeout=poll_interval)
+            payload = await asyncio.wait_for(queue.get(), timeout=poll_interval)
         except asyncio.TimeoutError:
             return None
+        else:
+            self._record_queue_depth()
+            return payload
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -123,6 +129,7 @@ class AsyncpgListenerHub:
             self._callbacks.clear()
             self._connection = None
             self._connection_cm = None
+            self._record_queue_depth()
         if connection is not None:
             for channel in channels:
                 callback = callbacks.get(channel)
@@ -151,7 +158,7 @@ class AsyncpgListenerHub:
             return None
         queue = queues.get(task)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = asyncio.Queue(maxsize=self._listener_queue_capacity or 0)
             queues[task] = queue
         return queue
 
@@ -207,7 +214,13 @@ class AsyncpgListenerHub:
         if queues is None:
             return
         for queue in list(queues.values()):
-            queue.put_nowait(payload)
+            if enqueue_with_capacity(queue, payload, self._listener_queue_capacity, empty_error=asyncio.QueueEmpty):
+                self._config.get_observability_runtime().increment_metric("events.listener.queue.dropped")
+        self._record_queue_depth()
+
+    def _record_queue_depth(self) -> None:
+        depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
+        self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
 
 
 def _record_listener_lifecycle(config: "AsyncpgConfig", backend_name: str, status: str) -> None:

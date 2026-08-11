@@ -8,6 +8,8 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import EventsConfig
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.events import SyncEventChannel
 
 
 def test_events_backend_literal_uses_canonical_transport_names() -> None:
@@ -18,6 +20,28 @@ def test_events_backend_literal_uses_canonical_transport_names() -> None:
     backend_values = get_args(backend_args[0]) if len(backend_args) == 1 and get_args(backend_args[0]) else backend_args
 
     assert set(backend_values) == {"notify", "notify_queue", "poll_queue", "aq", "txeventq"}
+
+
+@pytest.mark.parametrize("capacity", [True, False, 0, -1, 1.5, "1", []])
+def test_listener_queue_capacity_rejects_non_positive_integers(tmp_path: Path, capacity: object) -> None:
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "events-capacity.db")},
+        extension_config={"events": {"listener_queue_capacity": capacity}},  # type: ignore[typeddict-item]
+    )
+
+    with pytest.raises(ImproperConfigurationError, match="listener_queue_capacity must be a positive integer"):
+        SyncEventChannel(config)
+
+
+def test_listener_queue_capacity_is_accepted_by_poll_queue_store(tmp_path: Path) -> None:
+    from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "events-capacity.db")},
+        extension_config={"events": {"listener_queue_capacity": 4}},
+    )
+
+    assert SqliteEventQueueStore(config).settings["listener_queue_capacity"] == 4
 
 
 _POSTGRES_DRIVER_FEATURES = (
