@@ -20,6 +20,7 @@ from weakref import WeakKeyDictionary
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
+from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_notifies
 
@@ -43,6 +44,7 @@ class PsycopgAsyncListenerHub:
         "_config",
         "_connection",
         "_connection_cm",
+        "_listener_queue_capacity",
         "_lock",
         "_pool_destroying_registered",
         "_pump_task",
@@ -55,6 +57,7 @@ class PsycopgAsyncListenerHub:
         self._backend_name = backend_name
         self._config = config
         self._lock = asyncio.Lock()
+        self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
         self._connection_cm: Any | None = None
         self._connection: Any | None = None
@@ -100,9 +103,12 @@ class PsycopgAsyncListenerHub:
         if queue is None:
             return None
         try:
-            return await asyncio.wait_for(queue.get(), timeout=poll_interval)
+            payload = await asyncio.wait_for(queue.get(), timeout=poll_interval)
         except asyncio.TimeoutError:
             return None
+        else:
+            self._record_queue_depth()
+            return payload
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -115,6 +121,7 @@ class PsycopgAsyncListenerHub:
             pump_task = self._pump_task
             channels = list(self._queues.keys())
             self._queues.clear()
+            self._record_queue_depth()
             self._connection = None
             self._connection_cm = None
             self._pump_task = None
@@ -146,7 +153,7 @@ class PsycopgAsyncListenerHub:
             return None
         queue = queues.get(task)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = asyncio.Queue(maxsize=self._listener_queue_capacity or 0)
             queues[task] = queue
         return queue
 
@@ -235,7 +242,13 @@ class PsycopgAsyncListenerHub:
         if queues is None:
             return
         for queue in list(queues.values()):
-            queue.put_nowait(payload)
+            if enqueue_with_capacity(queue, payload, self._listener_queue_capacity, empty_error=asyncio.QueueEmpty):
+                self._config.get_observability_runtime().increment_metric("events.listener.queue.dropped")
+        self._record_queue_depth()
+
+    def _record_queue_depth(self) -> None:
+        depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
+        self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
 
 
 class PsycopgSyncListenerHub:
@@ -253,6 +266,7 @@ class PsycopgSyncListenerHub:
         "_config",
         "_connection",
         "_connection_cm",
+        "_listener_queue_capacity",
         "_lock",
         "_pool_destroying_registered",
         "_queues",
@@ -265,6 +279,7 @@ class PsycopgSyncListenerHub:
         self._backend_name = backend_name
         self._config = config
         self._lock = threading.Lock()
+        self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[threading.Thread, stdlib_queue.Queue[str]]] = {}
         self._connection_cm: Any | None = None
         self._connection: Any | None = None
@@ -305,9 +320,12 @@ class PsycopgSyncListenerHub:
         if queue is None:
             return None
         try:
-            return queue.get(timeout=poll_interval)
+            payload = queue.get(timeout=poll_interval)
         except stdlib_queue.Empty:
             return None
+        else:
+            self._record_queue_depth()
+            return payload
 
     def shutdown(self) -> None:
         with self._lock:
@@ -318,6 +336,7 @@ class PsycopgSyncListenerHub:
             channels = list(self._queues.keys())
             worker_thread = self._worker_thread
             self._queues.clear()
+            self._record_queue_depth()
             self._connection_cm = None
             self._worker_thread = None
         if worker_thread is not None:
@@ -349,7 +368,7 @@ class PsycopgSyncListenerHub:
             thread = threading.current_thread()
             queue = queues.get(thread)
             if queue is None:
-                queue = stdlib_queue.Queue()
+                queue = stdlib_queue.Queue(maxsize=self._listener_queue_capacity or 0)
                 queues[thread] = queue
             return queue
 
@@ -467,7 +486,13 @@ class PsycopgSyncListenerHub:
                 return
             targets = list(queues.values())
         for queue in targets:
-            queue.put_nowait(payload)
+            if enqueue_with_capacity(queue, payload, self._listener_queue_capacity, empty_error=stdlib_queue.Empty):
+                self._config.get_observability_runtime().increment_metric("events.listener.queue.dropped")
+        self._record_queue_depth()
+
+    def _record_queue_depth(self) -> None:
+        depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
+        self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
 
 
 def _record_listener_lifecycle(

@@ -55,6 +55,7 @@ Configure the transport and durable reconciliation cadence independently:
             "events": {
                 "backend": "notify_queue",
                 "event_poll_interval": 1.0,
+                "listener_queue_capacity": 256,
             }
         },
     )
@@ -63,6 +64,15 @@ Configure the transport and durable reconciliation cadence independently:
 queue when no native wakeup arrives. The older ``poll_interval`` setting is a
 compatibility input; ``event_poll_interval`` takes precedence when both are
 provided.
+
+``listener_queue_capacity`` bounds pending PostgreSQL notifications separately
+for each consumer. It is unbounded when omitted. At capacity, the oldest pending
+notification is discarded so the newest notification can be retained. For
+``notify`` this intentionally loses the transient notification. For
+``notify_queue`` only the wake-up marker is lost; the durable row remains in the
+table and reconciliation recovers it. The setting is accepted by every event
+store so applications can share configuration across adapters, but it does not
+change ``poll_queue`` polling or Oracle AQ and TxEventQ native dequeue behavior.
 
 ``polling`` is not a SQLSpec backend name. Litestar Queues uses it for the
 fallback worker mode where no push wakeup transport is available and the
@@ -83,6 +93,12 @@ backend owns its own listener hub that:
 * Serializes subscribe / unsubscribe under a lock so concurrent callers
   cannot race on driver-level statements that share the connection.
 
+Listener hubs report aggregate pending depth as
+``events.listener.queue.depth`` and increment the cumulative
+``events.listener.queue.dropped`` metric whenever overflow evicts an item.
+Shutdown clears pending payloads and records depth zero; a restarted hub keeps
+the runtime's cumulative dropped count.
+
 The listener lease is held for the backend lifetime. Publishers use separate,
 short-lived pooled sessions, so a shared PostgreSQL pool must configure at
 least two connections: ``max_size >= 2`` for asyncpg/psycopg and
@@ -93,6 +109,8 @@ the listener.
 The Oracle native backends (``aq`` and
 ``txeventq``) use an analogous pattern: a per-channel
 queue-handle cache backed by a single dedicated session per backend instance.
+They dequeue directly and do not add the PostgreSQL listener buffer described
+above.
 ``dequeue`` honors ``min(poll_interval, aq_wait_seconds)`` as its wait bound so
 the caller's polling cadence is respected.
 

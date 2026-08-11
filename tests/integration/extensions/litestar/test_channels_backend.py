@@ -1,8 +1,10 @@
 import asyncio
 import tempfile
+from types import SimpleNamespace
 from typing import Any, cast
 
 import msgspec.json
+import pytest
 from litestar.channels.plugin import ChannelsPlugin
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -25,6 +27,24 @@ class _RecordingEventChannel:
     async def publish_many(self, events: "list[tuple[str, dict[str, str], None]]") -> list[str]:
         self.batches.append(events)
         return [f"event-{index}" for index in range(len(events))]
+
+
+class _StreamingEventChannel:
+    def __init__(self, payloads: list[dict[str, str]]) -> None:
+        self.payloads = payloads
+        self.acked: list[str] = []
+        self.shutdown_calls = 0
+
+    async def iter_events(self, _channel: str, *, poll_interval: float) -> "Any":
+        _ = poll_interval
+        for index, payload in enumerate(self.payloads):
+            yield SimpleNamespace(event_id=str(index), payload=payload)
+
+    async def ack(self, event_id: str) -> None:
+        self.acked.append(event_id)
+
+    async def shutdown(self) -> None:
+        self.shutdown_calls += 1
 
 
 async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> None:
@@ -91,3 +111,45 @@ async def test_litestar_channels_backend_groups_multiple_payloads_and_channels()
         (backend._db_channel_name("alpha"), "c2Vjb25k"),
         (backend._db_channel_name("beta"), "c2Vjb25k"),
     ]
+
+
+@pytest.mark.parametrize("capacity", [True, False, 0, -1, 1.5, "1"])
+def test_litestar_channels_backend_rejects_invalid_output_capacity(capacity: object) -> None:
+    with pytest.raises(ValueError, match="output_queue_capacity must be a positive integer"):
+        SQLSpecChannelsBackend(cast("Any", _RecordingEventChannel()), output_queue_capacity=capacity)  # type: ignore[arg-type]
+
+
+async def test_litestar_channels_backend_drops_oldest_and_preserves_acknowledgements() -> None:
+    event_channel = _StreamingEventChannel([
+        {"data_b64": "Zmlyc3Q="},
+        {"data_b64": "c2Vjb25k"},
+        {"data_b64": "dGhpcmQ="},
+    ])
+    backend = SQLSpecChannelsBackend(cast("Any", event_channel), output_queue_capacity=2)
+    await backend.on_startup()
+
+    await backend._stream_channel("alerts", backend._db_channel_name("alerts"))
+
+    assert backend.output_queue_depth == 2
+    assert backend.dropped_message_count == 1
+    assert event_channel.acked == ["0", "1", "2"]
+    stream = backend.stream_events()
+    assert await anext(stream) == ("alerts", b"second")
+    assert await anext(stream) == ("alerts", b"third")
+    assert backend.output_queue_depth == 0
+
+    await backend.on_shutdown()
+    assert backend.output_queue_depth == 0
+    assert backend.dropped_message_count == 1
+
+
+async def test_litestar_channels_backend_malformed_payload_does_not_count_as_overflow() -> None:
+    event_channel = _StreamingEventChannel([{"invalid": "payload"}])
+    backend = SQLSpecChannelsBackend(cast("Any", event_channel), output_queue_capacity=1)
+    await backend.on_startup()
+
+    await backend._stream_channel("alerts", backend._db_channel_name("alerts"))
+
+    assert backend.output_queue_depth == 0
+    assert backend.dropped_message_count == 0
+    assert event_channel.acked == ["0"]

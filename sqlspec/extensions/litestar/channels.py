@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from litestar.channels.backends.base import ChannelsBackend
 
+from sqlspec.extensions.events._buffer import enqueue_with_capacity, validate_queue_capacity
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -29,7 +30,12 @@ class SQLSpecChannelsBackend(ChannelsBackend):
     """
 
     def __init__(
-        self, event_channel: "AsyncEventChannel", *, channel_prefix: str = "litestar", poll_interval: float = 0.2
+        self,
+        event_channel: "AsyncEventChannel",
+        *,
+        channel_prefix: str = "litestar",
+        poll_interval: float = 0.2,
+        output_queue_capacity: int | None = None,
     ) -> None:
         if not _IDENTIFIER_PATTERN.match(channel_prefix):
             msg = f"channel_prefix must be a valid identifier, got: {channel_prefix!r}"
@@ -37,10 +43,14 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         if poll_interval <= 0:
             msg = "poll_interval must be greater than zero"
             raise ValueError(msg)
+        self._output_queue_capacity = validate_queue_capacity(
+            output_queue_capacity, name="output_queue_capacity", error_type=ValueError
+        )
         self._event_channel = event_channel
         self._channel_prefix = channel_prefix
         self._poll_interval = poll_interval
         self._output_queue: asyncio.Queue[tuple[str, bytes]] | None = None
+        self._dropped_message_count = 0
         self._shutdown = asyncio.Event()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._to_db_channel: dict[str, str] = {}
@@ -61,7 +71,18 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             await asyncio.gather(*tasks, return_exceptions=True)
         self._to_db_channel.clear()
         self._to_litestar_channel.clear()
+        self._output_queue = None
         await self._event_channel.shutdown()
+
+    @property
+    def output_queue_depth(self) -> int:
+        """Return the number of buffered channel messages."""
+        return self._output_queue.qsize() if self._output_queue is not None else 0
+
+    @property
+    def dropped_message_count(self) -> int:
+        """Return the cumulative number of messages dropped due to overflow."""
+        return self._dropped_message_count
 
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
         await self.publish_many((data,), channels)
@@ -152,7 +173,10 @@ class SQLSpecChannelsBackend(ChannelsBackend):
                     await self._event_channel.ack(message.event_id)
                     continue
                 assert self._output_queue is not None
-                await self._output_queue.put((channel, decoded))
+                if enqueue_with_capacity(
+                    self._output_queue, (channel, decoded), self._output_queue_capacity, empty_error=asyncio.QueueEmpty
+                ):
+                    self._dropped_message_count += 1
                 await self._event_channel.ack(message.event_id)
         except asyncio.CancelledError:
             raise

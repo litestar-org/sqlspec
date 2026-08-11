@@ -792,6 +792,9 @@ class EventsConfig(TypedDict):
     event_poll_interval: NotRequired[float]
     """Durable event reconciliation interval in seconds. Takes precedence over poll_interval."""
 
+    listener_queue_capacity: NotRequired[int]
+    """Maximum pending notifications per PostgreSQL listener consumer. Defaults to unbounded."""
+
     select_for_update: NotRequired[bool]
     """Use SELECT FOR UPDATE locking when claiming events. Defaults to False."""
 
