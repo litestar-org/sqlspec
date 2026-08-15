@@ -67,19 +67,19 @@ Artifact Store Base Classes
 Record Types
 ============
 
-.. autoclass:: sqlspec.extensions.adk.SessionRecord
+.. autoclass:: sqlspec.extensions.adk.StoredSession
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.extensions.adk.EventRecord
+.. autoclass:: sqlspec.extensions.adk.StoredEvent
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.extensions.adk.MemoryRecord
+.. autoclass:: sqlspec.extensions.adk.StoredMemory
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.extensions.adk.ArtifactRecord
+.. autoclass:: sqlspec.extensions.adk.StoredArtifact
    :members:
    :show-inheritance:
 

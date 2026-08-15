@@ -10,19 +10,19 @@ DuckDB is an OLAP database optimized for analytical queries. This adapter provid
 import contextlib
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 
 __all__ = ("DuckdbADKConfig", "DuckdbADKFTSOptions", "DuckdbADKMemoryStore", "DuckdbADKStore")
@@ -117,7 +117,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session.
 
         Args:
@@ -134,7 +134,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID.
 
         Args:
@@ -159,7 +159,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -181,7 +181,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
         self._delete_session(app_name, user_id, session_id)
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
 
         Args:
@@ -191,7 +191,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -199,11 +199,11 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update the session's durable state.
 
         The event insert and state update succeed together or fail together
-        within a single DuckDB transaction; the updated SessionRecord is
+        within a single DuckDB transaction; the updated StoredSession is
         returned via UPDATE...RETURNING.
 
         Args:
@@ -227,7 +227,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session.
 
         Args:
@@ -450,7 +450,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
@@ -474,13 +474,13 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(sql, params)
             conn.commit()
 
-        return SessionRecord(
+        return StoredSession(
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
     def _get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Synchronous implementation of get_session."""
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             sql = f"""
@@ -510,7 +510,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
                 state = from_json(state_data) if state_data else {}
 
-                return SessionRecord(
+                return StoredSession(
                     id=session_id_val,
                     app_name=app_name,
                     user_id=user_id,
@@ -548,7 +548,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(delete_session_sql, (app_name, user_id, session_id))
             conn.commit()
 
-    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """Synchronous implementation of list_sessions."""
         if user_id is None:
             sql = f"""
@@ -573,7 +573,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 rows = cursor.fetchall()
 
                 return [
-                    SessionRecord(
+                    StoredSession(
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
@@ -588,7 +588,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 return []
             raise
 
-    def _append_event(self, event_record: EventRecord) -> None:
+    def _append_event(self, event_record: StoredEvent) -> None:
         """Synchronous implementation of append_event."""
         event_data_str = to_json(event_record["event_data"])
 
@@ -613,7 +613,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -621,7 +621,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Synchronous implementation of append_event_and_update_state."""
         now = datetime.now(timezone.utc)
         state_json = to_json(state)
@@ -683,7 +683,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         assert row is not None
         session_id_val, app_name, user_id, state_data, create_time, update_time = row
-        return SessionRecord(
+        return StoredSession(
             id=session_id_val,
             app_name=app_name,
             user_id=user_id,
@@ -699,7 +699,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Synchronous implementation of get_events."""
         if limit == 0:
             return []
@@ -728,7 +728,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 rows = cursor.fetchall()
 
                 return [
-                    EventRecord(
+                    StoredEvent(
                         id=row[0],
                         session_id=row[1],
                         invocation_id=row[2],
@@ -890,7 +890,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
         self._create_tables()
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         After successful inserts, refreshes the FTS index if FTS is enabled.
@@ -898,22 +898,27 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         return self._insert_memory_entries(entries, owner_id)
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query.
 
         When FTS is enabled, uses ``match_bm25()`` for BM25-ranked results.
         Falls back to ILIKE for simple substring matching.
         """
-        return self._search_entries(query, app_name, user_id, limit)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return self._delete_entries_by_session(session_id)
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
+        return self._delete_entries_older_than(days, app_name, scope)
 
     def _ensure_fts_extension(self, conn: Any) -> bool:
         """Ensure the DuckDB FTS extension is available for this connection."""
@@ -992,6 +997,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
+            scope VARCHAR(16) NOT NULL DEFAULT 'user',
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMP NOT NULL,
@@ -1001,8 +1007,11 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
+            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
+            ON {self._memory_table}(app_name, scope);
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
             ON {self._memory_table}(session_id);
@@ -1025,33 +1034,9 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
     def _sync_memory_table_ddl(self) -> str:
         """Synchronous version of DDL generation for use in _create_tables."""
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
+        return self._memory_table_ddl()
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP NOT NULL,
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        """
-
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Synchronous implementation of insert_memory_entries."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1064,30 +1049,32 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(event_id) DO NOTHING RETURNING 1
             """
         else:
             sql = f"""
             INSERT INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(event_id) DO NOTHING RETURNING 1
             """
 
         with self._config.provide_connection() as conn:
             for entry in entries:
                 params: tuple[Any, ...]
+                scope_value = entry.get("scope", "user")
                 if self._owner_id_column_name:
                     params = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        scope_value,
                         entry["event_id"],
                         entry["author"],
                         owner_id,
@@ -1103,6 +1090,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        scope_value,
                         entry["event_id"],
                         entry["author"],
                         entry["timestamp"],
@@ -1122,8 +1110,13 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         return inserted_count
 
     def _search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Synchronous implementation of search_entries."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1141,6 +1134,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
             if use_fts:
                 # Use match_bm25() -- the correct DuckDB FTS syntax
+                where_scope, scope_params = _build_duckdb_scope_where(app_name, user_id, scope_filter, prefix="m")
                 sql = f"""
             SELECT m.*
             FROM {self._memory_table} m
@@ -1148,31 +1142,33 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 SELECT id, fts_main_{self._memory_table}.match_bm25(id, ?, fields := 'content_text') AS score
                 FROM {self._memory_table}
             ) fts ON m.id = fts.id
-            WHERE m.app_name = ? AND m.user_id = ? AND fts.score IS NOT NULL
+            WHERE {where_scope} AND fts.score IS NOT NULL
             ORDER BY fts.score DESC
             LIMIT ?
             """
-                params = (query, app_name, user_id, limit_value)
+                params = (query, *scope_params, limit_value)
             else:
+                where_scope, scope_params = _build_duckdb_scope_where(app_name, user_id, scope_filter)
                 sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE app_name = ? AND user_id = ? AND content_text ILIKE ?
+            WHERE {where_scope} AND content_text ILIKE ?
             ORDER BY timestamp DESC
             LIMIT ?
             """
-                params = (app_name, user_id, f"%{query}%", limit_value)
+                params = (*scope_params, f"%{query}%", limit_value)
 
             rows = conn.execute(sql, params).fetchall()
             columns = [col[0] for col in conn.description or []]
-        records: list[MemoryRecord] = []
+        records: list[StoredMemory] = []
         for row in rows:
-            record = cast("MemoryRecord", dict(zip(columns, row, strict=False)))
+            record = cast("StoredMemory", dict(zip(columns, row, strict=False)))
             content_value = record["content_json"]
             if isinstance(content_value, (str, bytes)):
                 record["content_json"] = from_json(content_value)
             metadata_value = record.get("metadata_json")
             if isinstance(metadata_value, (str, bytes)):
                 record["metadata_json"] = from_json(metadata_value)
+            record["embedding"] = None
             records.append(record)
         return records
 
@@ -1191,19 +1187,25 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 self._refresh_fts_index(conn)
             return deleted_count
 
-    def _delete_entries_older_than(self, days: int) -> int:
+    def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Synchronous implementation of delete_entries_older_than."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < (CURRENT_TIMESTAMP - INTERVAL '{days} days')
-        RETURNING 1
-        """
+        clauses = [f"inserted_at < (CURRENT_TIMESTAMP - INTERVAL '{days} days')"]
+        params: list[Any] = []
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = ?")
+            params.append(scope)
+
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql} RETURNING 1"
         with self._config.provide_connection() as conn:
-            result = conn.execute(sql)
+            result = conn.execute(sql, tuple(params))
             deleted_count = len(result.fetchall())
             conn.commit()
             if self._use_fts and deleted_count > 0:
@@ -1246,3 +1248,17 @@ def _format_duckdb_fts_option(value: object) -> str:
         return f"'{escaped_value}'"
     msg = f"DuckDB ADK memory_fts_options values must be str, int, or bool; got {type(value).__name__}"
     raise TypeError(msg)
+
+
+def _build_duckdb_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"], *, prefix: str = ""
+) -> tuple[str, tuple[Any, ...]]:
+    pfx = f"{prefix}." if prefix else ""
+    if scope_filter == "all":
+        return f"{pfx}app_name = ? AND (({pfx}scope = 'user' AND {pfx}user_id = ?) OR {pfx}scope = 'app')", (
+            app_name,
+            user_id,
+        )
+    if scope_filter == "user":
+        return f"{pfx}app_name = ? AND {pfx}scope = 'user' AND {pfx}user_id = ?", (app_name, user_id)
+    return f"{pfx}app_name = ? AND {pfx}scope = 'app'", (app_name,)

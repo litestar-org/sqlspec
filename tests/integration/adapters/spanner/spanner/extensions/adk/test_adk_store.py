@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 pytestmark = [pytest.mark.spanner, pytest.mark.integration]
 
@@ -66,7 +66,7 @@ def test_create_and_list_events(spanner_adk_store: Any) -> None:
     spanner_adk_store.delete_session("app", "user", session_id)
     spanner_adk_store.create_session(session_id, "app", "user", {"x": 1})
 
-    event_one: EventRecord = {
+    event_one: StoredEvent = {
         "id": "event-1",
         "app_name": "app",
         "user_id": "user",
@@ -75,7 +75,7 @@ def test_create_and_list_events(spanner_adk_store: Any) -> None:
         "timestamp": datetime.now(timezone.utc),
         "event_data": {"id": "event-1", "author": "user", "content": {"msg": "hi"}},
     }
-    event_two: EventRecord = {
+    event_two: StoredEvent = {
         "id": "event-2",
         "app_name": "app",
         "user_id": "user",

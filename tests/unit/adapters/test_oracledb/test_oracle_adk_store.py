@@ -247,6 +247,7 @@ async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields(
         "session-1",
         "app",
         "user",
+        "user",
         "event-1",
         "assistant",
         timestamp,
@@ -264,6 +265,7 @@ async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields(
             "session_id": "session-1",
             "app_name": "app",
             "user_id": "user",
+            "scope": "user",
             "event_id": "event-1",
             "author": "assistant",
             "timestamp": timestamp,
@@ -271,6 +273,7 @@ async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields(
             "content_text": "hello",
             "metadata_json": {"source": "unit"},
             "inserted_at": timestamp,
+            "embedding": None,
         }
     ]
 
@@ -283,6 +286,7 @@ def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> No
         "memory-2",
         "session-2",
         "app",
+        "user",
         "user",
         "event-2",
         "user",
@@ -298,6 +302,8 @@ def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> No
     assert records[0]["content_json"] == {"text": "sync"}
     assert records[0]["metadata_json"] == {"source": "unit"}
     assert records[0]["content_text"] == "sync"
+    assert records[0]["scope"] == "user"
+    assert records[0]["embedding"] is None
 
 
 def _sync_store_with_driver() -> "tuple[Any, MagicMock, MagicMock]":

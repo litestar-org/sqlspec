@@ -23,7 +23,7 @@ from google.adk.events.event_actions import EventActions
 from google.adk.sessions.base_session_service import GetSessionConfig
 from google.adk.sessions.session import Session
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
+from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ class MockStore:
             self.app_state = dict(app_state)
         if user_state is not None:
             self.user_state = dict(user_state)
-        # Return the updated SessionRecord — caller no longer needs a follow-up get_session().
+        # Return the updated StoredSession — caller no longer needs a follow-up get_session().
         updated = dict(self._session_record)
         updated["state"] = state
         updated["update_time"] = datetime.now(timezone.utc)
@@ -164,7 +164,7 @@ class SyncStore:
         self.app_state: dict[str, Any] = {}
         self.user_state: dict[str, Any] = {}
         self.create_session_calls: list[dict[str, Any]] = []
-        self._session_record = SessionRecord(
+        self._session_record = StoredSession(
             id="s1",
             app_name="app",
             user_id="u1",
@@ -175,7 +175,7 @@ class SyncStore:
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         self.create_session_calls.append({
             "session_id": session_id,
             "app_name": app_name,
@@ -183,7 +183,7 @@ class SyncStore:
             "state": state,
             "owner_id": owner_id,
         })
-        self._session_record = SessionRecord(
+        self._session_record = StoredSession(
             id=session_id,
             app_name=app_name,
             user_id=user_id,
@@ -195,7 +195,7 @@ class SyncStore:
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: Any | None = None
-    ) -> SessionRecord | None:
+    ) -> StoredSession | None:
         if self._session_record["app_name"] != app_name or self._session_record["user_id"] != user_id:
             return None
         if self._session_record["id"] != session_id:
@@ -204,7 +204,7 @@ class SyncStore:
 
     def get_events(
         self, app_name: str, user_id: str, session_id: str, after_timestamp: Any = None, limit: Any = None
-    ) -> list[EventRecord]:
+    ) -> list[StoredEvent]:
         return []
 
     def get_app_state(self, app_name: str) -> dict[str, Any]:
@@ -221,19 +221,19 @@ class SyncStore:
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
         state: dict[str, Any],
         app_state: dict[str, Any] | None = None,
         user_state: dict[str, Any] | None = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         if app_state is not None:
             self.app_state = dict(app_state)
         if user_state is not None:
             self.user_state = dict(user_state)
-        self._session_record = SessionRecord(
+        self._session_record = StoredSession(
             id=self._session_record["id"],
             app_name=self._session_record["app_name"],
             user_id=self._session_record["user_id"],
@@ -243,7 +243,7 @@ class SyncStore:
         )
         return self._session_record
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]:
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> list[StoredSession]:
         return [self._session_record]
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -330,7 +330,7 @@ async def test_append_event_uses_returned_record_no_extra_get_session() -> None:
     """The post-append get_session round-trip must be eliminated.
 
     With the atomic-return contract, append_event_and_update_state returns the
-    updated SessionRecord; the service must use it directly instead of calling
+    updated StoredSession; the service must use it directly instead of calling
     get_session again. We expect exactly 1 get_session call (the stale-check
     BEFORE the append) per append_event.
     """

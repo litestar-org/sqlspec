@@ -5,12 +5,15 @@ They are separate from the Pydantic models to keep mypyc compilation working.
 """
 
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
-__all__ = ("MemoryRecord",)
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+__all__ = ("StoredMemory",)
 
 
-class MemoryRecord(TypedDict):
+class StoredMemory(TypedDict):
     """Database record for a memory entry.
 
     Represents the schema for memory entries stored in the database.
@@ -21,6 +24,7 @@ class MemoryRecord(TypedDict):
     session_id: str
     app_name: str
     user_id: str
+    scope: str
     event_id: str
     author: "str | None"
     timestamp: datetime
@@ -28,3 +32,4 @@ class MemoryRecord(TypedDict):
     content_text: str
     metadata_json: "dict[str, Any] | None"
     inserted_at: datetime
+    embedding: "Sequence[float] | None"

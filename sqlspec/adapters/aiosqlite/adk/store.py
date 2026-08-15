@@ -11,13 +11,13 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.aiosqlite.config import _render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 __all__ = ("AiosqliteADKConfig", "AiosqliteADKMemoryStore", "AiosqliteADKStore")
 
@@ -91,7 +91,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session.
 
         Args:
@@ -128,13 +128,13 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(sql, params)
             await conn.commit()
 
-        return SessionRecord(
+        return StoredSession(
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID.
 
         Args:
@@ -170,7 +170,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 if row is None:
                     return None
 
-                return SessionRecord(
+                return StoredSession(
                     id=row[0],
                     app_name=row[1],
                     user_id=row[2],
@@ -206,7 +206,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             await conn.commit()
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -240,7 +240,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 rows = await cursor.fetchall()
 
                 return [
-                    SessionRecord(
+                    StoredSession(
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
@@ -270,7 +270,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(sql, (app_name, user_id, session_id))
             await conn.commit()
 
-    async def append_event(self, event_record: EventRecord) -> None:
+    async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
 
         Args:
@@ -303,7 +303,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     async def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -311,12 +311,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update the session's durable state.
 
         Inserts the event and updates the session state + update_time in a
         single transaction. Both operations succeed or fail together. Returns
-        the updated SessionRecord via SQLite RETURNING (3.35+).
+        the updated StoredSession via SQLite RETURNING (3.35+).
 
         Args:
             event_record: Event record to store.
@@ -397,7 +397,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
-        return SessionRecord(
+        return StoredSession(
             id=row[0],
             app_name=row[1],
             user_id=row[2],
@@ -413,7 +413,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session.
 
         Args:
@@ -453,7 +453,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 rows = await cursor.fetchall()
 
                 return [
-                    EventRecord(
+                    StoredEvent(
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
@@ -751,7 +751,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             await driver.execute_script(await self._memory_table_ddl())
             await driver.commit()
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id unique constraint.
@@ -767,19 +767,21 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             for entry in entries:
                 params: tuple[Any, ...]
+                scope = entry.get("scope", "user")
                 if self._owner_id_column_name:
                     sql = f"""
                     INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, event_id, author,
+                    (id, session_id, app_name, user_id, scope, event_id, author,
                      {self._owner_id_column_name}, timestamp, content_json,
                      content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                     params = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        scope,
                         entry["event_id"],
                         entry["author"],
                         owner_id,
@@ -792,15 +794,16 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 else:
                     sql = f"""
                     INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, event_id, author,
+                    (id, session_id, app_name, user_id, scope, event_id, author,
                      timestamp, content_json, content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                     params = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        scope,
                         entry["event_id"],
                         entry["author"],
                         _datetime_to_julian(entry["timestamp"]),
@@ -816,8 +819,13 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         return inserted_count
 
     async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -828,36 +836,39 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         limit_value = limit or self._max_results
         if self._use_fts:
+            where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)
             sql = f"""
             SELECT m.* FROM {self._memory_table} AS m
             JOIN {self._memory_table}_fts AS fts ON m.rowid = fts.rowid
-            WHERE m.app_name = ? AND m.user_id = ? AND fts.content_text MATCH ?
+            WHERE {where_scope} AND fts.content_text MATCH ?
             ORDER BY m.timestamp DESC
             LIMIT ?
             """
-            params = (app_name, user_id, query, limit_value)
+            params = (*scope_params, query, limit_value)
         else:
+            where_scope, scope_params = _build_sqlite_scope_clause("", app_name, user_id, scope_filter)
             sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE app_name = ? AND user_id = ? AND content_text LIKE ?
+            WHERE {where_scope} AND content_text LIKE ?
             ORDER BY timestamp DESC
             LIMIT ?
             """
-            params = (app_name, user_id, f"%{query}%", limit_value)
+            params = (*scope_params, f"%{query}%", limit_value)
 
         async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
             columns = [col[0] for col in cursor.description or []]
             await cursor.close()
-        records: list[MemoryRecord] = []
+        records: list[StoredMemory] = []
         for row in rows:
             raw = dict(zip(columns, row, strict=False))
             raw["timestamp"] = _julian_to_datetime(raw["timestamp"])
             raw["inserted_at"] = _julian_to_datetime(raw["inserted_at"])
             raw["content_json"] = from_json(raw["content_json"])
             raw["metadata_json"] = from_json(raw["metadata_json"]) if raw["metadata_json"] else None
-            records.append(cast("MemoryRecord", raw))
+            raw["embedding"] = None
+            records.append(cast("StoredMemory", raw))
         return records
 
     async def delete_entries_by_session(self, session_id: str) -> int:
@@ -872,7 +883,9 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             await conn.commit()
             return cursor.rowcount
 
-    async def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
         """Delete memory entries older than specified days."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -880,8 +893,16 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         cutoff = _datetime_to_julian(datetime.now(timezone.utc)) - days
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
+        params: list[Any] = [cutoff]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
+        if scope is not None:
+            sql += " AND scope = ?"
+            params.append(scope)
+
         async with self._config.provide_connection() as conn:
-            cursor = await conn.execute(sql, (cutoff,))
+            cursor = await conn.execute(sql, tuple(params))
             await conn.commit()
             return cursor.rowcount
 
@@ -927,6 +948,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             session_id TEXT NOT NULL,
             app_name TEXT NOT NULL,
             user_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'user',
             event_id TEXT NOT NULL UNIQUE,
             author TEXT{owner_id_line},
             timestamp REAL NOT NULL,
@@ -936,8 +958,11 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             inserted_at REAL NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
+            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
+            ON {self._memory_table}(app_name, scope);
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
             ON {self._memory_table}(session_id);
@@ -1039,3 +1064,16 @@ def _julian_to_datetime(julian: float) -> datetime:
     days_since_epoch = julian - JULIAN_EPOCH
     timestamp = days_since_epoch * SECONDS_PER_DAY
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+def _build_sqlite_scope_clause(
+    prefix: str, app_name: str, user_id: str, scope_filter: "Literal['all', 'user', 'app']"
+) -> "tuple[str, tuple[Any, ...]]":
+    if scope_filter == "all":
+        return (
+            f"{prefix}app_name = ? AND (({prefix}scope = 'user' AND {prefix}user_id = ?) OR {prefix}scope = 'app')",
+            (app_name, user_id),
+        )
+    if scope_filter == "user":
+        return f"{prefix}app_name = ? AND {prefix}scope = 'user' AND {prefix}user_id = ?", (app_name, user_id)
+    return f"{prefix}app_name = ? AND {prefix}scope = 'app'", (app_name,)

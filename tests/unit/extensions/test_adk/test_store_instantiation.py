@@ -118,14 +118,14 @@ def test_store_method_signatures_match_base_contract(class_path: str) -> None:
     """Every shipped concrete store keeps the base store method signatures."""
     cls = _load_class(class_path)
 
-    if issubclass(cls, BaseAsyncADKStore):
-        base: type = BaseAsyncADKStore
-    elif issubclass(cls, BaseSyncADKStore):
-        base = BaseSyncADKStore
-    elif issubclass(cls, BaseAsyncADKMemoryStore):
-        base = BaseAsyncADKMemoryStore
-    else:
+    if issubclass(cls, BaseAsyncADKMemoryStore):
+        base: type = BaseAsyncADKMemoryStore
+    elif issubclass(cls, BaseSyncADKMemoryStore):
         base = BaseSyncADKMemoryStore
+    elif issubclass(cls, BaseAsyncADKStore):
+        base = BaseAsyncADKStore
+    else:
+        base = BaseSyncADKStore
 
     for method_name in base.__abstractmethods__:
         base_signature = inspect.signature(getattr(base, method_name))

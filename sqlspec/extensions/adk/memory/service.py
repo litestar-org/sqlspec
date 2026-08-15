@@ -1,7 +1,7 @@
 """SQLSpec-backed memory service for Google ADK."""
 
 import inspect
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
 
@@ -54,7 +54,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         """Return the database store."""
         return self._store
 
-    async def add_session_to_memory(self, session: "Session") -> None:
+    async def add_session_to_memory(self, session: "Session", scope: str = "user") -> None:
         """Add a completed session to the memory store.
 
         Extracts all events with content from the session and stores them
@@ -66,8 +66,9 @@ class SQLSpecMemoryService(BaseMemoryService):
 
         Args:
             session: Completed ADK Session with events.
+            scope: Visibility scope ('user' or 'app').
         """
-        records = session_to_memory_records(session)
+        records = session_to_memory_records(session, scope=scope)
 
         if not records:
             logger.debug(
@@ -88,10 +89,11 @@ class SQLSpecMemoryService(BaseMemoryService):
         events: "Sequence[Event]",
         session_id: "str | None" = None,
         custom_metadata: "Mapping[str, object] | None" = None,
+        scope: str = "user",
     ) -> None:
         """Add an explicit list of events to the memory service.
 
-        Same Event-to-MemoryRecord extraction logic as
+        Same Event-to-StoredMemory extraction logic as
         ``add_session_to_memory``, but operates on a sequence of Events
         directly (no Session wrapper needed).
 
@@ -102,7 +104,8 @@ class SQLSpecMemoryService(BaseMemoryService):
             session_id: Optional session ID for memory scope/partitioning.
                 If None, memory entries are user-scoped only.
             custom_metadata: Optional portable metadata stored in
-                ``MemoryRecord.metadata_json``.
+                ``StoredMemory.metadata_json``.
+            scope: Visibility scope ('user' or 'app').
         """
         from sqlspec.extensions.adk.memory.converters import event_to_memory_record
 
@@ -110,7 +113,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         records = []
         for event in events:
             record = event_to_memory_record(
-                event=event, session_id=session_id or "", app_name=app_name, user_id=user_id
+                event=event, session_id=session_id or "", app_name=app_name, user_id=user_id, scope=scope
             )
             if record is not None:
                 if metadata_dict:
@@ -135,6 +138,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         user_id: str,
         memories: "Sequence[MemoryEntry]",
         custom_metadata: "Mapping[str, object] | None" = None,
+        scope: str = "user",
     ) -> None:
         """Add explicit memory items directly to the memory service.
 
@@ -149,12 +153,13 @@ class SQLSpecMemoryService(BaseMemoryService):
             memories: Explicit memory items to add.
             custom_metadata: Optional portable metadata for memory writes.
                 Merged with each entry's ``custom_metadata``.
+            scope: Visibility scope ('user' or 'app').
         """
         call_metadata = dict(custom_metadata) if custom_metadata else {}
         records = []
         for entry in memories:
             record = memory_entry_to_record(
-                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata
+                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata, scope=scope
             )
             if record is not None:
                 records.append(record)
@@ -172,7 +177,9 @@ class SQLSpecMemoryService(BaseMemoryService):
             user_id,
         )
 
-    async def search_memory(self, *, app_name: str, user_id: str, query: str) -> "SearchMemoryResponse":
+    async def search_memory(
+        self, *, app_name: str, user_id: str, query: str, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "SearchMemoryResponse":
         """Search memory entries by text query.
 
         Uses the store's configured search strategy (simple ILIKE or FTS).
@@ -181,11 +188,14 @@ class SQLSpecMemoryService(BaseMemoryService):
             app_name: Name of the application.
             user_id: ID of the user.
             query: Text query to search for.
+            scope_filter: Scope filter ('all', 'user', 'app'). Defaults to 'all'.
 
         Returns:
             SearchMemoryResponse with memories: List[MemoryEntry].
         """
-        records = await self._call_store("search_entries", query=query, app_name=app_name, user_id=user_id)
+        records = await self._call_store(
+            "search_entries", query=query, app_name=app_name, user_id=user_id, scope_filter=scope_filter
+        )
 
         memories = records_to_memory_entries(records)
 
@@ -230,7 +240,7 @@ class SQLSpecSyncMemoryService:
         """Return the database store."""
         return self._store
 
-    def add_session_to_memory(self, session: "Session") -> None:
+    def add_session_to_memory(self, session: "Session", scope: str = "user") -> None:
         """Add a completed session to the memory store.
 
         Extracts all events with content from the session and stores them
@@ -238,8 +248,9 @@ class SQLSpecSyncMemoryService:
 
         Args:
             session: Completed ADK Session with events.
+            scope: Visibility scope ('user' or 'app').
         """
-        records = session_to_memory_records(session)
+        records = session_to_memory_records(session, scope=scope)
 
         if not records:
             logger.debug(
@@ -252,18 +263,21 @@ class SQLSpecSyncMemoryService:
             "Stored %d memory entries for session %s (total events: %d)", inserted_count, session.id, len(records)
         )
 
-    def search_memory(self, *, app_name: str, user_id: str, query: str) -> list["MemoryEntry"]:
+    def search_memory(
+        self, *, app_name: str, user_id: str, query: str, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> list["MemoryEntry"]:
         """Search memory entries by text query.
 
         Args:
             app_name: Name of the application.
             user_id: ID of the user.
             query: Text query to search for.
+            scope_filter: Scope filter ('all', 'user', 'app'). Defaults to 'all'.
 
         Returns:
             List of MemoryEntry objects.
         """
-        records = self._store.search_entries(query=query, app_name=app_name, user_id=user_id)
+        records = self._store.search_entries(query=query, app_name=app_name, user_id=user_id, scope_filter=scope_filter)
 
         memories = records_to_memory_entries(records)
 

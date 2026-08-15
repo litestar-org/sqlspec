@@ -633,7 +633,7 @@ v0.51.0 - ADK 2.0 clean-break store contract
   ``get_metadata``, and ``set_metadata``.
 * ``append_event_and_update_state()`` accepts optional ``app_state`` and
   ``user_state`` deltas and applies them atomically with the session and event
-  write, returning the updated ``SessionRecord``.
+  write, returning the updated ``StoredSession``.
 
 **Fixed:**
 
@@ -750,7 +750,7 @@ v0.47.0 - Persistent listeners, schema builders, and performance polish
   Pydantic, dataclasses, and attrs. Pass ``wire_format=True`` to keep
   wire-aligned names.
 * Third-party ADK stores implementing ``append_event_and_update_state()`` must
-  return the updated ``SessionRecord``.
+  return the updated ``StoredSession``.
 * Data dictionary metadata/version helpers now live under
   ``sqlspec.data_dictionary``. ``ColumnMetadata``, ``ForeignKeyMetadata``,
   ``IndexMetadata``, ``TableMetadata``, ``VersionInfo``, and

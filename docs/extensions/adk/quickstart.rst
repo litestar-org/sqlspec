@@ -117,5 +117,5 @@ Next Steps
 ==========
 
 - :doc:`backends` for the full support matrix and backend-specific details.
-- :doc:`schema` for table layouts, EventRecord format, and scoped state semantics.
+- :doc:`schema` for table layouts, StoredEvent format, and scoped state semantics.
 - :doc:`api` for the complete API reference.

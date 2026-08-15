@@ -2,12 +2,12 @@
 
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.protocols import HasErrnoProtocol
 from sqlspec.utils.serializers import from_json, to_json
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 
 __all__ = (
@@ -41,6 +41,7 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "            session_id VARCHAR(128) NOT NULL,\n"
     "            app_name VARCHAR(128) NOT NULL,\n"
     "            user_id VARCHAR(128) NOT NULL,\n"
+    "            scope VARCHAR(16) NOT NULL DEFAULT 'user',\n"
     "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
     "            author VARCHAR(256){1},\n"
     "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
@@ -48,9 +49,10 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "            content_text TEXT NOT NULL,\n"
     "            metadata_json JSON,\n"
     "            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
-    "            INDEX idx_{2}_app_user_time (app_name, user_id, timestamp),\n"
-    "            INDEX idx_{3}_session (session_id){4}{5}\n"
-    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{6}\n"
+    "            INDEX idx_{2}_app_scope_user_time (app_name, scope, user_id, timestamp),\n"
+    "            INDEX idx_{3}_scope (app_name, scope),\n"
+    "            INDEX idx_{4}_session (session_id){5}{6}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{7}\n"
     "        "
 )
 
@@ -176,7 +178,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
@@ -207,7 +209,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         import mysql.connector
 
         try:
@@ -257,7 +259,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 await cursor.close()
             await conn.commit()
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         import mysql.connector
 
         if user_id is None:
@@ -301,7 +303,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 await cursor.close()
             await conn.commit()
 
-    async def append_event(self, event_record: EventRecord) -> None:
+    async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -317,7 +319,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -325,7 +327,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -384,7 +386,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         import mysql.connector
 
         if limit == 0:
@@ -527,7 +529,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session."""
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -559,7 +561,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID."""
         import mysql.connector
 
@@ -610,7 +612,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app."""
         import mysql.connector
 
@@ -656,7 +658,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         sql = f"""
         INSERT INTO {self._events_table} (
@@ -673,7 +675,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -681,7 +683,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
@@ -741,7 +743,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session."""
         import mysql.connector
 
@@ -887,7 +889,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._memory_table_ddl())
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -899,17 +901,17 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         if self._owner_id_column_name:
             sql = f"""
             INSERT IGNORE INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
         else:
             sql = f"""
             INSERT IGNORE INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
         async with self._config.provide_connection() as conn:
@@ -923,6 +925,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                             entry["session_id"],
                             entry["app_name"],
                             entry["user_id"],
+                            entry.get("scope", "user"),
                             entry["event_id"],
                             entry["author"],
                             owner_id,
@@ -938,6 +941,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                             entry["session_id"],
                             entry["app_name"],
                             entry["user_id"],
+                            entry.get("scope", "user"),
                             entry["event_id"],
                             entry["author"],
                             entry["timestamp"],
@@ -954,8 +958,13 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         return inserted_count
 
     async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -964,23 +973,24 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             return []
 
         limit_value = limit or self._max_results
+        where_scope, scope_params = _build_mysql_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
             sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE app_name = %s AND user_id = %s
+            WHERE {where_scope}
               AND MATCH(content_text) AGAINST (%s IN NATURAL LANGUAGE MODE)
             ORDER BY timestamp DESC
             LIMIT %s
             """
-            params = (app_name, user_id, query, limit_value)
+            params = (*scope_params, query, limit_value)
         else:
             sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE app_name = %s AND user_id = %s AND content_text LIKE %s
+            WHERE {where_scope} AND content_text LIKE %s
             ORDER BY timestamp DESC
             LIMIT %s
             """
-            params = (app_name, user_id, f"%{query}%", limit_value)
+            params = (*scope_params, f"%{query}%", limit_value)
 
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
@@ -991,7 +1001,12 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             finally:
                 await cursor.close()
 
-        return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
+        records: list[StoredMemory] = []
+        for row in rows:
+            rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
+            rec["embedding"] = None
+            records.append(rec)
+        return records
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         if not self._enabled:
@@ -1008,19 +1023,28 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             finally:
                 await cursor.close()
 
-    async def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < (UTC_TIMESTAMP(6) - INTERVAL %s DAY)
-        """
+        clauses = ["inserted_at < (UTC_TIMESTAMP(6) - INTERVAL %s DAY)"]
+        params: list[Any] = [days]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = %s")
+            params.append(scope)
+
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
-                await cursor.execute(sql, (days,))
+                await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
@@ -1044,6 +1068,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
             self._memory_table,
             owner_id_line,
+            self._memory_table,
             self._memory_table,
             self._memory_table,
             fts_index,
@@ -1075,7 +1100,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1088,17 +1113,17 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         if self._owner_id_column_name:
             sql = f"""
             INSERT IGNORE INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
         else:
             sql = f"""
             INSERT IGNORE INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
         with self._config.provide_connection() as conn:
@@ -1112,6 +1137,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                             entry["session_id"],
                             entry["app_name"],
                             entry["user_id"],
+                            entry.get("scope", "user"),
                             entry["event_id"],
                             entry["author"],
                             owner_id,
@@ -1127,6 +1153,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                             entry["session_id"],
                             entry["app_name"],
                             entry["user_id"],
+                            entry.get("scope", "user"),
                             entry["event_id"],
                             entry["author"],
                             entry["timestamp"],
@@ -1143,8 +1170,13 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         return inserted_count
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1154,23 +1186,24 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             return []
 
         limit_value = limit or self._max_results
+        where_scope, scope_params = _build_mysql_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
             sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE app_name = %s AND user_id = %s
+            WHERE {where_scope}
               AND MATCH(content_text) AGAINST (%s IN NATURAL LANGUAGE MODE)
             ORDER BY timestamp DESC
             LIMIT %s
             """
-            params = (app_name, user_id, query, limit_value)
+            params = (*scope_params, query, limit_value)
         else:
             sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE app_name = %s AND user_id = %s AND content_text LIKE %s
+            WHERE {where_scope} AND content_text LIKE %s
             ORDER BY timestamp DESC
             LIMIT %s
             """
-            params = (app_name, user_id, f"%{query}%", limit_value)
+            params = (*scope_params, f"%{query}%", limit_value)
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -1181,7 +1214,12 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             finally:
                 cursor.close()
 
-        return [cast("MemoryRecord", dict(zip(columns, row, strict=False))) for row in rows]
+        records: list[StoredMemory] = []
+        for row in rows:
+            rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
+            rec["embedding"] = None
+            records.append(rec)
+        return records
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1199,20 +1237,27 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             finally:
                 cursor.close()
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < (UTC_TIMESTAMP(6) - INTERVAL %s DAY)
-        """
+        clauses = ["inserted_at < (UTC_TIMESTAMP(6) - INTERVAL %s DAY)"]
+        params: list[Any] = [days]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = %s")
+            params.append(scope)
+
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (days,))
+                cursor.execute(sql, tuple(params))
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
@@ -1236,6 +1281,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
             self._memory_table,
             owner_id_line,
+            self._memory_table,
             self._memory_table,
             self._memory_table,
             fts_index,
@@ -1301,14 +1347,14 @@ def _json_dict(value: Any) -> "dict[str, Any]":
     return cast("dict[str, Any]", value)
 
 
-def _session_record_from_row(row: Any) -> SessionRecord:
-    return SessionRecord(
+def _session_record_from_row(row: Any) -> StoredSession:
+    return StoredSession(
         id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
     )
 
 
-def _event_record_from_row(row: Any) -> EventRecord:
-    return EventRecord(
+def _event_record_from_row(row: Any) -> StoredEvent:
+    return StoredEvent(
         id=row[0],
         app_name=row[1],
         user_id=row[2],
@@ -1319,7 +1365,7 @@ def _event_record_from_row(row: Any) -> EventRecord:
     )
 
 
-def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -1518,3 +1564,13 @@ def _mysql_upsert_metadata_sql(metadata_table: str) -> str:
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE value = VALUES(value)
         """
+
+
+def _build_mysql_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> tuple[str, tuple[Any, ...]]:
+    if scope_filter == "all":
+        return "app_name = %s AND ((scope = 'user' AND user_id = %s) OR scope = 'app')", (app_name, user_id)
+    if scope_filter == "user":
+        return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
+    return "app_name = %s AND scope = 'app'", (app_name,)

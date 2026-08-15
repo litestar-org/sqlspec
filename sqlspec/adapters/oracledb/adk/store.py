@@ -1,7 +1,7 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 import oracledb
 from typing_extensions import NotRequired, TypedDict
@@ -20,7 +20,7 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     storage_type_from_version,
 )
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 __all__ = (
     "JSONStorageType",
@@ -172,6 +172,7 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                session_id VARCHAR2(128) NOT NULL,\n"
     "                app_name VARCHAR2(128) NOT NULL,\n"
     "                user_id VARCHAR2(128) NOT NULL,\n"
+    "                scope VARCHAR2(16) DEFAULT ''user'' NOT NULL,\n"
     "                event_id VARCHAR2(128) NOT NULL UNIQUE,\n"
     "                author VARCHAR2(256){1},\n"
     "                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,\n"
@@ -182,15 +183,20 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "        END;\n"
     "\n"
     "        BEGIN\n"
-    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user_time\n"
-    "                ON {5}(app_name, user_id, timestamp DESC)';\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_scope_user_time\n"
+    "                ON {5}(app_name, scope, user_id, timestamp DESC)';\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
-    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_session\n"
-    "                ON {7}(session_id)';\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_scope\n"
+    "                ON {7}(app_name, scope)';\n"
     "        END;\n"
-    "        {8}\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{8}_session\n"
+    "                ON {9}(session_id)';\n"
+    "        END;\n"
+    "        {10}\n"
     "        "
 )
 
@@ -362,7 +368,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session.
 
         Args:
@@ -410,7 +416,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID.
 
         Args:
@@ -454,7 +460,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
                 state = await self._deserialize_state(state_data)
 
-                return SessionRecord(
+                return StoredSession(
                     id=session_id_val,
                     app_name=app_name,
                     user_id=user_id,
@@ -495,7 +501,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             await conn.commit()
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -538,7 +544,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     state = await self._deserialize_state(row[3])
 
                     results.append(
-                        SessionRecord(
+                        StoredSession(
                             id=row[0],
                             app_name=row[1],
                             user_id=row[2],
@@ -572,7 +578,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             await conn.commit()
 
-    async def append_event(self, event_record: EventRecord) -> None:
+    async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
 
         Args:
@@ -602,7 +608,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     async def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -610,7 +616,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update session + scoped state.
 
         All writes are executed within a single transaction so they succeed or
@@ -694,7 +700,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 raise
 
         session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
-        return SessionRecord(
+        return StoredSession(
             id=session_id_val,
             app_name=row_app_name,
             user_id=row_user_id,
@@ -710,7 +716,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session.
 
         Args:
@@ -754,7 +760,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 rows = await cursor.fetchall()
 
                 return [
-                    EventRecord(
+                    StoredEvent(
                         id=row[0],
                         session_id=row[1],
                         invocation_id=_oracle_text_value(row[2]),
@@ -1331,7 +1337,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session."""
         """Create a new session.
 
@@ -1384,7 +1390,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID."""
         """Get session by ID.
 
@@ -1428,7 +1434,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
                 state = self._deserialize_state(state_data)
 
-                return SessionRecord(
+                return StoredSession(
                     id=session_id_val,
                     app_name=app_name,
                     user_id=user_id,
@@ -1470,7 +1476,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app."""
         """List sessions for an app, optionally filtered by user.
 
@@ -1514,7 +1520,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     state = self._deserialize_state(row[3])
 
                     results.append(
-                        SessionRecord(
+                        StoredSession(
                             id=row[0],
                             app_name=row[1],
                             user_id=row[2],
@@ -1549,7 +1555,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         """Synchronous implementation of append_event."""
         sql = f"""
@@ -1576,7 +1582,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -1584,7 +1590,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
         """Atomically create an event and update session + scoped state."""
         insert_sql = f"""
@@ -1663,7 +1669,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 raise
 
         session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
-        return SessionRecord(
+        return StoredSession(
             id=session_id_val,
             app_name=row_app_name,
             user_id=row_user_id,
@@ -1679,7 +1685,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session."""
         """List events for a session ordered by timestamp.
 
@@ -1721,7 +1727,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 rows = cursor.fetchall()
 
                 return [
-                    EventRecord(
+                    StoredEvent(
                         id=row[0],
                         session_id=row[1],
                         invocation_id=_oracle_text_value(row[2]),
@@ -2246,7 +2252,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
         await _resolve_oracle_storage_capabilities_async(driver)
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -2258,10 +2264,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         owner_param = ", :owner_id" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {self._memory_table} (
-            id, session_id, app_name, user_id, event_id, author{owner_column},
+            id, session_id, app_name, user_id, scope, event_id, author{owner_column},
             timestamp, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
-            :id, :session_id, :app_name, :user_id, :event_id, :author{owner_param},
+            :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
             :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
@@ -2277,6 +2283,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                     "session_id": entry["session_id"],
                     "app_name": entry["app_name"],
                     "user_id": entry["user_id"],
+                    "scope": entry.get("scope", "user"),
                     "event_id": entry["event_id"],
                     "author": entry["author"],
                     "timestamp": entry["timestamp"],
@@ -2294,8 +2301,13 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return inserted_count
 
     async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -2304,8 +2316,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
         try:
             if self._use_fts:
-                return await self._search_entries_fts(query, app_name, user_id, effective_limit)
-            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
+                return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -2320,14 +2332,23 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             await conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    async def delete_entries_older_than(self, days: int) -> int:
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
-        """
+    async def delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
+        clauses = ["inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')"]
+        params: dict[str, Any] = {"days": days}
+        if app_name is not None:
+            clauses.append("app_name = :app_name")
+            params["app_name"] = app_name
+        if scope is not None:
+            clauses.append("scope = :scope")
+            params["scope"] = scope
+
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            await cursor.execute(sql, {"days": days})
+            await cursor.execute(sql, params)
             await conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
@@ -2412,6 +2433,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             self._memory_table,
             self._memory_table,
             self._memory_table,
+            self._memory_table,
+            self._memory_table,
             fts_index,
         )
 
@@ -2460,58 +2483,62 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             raise
         return True
 
-    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    async def _search_entries_fts(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM (
-            SELECT id, session_id, app_name, user_id, event_id, author,
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
                    timestamp, content_json, content_text, metadata_json, inserted_at,
                    SCORE(1) AS score
             FROM {self._memory_table}
-            WHERE app_name = :app_name
-              AND user_id = :user_id
+            WHERE {where_scope}
               AND CONTAINS(content_text, :query, 1) > 0
             ORDER BY score DESC, timestamp DESC
         )
         WHERE ROWNUM <= :limit
         """
-        params = {"app_name": app_name, "user_id": user_id, "query": query, "limit": limit}
+        params = {**scope_params, "query": query, "limit": limit}
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             await cursor.execute(sql, params)
             rows = await cursor.fetchall()
         return await self._rows_to_records(rows)
 
-    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    async def _search_entries_simple(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM (
-            SELECT id, session_id, app_name, user_id, event_id, author,
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
                    timestamp, content_json, content_text, metadata_json, inserted_at
             FROM {self._memory_table}
-            WHERE app_name = :app_name
-              AND user_id = :user_id
+            WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
             ORDER BY timestamp DESC
         )
         WHERE ROWNUM <= :limit
         """
         pattern = f"%{query.lower()}%"
-        params = {"app_name": app_name, "user_id": user_id, "pattern": pattern, "limit": limit}
+        params = {**scope_params, "pattern": pattern, "limit": limit}
         async with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             await cursor.execute(sql, params)
             rows = await cursor.fetchall()
         return await self._rows_to_records(rows)
 
-    async def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
-        records: list[MemoryRecord] = []
+    async def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
+        records: list[StoredMemory] = []
         for row in rows:
-            content_json = await self._deserialize_json_field(row[7]) if row[7] is not None else {}
-            metadata_json = await self._deserialize_json_field(row[9])
-            content_text = row[8]
+            content_json = await self._deserialize_json_field(row[8]) if row[8] is not None else {}
+            metadata_json = await self._deserialize_json_field(row[10])
+            content_text = row[9]
             if is_async_readable(content_text) or is_readable(content_text):
                 content_text = await _read_lob_async(content_text)
             records.append({
@@ -2519,13 +2546,15 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "session_id": row[1],
                 "app_name": row[2],
                 "user_id": row[3],
-                "event_id": row[4],
-                "author": row[5],
-                "timestamp": row[6],
+                "scope": row[4],
+                "event_id": row[5],
+                "author": row[6],
+                "timestamp": row[7],
                 "content_json": cast("dict[str, Any]", content_json),
                 "content_text": str(content_text),
                 "metadata_json": metadata_json,
-                "inserted_at": row[10],
+                "inserted_at": row[11],
+                "embedding": None,
             })
         return records
 
@@ -2559,7 +2588,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
         _resolve_oracle_storage_capabilities_sync(driver)
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2572,10 +2601,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         owner_param = ", :owner_id" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {self._memory_table} (
-            id, session_id, app_name, user_id, event_id, author{owner_column},
+            id, session_id, app_name, user_id, scope, event_id, author{owner_column},
             timestamp, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
-            :id, :session_id, :app_name, :user_id, :event_id, :author{owner_param},
+            :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
             :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
@@ -2591,6 +2620,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                     "session_id": entry["session_id"],
                     "app_name": entry["app_name"],
                     "user_id": entry["user_id"],
+                    "scope": entry.get("scope", "user"),
                     "event_id": entry["event_id"],
                     "author": entry["author"],
                     "timestamp": entry["timestamp"],
@@ -2608,8 +2638,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         return inserted_count
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2619,8 +2654,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         try:
             if self._use_fts:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit)
-            return self._search_entries_simple(query, app_name, user_id, effective_limit)
+                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -2636,15 +2671,22 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
-        sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')
-        """
+        clauses = ["inserted_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')"]
+        params: dict[str, Any] = {"days": days}
+        if app_name is not None:
+            clauses.append("app_name = :app_name")
+            params["app_name"] = app_name
+        if scope is not None:
+            clauses.append("scope = :scope")
+            params["scope"] = scope
+
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(sql, {"days": days})
+            cursor.execute(sql, params)
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
@@ -2729,6 +2771,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             self._memory_table,
             self._memory_table,
             self._memory_table,
+            self._memory_table,
+            self._memory_table,
             fts_index,
         )
 
@@ -2777,58 +2821,62 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             raise
         return True
 
-    def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    def _search_entries_fts(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM (
-            SELECT id, session_id, app_name, user_id, event_id, author,
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
                    timestamp, content_json, content_text, metadata_json, inserted_at,
                    SCORE(1) AS score
             FROM {self._memory_table}
-            WHERE app_name = :app_name
-              AND user_id = :user_id
+            WHERE {where_scope}
               AND CONTAINS(content_text, :query, 1) > 0
             ORDER BY score DESC, timestamp DESC
         )
         WHERE ROWNUM <= :limit
         """
-        params = {"app_name": app_name, "user_id": user_id, "query": query, "limit": limit}
+        params = {**scope_params, "query": query, "limit": limit}
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(sql, params)
             rows = cursor.fetchall()
         return self._rows_to_records(rows)
 
-    def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    def _search_entries_simple(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM (
-            SELECT id, session_id, app_name, user_id, event_id, author,
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
                    timestamp, content_json, content_text, metadata_json, inserted_at
             FROM {self._memory_table}
-            WHERE app_name = :app_name
-              AND user_id = :user_id
+            WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
             ORDER BY timestamp DESC
         )
         WHERE ROWNUM <= :limit
         """
         pattern = f"%{query.lower()}%"
-        params = {"app_name": app_name, "user_id": user_id, "pattern": pattern, "limit": limit}
+        params = {**scope_params, "pattern": pattern, "limit": limit}
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(sql, params)
             rows = cursor.fetchall()
         return self._rows_to_records(rows)
 
-    def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
-        records: list[MemoryRecord] = []
+    def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
+        records: list[StoredMemory] = []
         for row in rows:
-            content_json = self._deserialize_json_field(row[7]) if row[7] is not None else {}
-            metadata_json = self._deserialize_json_field(row[9])
-            content_text = row[8]
+            content_json = self._deserialize_json_field(row[8]) if row[8] is not None else {}
+            metadata_json = self._deserialize_json_field(row[10])
+            content_text = row[9]
             if is_readable(content_text):
                 content_text = _read_lob_sync(content_text)
             records.append({
@@ -2836,13 +2884,15 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "session_id": row[1],
                 "app_name": row[2],
                 "user_id": row[3],
-                "event_id": row[4],
-                "author": row[5],
-                "timestamp": row[6],
+                "scope": row[4],
+                "event_id": row[5],
+                "author": row[6],
+                "timestamp": row[7],
                 "content_json": cast("dict[str, Any]", content_json),
                 "content_text": str(content_text),
                 "metadata_json": metadata_json,
-                "inserted_at": row[10],
+                "inserted_at": row[11],
+                "embedding": None,
             })
         return records
 
@@ -2979,3 +3029,19 @@ def _read_lob_sync(data: Any) -> Any:
     if is_readable(data):
         return data.read()
     return data
+
+
+def _build_oracle_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> tuple[str, dict[str, Any]]:
+    if scope_filter == "all":
+        return "app_name = :app_name AND ((scope = 'user' AND user_id = :user_id) OR scope = 'app')", {
+            "app_name": app_name,
+            "user_id": user_id,
+        }
+    if scope_filter == "user":
+        return "app_name = :app_name AND scope = 'user' AND user_id = :user_id", {
+            "app_name": app_name,
+            "user_id": user_id,
+        }
+    return "app_name = :app_name AND scope = 'app'", {"app_name": app_name}

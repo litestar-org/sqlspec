@@ -2,19 +2,21 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
-from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, reset_drop_sql
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
+from sqlspec.extensions.adk._table_utils import owner_id_column_name, unique_statements
+from sqlspec.extensions.adk.store import _reconcile_adk_schema_sync
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk.memory._types import StoredMemory
 
 __all__ = ("BaseAsyncADKMemoryStore", "BaseSyncADKMemoryStore")
 
@@ -58,7 +60,9 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self._owner_id_column_name: str | None = (
             owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        ensure_table_name(self._memory_table)
+
+    def _store_config_from_extension(self) -> _ADKMemoryStoreConfig:
+        return _adk_memory_store_config(self._config)
 
     @property
     def config(self) -> ConfigT:
@@ -66,14 +70,14 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         return self._config
 
     @property
-    def memory_table(self) -> str:
-        """Return the memory table name."""
-        return self._memory_table
+    def is_enabled(self) -> bool:
+        """Return whether memory storage is enabled."""
+        return self._enabled
 
     @property
-    def enabled(self) -> bool:
-        """Return whether memory store is enabled."""
-        return self._enabled
+    def memory_table(self) -> str:
+        """Return the configured memory table name."""
+        return self._memory_table
 
     @property
     def use_fts(self) -> bool:
@@ -82,18 +86,25 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
 
     @property
     def max_results(self) -> int:
-        """Return the max search results limit."""
+        """Return the default maximum results for search."""
         return self._max_results
 
     @property
-    def owner_id_column_ddl(self) -> "str | None":
-        """Return the full owner ID column DDL (or None if not configured)."""
+    def owner_id_column_ddl(self) -> str | None:
+        """Return the configured owner column DDL snippet, if any."""
         return self._owner_id_column_ddl
 
     @property
-    def owner_id_column_name(self) -> "str | None":
-        """Return the owner ID column name only (or None if not configured)."""
+    def owner_id_column_name(self) -> str | None:
+        """Return the extracted owner column name, if configured."""
         return self._owner_id_column_name
+
+    def _schema_management_flags(self) -> tuple[bool, bool]:
+        extension_config = getattr(self._config, "extension_config", {})
+        adk_config = extension_config.get("adk", {}) if isinstance(extension_config, dict) else {}
+        manage_schema = adk_config.get("manage_schema", True) if isinstance(adk_config, dict) else True
+        create_schema = adk_config.get("create_schema", True) if isinstance(adk_config, dict) else True
+        return bool(manage_schema), bool(create_schema)
 
     @property
     def create_schema_enabled(self) -> bool:
@@ -101,34 +112,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         manage_schema, create_schema = self._schema_management_flags()
         return manage_schema and create_schema
 
-    def _store_config_from_extension(self) -> "_ADKMemoryStoreConfig":
-        """Extract ADK memory configuration from config.extension_config.
-
-        Returns:
-            Dict with memory_table, use_fts, max_results, and optionally owner_id_column.
-        """
-        return _adk_memory_store_config(self._config)
-
-    def _schema_management_flags(self) -> "tuple[bool, bool]":
-        """Return automatic-management and missing-table creation flags."""
-        extension_config = cast("dict[str, Any]", self._config.extension_config)
-        settings = cast("dict[str, Any]", extension_config.get("adk", {}))
-        return bool(settings.get("manage_schema", True)), bool(settings.get("create_schema", True))
-
-    def _schema_target(self, ddl: "str | list[str]") -> SchemaTarget:
-        """Build a target from the canonical memory table DDL."""
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        script = ddl if isinstance(ddl, str) else ";\n".join(ddl)
-        return SchemaTarget.from_ddl(self._memory_table, script, dialect=dialect)
-
-    def _reset_drop_memory_table_sql(self) -> "list[str]":
-        """Return memory drops needed before recreating the clean-break schema."""
-        return reset_drop_sql(
-            list(self._drop_memory_table_sql()), ADK_RESET_MEMORY_TABLES, self._drop_memory_sql_for_table
-        )
-
-    def _drop_memory_sql_for_table(self, table_name: str) -> "list[str]":
+    def _drop_sql_for_table(self, table_name: str) -> list[str]:
         current_table = self._memory_table
         self._memory_table = table_name
         try:
@@ -136,23 +120,30 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         finally:
             self._memory_table = current_table
 
-    def _log_memory_table_created(self) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.memory.table.ready",
-            db_system=resolve_db_system(type(self).__name__),
-            memory_table=self._memory_table,
-        )
+    def _reset_drop_memory_table_sql(self) -> list[str]:
+        configured = self._memory_table
+        candidates = (configured, *[name for name in ADK_RESET_MEMORY_TABLES if name != configured])
+        statements: list[str] = []
+        for cand in candidates:
+            statements.extend(self._drop_sql_for_table(cand))
+        return unique_statements(statements)
 
-    def _log_memory_table_skipped(self) -> None:
+    def _require_enabled(self) -> None:
+        if not self._enabled:
+            msg = "ADK memory store is disabled for this database configuration"
+            raise RuntimeError(msg)
+
+    def _effective_limit(self, limit: int | None) -> int:
+        return limit if limit is not None else self._max_results
+
+    def _log_operation(self, event: str, **kwargs: Any) -> None:
         log_with_context(
             logger,
             logging.DEBUG,
-            "adk.memory.table.skipped",
+            event,
+            table_name=self._memory_table,
             db_system=resolve_db_system(type(self).__name__),
-            memory_table=self._memory_table,
-            reason="disabled",
+            **kwargs,
         )
 
 
@@ -161,19 +152,6 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
 
     Implements storage operations for Google ADK memory entries using
     SQLSpec database adapters with async/await.
-
-    This abstract base class provides common functionality for all database-specific
-    memory store implementations including:
-    - Connection management via SQLSpec configs
-    - Table name validation
-    - Memory entry CRUD operations
-    - Text search with optional full-text search support
-
-    Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory.
-
-    Args:
-        config: SQLSpec database configuration with extension_config["adk"] settings.
     """
 
     __slots__ = ()
@@ -186,73 +164,97 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+    async def drop_tables(self) -> None:
+        """Drop the memory table and indexes if they exist.
 
-    async def ensure_tables(self) -> None:
-        """Create tables when enabled and emit a standardized log entry."""
-
-        if not self._enabled:
-            self._log_memory_table_skipped()
-            return
-        if self.create_schema_enabled:
-            await self.create_tables()
-        await self.reconcile_schema(assume_existing=self.create_schema_enabled)
-        self._log_memory_table_created()
-
-    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
-        """Apply additive memory-table changes from canonical adapter DDL.
-
-        Args:
-            assume_existing: Skip table discovery after adapter-level creation.
+        Should drop all dialect-specific objects (tables, indexes, FTS virtual tables, triggers).
         """
-        manage_schema, create_schema = self._schema_management_flags()
-        if not manage_schema:
-            return
-        target = self._schema_target(await self._memory_table_ddl())
+        statements = self._drop_memory_table_sql()
         session_context = self._config.provide_session()
         async with cast("Any", session_context) as driver:
-            await ensure_schema_async(
-                driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+            for statement in statements:
+                await driver.execute(statement)
+
+    async def ensure_tables(self) -> None:
+        """Create tables and emit a standardized log entry."""
+        if not self._enabled:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "adk.memory.table.skipped",
+                memory_table=self._memory_table,
+                reason="disabled",
+                db_system=resolve_db_system(type(self).__name__),
             )
+            return
+
+        manage_schema, _create_schema = self._schema_management_flags()
+        if self.create_schema_enabled:
+            await self.create_tables()
+        if manage_schema:
+            await self.reconcile_schema(assume_existing=self.create_schema_enabled)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.memory.table.ready",
+            memory_table=self._memory_table,
+            db_system=resolve_db_system(type(self).__name__),
+        )
+
+    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK memory table changes from canonical adapter DDL."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema or not self._enabled:
+            return
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl = await self._memory_table_ddl()
+        ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
+        target = SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)
+        session_context = self._config.provide_session()
+        if hasattr(session_context, "__aenter__"):
+            async with cast("Any", session_context) as driver:
+                await ensure_schema_async(
+                    driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+                )
+            return
+        await async_(_reconcile_adk_schema_sync)(
+            self._config, [target], create_schema=create_schema, assume_existing=assume_existing
+        )
 
     @abstractmethod
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
-        Uses UPSERT pattern to skip duplicates based on event_id.
-
         Args:
-            entries: List of memory records to insert.
+            entries: List of stored memory records to insert.
             owner_id: Optional owner ID value for owner_id_column (if configured).
 
         Returns:
             Number of entries actually inserted (excludes duplicates).
-
-        Raises:
-            RuntimeError: If memory store is disabled.
         """
         raise NotImplementedError
 
     @abstractmethod
     async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query.
-
-        Uses the configured search strategy (simple ILIKE or FTS).
 
         Args:
             query: Text query to search for.
             app_name: Application name to filter by.
             user_id: User ID to filter by.
             limit: Maximum number of results (defaults to max_results config).
+            scope_filter: Scope filter ('all', 'user', 'app').
 
         Returns:
             List of matching memory records ordered by relevance/timestamp.
-
-        Raises:
-            RuntimeError: If memory store is disabled.
         """
         raise NotImplementedError
 
@@ -269,13 +271,15 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
         """Delete memory entries older than specified days.
-
-        Used for TTL cleanup operations.
 
         Args:
             days: Number of days to retain entries.
+            app_name: Optional application name to scope deletion.
+            scope: Optional scope ('user' or 'app') to scope deletion.
 
         Returns:
             Number of entries deleted.
@@ -284,162 +288,103 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
 
     @abstractmethod
     async def _memory_table_ddl(self) -> "str | list[str]":
-        """Get the CREATE TABLE SQL for the memory table.
-
-        Returns:
-            SQL statement(s) to create the memory table with indexes.
-        """
+        """Get the CREATE TABLE SQL for the memory table."""
         raise NotImplementedError
 
     @abstractmethod
     def _drop_memory_table_sql(self) -> "list[str]":
-        """Get the DROP TABLE SQL statements for this database dialect.
-
-        Returns:
-            List of SQL statements to drop the memory table and indexes.
-        """
+        """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
 
 
 class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
-    """Base class for sync SQLSpec-backed ADK memory stores.
-
-    Implements storage operations for Google ADK memory entries using
-    SQLSpec database adapters with synchronous execution.
-
-    This abstract base class provides common functionality for sync database-specific
-    memory store implementations including:
-    - Connection management via SQLSpec configs
-    - Table name validation
-    - Memory entry CRUD operations
-    - Text search with optional full-text search support
-
-    Subclasses must implement dialect-specific SQL queries and will be created
-    in each adapter directory.
-
-    Args:
-        config: SQLSpec database configuration with extension_config["adk"] settings.
-    """
+    """Base class for sync SQLSpec-backed ADK memory stores."""
 
     __slots__ = ()
 
     @abstractmethod
     def create_tables(self) -> None:
-        """Create the memory table and indexes if they don't exist.
-
-        Should check self._enabled and skip table creation if False.
-        """
+        """Create the memory table and indexes if they don't exist."""
         raise NotImplementedError
 
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Prepare adapter-specific schema decisions with a synchronous driver."""
+    def drop_tables(self) -> None:
+        """Drop the memory table and indexes if they exist."""
+        statements = self._drop_memory_table_sql()
+        with cast("Any", self._config.provide_session()) as driver:
+            for statement in statements:
+                driver.execute(statement)
 
     def ensure_tables(self) -> None:
-        """Create tables when enabled and emit a standardized log entry."""
-
+        """Create tables and emit a standardized log entry."""
         if not self._enabled:
-            self._log_memory_table_skipped()
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "adk.memory.table.skipped",
+                memory_table=self._memory_table,
+                reason="disabled",
+                db_system=resolve_db_system(type(self).__name__),
+            )
             return
+
+        manage_schema, _create_schema = self._schema_management_flags()
         if self.create_schema_enabled:
             self.create_tables()
-        self.reconcile_schema(assume_existing=self.create_schema_enabled)
-        self._log_memory_table_created()
+        if manage_schema:
+            self.reconcile_schema(assume_existing=self.create_schema_enabled)
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.memory.table.ready",
+            memory_table=self._memory_table,
+            db_system=resolve_db_system(type(self).__name__),
+        )
 
     def reconcile_schema(self, *, assume_existing: bool = False) -> None:
-        """Apply additive memory-table changes from canonical adapter DDL.
-
-        Args:
-            assume_existing: Skip table discovery after adapter-level creation.
-        """
+        """Apply additive ADK memory table changes from canonical adapter DDL."""
         manage_schema, create_schema = self._schema_management_flags()
-        if not manage_schema:
+        if not manage_schema or not self._enabled:
             return
-        target = self._schema_target(self._memory_table_ddl())
-        with cast("Any", self._config.provide_session()) as driver:
-            ensure_schema_sync(
-                driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
-            )
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl = self._memory_table_ddl()
+        ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
+        target = SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)
+        _reconcile_adk_schema_sync(self._config, [target], create_schema=create_schema, assume_existing=assume_existing)
 
     @abstractmethod
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication.
-
-        Uses UPSERT pattern to skip duplicates based on event_id.
-
-        Args:
-            entries: List of memory records to insert.
-            owner_id: Optional owner ID value for owner_id_column (if configured).
-
-        Returns:
-            Number of entries actually inserted (excludes duplicates).
-
-        Raises:
-            RuntimeError: If memory store is disabled.
-        """
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with deduplication."""
         raise NotImplementedError
 
     @abstractmethod
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
-        """Search memory entries by text query.
-
-        Uses the configured search strategy (simple ILIKE or FTS).
-
-        Args:
-            query: Text query to search for.
-            app_name: Application name to filter by.
-            user_id: User ID to filter by.
-            limit: Maximum number of results (defaults to max_results config).
-
-        Returns:
-            List of matching memory records ordered by relevance/timestamp.
-
-        Raises:
-            RuntimeError: If memory store is disabled.
-        """
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
+        """Search memory entries by text query."""
         raise NotImplementedError
 
     @abstractmethod
     def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session.
-
-        Args:
-            session_id: Session ID to delete entries for.
-
-        Returns:
-            Number of entries deleted.
-        """
+        """Delete all memory entries for a specific session."""
         raise NotImplementedError
 
     @abstractmethod
-    def delete_entries_older_than(self, days: int) -> int:
-        """Delete memory entries older than specified days.
-
-        Used for TTL cleanup operations.
-
-        Args:
-            days: Number of days to retain entries.
-
-        Returns:
-            Number of entries deleted.
-        """
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
+        """Delete memory entries older than specified days."""
         raise NotImplementedError
 
     @abstractmethod
     def _memory_table_ddl(self) -> "str | list[str]":
-        """Get the CREATE TABLE SQL for the memory table.
-
-        Returns:
-            SQL statement(s) to create the memory table with indexes.
-        """
+        """Get the CREATE TABLE SQL for the memory table."""
         raise NotImplementedError
 
     @abstractmethod
     def _drop_memory_table_sql(self) -> "list[str]":
-        """Get the DROP TABLE SQL statements for this database dialect.
-
-        Returns:
-            List of SQL statements to drop the memory table and indexes.
-        """
+        """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError

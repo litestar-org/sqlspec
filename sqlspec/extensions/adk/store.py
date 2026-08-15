@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.extensions.adk._types import EventRecord, SessionRecord
+    from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 
 __all__ = ("BaseAsyncADKStore", "BaseSyncADKStore")
 
@@ -259,7 +259,7 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> "SessionRecord":
+    ) -> "StoredSession":
         """Create a new session.
 
         Args:
@@ -277,7 +277,7 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     @abstractmethod
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get a session.
 
         Args:
@@ -304,7 +304,7 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """List all sessions for an app, optionally filtered by user.
 
         Args:
@@ -328,18 +328,18 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def append_event(self, event_record: "EventRecord") -> None:
+    async def append_event(self, event_record: "StoredEvent") -> None:
         """Append an event to a session.
 
         Args:
-            event_record: Event record to store.
+            event_record: Event record to insert.
         """
         raise NotImplementedError
 
     @abstractmethod
     async def append_event_and_update_state(
         self,
-        event_record: "EventRecord",
+        event_record: "StoredEvent",
         app_name: str,
         user_id: str,
         session_id: str,
@@ -347,16 +347,10 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> "SessionRecord":
+    ) -> "StoredSession":
         """Atomically append an event and update the session's durable state.
 
         This is the authoritative durable write boundary for post-creation
-        session mutations.  The event insert, session state update, and the
-        optional scoped-state upserts must succeed together or fail together,
-        and the updated session record is returned in the same round-trip so
-        callers don't need a follow-up read.
-
-        When ``app_state`` is provided (non-None), it is a full merged
         app-scoped snapshot to replace/upsert for ``app_name``. When
         ``user_state`` is provided, it is a full merged user-scoped snapshot to
         replace/upsert for ``(app_name, user_id)``. ``None`` means that scope
@@ -375,7 +369,7 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
                 upsert atomically, or ``None`` when untouched.
 
         Returns:
-            The updated SessionRecord reflecting the new state and update_time.
+            The updated StoredSession reflecting the new state and update_time.
 
         Raises:
             ValueError: If the session row no longer exists at update time
@@ -391,7 +385,7 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session.
 
         Args:
@@ -676,14 +670,14 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     @abstractmethod
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> "SessionRecord":
+    ) -> "StoredSession":
         """Create a new session."""
         raise NotImplementedError
 
     @abstractmethod
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get a session."""
         raise NotImplementedError
 
@@ -693,7 +687,7 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """List all sessions for an app, optionally filtered by user."""
         raise NotImplementedError
 
@@ -703,14 +697,14 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def append_event(self, event_record: "EventRecord") -> None:
+    def append_event(self, event_record: "StoredEvent") -> None:
         """Append an event to a session."""
         raise NotImplementedError
 
     @abstractmethod
     def append_event_and_update_state(
         self,
-        event_record: "EventRecord",
+        event_record: "StoredEvent",
         app_name: str,
         user_id: str,
         session_id: str,
@@ -718,7 +712,7 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> "SessionRecord":
+    ) -> "StoredSession":
         """Atomically append an event and update the session's durable state."""
         raise NotImplementedError
 
@@ -730,7 +724,7 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session."""
         raise NotImplementedError
 

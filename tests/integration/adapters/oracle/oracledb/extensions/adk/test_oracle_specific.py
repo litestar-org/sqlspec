@@ -11,7 +11,7 @@ import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
 
@@ -23,9 +23,9 @@ def _unique_session_id(prefix: str) -> str:
 
 def _event_record(
     *, event_id: str, app_name: str, user_id: str, session_id: str, invocation_id: str, event_data: dict[str, Any]
-) -> EventRecord:
-    """Return a clean-break EventRecord for Oracle store tests."""
-    return EventRecord(
+) -> StoredEvent:
+    """Return a clean-break StoredEvent for Oracle store tests."""
+    return StoredEvent(
         id=event_id,
         app_name=app_name,
         user_id=user_id,
@@ -321,7 +321,7 @@ async def test_state_lob_deserialization_sync(oracle_sync_store: "OracleSyncADKS
 
 
 async def test_event_record_clean_break_contract(oracle_async_store: "OracleAsyncADKStore") -> None:
-    """Test the clean-break EventRecord contract with append_event."""
+    """Test the clean-break StoredEvent contract with append_event."""
     session_id = _unique_session_id("event-contract")
     app_name = "test-app"
     user_id = "user-123"

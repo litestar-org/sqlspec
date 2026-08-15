@@ -16,7 +16,7 @@ from typing import Any
 from google.adk.events.event import Event
 from google.adk.sessions import Session
 
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
+from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 
 __all__ = (
     "compute_update_marker",
@@ -35,16 +35,16 @@ __all__ = (
 # ---------------------------------------------------------------------------
 
 
-def session_to_record(session: "Session") -> SessionRecord:
+def session_to_record(session: "Session") -> StoredSession:
     """Convert ADK Session to database record.
 
     Args:
         session: ADK Session object.
 
     Returns:
-        SessionRecord for database storage.
+        StoredSession for database storage.
     """
-    return SessionRecord(
+    return StoredSession(
         id=session.id,
         app_name=session.app_name,
         user_id=session.user_id,
@@ -74,7 +74,7 @@ def compute_update_marker(update_time: "datetime") -> str:
     return update_time.isoformat(timespec="microseconds")
 
 
-def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Session":
+def record_to_session(record: StoredSession, events: "list[StoredEvent]") -> "Session":
     """Convert database record to ADK Session.
 
     Sets ``_storage_update_marker`` so the service layer can detect
@@ -106,7 +106,7 @@ def record_to_session(record: SessionRecord, events: "list[EventRecord]") -> "Se
 # ---------------------------------------------------------------------------
 
 
-def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str) -> EventRecord:
+def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str) -> StoredEvent:
     """Convert ADK Event to database record using full-event JSON storage.
 
     The entire Event is serialized into ``event_data`` via Pydantic's
@@ -120,10 +120,10 @@ def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str
         session_id: ID of the parent session.
 
     Returns:
-        EventRecord for database storage.
+        StoredEvent for database storage.
     """
     event_data = _normalize_event_data(event.model_dump(exclude_none=True, mode="json"))
-    return EventRecord(
+    return StoredEvent(
         id=event.id,
         app_name=app_name,
         user_id=user_id,
@@ -134,7 +134,7 @@ def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str
     )
 
 
-def record_to_event(record: "EventRecord") -> "Event":
+def record_to_event(record: "StoredEvent") -> "Event":
     """Convert database record to ADK Event.
 
     Reconstruction is lossless for valid ADK payloads: the full Event is

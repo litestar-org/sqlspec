@@ -56,7 +56,7 @@ config for multi-tenant deployments.
 
 .. _event-record:
 
-Events Table (EventRecord)
+Events Table (StoredEvent)
 ==========================
 
 The events table uses **full-event JSON storage**: the entire ADK ``Event`` is
@@ -107,7 +107,7 @@ via ``Event.model_validate()``.
 
    from sqlspec.extensions.adk.converters import event_to_record, record_to_event
 
-   # Serialize: Event -> EventRecord
+   # Serialize: Event -> StoredEvent
    record = event_to_record(
        event=adk_event,
        app_name="my_agent",
@@ -115,7 +115,7 @@ via ``Event.model_validate()``.
        session_id="sess_123",
    )
 
-   # Reconstruct: EventRecord -> Event
+   # Reconstruct: StoredEvent -> Event
    restored_event = record_to_event(record)
 
 .. _scoped-state:
