@@ -61,6 +61,8 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
     "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
     "            session_id VARCHAR(128) NOT NULL,\n"
     "            invocation_id VARCHAR(256),\n"
     "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
@@ -70,6 +72,9 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "\n"
     "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
     "            ON {4}(session_id, timestamp ASC){5};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{8}_app_timestamp\n"
+    "            ON {9}(app_name, timestamp ASC);\n"
     "        {6}\n"
     "        "
 )
@@ -338,8 +343,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def append_event(self, event_record: StoredEvent) -> None:
         query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         event_data_value = event_record["event_data"]
@@ -350,6 +355,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                 query,
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -370,8 +377,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     ) -> StoredSession:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         update_query = pg_sql.SQL("""
@@ -406,6 +413,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                     insert_query,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -491,27 +500,41 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
-            table=pg_sql.Identifier(self._events_table)
-        )
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params = (before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(query, (before,))
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params = (updated_before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(query, (updated_before,))
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -622,6 +645,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             covering_columns,
             generated_indexes,
             _postgres_table_options(adk_config, include_autovacuum=True),
+            self._events_table,
+            self._events_table,
         )
 
     async def _app_states_table_ddl(self) -> str:
@@ -822,8 +847,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         """Atomically append an event and update session + scoped state."""
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         update_query = pg_sql.SQL("""
@@ -858,6 +883,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                     insert_query,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -944,29 +971,43 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
-            table=pg_sql.Identifier(self._events_table)
-        )
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params = (before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (before,))
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold."""
-        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params = (updated_before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (updated_before,))
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -1086,6 +1127,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             covering_columns,
             generated_indexes,
             _postgres_table_options(adk_config, include_autovacuum=True),
+            self._events_table,
+            self._events_table,
         )
 
     def _app_states_table_ddl(self) -> str:
@@ -1122,8 +1165,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
     def _insert_event(self, event_record: StoredEvent) -> None:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         event_data_value = event_record["event_data"]
@@ -1134,6 +1177,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                 insert_query,
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],

@@ -208,8 +208,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
 
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
@@ -217,6 +217,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 sql,
                 [
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -237,8 +239,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     ) -> StoredSession:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
         update_sql = f"""
         UPDATE {self._session_table}
@@ -268,6 +270,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     insert_sql,
                     [
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -350,32 +354,44 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 return []
             raise
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        count_sql = f"SELECT COUNT(*) AS count FROM {self._events_table} WHERE timestamp < $1"
-        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            count_sql = f"SELECT COUNT(*) AS count FROM {self._events_table} WHERE timestamp < $1 AND app_name = $2"
+            delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1 AND app_name = $2"
+            params: list[Any] = [before, app_name]
+        else:
+            count_sql = f"SELECT COUNT(*) AS count FROM {self._events_table} WHERE timestamp < $1"
+            delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+            params = [before]
 
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-                count_result = await conn.fetch(count_sql, [before])
+                count_result = await conn.fetch(count_sql, params)
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, [before])
+                await conn.execute(delete_sql, params)
                 return count
         except Exception as e:
             if _is_table_missing_error(e):
                 return 0
             raise
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        count_sql = f"SELECT COUNT(*) AS count FROM {self._session_table} WHERE update_time < $1"
-        delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            count_sql = f"SELECT COUNT(*) AS count FROM {self._session_table} WHERE update_time < $1 AND app_name = $2"
+            delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < $1 AND app_name = $2"
+            params: list[Any] = [updated_before, app_name]
+        else:
+            count_sql = f"SELECT COUNT(*) AS count FROM {self._session_table} WHERE update_time < $1"
+            delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+            params = [updated_before]
 
         try:
             async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-                count_result = await conn.fetch(count_sql, [updated_before])
+                count_result = await conn.fetch(count_sql, params)
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, [updated_before])
+                await conn.execute(delete_sql, params)
                 return count
         except Exception as e:
             if _is_table_missing_error(e):
@@ -492,6 +508,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -501,6 +519,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC){covering_columns};
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
+            ON {self._events_table}(app_name, timestamp ASC);
         {generated_indexes}
         """
 
