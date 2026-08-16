@@ -1315,8 +1315,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
@@ -1336,8 +1334,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id TEXT PRIMARY KEY,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
             app_name TEXT NOT NULL,
             user_id TEXT NOT NULL,
@@ -1357,8 +1353,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
@@ -1378,8 +1372,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id VARCHAR PRIMARY KEY,
-            app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL,
             session_id VARCHAR NOT NULL,
             app_name VARCHAR NOT NULL,
             user_id VARCHAR NOT NULL,
@@ -1399,8 +1391,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,

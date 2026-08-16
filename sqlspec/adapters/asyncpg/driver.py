@@ -63,44 +63,6 @@ _QUALIFIED_TABLE_NAME_PARTS: Final = 2
 
 logger = get_logger("sqlspec.adapters.asyncpg")
 
-_ASYNCPG_OID_TOKENS: "dict[int, str]" = {
-    16: "bool",
-    17: "binary",
-    20: "int64",
-    21: "int16",
-    23: "int32",
-    25: "string",
-    114: "string",
-    700: "float32",
-    701: "float64",
-    1043: "string",
-    1082: "date",
-    1083: "time",
-    1114: "timestamp",
-    1184: "timestamptz",
-    1700: "decimal",
-    2950: "string",
-    3802: "string",
-}
-
-
-def _resolve_column_types(prepared: Any) -> "dict[str, str] | None":
-    """Map prepared-statement attribute OIDs to neutral Arrow type tokens.
-
-    asyncpg already prepares the statement to run a query, so its attribute
-    descriptors are available without an additional round trip.
-    """
-    try:
-        attributes = prepared.get_attributes()
-    except Exception:
-        return None
-    column_types: dict[str, str] = {}
-    for attribute in attributes or ():
-        token = _ASYNCPG_OID_TOKENS.get(attribute.type.oid)
-        if token is not None:
-            column_types[attribute.name] = token
-    return column_types or None
-
 
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling AsyncPG database exceptions.
@@ -170,15 +132,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
 
         if statement.returns_rows():
-            prepared = await cursor.prepare(sql)
-            records = await prepared.fetch(*params) if params else await prepared.fetch()
+            records = await cursor.fetch(sql, *params) if params else await cursor.fetch(sql)
             data, column_names = collect_rows(records)
 
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
-                column_types=_resolve_column_types(prepared),
                 data_row_count=len(data),
                 is_select_result=True,
                 row_format="record",
