@@ -23,10 +23,12 @@ __all__ = (
     "event_to_record",
     "filter_temp_state",
     "merge_scoped_state",
+    "merge_state",
     "record_to_event",
     "record_to_session",
     "session_to_record",
     "split_scoped_state",
+    "split_state_by_prefix",
 )
 
 
@@ -236,3 +238,7 @@ def _normalize_event_data(event_data: "dict[str, Any]") -> "dict[str, Any]":
     if normalized.get("actions") is None:
         normalized.pop("actions", None)
     return normalized
+
+
+split_state_by_prefix = split_scoped_state
+merge_state = merge_scoped_state

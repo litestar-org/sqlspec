@@ -17,6 +17,8 @@ from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import Transaction
 
@@ -159,13 +161,17 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
                 return []
             raise
 
-    def delete_expired_events(self, before: datetime) -> int:
-        """Delete events older than a timestamp."""
-        return self._delete_expired_events(before)
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
+        """Delete events older than a timestamp, optionally scoped to one application."""
+        return self._delete_expired_events(before, app_name)
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
-        """Delete sessions older than a timestamp."""
-        return self._delete_idle_sessions(updated_before)
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete sessions older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_sessions(updated_before, app_name)
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_user_states(updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
@@ -227,6 +233,8 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         json_type = _json_param_type()
         return {
             "id": SPANNER_PARAM_TYPES.STRING,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
             "invocation_id": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
@@ -441,14 +449,16 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """
         event_params: dict[str, Any] = {
             "id": event_record["id"],
+            "app_name": event_record["app_name"],
+            "user_id": event_record["user_id"],
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
             "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (id, session_id, invocation_id, timestamp, event_data)
-            VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
+            INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
+            VALUES (@id, @app_name, @user_id, @session_id, @invocation_id, @timestamp, @event_data)
         """
 
         json_type = _json_param_type()
@@ -509,14 +519,16 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
     def _insert_event(self, event_record: "StoredEvent") -> None:
         event_params: dict[str, Any] = {
             "id": event_record["id"],
+            "app_name": event_record["app_name"],
+            "user_id": event_record["user_id"],
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
             "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
-            INSERT INTO {self._events_table} (id, session_id, invocation_id, timestamp, event_data)
-            VALUES (@id, @session_id, @invocation_id, @timestamp, @event_data)
+            INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
+            VALUES (@id, @app_name, @user_id, @session_id, @invocation_id, @timestamp, @event_data)
         """
         self._run_write([(insert_sql, event_params, self._event_param_types())])
 
@@ -572,23 +584,35 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
 
-    def _delete_expired_events(self, before: datetime) -> int:
+    def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < @before"
-        return int(
-            cast("Any", self._database()).run_in_transaction(
-                _SpannerUpdateJob(sql, {"before": before}, {"before": SPANNER_PARAM_TYPES.TIMESTAMP})
-            )
-        )
+        params: dict[str, Any] = {"before": before}
+        types: dict[str, Any] = {"before": SPANNER_PARAM_TYPES.TIMESTAMP}
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params["app_name"] = app_name
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
 
-    def _delete_idle_sessions(self, updated_before: datetime) -> int:
+    def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
-        return int(
-            cast("Any", self._database()).run_in_transaction(
-                _SpannerUpdateJob(
-                    sql, {"updated_before": updated_before}, {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
-                )
-            )
-        )
+        params: dict[str, Any] = {"updated_before": updated_before}
+        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params["app_name"] = app_name
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+
+    def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < @updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params["app_name"] = app_name
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
@@ -698,6 +722,8 @@ CREATE TABLE {self._session_table} (
         return f"""
 CREATE TABLE {self._events_table} (
   id STRING(128) NOT NULL,
+  app_name STRING(128) NOT NULL,
+  user_id STRING(128) NOT NULL,
   session_id STRING(128) NOT NULL,
   invocation_id STRING(256),
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
@@ -792,6 +818,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter)

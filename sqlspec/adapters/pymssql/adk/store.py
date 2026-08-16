@@ -14,6 +14,7 @@ from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import timedelta
 
     from sqlspec.adapters.pymssql.config import PymssqlConfig
@@ -230,23 +231,43 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             raise
         return [_event_record_from_row(row) for row in rows]
 
-    def delete_expired_events(self, before: datetime) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than ``before``."""
+        sql = f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < %s"
+        params: list[Any] = [before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
         try:
-            return self._execute(
-                f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < %s", (before,), commit=True
-            )
+            return self._execute(sql, tuple(params), commit=True)
         except MSSQL_ERROR as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time is older than ``updated_before``."""
+        sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < %s"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
         try:
-            return self._execute(
-                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < %s", (updated_before,), commit=True
-            )
+            return self._execute(sql, tuple(params), commit=True)
+        except MSSQL_ERROR as exc:
+            if _is_mssql_table_missing(exc):
+                return 0
+            raise
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time is older than ``updated_before``."""
+        sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < %s"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
+        try:
+            return self._execute(sql, tuple(params), commit=True)
         except MSSQL_ERROR as exc:
             if _is_mssql_table_missing(exc):
                 return 0
@@ -473,6 +494,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
@@ -646,6 +668,7 @@ def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
         (f"idx_{table}_session", table, "session_id, timestamp ASC"),
         (f"idx_{table}_invocation", table, "invocation_id"),
         (f"idx_{table}_timestamp", table, "timestamp ASC"),
+        (f"idx_{table}_app_timestamp", table, "app_name, timestamp ASC"),
     ]
 
 

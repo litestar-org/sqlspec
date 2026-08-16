@@ -14,6 +14,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.aiomysql.config import AiomysqlConfig
@@ -328,16 +329,20 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 return []
             raise
 
-    async def delete_expired_events(self, before: "datetime") -> int:
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+        params: list[Any] = [before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
 
         try:
             async with (
                 self._config.provide_connection() as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
-                await cursor.execute(sql, (before,))
+                await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except pymysql.err.ProgrammingError as exc:
@@ -345,16 +350,41 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 return 0
             raise
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the threshold."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
 
         try:
             async with (
                 self._config.provide_connection() as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
-                await cursor.execute(sql, (updated_before,))
+                await cursor.execute(sql, tuple(params))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
+
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the threshold."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
+
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except pymysql.err.ProgrammingError as exc:
@@ -585,6 +615,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
@@ -848,7 +879,8 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
             event_data JSON NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
             INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC{covering_column}),
-            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}){generated_indexes}
+            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}),
+            INDEX idx_{events_table}_app_timestamp (app_name, timestamp ASC){generated_indexes}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 

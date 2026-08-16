@@ -172,8 +172,9 @@ def test_sync_append_event_inserts_without_session_update() -> None:
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
     assert params[0] == "event-1"
-    assert params[1] == "session-1"
-    assert isinstance(params[4], Jsonb)
+    assert params[1:3] == ("app", "user")
+    assert params[3] == "session-1"
+    assert isinstance(params[6], Jsonb)
     assert connection.commit_called
 
 
@@ -252,7 +253,8 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
     _, app_state_params = cursor.execute_calls[2]
     _, user_state_params = cursor.execute_calls[3]
     assert insert_params[0] == "event-1"
-    assert isinstance(insert_params[4], Jsonb)
+    assert insert_params[1:3] == ("app", "user")
+    assert isinstance(insert_params[6], Jsonb)
     assert getattr(update_params[0], "obj", None) == {"session": True}
     assert update_params[1:4] == ("app", "user", "session-1")
     assert app_state_params[0] == "app"

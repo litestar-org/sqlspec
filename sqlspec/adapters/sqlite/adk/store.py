@@ -18,6 +18,7 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Sequence
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
     from sqlspec.extensions.adk import StoredMemory
@@ -491,15 +492,19 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 return []
             raise
 
-    def delete_expired_events(self, before: datetime) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
         """Synchronous implementation of delete_expired_events."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+        params: list[Any] = [_datetime_to_julian(before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
 
         try:
             with self._config.provide_connection() as conn:
                 self._apply_pragmas(conn)
-                cursor = conn.execute(sql, (_datetime_to_julian(before),))
+                cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 conn.commit()
                 return deleted_count
@@ -508,15 +513,39 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 return 0
             raise
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        """Synchronous implementation of delete_idle_sessions."""
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete sessions whose update_time predates the threshold, optionally scoped to one application."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+        params: list[Any] = [_datetime_to_julian(updated_before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
 
         try:
             with self._config.provide_connection() as conn:
                 self._apply_pragmas(conn)
-                cursor = conn.execute(sql, (_datetime_to_julian(updated_before),))
+                cursor = conn.execute(sql, tuple(params))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the given threshold."""
+        """Synchronous implementation of delete_idle_user_states."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < ?"
+        params: list[Any] = [_datetime_to_julian(updated_before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 conn.commit()
                 return deleted_count
@@ -680,6 +709,8 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             ON {self._events_table}(invocation_id);
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp
             ON {self._events_table}(timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
+            ON {self._events_table}(app_name, timestamp ASC);
         """
 
     def _app_states_table_ddl(self) -> str:
@@ -875,6 +906,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:

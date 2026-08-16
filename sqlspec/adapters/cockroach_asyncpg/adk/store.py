@@ -11,6 +11,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig
@@ -199,14 +200,16 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
     async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
 
         async with self._config.provide_connection() as conn:
             await conn.execute(
                 sql,
                 event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
                 event_record["session_id"],
                 event_record["invocation_id"],
                 event_record["timestamp"],
@@ -226,8 +229,8 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
     ) -> StoredSession:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
         update_sql = f"""
         UPDATE {self._session_table}
@@ -252,6 +255,8 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             await conn.execute(
                 insert_sql,
                 event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
                 event_record["session_id"],
                 event_record["invocation_id"],
                 event_record["timestamp"],
@@ -329,22 +334,47 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             for row in rows
         ]
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1 AND app_name = $2"
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+            params = (before,)
 
         try:
             async with self._config.provide_connection() as conn:
-                result = await conn.execute(sql, before)
+                result = await conn.execute(sql, *params)
                 return int(result.split()[-1]) if result else 0
         except asyncpg.exceptions.UndefinedTableError:
             return 0
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._session_table} WHERE update_time < $1 AND app_name = $2"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+            params = (updated_before,)
 
         try:
             async with self._config.provide_connection() as conn:
-                result = await conn.execute(sql, updated_before)
+                result = await conn.execute(sql, *params)
+                return int(result.split()[-1]) if result else 0
+        except asyncpg.exceptions.UndefinedTableError:
+            return 0
+
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1 AND app_name = $2"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1"
+            params = (updated_before,)
+
+        try:
+            async with self._config.provide_connection() as conn:
+                result = await conn.execute(sql, *params)
                 return int(result.split()[-1]) if result else 0
         except asyncpg.exceptions.UndefinedTableError:
             return 0
@@ -445,6 +475,8 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -457,6 +489,9 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
             ON {self._events_table} USING GIN (event_data);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
+            ON {self._events_table}(app_name, timestamp ASC);
         """
 
     async def _app_states_table_ddl(self) -> str:
@@ -606,6 +641,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"

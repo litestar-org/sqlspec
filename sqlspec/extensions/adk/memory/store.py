@@ -13,7 +13,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.memory._types import StoredMemory
@@ -36,12 +36,17 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
 
     __slots__ = (
         "_config",
+        "_enable_bm25",
         "_enabled",
         "_max_results",
         "_memory_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
+        "_scann_num_leaves",
+        "_scann_quantizer",
         "_use_fts",
+        "_vector_dimensions",
+        "_vector_index_type",
     )
 
     def __init__(self, config: ConfigT) -> None:
@@ -56,6 +61,11 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self._memory_table: str = str(store_config["memory_table"])
         self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
+        self._vector_index_type: str = store_config.get("vector_index_type", "hnsw")
+        self._vector_dimensions: int = store_config.get("vector_dimensions", 768)
+        self._enable_bm25: bool = bool(store_config.get("enable_bm25", False))
+        self._scann_num_leaves: int = store_config.get("scann_num_leaves", 100)
+        self._scann_quantizer: str = store_config.get("scann_quantizer", "SQ8")
         self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
         self._owner_id_column_name: str | None = (
             owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
@@ -78,6 +88,31 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
     def memory_table(self) -> str:
         """Return the configured memory table name."""
         return self._memory_table
+
+    @property
+    def vector_index_type(self) -> str:
+        """Return the configured vector index type."""
+        return self._vector_index_type
+
+    @property
+    def vector_dimensions(self) -> int:
+        """Return the vector dimensionality."""
+        return self._vector_dimensions
+
+    @property
+    def enable_bm25(self) -> bool:
+        """Return whether BM25 text search is enabled."""
+        return self._enable_bm25
+
+    @property
+    def scann_num_leaves(self) -> int:
+        """Return the number of leaves for ScaNN tree quantization."""
+        return self._scann_num_leaves
+
+    @property
+    def scann_quantizer(self) -> str:
+        """Return the ScaNN quantizer."""
+        return self._scann_quantizer
 
     @property
     def use_fts(self) -> bool:
@@ -243,8 +278,9 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query.
+        """Search memory entries by text query or vector embedding.
 
         Args:
             query: Text query to search for.
@@ -252,6 +288,7 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
             user_id: User ID to filter by.
             limit: Maximum number of results (defaults to max_results config).
             scope_filter: Scope filter ('all', 'user', 'app').
+            embedding: Optional query vector embedding for semantic/hybrid search.
 
         Returns:
             List of matching memory records ordered by relevance/timestamp.
@@ -365,8 +402,9 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         raise NotImplementedError
 
     @abstractmethod

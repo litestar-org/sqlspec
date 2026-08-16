@@ -7,12 +7,7 @@ import oracledb
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
-from sqlspec.adapters.oracledb._storage import (
-    _oracle_table_feature_report,
-    _resolve_oracle_storage_capabilities_async,
-    _resolve_oracle_storage_capabilities_sync,
-    _validate_oracle_identifier,
-)
+from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
 from sqlspec.adapters.oracledb.data_dictionary import (
     JSONStorageType,
     OracleVersionInfo,
@@ -27,6 +22,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
@@ -101,6 +97,8 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
     "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
     "                session_id VARCHAR2(128) NOT NULL,\n"
     "                invocation_id VARCHAR2(256),\n"
     "                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
@@ -123,6 +121,11 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{9}_timestamp\n"
     "                ON {10}(timestamp ASC)';\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{11}_app_timestamp\n"
+    "                ON {12}(app_name, timestamp ASC)';\n"
     "        END;\n"
     "        "
 )
@@ -169,6 +172,8 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
     "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
     "                session_id VARCHAR2(128) NOT NULL,\n"
     "                app_name VARCHAR2(128) NOT NULL,\n"
     "                user_id VARCHAR2(128) NOT NULL,\n"
@@ -348,7 +353,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
         async with self._config.provide_session() as driver:
-            await _resolve_oracle_storage_capabilities_async(driver)
             existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._session_table) not in existing:
                 await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
@@ -361,10 +365,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             if _bare_table_name(self._metadata_table) not in existing:
                 await driver.execute_script(await self._metadata_table_ddl())
             await driver.commit()
-
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -586,9 +586,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -598,6 +598,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 sql,
                 {
                     "id": event_record["id"],
+                    "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
                     "timestamp": event_record["timestamp"],
@@ -624,9 +626,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -679,6 +681,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     insert_sql,
                     {
                         "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
                         "session_id": event_record["session_id"],
                         "invocation_id": event_record["invocation_id"],
                         "timestamp": event_record["timestamp"],
@@ -777,13 +781,17 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return []
             raise
 
-    async def delete_expired_events(self, before: "datetime") -> int:
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+        params: dict[str, Any] = {"before": before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             async with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                await cursor.execute(sql, {"before": before})
+                await cursor.execute(sql, params)
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -792,13 +800,36 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return 0
             raise
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             async with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                await cursor.execute(sql, {"updated_before": updated_before})
+                await cursor.execute(sql, params)
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, params)
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -1124,6 +1155,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             self._events_table,
             self._events_table,
             self._events_table,
+            self._events_table,
+            self._events_table,
         )
 
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
@@ -1317,7 +1350,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
         with self._config.provide_session() as driver:
-            _resolve_oracle_storage_capabilities_sync(driver)
             existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._session_table) not in existing:
                 driver.execute_script(SQL(self._sessions_table_ddl_for_type(storage_type)))
@@ -1330,10 +1362,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             if _bare_table_name(self._metadata_table) not in existing:
                 driver.execute_script(SQL(self._metadata_table_ddl()))
             driver.commit()
-
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        _resolve_oracle_storage_capabilities_sync(driver)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1560,9 +1588,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Synchronous implementation of append_event."""
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -1572,6 +1600,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 sql,
                 {
                     "id": event_record["id"],
+                    "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
                     "timestamp": event_record["timestamp"],
@@ -1595,9 +1625,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Atomically create an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -1650,6 +1680,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     insert_sql,
                     {
                         "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
                         "session_id": event_record["session_id"],
                         "invocation_id": event_record["invocation_id"],
                         "timestamp": event_record["timestamp"],
@@ -1744,14 +1776,18 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return []
             raise
 
-    def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete events older than the given timestamp, optionally scoped to one application."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+        params: dict[str, Any] = {"before": before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(sql, {"before": before})
+                cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -1760,14 +1796,38 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return 0
             raise
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete sessions whose update_time predates the given threshold, optionally scoped to one application."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(sql, {"updated_before": updated_before})
+                cursor.execute(sql, params)
+                conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold, optionally scoped to one application."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -2093,6 +2153,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             self._events_table,
             self._events_table,
             self._events_table,
+            self._events_table,
+            self._events_table,
         )
 
     def _app_states_table_ddl_for_type(self, storage_type: JSONStorageType) -> str:
@@ -2243,14 +2305,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return
 
         async with self._config.provide_session() as driver:
-            await _resolve_oracle_storage_capabilities_async(driver)
             existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._memory_table) not in existing:
                 await driver.execute_script(await self._memory_table_ddl())
-
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2307,6 +2364,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2579,14 +2637,9 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            _resolve_oracle_storage_capabilities_sync(driver)
             existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._memory_table) not in existing:
                 driver.execute_script(self._memory_table_ddl())
-
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        _resolve_oracle_storage_capabilities_sync(driver)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -2644,6 +2697,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:

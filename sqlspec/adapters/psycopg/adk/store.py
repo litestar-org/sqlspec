@@ -14,6 +14,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyn
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -60,6 +61,8 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
     "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
     "            session_id VARCHAR(128) NOT NULL,\n"
     "            invocation_id VARCHAR(256),\n"
     "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
@@ -69,6 +72,9 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "\n"
     "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
     "            ON {4}(session_id, timestamp ASC){5};\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{8}_app_timestamp\n"
+    "            ON {9}(app_name, timestamp ASC);\n"
     "        {6}\n"
     "        "
 )
@@ -105,13 +111,6 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
 )
 
 
-_ADK_MEMORY_TABLE_DDL_TEMPLATE = (
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{0}_fts\n"
-    "            ON {1} USING GIN (to_tsvector('english', content_text));\n"
-    "            "
-)
-
 _ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
@@ -123,21 +122,14 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
     "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
     "            author VARCHAR(256){1},\n"
     "            timestamp TIMESTAMPTZ NOT NULL,\n"
+    "            embedding VECTOR({2}),\n"
     "            content_json JSONB NOT NULL,\n"
     "            content_text TEXT NOT NULL,\n"
     "            metadata_json JSONB,\n"
     "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
     "        );\n"
     "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{2}_app_scope_user_time\n"
-    "            ON {3}(app_name, scope, user_id, timestamp DESC);\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{4}_scope\n"
-    "            ON {5}(app_name, scope);\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{6}_session\n"
-    "            ON {7}(session_id);\n"
-    "        {8}\n"
+    "        {3}\n"
     "        "
 )
 
@@ -337,8 +329,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     async def append_event(self, event_record: StoredEvent) -> None:
         query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         event_data_value = event_record["event_data"]
@@ -349,6 +341,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                 query,
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -369,8 +363,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
     ) -> StoredSession:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         update_query = pg_sql.SQL("""
@@ -405,6 +399,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                     insert_query,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -490,27 +486,61 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
-            table=pg_sql.Identifier(self._events_table)
-        )
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params = (before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(query, (before,))
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params = (updated_before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(query, (updated_before,))
+                await cur.execute(query, params)
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params = (updated_before,)
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -621,6 +651,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             covering_columns,
             generated_indexes,
             _postgres_table_options(adk_config, include_autovacuum=True),
+            self._events_table,
+            self._events_table,
         )
 
     async def _app_states_table_ddl(self) -> str:
@@ -821,8 +853,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         """Atomically append an event and update session + scoped state."""
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         update_query = pg_sql.SQL("""
@@ -857,6 +889,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                     insert_query,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -943,29 +977,64 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
-            table=pg_sql.Identifier(self._events_table)
-        )
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+                table=pg_sql.Identifier(self._events_table)
+            )
+            params = (before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (before,))
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold."""
-        query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
-            table=pg_sql.Identifier(self._session_table)
-        )
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._session_table)
+            )
+            params = (updated_before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (updated_before,))
+                cur.execute(query, params)
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold."""
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params = (updated_before,)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -1085,6 +1154,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             covering_columns,
             generated_indexes,
             _postgres_table_options(adk_config, include_autovacuum=True),
+            self._events_table,
+            self._events_table,
         )
 
     def _app_states_table_ddl(self) -> str:
@@ -1121,8 +1192,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
     def _insert_event(self, event_record: StoredEvent) -> None:
         insert_query = pg_sql.SQL("""
         INSERT INTO {table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """).format(table=pg_sql.Identifier(self._events_table))
 
         event_data_value = event_record["event_data"]
@@ -1133,6 +1204,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                 insert_query,
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -1215,15 +1288,25 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query and embedding is None:
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._enable_bm25 and query:
+                return await self._search_entries_hybrid(
+                    query, app_name, user_id, effective_limit, scope_filter, embedding
+                )
+            if embedding is not None:
+                return await self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
@@ -1275,25 +1358,85 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+        indexes_sql = _postgres_memory_indexes(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        )
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
-            self._memory_table,
-            owner_id_line,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            fts_index,
+            self._memory_table, owner_id_line, self._vector_dimensions, indexes_sql
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    async def _search_entries_hybrid(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        candidate_limit = max(limit * 2, 50)
+        sql = pg_sql.SQL(
+            """
+            WITH vector_matches AS (
+                SELECT id, RANK() OVER (ORDER BY embedding <=> %s) AS rank_vec
+                FROM {table}
+                WHERE {where_scope} AND embedding IS NOT NULL
+                LIMIT %s
+            ),
+            text_matches AS (
+                SELECT id, RANK() OVER (ORDER BY content_text <@> %s) AS rank_txt
+                FROM {table}
+                WHERE {where_scope}
+                LIMIT %s
+            )
+            SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+            FROM {table} m
+            LEFT JOIN vector_matches v ON m.id = v.id
+            LEFT JOIN text_matches t ON m.id = t.id
+            WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+            ORDER BY rrf_score DESC, m.timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        return _rows_to_records(rows)
+
+    async def _search_entries_vector(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        sql = pg_sql.SQL(
+            """
+            SELECT * FROM {table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s ASC, timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (*scope_params, list(embedding), limit)
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        return _rows_to_records(rows)
 
     async def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -1341,16 +1484,11 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
 
 class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
-    """PostgreSQL ADK memory store using Psycopg3 sync driver."""
+    """Psycopg sync ADK memory store implementation."""
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        """Initialize Psycopg sync memory store."""
-        super().__init__(config)
-
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
         """Create the memory table and indexes if they don't exist."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
@@ -1363,7 +1501,6 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1380,7 +1517,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
                 {owner_id_col}, timestamp, content_json, content_text,
                 metadata_json, inserted_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(
@@ -1415,16 +1552,23 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query and embedding is None:
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._enable_bm25 and query:
+                return self._search_entries_hybrid(query, app_name, user_id, effective_limit, scope_filter, embedding)
+            if embedding is not None:
+                return self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
             if self._use_fts:
                 try:
                     return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
@@ -1475,25 +1619,85 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+        indexes_sql = _postgres_memory_indexes(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        )
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
-            self._memory_table,
-            owner_id_line,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            fts_index,
+            self._memory_table, owner_id_line, self._vector_dimensions, indexes_sql
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    def _search_entries_hybrid(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        candidate_limit = max(limit * 2, 50)
+        sql = pg_sql.SQL(
+            """
+            WITH vector_matches AS (
+                SELECT id, RANK() OVER (ORDER BY embedding <=> %s) AS rank_vec
+                FROM {table}
+                WHERE {where_scope} AND embedding IS NOT NULL
+                LIMIT %s
+            ),
+            text_matches AS (
+                SELECT id, RANK() OVER (ORDER BY content_text <@> %s) AS rank_txt
+                FROM {table}
+                WHERE {where_scope}
+                LIMIT %s
+            )
+            SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+            FROM {table} m
+            LEFT JOIN vector_matches v ON m.id = v.id
+            LEFT JOIN text_matches t ON m.id = t.id
+            WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+            ORDER BY rrf_score DESC, m.timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return _rows_to_records(rows)
+
+    def _search_entries_vector(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        sql = pg_sql.SQL(
+            """
+            SELECT * FROM {table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s ASC, timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (*scope_params, list(embedding), limit)
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return _rows_to_records(rows)
 
     def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -1590,7 +1794,7 @@ def _rows_to_records(rows: "list[Any]") -> "list[StoredMemory]":
             "content_text": row["content_text"],
             "metadata_json": row["metadata_json"],
             "inserted_at": row["inserted_at"],
-            "embedding": None,
+            "embedding": row.get("embedding"),
         }
         for row in rows
     ]
@@ -1633,6 +1837,48 @@ def _postgres_autovacuum_options(adk_config: PsycopgADKConfig) -> "list[str]":
                 raise ValueError(msg)
             options.append(f"{key} = {float(value):g}")
     return options
+
+
+def _postgres_memory_indexes(
+    memory_table: str,
+    use_fts: bool,
+    enable_bm25: bool,
+    vector_index_type: str,
+    scann_num_leaves: int,
+    scann_quantizer: str,
+) -> str:
+    """Return the index DDL statements for the ADK memory table."""
+
+    indexes: list[str] = [
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_app_scope_user_time ON {memory_table}(app_name, scope, user_id, timestamp DESC);",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scope ON {memory_table}(app_name, scope);",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_session ON {memory_table}(session_id);",
+    ]
+
+    if use_fts:
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_fts ON {memory_table} USING GIN (to_tsvector('english', content_text));"
+        )
+
+    if enable_bm25:
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_bm25 ON {memory_table} USING bm25 (content_text);"
+        )
+
+    if vector_index_type == "scann":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scann ON {memory_table} USING scann (embedding) WITH (num_leaves = {scann_num_leaves}, quantizer = '{scann_quantizer}');"
+        )
+    elif vector_index_type == "ivfflat":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_ivfflat ON {memory_table} USING ivfflat (embedding vector_cosine_ops);"
+        )
+    elif vector_index_type == "hnsw":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_hnsw ON {memory_table} USING hnsw (embedding vector_cosine_ops);"
+        )
+
+    return "\n        ".join(indexes)
 
 
 def _postgres_event_ddl_options(adk_config: PsycopgADKConfig, events_table: str) -> "tuple[str, str, str]":

@@ -67,13 +67,6 @@ def _storage_config(settings: "dict[str, Any]") -> Any:
     config = cast("Any", _FakeOracleConfig(_FakeConnection(_FakeCursor())))
     config.extension_config = {"litestar": {"session_table": "oracle_sessions", **settings}}
     cache = OracleVersionCache()
-    cache.storage_capabilities = {
-        "advanced_compression": True,
-        "basic_compression": True,
-        "in_memory": True,
-        "partitioning": True,
-    }
-    cache.storage_capabilities_resolved = True
     config._oracle_version_cache = cache
     return config
 

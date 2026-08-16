@@ -1,13 +1,19 @@
-"""Oracle extension-table storage feature gates."""
+"""Oracle extension-table storage clauses.
 
-import logging
+Configured clauses are emitted as written. SQLSpec does not inspect the server
+to decide whether an option is licensed or enabled: configuration is a
+statement of intent, and silently creating a table without the requested
+compression, in-memory, or partitioning clause would hand back a schema the
+caller did not ask for. An unavailable option surfaces as the database's own
+error instead.
+"""
+
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
 from typing_extensions import TypedDict
 
-from sqlspec.adapters.oracledb.data_dictionary import OracleStorageCapabilities, OracleVersionCache
-from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.logging import get_logger
 
 logger = get_logger("sqlspec.adapters.oracledb.storage")
 
@@ -31,21 +37,10 @@ ORACLE_COMPRESSION_CLAUSES = {
 
 
 class _OracleStorageFeatureReport(TypedDict):
-    """Storage clauses applied or degraded for one table."""
+    """Storage clauses applied to one table."""
 
     applied: tuple[str, ...]
     clause: str
-    degraded: tuple[dict[str, str], ...]
-
-
-def _resolve_oracle_storage_capabilities_sync(driver: Any) -> OracleStorageCapabilities:
-    """Resolve storage options through the driver's pool-cached data dictionary."""
-    return cast("OracleStorageCapabilities", driver.data_dictionary.get_storage_capabilities(driver))
-
-
-async def _resolve_oracle_storage_capabilities_async(driver: Any) -> OracleStorageCapabilities:
-    """Resolve storage options through the driver's pool-cached data dictionary."""
-    return cast("OracleStorageCapabilities", await driver.data_dictionary.get_storage_capabilities(driver))
 
 
 def _oracle_table_feature_report(
@@ -59,11 +54,9 @@ def _oracle_table_feature_report(
     range_partition_key: str,
     table_options_key: str | None = None,
 ) -> _OracleStorageFeatureReport:
-    """Return gated Oracle table clauses and a structured degradation report."""
-    capabilities, unavailable_reason = _cached_storage_capabilities(config)
+    """Return the Oracle table clauses requested by configuration."""
     clauses: list[str] = []
     applied: list[str] = []
-    degraded: list[dict[str, str]] = []
 
     compression = settings.get("compression")
     if isinstance(compression, Mapping) and compression.get("enabled"):
@@ -74,31 +67,12 @@ def _oracle_table_feature_report(
             supported = ", ".join(sorted(ORACLE_COMPRESSION_CLAUSES))
             msg = f"Unsupported Oracle compression algorithm {algorithm!r}. Supported values: {supported}"
             raise ValueError(msg) from exc
-        capability = "basic_compression" if algorithm == "basic" else "advanced_compression"
-        _apply_or_degrade(
-            clauses,
-            applied,
-            degraded,
-            capabilities,
-            capability,
-            compression_clause,
-            unavailable_reason,
-            extension_name,
-            table_kind,
-        )
+        clauses.append(compression_clause)
+        applied.append("basic_compression" if algorithm == "basic" else "advanced_compression")
 
     if in_memory:
-        _apply_or_degrade(
-            clauses,
-            applied,
-            degraded,
-            capabilities,
-            "in_memory",
-            "INMEMORY PRIORITY HIGH",
-            unavailable_reason,
-            extension_name,
-            table_kind,
-        )
+        clauses.append("INMEMORY PRIORITY HIGH")
+        applied.append("in_memory")
 
     resolved_options_key = table_options_key or (
         "events_table_options" if table_kind == "events" else f"{table_kind}_table_options"
@@ -112,69 +86,13 @@ def _oracle_table_feature_report(
     if isinstance(partitioning, Mapping):
         partition_clause = _oracle_partition_clause(partitioning, table_kind, hash_partition_key, range_partition_key)
         if partition_clause:
-            _apply_or_degrade(
-                clauses,
-                applied,
-                degraded,
-                capabilities,
-                "partitioning",
-                partition_clause,
-                unavailable_reason,
-                extension_name,
-                table_kind,
-            )
+            clauses.append(partition_clause)
+            applied.append("partitioning")
 
     clause = ""
     if clauses:
         clause = " " + " ".join(clauses).replace("'", "''")
-    return {"applied": tuple(applied), "clause": clause, "degraded": tuple(degraded)}
-
-
-def _cached_storage_capabilities(config: Any) -> "tuple[OracleStorageCapabilities, str | None]":
-    """Read capabilities only from the config's shared Oracle cache."""
-    cache = getattr(config, "_oracle_version_cache", None)
-    if not isinstance(cache, OracleVersionCache) or not cache.storage_capabilities_resolved:
-        return _assumed_storage_capabilities(), None
-    reason = cache.storage_capabilities_reason
-    return cache.storage_capabilities, reason
-
-
-def _unsupported_capabilities() -> OracleStorageCapabilities:
-    return {"advanced_compression": False, "basic_compression": False, "in_memory": False, "partitioning": False}
-
-
-def _assumed_storage_capabilities() -> OracleStorageCapabilities:
-    """Preserve configured clauses for offline DDL rendering before preparation."""
-    return {"advanced_compression": True, "basic_compression": True, "in_memory": True, "partitioning": True}
-
-
-def _apply_or_degrade(
-    clauses: list[str],
-    applied: list[str],
-    degraded: list[dict[str, str]],
-    capabilities: OracleStorageCapabilities,
-    optimization: str,
-    clause: str,
-    unavailable_reason: str | None,
-    extension_name: str,
-    table_kind: str,
-) -> None:
-    """Append a supported clause or record and log its degradation."""
-    if capabilities.get(optimization, False):
-        clauses.append(clause)
-        applied.append(optimization)
-        return
-    reason = unavailable_reason or "unlicensed_or_unavailable"
-    degraded.append({"optimization": optimization, "reason": reason})
-    log_with_context(
-        logger,
-        logging.WARNING,
-        "oracle.storage.optimization.degraded",
-        extension=extension_name,
-        optimization=optimization,
-        reason=reason,
-        table_kind=table_kind,
-    )
+    return {"applied": tuple(applied), "clause": clause}
 
 
 def _oracle_partition_clause(

@@ -188,6 +188,7 @@ class ExecutionResult(NamedTuple):
     is_many_result: bool
     row_format: "RowFormat" = "dict"
     last_inserted_id: int | str | None = None
+    column_types: "dict[str, str] | None" = None
 
 
 def describe_stack_statement(statement: "StatementProtocol | str") -> str:
@@ -776,6 +777,7 @@ class CommonDriverAttributesMixin:
         is_many_result: bool = False,
         row_format: "RowFormat" = "dict",
         last_inserted_id: int | str | None = None,
+        column_types: "dict[str, str] | None" = None,
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.
 
@@ -793,6 +795,8 @@ class CommonDriverAttributesMixin:
             is_many_result: Whether this result is from an execute_many operation
             row_format: Format of raw rows - "tuple", "dict", or "record"
             last_inserted_id: The ID of the last inserted row (if applicable)
+            column_types: For SELECT operations, a column name to neutral type-token map
+                describing declared column types, used to type all-NULL Arrow columns
 
         Returns:
             ExecutionResult configured for the specified operation type
@@ -812,6 +816,7 @@ class CommonDriverAttributesMixin:
             is_many_result,
             row_format,
             last_inserted_id,
+            column_types,
         )
 
     def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
@@ -836,13 +841,16 @@ class CommonDriverAttributesMixin:
             )
 
         if execution_result.is_select_result:
+            select_metadata = execution_result.special_data or {}
+            if execution_result.column_types:
+                select_metadata = {**select_metadata, "column_types": execution_result.column_types}
             return SQLResult(
                 statement=statement,
                 data=execution_result.selected_data or [],
                 column_names=execution_result.column_names or [],
                 rows_affected=execution_result.data_row_count or 0,
                 operation_type="SELECT",
-                metadata=execution_result.special_data or {},
+                metadata=select_metadata,
                 row_format=execution_result.row_format,
                 last_inserted_id=execution_result.last_inserted_id,
             )

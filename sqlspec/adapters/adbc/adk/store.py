@@ -11,6 +11,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.adbc.config import AdbcConfig
     from sqlspec.extensions.adk import StoredMemory
 
@@ -133,13 +135,17 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Get events for a session."""
         return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
 
-    def delete_expired_events(self, before: datetime) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than a timestamp."""
-        return self._delete_expired_events(before)
+        return self._delete_expired_events(before, app_name)
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete sessions older than a timestamp."""
-        return self._delete_idle_sessions(updated_before)
+        return self._delete_idle_sessions(updated_before, app_name)
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows older than a timestamp."""
+        return self._delete_idle_user_states(updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
@@ -390,6 +396,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -407,6 +415,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id TEXT PRIMARY KEY,
+            app_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
             invocation_id TEXT,
             timestamp REAL NOT NULL,
@@ -424,6 +434,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -441,6 +453,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL,
             session_id VARCHAR NOT NULL,
             invocation_id VARCHAR,
             timestamp TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
@@ -458,6 +472,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -821,8 +837,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         event_data = self._serialize_json_field(event_record["event_data"])
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, {self._json_placeholder()})
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
         """
 
         with self._config.provide_connection() as conn:
@@ -833,6 +849,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     sql,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -874,8 +892,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, {self._json_placeholder()})
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
         """
         update_sql = f"""
         UPDATE {self._session_table}
@@ -908,6 +926,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     insert_sql,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -1019,18 +1039,23 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 return []
             raise
 
-    def _delete_expired_events(self, before: datetime) -> int:
-        count_sql = f"SELECT COUNT(*) FROM {self._events_table} WHERE timestamp < ?"
-        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+    def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
+        where = "WHERE timestamp < ?"
+        params: tuple[Any, ...] = (before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._events_table} {where}"
+        delete_sql = f"DELETE FROM {self._events_table} {where}"
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    self._execute(cursor, count_sql, (before,))
+                    self._execute(cursor, count_sql, params)
                     row = cursor.fetchone()
                     count = int(row[0]) if row is not None else 0
-                    self._execute(cursor, delete_sql, (before,))
+                    self._execute(cursor, delete_sql, params)
                     conn.commit()
                     return count
                 finally:
@@ -1041,23 +1066,55 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 return 0
             raise
 
-    def _delete_idle_sessions(self, updated_before: datetime) -> int:
-        count_sql = f"SELECT COUNT(*) FROM {self._session_table} WHERE update_time < ?"
+    def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        where = "WHERE update_time < ?"
+        params: tuple[Any, ...] = (updated_before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (updated_before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._session_table} {where}"
         delete_events_sql = f"""
         DELETE FROM {self._events_table}
-        WHERE session_id IN (SELECT id FROM {self._session_table} WHERE update_time < ?)
+        WHERE session_id IN (SELECT id FROM {self._session_table} {where})
         """
-        delete_sessions_sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+        delete_sessions_sql = f"DELETE FROM {self._session_table} {where}"
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    self._execute(cursor, count_sql, (updated_before,))
+                    self._execute(cursor, count_sql, params)
                     row = cursor.fetchone()
                     count = int(row[0]) if row is not None else 0
-                    self._execute(cursor, delete_events_sql, (updated_before,))
-                    self._execute(cursor, delete_sessions_sql, (updated_before,))
+                    self._execute(cursor, delete_events_sql, params)
+                    self._execute(cursor, delete_sessions_sql, params)
+                    conn.commit()
+                    return count
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return 0
+            raise
+
+    def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        where = "WHERE update_time < ?"
+        params: tuple[Any, ...] = (updated_before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (updated_before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._user_state_table} {where}"
+        delete_sql = f"DELETE FROM {self._user_state_table} {where}"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, count_sql, params)
+                    row = cursor.fetchone()
+                    count = int(row[0]) if row is not None else 0
+                    self._execute(cursor, delete_sql, params)
                     conn.commit()
                     return count
                 finally:
@@ -1197,6 +1254,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter)

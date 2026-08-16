@@ -13,6 +13,7 @@ from sqlspec.protocols import HasErrnoProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
@@ -91,7 +92,8 @@ _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
     "            event_data JSON NOT NULL{1},\n"
     "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE,\n"
     "            INDEX idx_{3}_scope (app_name, user_id, session_id, timestamp ASC{4}),\n"
-    "            INDEX idx_{5}_session (session_id, timestamp ASC{6}){7}\n"
+    "            INDEX idx_{5}_session (session_id, timestamp ASC{6}),\n"
+    "            INDEX idx_{9}_app_timestamp (app_name, timestamp ASC){7}\n"
     "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{8}\n"
     "        "
 )
@@ -423,11 +425,14 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 return []
             raise
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        return await _async_delete_before(self, self._events_table, "timestamp", before)
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        return await _async_delete_before(self, self._events_table, "timestamp", before, app_name)
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        return await _async_delete_before(self, self._session_table, "update_time", updated_before)
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        return await _async_delete_before(self, self._session_table, "update_time", updated_before, app_name)
+
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        return await _async_delete_before(self, self._user_state_table, "update_time", updated_before, app_name)
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         return await _async_state(self, self._app_state_table, "app_name = %s", (app_name,))
@@ -781,13 +786,17 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 return []
             raise
 
-    def delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        return _sync_delete_before(self, self._events_table, "timestamp", before)
+        return _sync_delete_before(self, self._events_table, "timestamp", before, app_name)
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the threshold."""
-        return _sync_delete_before(self, self._session_table, "update_time", updated_before)
+        return _sync_delete_before(self, self._session_table, "update_time", updated_before, app_name)
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the threshold."""
+        return _sync_delete_before(self, self._user_state_table, "update_time", updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
@@ -964,6 +973,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1176,6 +1186,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
@@ -1383,16 +1394,24 @@ def _raise_session_not_found(session_id: str) -> None:
 
 
 async def _async_delete_before(
-    store: MysqlConnectorAsyncADKStore, table_name: str, column_name: str, threshold: "datetime"
+    store: MysqlConnectorAsyncADKStore,
+    table_name: str,
+    column_name: str,
+    threshold: "datetime",
+    app_name: "str | None" = None,
 ) -> int:
     import mysql.connector
 
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
+    params: list[Any] = [threshold]
+    if app_name is not None:
+        sql += " AND app_name = %s"
+        params.append(app_name)
     try:
         async with store._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
-                await cursor.execute(sql, (threshold,))
+                await cursor.execute(sql, tuple(params))
                 rowcount = cursor.rowcount
             finally:
                 await cursor.close()
@@ -1437,16 +1456,24 @@ async def _async_execute_commit(store: MysqlConnectorAsyncADKStore, sql: str, pa
 
 
 def _sync_delete_before(
-    store: MysqlConnectorSyncADKStore, table_name: str, column_name: str, threshold: "datetime"
+    store: MysqlConnectorSyncADKStore,
+    table_name: str,
+    column_name: str,
+    threshold: "datetime",
+    app_name: "str | None" = None,
 ) -> int:
     import mysql.connector
 
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
+    params: list[Any] = [threshold]
+    if app_name is not None:
+        sql += " AND app_name = %s"
+        params.append(app_name)
     try:
         with store._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (threshold,))
+                cursor.execute(sql, tuple(params))
                 rowcount = cursor.rowcount
             finally:
                 cursor.close()
@@ -1527,6 +1554,7 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
         covering_column,
         generated_indexes,
         table_options,
+        events_table,
     )
 
 

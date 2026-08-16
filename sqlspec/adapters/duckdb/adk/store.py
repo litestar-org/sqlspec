@@ -21,6 +21,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.duckdb.config import DuckDBConfig
     from sqlspec.extensions.adk import StoredMemory
 
@@ -242,13 +244,17 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
         return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
 
-    def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than a timestamp."""
-        return self._delete_expired_events(before)
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete events older than a timestamp, optionally scoped to one application."""
+        return self._delete_expired_events(before, app_name)
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions older than a timestamp."""
-        return self._delete_idle_sessions(updated_before)
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete sessions older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_sessions(updated_before, app_name)
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_user_states(updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
@@ -308,6 +314,8 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL,
             session_id VARCHAR NOT NULL,
             invocation_id VARCHAR,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -315,6 +323,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp ON {self._events_table}(app_name, timestamp ASC);
         {generated_indexes}
         """
 
@@ -438,6 +447,8 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR PRIMARY KEY,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL,
             session_id VARCHAR NOT NULL,
             invocation_id VARCHAR,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -445,6 +456,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp ON {self._events_table}(app_name, timestamp ASC);
         {generated_indexes}
         """
 
@@ -594,8 +606,8 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         sql = f"""
         INSERT INTO {self._events_table}
-        (id, session_id, invocation_id, timestamp, event_data)
-        VALUES (?, ?, ?, ?, ?)
+        (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """
 
         with self._config.provide_connection() as conn:
@@ -603,6 +615,8 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 sql,
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -629,8 +643,8 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         insert_sql = f"""
         INSERT INTO {self._events_table}
-        (id, session_id, invocation_id, timestamp, event_data)
-        VALUES (?, ?, ?, ?, ?)
+        (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """
 
         update_sql = f"""
@@ -661,6 +675,8 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     insert_sql,
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -744,15 +760,20 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 return []
             raise
 
-    def _delete_expired_events(self, before: "datetime") -> int:
-        count_sql = f"SELECT COUNT(*) FROM {self._events_table} WHERE timestamp < ?"
-        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+    def _delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        where = "WHERE timestamp < ?"
+        params: tuple[Any, ...] = (before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._events_table} {where}"
+        delete_sql = f"DELETE FROM {self._events_table} {where}"
 
         try:
             with self._config.provide_connection() as conn:
-                count_row = conn.execute(count_sql, (before,)).fetchone()
+                count_row = conn.execute(count_sql, params).fetchone()
                 count = int(count_row[0]) if count_row is not None else 0
-                conn.execute(delete_sql, (before,))
+                conn.execute(delete_sql, params)
                 conn.commit()
                 return count
         except Exception as e:
@@ -760,20 +781,46 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 return 0
             raise
 
-    def _delete_idle_sessions(self, updated_before: "datetime") -> int:
-        count_sql = f"SELECT COUNT(*) FROM {self._session_table} WHERE update_time < ?"
+    def _delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        where = "WHERE update_time < ?"
+        params: tuple[Any, ...] = (updated_before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (updated_before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._session_table} {where}"
         delete_events_sql = f"""
         DELETE FROM {self._events_table}
-        WHERE session_id IN (SELECT id FROM {self._session_table} WHERE update_time < ?)
+        WHERE session_id IN (SELECT id FROM {self._session_table} {where})
         """
-        delete_sessions_sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+        delete_sessions_sql = f"DELETE FROM {self._session_table} {where}"
 
         try:
             with self._config.provide_connection() as conn:
-                count_row = conn.execute(count_sql, (updated_before,)).fetchone()
+                count_row = conn.execute(count_sql, params).fetchone()
                 count = int(count_row[0]) if count_row is not None else 0
-                conn.execute(delete_events_sql, (updated_before,))
-                conn.execute(delete_sessions_sql, (updated_before,))
+                conn.execute(delete_events_sql, params)
+                conn.execute(delete_sessions_sql, params)
+                conn.commit()
+                return count
+        except Exception as e:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(e):
+                return 0
+            raise
+
+    def _delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        where = "WHERE update_time < ?"
+        params: tuple[Any, ...] = (updated_before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (updated_before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._user_state_table} {where}"
+        delete_sql = f"DELETE FROM {self._user_state_table} {where}"
+
+        try:
+            with self._config.provide_connection() as conn:
+                count_row = conn.execute(count_sql, params).fetchone()
+                count = int(count_row[0]) if count_row is not None else 0
+                conn.execute(delete_sql, params)
                 conn.commit()
                 return count
         except Exception as e:
@@ -904,6 +951,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query.
 

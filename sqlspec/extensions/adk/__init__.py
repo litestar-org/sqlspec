@@ -29,6 +29,17 @@ from sqlspec.extensions.adk.artifact import (
     SQLSpecArtifactService,
     StoredArtifact,
 )
+from sqlspec.extensions.adk.maintenance import (
+    PruneReport,
+    prune_events,
+    prune_events_sync,
+    prune_memory,
+    prune_memory_sync,
+    prune_sessions,
+    prune_sessions_sync,
+    prune_user_state,
+    prune_user_state_sync,
+)
 from sqlspec.extensions.adk.memory import (
     BaseAsyncADKMemoryStore,
     BaseSyncADKMemoryStore,
@@ -47,6 +58,7 @@ __all__ = (
     "BaseSyncADKArtifactStore",
     "BaseSyncADKMemoryStore",
     "BaseSyncADKStore",
+    "PruneReport",
     "SQLSpecArtifactService",
     "SQLSpecMemoryService",
     "SQLSpecSessionService",
@@ -55,4 +67,12 @@ __all__ = (
     "StoredEvent",
     "StoredMemory",
     "StoredSession",
+    "prune_events",
+    "prune_events_sync",
+    "prune_memory",
+    "prune_memory_sync",
+    "prune_sessions",
+    "prune_sessions_sync",
+    "prune_user_state",
+    "prune_user_state_sync",
 )

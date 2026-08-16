@@ -16,6 +16,8 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
     from sqlspec.extensions.adk import StoredMemory
 
@@ -469,14 +471,18 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return []
             raise
 
-    async def delete_expired_events(self, before: datetime) -> int:
+    async def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+        params: list[Any] = [_datetime_to_julian(before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
 
         try:
             async with self._config.provide_connection() as conn:
                 await self._apply_pragmas(conn)
-                cursor = await conn.execute(sql, (_datetime_to_julian(before),))
+                cursor = await conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 await conn.commit()
                 return deleted_count
@@ -485,14 +491,38 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return 0
             raise
 
-    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+    async def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+        params: list[Any] = [_datetime_to_julian(updated_before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
 
         try:
             async with self._config.provide_connection() as conn:
                 await self._apply_pragmas(conn)
-                cursor = await conn.execute(sql, (_datetime_to_julian(updated_before),))
+                cursor = await conn.execute(sql, tuple(params))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                await conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    async def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the given threshold."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < ?"
+        params: list[Any] = [_datetime_to_julian(updated_before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 await conn.commit()
                 return deleted_count
@@ -652,6 +682,8 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             ON {self._events_table}(invocation_id);
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp
             ON {self._events_table}(timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
+            ON {self._events_table}(app_name, timestamp ASC);
         """
 
     async def _app_states_table_ddl(self) -> str:
@@ -825,6 +857,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:

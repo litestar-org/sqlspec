@@ -1,12 +1,9 @@
 """Oracle-specific data dictionary for metadata queries."""
 
-import logging
-from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import TypedDict
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
@@ -45,7 +42,7 @@ from sqlspec.data_dictionary.dialects.oracle import (
     resolve_oracle_json_type,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
-from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -56,7 +53,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "JSONStorageType",
-    "OracleStorageCapabilities",
     "OracleVersionCache",
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
@@ -107,15 +103,6 @@ ORACLE_SYSTEM_METADATA_DOMAINS = ("system", "diagnostics", "awr", "ash", "addm",
 ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS = ("no_diagnostics", "disabled")
 ORACLE_SYSTEM_REDACTION_FIELDS = ("query_text", "sql_text", "username", "user_name", "session_user")
 _STORAGE_OPTION_FIELD_COUNT = 2
-
-
-class OracleStorageCapabilities(TypedDict):
-    """Oracle storage options resolved from the database option catalog."""
-
-    advanced_compression: bool
-    basic_compression: bool
-    in_memory: bool
-    partitioning: bool
 
 
 class OracleVersionInfo(VersionInfo):
@@ -191,27 +178,15 @@ class OracleVersionCache:
     next pool restart.
     """
 
-    __slots__ = (
-        "resolved",
-        "storage_capabilities",
-        "storage_capabilities_reason",
-        "storage_capabilities_resolved",
-        "version",
-    )
+    __slots__ = ("resolved", "version")
 
     def __init__(self) -> None:
         self.resolved: bool = False
-        self.storage_capabilities: OracleStorageCapabilities = _unsupported_storage_capabilities()
-        self.storage_capabilities_reason: str | None = None
-        self.storage_capabilities_resolved = False
         self.version: OracleVersionInfo | None = None
 
     def reset(self) -> None:
         """Clear the cached version so the next resolution re-queries the server."""
         self.resolved = False
-        self.storage_capabilities = _unsupported_storage_capabilities()
-        self.storage_capabilities_reason = None
-        self.storage_capabilities_resolved = False
         self.version = None
 
 
@@ -456,34 +431,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         else:
             self.cache_version(driver_id, version_info)
         return version_info
-
-    def get_storage_capabilities(self, driver: "OracleSyncDriver") -> OracleStorageCapabilities:
-        """Return pool-scoped Oracle storage-option capabilities.
-
-        An unavailable option catalog degrades to an all-false capability set.
-        The reason is stored on the same pool-scoped holder as the version.
-        """
-        holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
-        if holder is not None and holder.storage_capabilities_resolved:
-            return cast("OracleStorageCapabilities", dict(holder.storage_capabilities))
-
-        self.get_version(driver)
-        capabilities = _unsupported_storage_capabilities()
-        reason: str | None = None
-        try:
-            rows = driver.select(self.get_query_text("version", "storage_options"))
-            capabilities = _storage_capabilities_from_rows(rows)
-            if not rows:
-                reason = "options_not_reported"
-        except Exception as exc:
-            reason = f"capability_query_failed:{type(exc).__name__}"
-            log_with_context(logger, logging.WARNING, "oracle.storage.capabilities.degraded", reason=reason)
-
-        if holder is not None:
-            holder.storage_capabilities = capabilities
-            holder.storage_capabilities_reason = reason
-            holder.storage_capabilities_resolved = True
-        return capabilities
 
     def get_feature_flag(self, driver: "OracleSyncDriver", feature: str) -> bool:
         """Check if Oracle database supports a specific feature."""
@@ -859,30 +806,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_storage_capabilities(self, driver: "OracleAsyncDriver") -> OracleStorageCapabilities:
-        """Return pool-scoped Oracle storage-option capabilities."""
-        holder: OracleVersionCache | None = getattr(driver, "_oracle_version_cache", None)
-        if holder is not None and holder.storage_capabilities_resolved:
-            return cast("OracleStorageCapabilities", dict(holder.storage_capabilities))
-
-        await self.get_version(driver)
-        capabilities = _unsupported_storage_capabilities()
-        reason: str | None = None
-        try:
-            rows = await driver.select(self.get_query_text("version", "storage_options"))
-            capabilities = _storage_capabilities_from_rows(rows)
-            if not rows:
-                reason = "options_not_reported"
-        except Exception as exc:
-            reason = f"capability_query_failed:{type(exc).__name__}"
-            log_with_context(logger, logging.WARNING, "oracle.storage.capabilities.degraded", reason=reason)
-
-        if holder is not None:
-            holder.storage_capabilities = capabilities
-            holder.storage_capabilities_reason = reason
-            holder.storage_capabilities_resolved = True
-        return capabilities
-
     async def get_feature_flag(self, driver: "OracleAsyncDriver", feature: str) -> bool:
         """Check if Oracle database supports a specific feature."""
         version_info = await self.get_version(driver)
@@ -1223,31 +1146,3 @@ def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSON
     if version_info is None:
         return JSONStorageType.BLOB_JSON
     return JSONStorageType(resolve_oracle_json_storage(version_info.major, version_info.compatible_major))
-
-
-def _unsupported_storage_capabilities() -> OracleStorageCapabilities:
-    """Return the safe capability set used before or after failed detection."""
-    return {"advanced_compression": False, "basic_compression": False, "in_memory": False, "partitioning": False}
-
-
-def _storage_capabilities_from_rows(rows: "Sequence[Any]") -> OracleStorageCapabilities:
-    """Normalize ``V$OPTION`` rows into storage capability flags."""
-    option_values: dict[str, bool] = {}
-    for row in rows:
-        if isinstance(row, Mapping):
-            parameter = row.get("parameter", row.get("PARAMETER"))
-            value = row.get("value", row.get("VALUE"))
-        elif isinstance(row, (tuple, list)) and len(row) >= _STORAGE_OPTION_FIELD_COUNT:
-            parameter, value = row[0], row[1]
-        else:
-            continue
-        if parameter is not None:
-            option_values[str(parameter).casefold()] = str(value).casefold() == "true"
-
-    advanced_compression = option_values.get("advanced compression", False)
-    return {
-        "advanced_compression": advanced_compression,
-        "basic_compression": option_values.get("basic compression", False) or advanced_compression,
-        "in_memory": option_values.get("in-memory column store", False),
-        "partitioning": option_values.get("partitioning", False),
-    }

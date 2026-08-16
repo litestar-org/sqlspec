@@ -153,13 +153,17 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         """Get events for a session."""
         return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
 
-    def delete_expired_events(self, before: datetime) -> int:
-        """Delete events older than a timestamp."""
-        return self._delete_expired_events(before)
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
+        """Delete events older than a timestamp, optionally scoped to one application."""
+        return self._delete_expired_events(before, app_name)
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
-        """Delete idle sessions older than a timestamp."""
-        return self._delete_idle_sessions(updated_before)
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete idle sessions older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_sessions(updated_before, app_name)
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete idle user-scoped state rows older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_user_states(updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
@@ -413,14 +417,31 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         rows = self._run_query(sql, params)
         return [_event_record_from_row(row) for row in rows]
 
-    def _delete_expired_events(self, before: datetime) -> int:
+    def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE timestamp < @before{self._partition_filter('timestamp')}"
-        self._run_query(sql, [self._query_param("before", before, bq_type="TIMESTAMP")])
+        params = [self._query_param("before", before, bq_type="TIMESTAMP")]
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params.append(self._query_param("app_name", app_name))
+        self._run_query(sql, params)
         return 0
 
-    def _delete_idle_sessions(self, updated_before: datetime) -> int:
+    def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE update_time < @before{self._partition_filter('create_time')}"
-        self._run_query(sql, [self._query_param("before", updated_before, bq_type="TIMESTAMP")])
+        params = [self._query_param("before", updated_before, bq_type="TIMESTAMP")]
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params.append(self._query_param("app_name", app_name))
+        self._run_query(sql, params)
+        return 0
+
+    def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        sql = f"DELETE FROM {self._qualified(self._user_state_table)} WHERE update_time < @before"
+        params = [self._query_param("before", updated_before, bq_type="TIMESTAMP")]
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params.append(self._query_param("app_name", app_name))
+        self._run_query(sql, params)
         return 0
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":

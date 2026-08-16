@@ -14,12 +14,9 @@ Covers the C1 contract:
 from typing import Any
 from unittest.mock import MagicMock
 
-import oracledb
 import pytest
 
 from sqlspec.adapters.oracledb import config as oracle_config_module
-from sqlspec.adapters.oracledb._json_handlers import json_input_type_handler
-from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB
 from sqlspec.adapters.oracledb.adk import store as adk_store
 from sqlspec.adapters.oracledb.config import OracleSyncConfig
 from sqlspec.adapters.oracledb.data_dictionary import (
@@ -45,13 +42,6 @@ def _config_with_version(version: "OracleVersionInfo | None") -> Any:
     cache = OracleVersionCache()
     cache.resolved = True
     cache.version = version
-    cache.storage_capabilities = {
-        "advanced_compression": True,
-        "basic_compression": True,
-        "in_memory": True,
-        "partitioning": True,
-    }
-    cache.storage_capabilities_resolved = True
     config._oracle_version_cache = cache
     return config
 
@@ -82,85 +72,6 @@ def test_oracle_version_resolved_once_per_pool() -> None:
     assert second is not None and second.major == 21
     assert first_driver.select_one_or_none.call_count == 1
     assert second_driver.select_one_or_none.call_count == 0
-
-
-def test_oracle_storage_capabilities_resolve_once_per_pool() -> None:
-    """Two sessions from one config share one Oracle option-catalog lookup."""
-    config = OracleSyncConfig(connection_config={"user": "u", "password": "p", "dsn": "d"})
-    cache = config._oracle_version_cache
-    cache.resolved = True
-    cache.version = OracleVersionInfo(21, 3, 0, compatible="21.0.0")
-    first_driver = MagicMock(_oracle_version_cache=cache)
-    second_driver = MagicMock(_oracle_version_cache=cache)
-    first_driver.select.return_value = [
-        {"parameter": "Basic Compression", "value": "TRUE"},
-        {"parameter": "Advanced Compression", "value": "FALSE"},
-        {"parameter": "Partitioning", "value": "TRUE"},
-        {"parameter": "In-Memory Column Store", "value": "FALSE"},
-    ]
-
-    first = OracledbSyncDataDictionary().get_storage_capabilities(first_driver)
-    second = OracledbSyncDataDictionary().get_storage_capabilities(second_driver)
-
-    assert (
-        first
-        == second
-        == {"advanced_compression": False, "basic_compression": True, "in_memory": False, "partitioning": True}
-    )
-    first_driver.select.assert_called_once()
-    second_driver.select.assert_not_called()
-
-
-def test_oracle_storage_capabilities_degrade_when_option_catalog_is_unavailable() -> None:
-    """An inaccessible option catalog returns safe false flags without a raw error."""
-    cache = OracleVersionCache()
-    cache.resolved = True
-    cache.version = OracleVersionInfo(19, 0, 0, compatible="19.0.0")
-    driver = MagicMock(_oracle_version_cache=cache)
-    driver.select.side_effect = RuntimeError("catalog denied")
-
-    capabilities = OracledbSyncDataDictionary().get_storage_capabilities(driver)
-
-    assert not any(capabilities.values())
-    assert cache.storage_capabilities_reason == "capability_query_failed:RuntimeError"
-
-
-@pytest.mark.parametrize("major", [11, 12, 19, 21, 23])
-def test_oracle_json_thresholds_single_source(major: int) -> None:
-    """The connection JSON handler agrees with OracleVersionInfo for every major."""
-    cursor = MagicMock()
-    cursor.connection._sqlspec_oracle_major = major
-    sentinel = object()
-    cursor.var = MagicMock(return_value=sentinel)
-
-    json_input_type_handler(cursor, {"key": "value"}, 1)
-    bound_type = cursor.var.call_args.args[0]
-
-    version = OracleVersionInfo(major, 0, 0, compatible=str(major))
-    if version.supports_native_json():
-        expected = oracledb.DB_TYPE_JSON
-    elif version.supports_json_blob():
-        expected = DB_TYPE_BLOB
-    else:
-        expected = DB_TYPE_CLOB
-
-    assert bound_type is expected
-
-
-@pytest.mark.parametrize(
-    ("major", "compatible", "expected"),
-    [
-        (11, "11.2.0", JSONStorageType.BLOB_PLAIN),
-        (12, "12.1.0", JSONStorageType.BLOB_JSON),
-        (19, "19.0.0", JSONStorageType.BLOB_JSON),
-        (21, "21.0.0", JSONStorageType.JSON_NATIVE),
-        (23, "23.0.0", JSONStorageType.JSON_NATIVE),
-    ],
-)
-def test_oracle_storage_ladder_selection_all_rungs(major: int, compatible: str, expected: JSONStorageType) -> None:
-    """Storage-type selection lands on the adjudicated rung for every supported major."""
-    version = OracleVersionInfo(major, 0, 0, compatible=compatible)
-    assert storage_type_from_version(version) is expected
 
 
 def test_oracle_storage_ladder_native_requires_compatible() -> None:

@@ -3,11 +3,7 @@
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.oracledb._storage import (
-    _oracle_table_feature_report,
-    _resolve_oracle_storage_capabilities_async,
-    _resolve_oracle_storage_capabilities_sync,
-)
+from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
@@ -61,16 +57,11 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             await self.reconcile_schema()
             return
         async with self._config.provide_session() as driver:
-            await _resolve_oracle_storage_capabilities_async(driver)
             sql = self._table_ddl()
             await driver.execute_script(sql)
 
         self._log_table_created()
         await self.reconcile_schema(assume_existing=True)
-
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -409,10 +400,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        _resolve_oracle_storage_capabilities_sync(driver)
-
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
 
@@ -543,7 +530,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         with self._config.provide_session() as driver:
-            _resolve_oracle_storage_capabilities_sync(driver)
             sql = self._table_ddl()
             driver.execute_script(sql)
 

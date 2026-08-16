@@ -14,6 +14,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyn
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
@@ -60,6 +61,8 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
     "            id VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) NOT NULL,\n"
+    "            user_id VARCHAR(128) NOT NULL,\n"
     "            session_id VARCHAR(128) NOT NULL,\n"
     "            invocation_id VARCHAR(256),\n"
     "            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
@@ -72,6 +75,9 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "\n"
     "        CREATE INDEX IF NOT EXISTS idx_{7}_event_data\n"
     "            ON {8} USING GIN (event_data);\n"
+    "\n"
+    "        CREATE INDEX IF NOT EXISTS idx_{9}_app_timestamp\n"
+    "            ON {10}(app_name, timestamp ASC);\n"
     "        "
 )
 
@@ -330,8 +336,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
@@ -341,6 +347,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                 sql.encode(),
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -362,8 +370,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     ) -> StoredSession:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         update_sql = f"""
         UPDATE {self._session_table}
@@ -388,6 +396,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                     insert_sql.encode(),
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -467,23 +477,49 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             for row in rows
         ]
 
-    async def delete_expired_events(self, before: "datetime") -> int:
-        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s AND app_name = %s"
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+            params = (before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (before,))
+                await cur.execute(sql.encode(), params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s AND app_name = %s"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+            params = (updated_before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (updated_before,))
+                await cur.execute(sql.encode(), params)
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s AND app_name = %s"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+            params = (updated_before,)
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql.encode(), params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -589,6 +625,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             self._events_table,
             hash_shard_clause,
             events_storing_clause,
+            self._events_table,
+            self._events_table,
             self._events_table,
             self._events_table,
         )
@@ -794,8 +832,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """Atomically append an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         update_sql = f"""
         UPDATE {self._session_table}
@@ -820,6 +858,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                     insert_sql.encode(),
                     (
                         event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
                         event_record["timestamp"],
@@ -900,25 +940,52 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         except errors.UndefinedTable:
             return []
 
-    def delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+        if app_name is not None:
+            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s AND app_name = %s"
+            params: tuple[Any, ...] = (before, app_name)
+        else:
+            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+            params = (before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (before,))
+                cur.execute(sql.encode(), params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold."""
-        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+        if app_name is not None:
+            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s AND app_name = %s"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+            params = (updated_before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (updated_before,))
+                cur.execute(sql.encode(), params)
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold."""
+        if app_name is not None:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s AND app_name = %s"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+            params = (updated_before,)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -1032,6 +1099,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             events_storing_clause,
             self._events_table,
             self._events_table,
+            self._events_table,
+            self._events_table,
         )
 
     def _app_states_table_ddl(self) -> str:
@@ -1073,8 +1142,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
     def _insert_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
@@ -1084,6 +1153,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                 sql.encode(),
                 (
                     event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
                     event_record["session_id"],
                     event_record["invocation_id"],
                     event_record["timestamp"],
@@ -1164,6 +1235,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1346,6 +1418,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:

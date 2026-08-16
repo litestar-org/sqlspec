@@ -3,6 +3,7 @@
 
 import importlib
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Literal
 
@@ -83,10 +84,13 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     ) -> list[StoredEvent]:
         return []
 
-    async def delete_expired_events(self, before: datetime) -> int:
+    async def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         return 0
 
-    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+    async def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        return 0
+
+    async def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         return 0
 
     async def get_app_state(self, app_name: str) -> dict[str, Any] | None:
@@ -201,10 +205,13 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
     ) -> list[StoredEvent]:
         return []
 
-    def delete_expired_events(self, before: datetime) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         return 0
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        return 0
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         return 0
 
     def get_app_state(self, app_name: str) -> dict[str, Any] | None:
@@ -280,6 +287,7 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
         user_id: str,
         limit: int | None = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: Sequence[float] | None = None,
     ) -> list[StoredMemory]:
         return []
 

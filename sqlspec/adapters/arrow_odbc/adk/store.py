@@ -12,6 +12,7 @@ from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import timedelta
 
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
@@ -219,18 +220,18 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             raise
         return [_event_record_from_row(row) for row in rows]
 
-    def delete_expired_events(self, before: datetime) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than ``before``."""
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._events_table)} WHERE timestamp < ?"
+        delete_sql = f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < ?"
+        params: list[Any] = [_format_datetime(before)]
+        if app_name is not None:
+            count_sql += " AND app_name = ?"
+            delete_sql += " AND app_name = ?"
+            params.append(app_name)
         try:
-            count = self._select_count(
-                f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._events_table)} WHERE timestamp < ?",
-                (_format_datetime(before),),
-            )
-            self._execute(
-                f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < ?",
-                (_format_datetime(before),),
-                commit=True,
-            )
+            count = self._select_count(count_sql, tuple(params))
+            self._execute(delete_sql, tuple(params), commit=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return 0
@@ -238,18 +239,37 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         else:
             return count
 
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time is older than ``updated_before``."""
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._session_table)} WHERE update_time < ?"
+        delete_sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?"
+        params: list[Any] = [_format_datetime(updated_before)]
+        if app_name is not None:
+            count_sql += " AND app_name = ?"
+            delete_sql += " AND app_name = ?"
+            params.append(app_name)
         try:
-            count = self._select_count(
-                f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._session_table)} WHERE update_time < ?",
-                (_format_datetime(updated_before),),
-            )
-            self._execute(
-                f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?",
-                (_format_datetime(updated_before),),
-                commit=True,
-            )
+            count = self._select_count(count_sql, tuple(params))
+            self._execute(delete_sql, tuple(params), commit=True)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return 0
+            raise
+        else:
+            return count
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time is older than ``updated_before``."""
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
+        delete_sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
+        params: list[Any] = [_format_datetime(updated_before)]
+        if app_name is not None:
+            count_sql += " AND app_name = ?"
+            delete_sql += " AND app_name = ?"
+            params.append(app_name)
+        try:
+            count = self._select_count(count_sql, tuple(params))
+            self._execute(delete_sql, tuple(params), commit=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return 0
@@ -460,6 +480,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries with SQL Server LIKE matching."""
         if not self._enabled:
@@ -620,6 +641,7 @@ def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
         (f"idx_{table}_session", table, "session_id, timestamp ASC"),
         (f"idx_{table}_invocation", table, "invocation_id"),
         (f"idx_{table}_timestamp", table, "timestamp ASC"),
+        (f"idx_{table}_app_timestamp", table, "app_name, timestamp ASC"),
     ]
 
 

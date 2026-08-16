@@ -34,6 +34,7 @@ __all__ = (
     "arrow_table_to_pylist",
     "arrow_table_to_return_format",
     "arrow_table_to_rows",
+    "arrow_type_from_token",
     "build_ingest_telemetry",
     "cast_arrow_table_schema",
     "coerce_arrow_table",
@@ -48,25 +49,37 @@ _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
 
 @overload
 def convert_dict_to_arrow(
-    data: "list[dict[str, Any]]", return_format: Literal["table"] = "table", batch_size: int | None = None
+    data: "list[dict[str, Any]]",
+    return_format: Literal["table"] = "table",
+    batch_size: int | None = None,
+    column_types: "Mapping[str, str] | None" = None,
 ) -> "ArrowTable": ...
 
 
 @overload
 def convert_dict_to_arrow(
-    data: "list[dict[str, Any]]", return_format: Literal["reader"], batch_size: int | None = None
+    data: "list[dict[str, Any]]",
+    return_format: Literal["reader"],
+    batch_size: int | None = None,
+    column_types: "Mapping[str, str] | None" = None,
 ) -> "ArrowRecordBatchReader": ...
 
 
 @overload
 def convert_dict_to_arrow(
-    data: "list[dict[str, Any]]", return_format: Literal["batch"], batch_size: int | None = None
+    data: "list[dict[str, Any]]",
+    return_format: Literal["batch"],
+    batch_size: int | None = None,
+    column_types: "Mapping[str, str] | None" = None,
 ) -> "ArrowRecordBatch": ...
 
 
 @overload
 def convert_dict_to_arrow(
-    data: "list[dict[str, Any]]", return_format: Literal["batches"], batch_size: int | None = None
+    data: "list[dict[str, Any]]",
+    return_format: Literal["batches"],
+    batch_size: int | None = None,
+    column_types: "Mapping[str, str] | None" = None,
 ) -> "list[ArrowRecordBatch]": ...
 
 
@@ -74,6 +87,7 @@ def convert_dict_to_arrow(
     data: "list[dict[str, Any]]",
     return_format: Literal["table", "reader", "batch", "batches"] = "table",
     batch_size: int | None = None,
+    column_types: "Mapping[str, str] | None" = None,
 ) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
     """Convert list of dictionaries to Arrow Table or RecordBatch.
 
@@ -86,6 +100,9 @@ def convert_dict_to_arrow(
         return_format: Output format - "table" for Table, "batch"/"batches" for RecordBatch.
             "reader" returns a RecordBatchReader.
         batch_size: Chunk size for batching (used when return_format="batch"/"batches").
+        column_types: Optional column name to neutral type-token map reported by the
+            adapter. Used to type columns that are NULL in every row and would
+            otherwise infer as Arrow ``null``.
 
     Returns:
         ArrowTable or ArrowRecordBatch depending on return_format.
@@ -105,7 +122,7 @@ def convert_dict_to_arrow(
             return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
         return empty_table
-    arrow_table = _coerce_null_columns_to_string(pa.Table.from_pylist(data))
+    arrow_table = _resolve_null_columns(pa.Table.from_pylist(data), column_types)
 
     if return_format == "reader":
         batches = arrow_table.to_batches(max_chunksize=batch_size)
@@ -121,20 +138,59 @@ def convert_dict_to_arrow(
     return arrow_table
 
 
-def _coerce_null_columns_to_string(table: "ArrowTable") -> "ArrowTable":
-    """Retype value-inferred Arrow ``null`` columns to ``string``.
+def arrow_type_from_token(token: str) -> Any:
+    """Return the pyarrow type for a neutral column-type token.
 
-    ``pa.Table.from_pylist`` infers column types from values only, so a column
-    that is ``NULL`` in every row becomes Arrow ``null`` type and loses the
-    database column's declared type. Downstream consumers (notably DuckDB) then
-    misread such columns, so fall back to ``string`` which safely holds the
-    all-null values without breaking string operations.
+    Unknown tokens resolve to ``string`` so an adapter reporting a type this
+    module does not model degrades to the safe fallback rather than raising.
+    """
+    import pyarrow as pa
+
+    factory = _ARROW_TOKEN_FACTORIES.get(token)
+    if factory is None:
+        return pa.string()
+    return factory(pa)
+
+
+_ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
+    "bool": lambda pa: pa.bool_(),
+    "int16": lambda pa: pa.int16(),
+    "int32": lambda pa: pa.int32(),
+    "int64": lambda pa: pa.int64(),
+    "float32": lambda pa: pa.float32(),
+    "float64": lambda pa: pa.float64(),
+    "decimal": lambda pa: pa.decimal128(38, 9),
+    "string": lambda pa: pa.string(),
+    "binary": lambda pa: pa.binary(),
+    "date": lambda pa: pa.date32(),
+    "time": lambda pa: pa.time64("us"),
+    "timestamp": lambda pa: pa.timestamp("us"),
+    "timestamptz": lambda pa: pa.timestamp("us", tz="UTC"),
+    "duration": lambda pa: pa.duration("us"),
+}
+
+
+def _resolve_null_columns(table: "ArrowTable", column_types: "Mapping[str, str] | None" = None) -> "ArrowTable":
+    """Give value-inferred Arrow ``null`` columns their real type.
+
+    ``pa.Table.from_pylist`` infers column types from values alone, so a column
+    that is ``NULL`` in every row arrives as Arrow ``null`` and loses the type
+    the database declared. When the adapter reported that column's type, use it.
+    Otherwise fall back to ``string``, which holds the nulls without breaking
+    string operations downstream.
     """
     import pyarrow as pa
 
     if not any(pa.types.is_null(field.type) for field in table.schema):
         return table
-    fields = [field.with_type(pa.string()) if pa.types.is_null(field.type) else field for field in table.schema]
+
+    hints = column_types or {}
+    fields = [
+        field.with_type(arrow_type_from_token(hints[field.name]))
+        if pa.types.is_null(field.type) and field.name in hints
+        else (field.with_type(pa.string()) if pa.types.is_null(field.type) else field)
+        for field in table.schema
+    ]
     return table.cast(pa.schema(fields))
 
 
@@ -143,9 +199,14 @@ def convert_dict_to_arrow_with_schema(
     return_format: Literal["table", "reader", "batch", "batches"] = "table",
     batch_size: int | None = None,
     arrow_schema: Any = None,
+    column_types: "Mapping[str, str] | None" = None,
 ) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
-    """Convert dict rows to Arrow and optionally cast to a schema."""
-    table = convert_dict_to_arrow(data, return_format="table", batch_size=batch_size)
+    """Convert dict rows to Arrow, optionally casting to an explicit schema.
+
+    An explicit ``arrow_schema`` always wins; ``column_types`` only fills in
+    columns that would otherwise infer as Arrow ``null``.
+    """
+    table = convert_dict_to_arrow(data, return_format="table", batch_size=batch_size, column_types=column_types)
     if arrow_schema is not None:
         ensure_pyarrow()
         import pyarrow as pa

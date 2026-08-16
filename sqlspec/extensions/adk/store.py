@@ -401,11 +401,12 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_expired_events(self, before: datetime) -> int:
+    async def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp.
 
         Args:
             before: Timestamp threshold; events with timestamp earlier than this value are deleted.
+            app_name: When given, restrict deletion to events belonging to this application.
 
         Returns:
             Number of event rows deleted.
@@ -413,11 +414,25 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_idle_sessions(self, updated_before: datetime) -> int:
+    async def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold.
+
+        Args:
+            updated_before: Timestamp threshold; rows updated earlier than this value are deleted.
+            app_name: When given, restrict deletion to rows belonging to this application.
+
+        Returns:
+            Number of user state rows deleted.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold.
 
         Args:
             updated_before: Timestamp threshold; sessions updated earlier than this value are deleted.
+            app_name: When given, restrict deletion to sessions belonging to this application.
 
         Returns:
             Number of session rows deleted.
@@ -729,13 +744,18 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete_expired_events(self, before: datetime) -> int:
-        """Delete events older than the given timestamp."""
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
+        """Delete events older than the given timestamp, optionally scoped to one application."""
         raise NotImplementedError
 
     @abstractmethod
-    def delete_idle_sessions(self, updated_before: datetime) -> int:
-        """Delete sessions whose update_time predates the given threshold."""
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the threshold, optionally scoped to one application."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete sessions whose update_time predates the given threshold, optionally scoped to one application."""
         raise NotImplementedError
 
     @abstractmethod
