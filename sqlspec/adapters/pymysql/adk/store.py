@@ -124,13 +124,13 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         """Get events for a session."""
         return _select_events(self, app_name, user_id, session_id, after_timestamp, limit)
 
-    def delete_expired_events(self, before: "datetime") -> int:
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        return _delete_expired_events(self, before)
+        return _delete_expired_events(self, before, app_name)
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the threshold."""
-        return _delete_idle_sessions(self, updated_before)
+        return _delete_idle_sessions(self, updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
@@ -713,21 +713,27 @@ def _select_events(
         raise
 
 
-def _delete_expired_events(store: PyMysqlADKStore, before: "datetime") -> int:
-    return _delete_before(store, store._events_table, "timestamp", before)
+def _delete_expired_events(store: PyMysqlADKStore, before: "datetime", app_name: "str | None" = None) -> int:
+    return _delete_before(store, store._events_table, "timestamp", before, app_name)
 
 
-def _delete_idle_sessions(store: PyMysqlADKStore, updated_before: "datetime") -> int:
-    return _delete_before(store, store._session_table, "update_time", updated_before)
+def _delete_idle_sessions(store: PyMysqlADKStore, updated_before: "datetime", app_name: "str | None" = None) -> int:
+    return _delete_before(store, store._session_table, "update_time", updated_before, app_name)
 
 
-def _delete_before(store: PyMysqlADKStore, table_name: str, column_name: str, threshold: "datetime") -> int:
+def _delete_before(
+    store: PyMysqlADKStore, table_name: str, column_name: str, threshold: "datetime", app_name: "str | None" = None
+) -> int:
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
+    params: list[Any] = [threshold]
+    if app_name is not None:
+        sql += " AND app_name = %s"
+        params.append(app_name)
     try:
         with store._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (threshold,))
+                cursor.execute(sql, tuple(params))
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
@@ -937,7 +943,8 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
             event_data JSON NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
             INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC{covering_column}),
-            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}){generated_indexes}
+            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}),
+            INDEX idx_{events_table}_app_timestamp (app_name, timestamp ASC){generated_indexes}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
