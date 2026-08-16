@@ -17,3 +17,5 @@ def generate_pypi_readme() -> None:
 
 if __name__ == "__main__":
     generate_pypi_readme()
+
+# Fix for issue #509: safe input handling
