@@ -18,6 +18,7 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Sequence
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
     from sqlspec.extensions.adk import StoredMemory
@@ -875,6 +876,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:

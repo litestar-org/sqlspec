@@ -17,6 +17,8 @@ from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import Transaction
 
@@ -792,6 +794,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter)

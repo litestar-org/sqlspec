@@ -41,6 +41,11 @@ class _ADKMemoryStoreConfig(TypedDict):
     memory_table: str
     use_fts: bool
     max_results: int
+    vector_index_type: str
+    vector_dimensions: int
+    enable_bm25: bool
+    scann_num_leaves: int
+    scann_quantizer: str
     owner_id_column: NotRequired[str]
 
 
@@ -93,6 +98,11 @@ def _adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreConfig:
         "memory_table": str(adk_config.get("memory_table") or "adk_memory"),
         "use_fts": bool(adk_config.get("memory_use_fts", False)),
         "max_results": int(max_results) if isinstance(max_results, int) else 20,
+        "vector_index_type": str(adk_config.get("vector_index_type") or "hnsw"),
+        "vector_dimensions": int(adk_config.get("vector_dimensions") or 768),
+        "enable_bm25": bool(adk_config.get("enable_bm25", False)),
+        "scann_num_leaves": int(adk_config.get("scann_num_leaves") or 100),
+        "scann_quantizer": str(adk_config.get("scann_quantizer") or "SQ8"),
     }
     _apply_owner_id(result, adk_config)
     return result

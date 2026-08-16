@@ -14,6 +14,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyn
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -1215,8 +1216,9 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1341,16 +1343,11 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
 
 class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
-    """PostgreSQL ADK memory store using Psycopg3 sync driver."""
+    """Psycopg sync ADK memory store implementation."""
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        """Initialize Psycopg sync memory store."""
-        super().__init__(config)
-
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
         """Create the memory table and indexes if they don't exist."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
@@ -1363,7 +1360,6 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1380,7 +1376,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
                 {owner_id_col}, timestamp, content_json, content_text,
                 metadata_json, inserted_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(
@@ -1415,9 +1411,9 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)

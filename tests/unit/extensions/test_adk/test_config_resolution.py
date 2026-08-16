@@ -105,7 +105,15 @@ def test_flat_memory_config_resolves_memory_store_settings() -> None:
 
     resolved = _adk_memory_store_config(config)
 
-    assert resolved == {"enable_memory": False, "memory_table": "agent_memories", "use_fts": True, "max_results": 50}
+    assert resolved["enable_memory"] is False
+    assert resolved["memory_table"] == "agent_memories"
+    assert resolved["use_fts"] is True
+    assert resolved["max_results"] == 50
+    assert resolved["vector_index_type"] == "hnsw"
+    assert resolved["vector_dimensions"] == 768
+    assert resolved["enable_bm25"] is False
+    assert resolved["scann_num_leaves"] == 100
+    assert resolved["scann_quantizer"] == "SQ8"
 
 
 def test_flat_artifact_config_resolves_store_owned_table_only() -> None:

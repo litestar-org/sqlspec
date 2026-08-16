@@ -10,6 +10,7 @@ from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.asyncpg.config import AsyncpgConfig
@@ -627,12 +628,13 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query:
+        if not query and embedding is None:
             return []
 
         from typing import cast
@@ -641,20 +643,56 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         if scope_filter == "all":
             where_scope = "app_name = $1 AND ((scope = 'user' AND user_id = $2) OR scope = 'app')"
             scope_params: tuple[Any, ...] = (app_name, user_id)
-            p_q = "$3"
-            p_lim = "$4"
         elif scope_filter == "user":
             where_scope = "app_name = $1 AND scope = 'user' AND user_id = $2"
             scope_params = (app_name, user_id)
-            p_q = "$3"
-            p_lim = "$4"
         else:
             where_scope = "app_name = $1 AND scope = 'app'"
             scope_params = (app_name,)
-            p_q = "$2"
-            p_lim = "$3"
 
-        if self._use_fts:
+        scope_count = len(scope_params)
+
+        if embedding is not None and self._enable_bm25 and query:
+            p_vec = f"${scope_count + 1}"
+            p_txt = f"${scope_count + 2}"
+            p_cand = f"${scope_count + 3}"
+            p_lim = f"${scope_count + 4}"
+            candidate_limit = max(limit_value * 2, 50)
+            sql = f"""
+            WITH vector_matches AS (
+                SELECT id, RANK() OVER (ORDER BY embedding <=> {p_vec}) AS rank_vec
+                FROM {self._memory_table}
+                WHERE {where_scope} AND embedding IS NOT NULL
+                LIMIT {p_cand}
+            ),
+            text_matches AS (
+                SELECT id, RANK() OVER (ORDER BY content_text <@> {p_txt}) AS rank_txt
+                FROM {self._memory_table}
+                WHERE {where_scope}
+                LIMIT {p_cand}
+            )
+            SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+            FROM {self._memory_table} m
+            LEFT JOIN vector_matches v ON m.id = v.id
+            LEFT JOIN text_matches t ON m.id = t.id
+            WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+            ORDER BY rrf_score DESC, m.timestamp DESC
+            LIMIT {p_lim}
+            """
+            params = (*scope_params, list(embedding), query, candidate_limit, limit_value)
+        elif embedding is not None:
+            p_vec = f"${scope_count + 1}"
+            p_lim = f"${scope_count + 2}"
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> {p_vec} ASC, timestamp DESC
+            LIMIT {p_lim}
+            """
+            params = (*scope_params, list(embedding), limit_value)
+        elif self._use_fts:
+            p_q = f"${scope_count + 1}"
+            p_lim = f"${scope_count + 2}"
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope}
@@ -664,6 +702,8 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             """
             params = (*scope_params, query, limit_value)
         else:
+            p_q = f"${scope_count + 1}"
+            p_lim = f"${scope_count + 2}"
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope} AND content_text ILIKE {p_q}
@@ -722,12 +762,36 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        fts_index = ""
+        indexes: list[str] = [
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope);",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session ON {self._memory_table}(session_id);",
+        ]
+
         if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts ON {self._memory_table} USING GIN (to_tsvector('english', content_text));"
+            )
+
+        if self._enable_bm25:
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_bm25 ON {self._memory_table} USING bm25 (content_text);"
+            )
+
+        if self._vector_index_type == "scann":
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scann ON {self._memory_table} USING scann (embedding) WITH (num_leaves = {self._scann_num_leaves}, quantizer = '{self._scann_quantizer}');"
+            )
+        elif self._vector_index_type == "ivfflat":
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_ivfflat ON {self._memory_table} USING ivfflat (embedding vector_cosine_ops);"
+            )
+        elif self._vector_index_type == "hnsw":
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_hnsw ON {self._memory_table} USING hnsw (embedding vector_cosine_ops);"
+            )
+
+        indexes_sql = "\n        ".join(indexes)
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -739,21 +803,14 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
+            embedding VECTOR({self._vector_dimensions}),
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
             inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
-            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
-            ON {self._memory_table}(app_name, scope);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
+        {indexes_sql}
         """
 
     def _drop_memory_table_sql(self) -> "list[str]":

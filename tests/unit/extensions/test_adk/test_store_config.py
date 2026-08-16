@@ -3,6 +3,7 @@
 
 import importlib
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Literal
 
@@ -280,6 +281,7 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
         user_id: str,
         limit: int | None = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: Sequence[float] | None = None,
     ) -> list[StoredMemory]:
         return []
 

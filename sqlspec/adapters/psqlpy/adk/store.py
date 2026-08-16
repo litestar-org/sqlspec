@@ -12,6 +12,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
@@ -651,6 +652,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:

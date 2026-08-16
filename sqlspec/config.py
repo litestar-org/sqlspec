@@ -744,6 +744,21 @@ class ADKConfig(TypedDict):
         - Plain columns without FK (just extra column storage)
     """
 
+    vector_index_type: NotRequired[Literal["hnsw", "ivfflat", "scann"]]
+    """Vector index algorithm for memory embeddings ('hnsw', 'ivfflat', 'scann'). Default: 'hnsw'."""
+
+    vector_dimensions: NotRequired[int]
+    """Dimensionality of embedding vectors (e.g. 768 for gemini-embedding-001 with MRL). Default: 768."""
+
+    enable_bm25: NotRequired[bool]
+    """Enable native pg_textsearch BM25 full-text indexing on AlloyDB / PostgreSQL 17+. Default: False."""
+
+    scann_num_leaves: NotRequired[int]
+    """Number of partition leaves (clusters) for ScaNN tree quantization. Default: 100."""
+
+    scann_quantizer: NotRequired[str]
+    """Quantization method for ScaNN index ('SQ8', 'FP32'). Default: 'SQ8'."""
+
 
 class EventsConfig(TypedDict):
     """Configuration options for the events extension.

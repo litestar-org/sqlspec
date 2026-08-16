@@ -12,6 +12,7 @@ from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import timedelta
 
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
@@ -460,6 +461,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries with SQL Server LIKE matching."""
         if not self._enabled:
