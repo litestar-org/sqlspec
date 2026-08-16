@@ -1,29 +1,26 @@
-"""Modular maintenance, pruning, and compaction engine for ADK stores.
+"""Retention helpers for ADK stores.
 
-Provides standalone functions to prune aged sessions, purge expired events,
-sweep scoped memories, and execute dialect-specific table maintenance without
-framework worker coupling.
+Standalone functions to prune aged sessions, purge expired events, and sweep
+scoped memories, decoupled from any framework worker so retention can run from
+a cron job, a CLI, or a task queue.
+
+Storage-level upkeep such as vacuuming, checkpointing, or refreshing optimizer
+statistics is deliberately out of scope. Those are operator decisions that need
+elevated privileges and their own scheduling, and several cannot run inside the
+transaction a store session provides.
 """
 
 import time
-from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from typing_extensions import TypedDict
 
-from sqlspec.extensions.adk._config_utils import (
-    _adk_adapter_store_class,
-    _adk_memory_store_config,
-    _adk_session_store_config,
-)
-from sqlspec.utils.sync_tools import async_, await_
+from sqlspec.extensions.adk._config_utils import _adk_adapter_store_class
+from sqlspec.utils.sync_tools import await_
 
 __all__ = (
-    "MaintenanceReport",
     "PruneReport",
-    "maintain_tables",
-    "maintain_tables_sync",
     "prune_events",
     "prune_events_sync",
     "prune_memory",
@@ -41,13 +38,6 @@ class PruneReport(TypedDict):
     deleted_count: int
     elapsed_ms: float
     table: str
-
-
-class MaintenanceReport(TypedDict):
-    """Execution telemetry for database table maintenance."""
-
-    operations: dict[str, Any]
-    total_elapsed_ms: float
 
 
 def _resolve_session_store(target: Any) -> Any:
@@ -172,204 +162,7 @@ async def prune_user_state(target: Any, *, idle_days: int = 180, app_name: str |
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
 
 
-async def _maintain_sqlite(session_context: Any, vacuum: bool, analyze: bool, ops: dict[str, Any]) -> None:
-    if hasattr(session_context, "__aenter__"):
-        async with session_context as driver:
-            if vacuum:
-                await driver.execute("PRAGMA incremental_vacuum;")
-                ops["incremental_vacuum"] = "executed"
-            if analyze:
-                await driver.execute("PRAGMA optimize;")
-                ops["optimize"] = "executed"
-    else:
-
-        def _sync() -> None:
-            with session_context as driver:
-                if vacuum:
-                    driver.execute("PRAGMA incremental_vacuum;")
-                    ops["incremental_vacuum"] = "executed"
-                if analyze:
-                    driver.execute("PRAGMA optimize;")
-                    ops["optimize"] = "executed"
-
-        await async_(_sync)()
-
-
-async def _maintain_duckdb(session_context: Any, ops: dict[str, Any]) -> None:
-    if hasattr(session_context, "__aenter__"):
-        async with session_context as driver:
-            await driver.execute("CHECKPOINT;")
-            ops["checkpoint"] = "executed"
-    else:
-
-        def _sync() -> None:
-            with session_context as driver:
-                driver.execute("CHECKPOINT;")
-                ops["checkpoint"] = "executed"
-
-        await async_(_sync)()
-
-
-async def _exec_pg_table_async(driver: Any, tbl: str, action: str, ops: dict[str, Any]) -> None:
-    try:
-        await driver.execute(f"{action} {tbl};")
-        ops[f"{action}_{tbl}"] = "executed"
-    except Exception as e:
-        ops[f"{action}_{tbl}"] = f"skipped: {e}"
-
-
-def _exec_pg_table_sync(driver: Any, tbl: str, action: str, ops: dict[str, Any]) -> None:
-    try:
-        driver.execute(f"{action} {tbl};")
-        ops[f"{action}_{tbl}"] = "executed"
-    except Exception as e:
-        ops[f"{action}_{tbl}"] = f"skipped: {e}"
-
-
-async def _maintain_postgres(
-    session_context: Any, tables: Sequence[str], vacuum: bool, analyze: bool, ops: dict[str, Any]
-) -> None:
-    action = "VACUUM ANALYZE" if (vacuum and analyze) else ("VACUUM" if vacuum else "ANALYZE")
-    if hasattr(session_context, "__aenter__"):
-        async with session_context as driver:
-            for tbl in tables:
-                await _exec_pg_table_async(driver, tbl, action, ops)
-    else:
-
-        def _sync() -> None:
-            with session_context as driver:
-                for tbl in tables:
-                    _exec_pg_table_sync(driver, tbl, action, ops)
-
-        await async_(_sync)()
-
-
-async def _exec_oracle_table_async(driver: Any, tbl: str, ops: dict[str, Any]) -> None:
-    try:
-        await driver.execute(f"BEGIN DBMS_STATS.GATHER_TABLE_STATS(USER, UPPER('{tbl}')); END;")
-        ops[f"gather_stats_{tbl}"] = "executed"
-    except Exception as e:
-        ops[f"gather_stats_{tbl}"] = f"skipped: {e}"
-
-
-def _exec_oracle_table_sync(driver: Any, tbl: str, ops: dict[str, Any]) -> None:
-    try:
-        driver.execute(f"BEGIN DBMS_STATS.GATHER_TABLE_STATS(USER, UPPER('{tbl}')); END;")
-        ops[f"gather_stats_{tbl}"] = "executed"
-    except Exception as e:
-        ops[f"gather_stats_{tbl}"] = f"skipped: {e}"
-
-
-async def _maintain_oracle(session_context: Any, tables: Sequence[str], analyze: bool, ops: dict[str, Any]) -> None:
-    if not analyze:
-        return
-    if hasattr(session_context, "__aenter__"):
-        async with session_context as driver:
-            for tbl in tables:
-                await _exec_oracle_table_async(driver, tbl, ops)
-    else:
-
-        def _sync() -> None:
-            with session_context as driver:
-                for tbl in tables:
-                    _exec_oracle_table_sync(driver, tbl, ops)
-
-        await async_(_sync)()
-
-
-async def _exec_mysql_table_async(driver: Any, tbl: str, action: str, ops: dict[str, Any]) -> None:
-    try:
-        await driver.execute(f"{action} {tbl};")
-        ops[f"{action}_{tbl}"] = "executed"
-    except Exception as e:
-        ops[f"{action}_{tbl}"] = f"skipped: {e}"
-
-
-def _exec_mysql_table_sync(driver: Any, tbl: str, action: str, ops: dict[str, Any]) -> None:
-    try:
-        driver.execute(f"{action} {tbl};")
-        ops[f"{action}_{tbl}"] = "executed"
-    except Exception as e:
-        ops[f"{action}_{tbl}"] = f"skipped: {e}"
-
-
-async def _maintain_mysql(session_context: Any, tables: Sequence[str], vacuum: bool, ops: dict[str, Any]) -> None:
-    action = "OPTIMIZE TABLE" if vacuum else "ANALYZE TABLE"
-    if hasattr(session_context, "__aenter__"):
-        async with session_context as driver:
-            for tbl in tables:
-                await _exec_mysql_table_async(driver, tbl, action, ops)
-    else:
-
-        def _sync() -> None:
-            with session_context as driver:
-                for tbl in tables:
-                    _exec_mysql_table_sync(driver, tbl, action, ops)
-
-        await async_(_sync)()
-
-
-async def maintain_tables(
-    target: Any,
-    *,
-    vacuum: bool = True,
-    analyze: bool = True,
-    tables: Sequence[str] | None = None,
-) -> MaintenanceReport:
-    """Execute dialect-specific maintenance (vacuum, analyze, checkpoint, optimize) on ADK tables.
-
-    Args:
-        target: ADKStore, DatabaseConfig, or DriverAdapter.
-        vacuum: Whether to run vacuum / storage compaction.
-        analyze: Whether to update database optimizer statistics.
-        tables: Optional explicit sequence of table names to maintain.
-
-    Returns:
-        MaintenanceReport with execution details per operation.
-    """
-    start = time.perf_counter()
-    config = getattr(target, "config", target)
-    statement_config = getattr(config, "statement_config", None)
-    dialect = getattr(statement_config, "dialect", "") if statement_config else ""
-    dialect_str = str(dialect).lower()
-
-    if tables is None:
-        if hasattr(config, "extension_config") and isinstance(getattr(config, "extension_config", None), dict):
-            s_cfg = _adk_session_store_config(config)
-            m_cfg = _adk_memory_store_config(config)
-            tables = (
-                s_cfg["session_table"],
-                s_cfg["events_table"],
-                s_cfg["app_state_table"],
-                s_cfg["user_state_table"],
-                s_cfg["metadata_table"],
-                m_cfg["memory_table"],
-            )
-        else:
-            tables = ("adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_memory")
-
-    ops: dict[str, Any] = {}
-    session_context = config.provide_session() if hasattr(config, "provide_session") else target
-
-    if "sqlite" in dialect_str:
-        await _maintain_sqlite(session_context, vacuum, analyze, ops)
-    elif "duckdb" in dialect_str:
-        await _maintain_duckdb(session_context, ops)
-    elif "postgres" in dialect_str or "cockroach" in dialect_str:
-        await _maintain_postgres(session_context, tables, vacuum, analyze, ops)
-    elif "oracle" in dialect_str:
-        await _maintain_oracle(session_context, tables, analyze, ops)
-    elif "mysql" in dialect_str:
-        await _maintain_mysql(session_context, tables, vacuum, ops)
-    else:
-        ops["status"] = f"no-op for dialect {dialect_str}"
-
-    total_elapsed = (time.perf_counter() - start) * 1000.0
-    return MaintenanceReport(operations=ops, total_elapsed_ms=total_elapsed)
-
-
 prune_sessions_sync = await_(prune_sessions)
 prune_events_sync = await_(prune_events)
 prune_memory_sync = await_(prune_memory)
 prune_user_state_sync = await_(prune_user_state)
-maintain_tables_sync = await_(maintain_tables)

@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sqlspec.extensions.adk.maintenance import (
-    maintain_tables,
     prune_events,
     prune_events_sync,
     prune_memory,
@@ -139,13 +138,6 @@ def test_prune_user_state_sync() -> None:
     assert store.delete_idle_user_states.call_args.kwargs["app_name"] == "app1"
 
 
-async def test_maintain_tables_unknown_dialect() -> None:
-    config = MagicMock()
-    config.statement_config.dialect = "custom_unsupported"
-    report = await maintain_tables(config)
-
-    assert "status" in report["operations"]
-    assert report["total_elapsed_ms"] >= 0.0
 
 
 def test_invalid_target_resolution() -> None:

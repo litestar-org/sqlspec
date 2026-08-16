@@ -30,10 +30,7 @@ from sqlspec.extensions.adk.artifact import (
     StoredArtifact,
 )
 from sqlspec.extensions.adk.maintenance import (
-    MaintenanceReport,
     PruneReport,
-    maintain_tables,
-    maintain_tables_sync,
     prune_events,
     prune_events_sync,
     prune_memory,
@@ -61,7 +58,6 @@ __all__ = (
     "BaseSyncADKArtifactStore",
     "BaseSyncADKMemoryStore",
     "BaseSyncADKStore",
-    "MaintenanceReport",
     "PruneReport",
     "SQLSpecArtifactService",
     "SQLSpecMemoryService",
@@ -71,8 +67,6 @@ __all__ = (
     "StoredEvent",
     "StoredMemory",
     "StoredSession",
-    "maintain_tables",
-    "maintain_tables_sync",
     "prune_events",
     "prune_events_sync",
     "prune_memory",

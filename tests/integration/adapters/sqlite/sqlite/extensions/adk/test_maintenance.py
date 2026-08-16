@@ -1,4 +1,4 @@
-"""Integration tests for ADK maintenance and pruning engine on SQLite."""
+"""Integration tests for ADK retention on SQLite."""
 
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -11,12 +11,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.adk.store import _datetime_to_julian
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
-from sqlspec.extensions.adk.maintenance import (
-    maintain_tables_sync,
-    prune_events_sync,
-    prune_memory_sync,
-    prune_sessions_sync,
-)
+from sqlspec.extensions.adk.maintenance import prune_events_sync, prune_memory_sync, prune_sessions_sync
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -42,8 +37,8 @@ def _build_memory_record(
     )
 
 
-def test_sqlite_maintenance_prune_and_vacuum() -> None:
-    """Verify pruning stale sessions, memories, events, and running SQLite maintenance."""
+def test_sqlite_prune_sessions_and_scoped_memory() -> None:
+    """Prune stale sessions and user-scoped memories while preserving app-scoped ones."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         config = SqliteConfig(connection_config={"database": tmp.name})
         session_store = SqliteADKStore(config)
@@ -94,11 +89,6 @@ def test_sqlite_maintenance_prune_and_vacuum() -> None:
         remaining_ids = {m["event_id"] for m in remaining_mem}
         assert "evt-old-app" in remaining_ids
         assert "evt-new-user" in remaining_ids
-
-        maint_report = maintain_tables_sync(config, vacuum=True, analyze=True)
-        assert maint_report["operations"]["incremental_vacuum"] == "executed"
-        assert maint_report["operations"]["optimize"] == "executed"
-        assert maint_report["total_elapsed_ms"] >= 0.0
 
 
 def test_sqlite_prune_sessions_scopes_to_app_name() -> None:

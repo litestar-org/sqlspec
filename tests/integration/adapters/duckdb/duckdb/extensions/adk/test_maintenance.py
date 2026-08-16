@@ -1,4 +1,4 @@
-"""Integration tests for ADK maintenance and pruning on DuckDB."""
+"""Integration tests for ADK retention on DuckDB."""
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,7 +10,6 @@ from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
 from sqlspec.extensions.adk.maintenance import (
-    maintain_tables_sync,
     prune_events_sync,
     prune_memory_sync,
     prune_sessions_sync,
@@ -135,13 +134,3 @@ def test_duckdb_prune_memory_respects_scope(tmp_path: Path) -> None:
     assert remaining[0]["scope"] == "app"
 
 
-def test_duckdb_maintain_tables_executes_dialect_branch(tmp_path: Path) -> None:
-    """The DuckDB maintenance branch runs against a real database without error."""
-    config = _config(tmp_path, "maintain")
-    store = DuckdbADKStore(config)
-    store.create_tables()
-
-    report = maintain_tables_sync(config)
-
-    assert report["total_elapsed_ms"] >= 0.0
-    assert report["operations"]
