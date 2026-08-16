@@ -77,6 +77,40 @@ logger = get_logger("sqlspec.adapters.mysqlconnector")
 json_type_value = MysqlConnectorFieldType.JSON if supports_json_type(MysqlConnectorFieldType) else None
 MYSQLCONNECTOR_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
+_MYSQL_TYPE_CODE_TOKENS: "Final[dict[int, str]]" = {
+    0: "decimal",
+    1: "int32",
+    2: "int32",
+    3: "int64",
+    4: "float32",
+    5: "float64",
+    7: "timestamp",
+    8: "int64",
+    10: "date",
+    11: "time",
+    12: "timestamp",
+    246: "decimal",
+    252: "binary",
+    253: "string",
+    254: "string",
+}
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
+        if token is not None:
+            column_types[col[0]] = token
+    return column_types or None
+
 
 class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling mysql-connector sync exceptions."""
@@ -125,11 +159,13 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
+            column_types = _resolve_column_types(description)
 
             return self.create_execution_result(
                 cursor,
                 selected_data=rows,
                 column_names=column_names,
+                column_types=column_types,
                 data_row_count=len(rows),
                 is_select_result=True,
                 row_format=row_format,
@@ -365,11 +401,13 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
             deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
             rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
+            column_types = _resolve_column_types(description)
 
             return self.create_execution_result(
                 cursor,
                 selected_data=rows,
                 column_names=column_names,
+                column_types=column_types,
                 data_row_count=len(rows),
                 is_select_result=True,
                 row_format=row_format,

@@ -86,6 +86,43 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.psycopg")
 
+_PSYCOPG_OID_TOKENS: "dict[int, str]" = {
+    16: "bool",
+    17: "binary",
+    20: "int64",
+    21: "int16",
+    23: "int32",
+    25: "string",
+    114: "string",
+    700: "float32",
+    701: "float64",
+    1043: "string",
+    1082: "date",
+    1083: "time",
+    1114: "timestamp",
+    1184: "timestamptz",
+    1700: "decimal",
+    2950: "string",
+    3802: "string",
+}
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map psycopg cursor column OIDs to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable OIDs, so callers can pass the result straight through
+    without adding a code path for the empty case.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _PSYCOPG_OID_TOKENS.get(col.type_code)
+        if token is not None:
+            column_types[col.name] = token
+    return column_types or None
+
 
 def pipeline_operation_failed(cursor: Any, statement: "SQL") -> bool:
     """Return True when a synced pipeline cursor reflects a failed non-select operation.
@@ -224,12 +261,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             fetched_data = cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
             column_names = self._resolve_column_names(cursor.description)
+            column_types = _resolve_column_types(cursor.description)
             row_format = resolve_row_format(data)
 
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
+                column_types=column_types,
                 data_row_count=len(data),
                 is_select_result=True,
                 row_format=row_format,
@@ -750,12 +789,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             fetched_data = await cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
             column_names = self._resolve_column_names(cursor.description)
+            column_types = _resolve_column_types(cursor.description)
             row_format = resolve_row_format(data)
 
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
+                column_types=column_types,
                 data_row_count=len(data),
                 is_select_result=True,
                 row_format=row_format,
