@@ -161,7 +161,7 @@ The ``adk`` extra includes the Google ADK SDK (``google-genai``). SQLSpec provid
   for context retrieval across conversations.
 - **Artifact Service contracts** -- Compose a concrete metadata store with
   pluggable object storage backends when your deployment needs ADK artifacts.
-- **Event Storage** -- Full-event JSON storage (EventRecord) that captures the
+- **Event Storage** -- Full-event JSON storage (StoredEvent) that captures the
   entire ADK Event without schema drift.
 
 Next Steps

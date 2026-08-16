@@ -79,22 +79,22 @@ Artifact Stores
 Record Types
 ============
 
-.. autoclass:: SessionRecord
+.. autoclass:: StoredSession
    :members:
    :show-inheritance:
    :no-index:
 
-.. autoclass:: EventRecord
+.. autoclass:: StoredEvent
    :members:
    :show-inheritance:
    :no-index:
 
-.. autoclass:: MemoryRecord
+.. autoclass:: StoredMemory
    :members:
    :show-inheritance:
    :no-index:
 
-.. autoclass:: ArtifactRecord
+.. autoclass:: StoredArtifact
    :members:
    :show-inheritance:
    :no-index:

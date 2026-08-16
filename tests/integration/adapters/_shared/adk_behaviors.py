@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from inspect import isawaitable
 from typing import Any, TypeVar
 
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 T = TypeVar("T")
 
@@ -20,7 +20,7 @@ async def _aclose(config: Any) -> None:
     await _resolve(config.close_pool())
 
 
-def _event(app_name: str, user_id: str, session_id: str, index: int, when: datetime) -> EventRecord:
+def _event(app_name: str, user_id: str, session_id: str, index: int, when: datetime) -> StoredEvent:
     return {
         "id": f"event-{session_id}-{index}",
         "app_name": app_name,

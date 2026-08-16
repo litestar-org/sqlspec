@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from google.adk.artifacts.base_artifact_service import BaseArtifactService
 
-from sqlspec.extensions.adk.artifact._types import ArtifactRecord
+from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -154,7 +154,7 @@ def _deserialize_artifact(data: bytes) -> "types.Part":
     return types.Part.model_validate(parsed)
 
 
-def _record_to_artifact_version(record: "ArtifactRecord") -> "ArtifactVersion":
+def _record_to_artifact_version(record: "StoredArtifact") -> "ArtifactVersion":
     """Convert a database artifact record to an ADK ArtifactVersion.
 
     Args:
@@ -266,7 +266,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         # Insert metadata row
         from datetime import datetime, timezone
 
-        record = ArtifactRecord(
+        record = StoredArtifact(
             app_name=app_name,
             user_id=user_id,
             session_id=session_id,

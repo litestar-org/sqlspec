@@ -15,70 +15,44 @@ Public API exports:
     - BaseSyncADKMemoryStore: Base class for sync memory store implementations
     - BaseAsyncADKArtifactStore: Base class for async artifact metadata stores
     - BaseSyncADKArtifactStore: Base class for sync artifact metadata stores
-    - SessionRecord: TypedDict for session database records
-    - EventRecord: TypedDict for event database records
-    - MemoryRecord: TypedDict for memory database records
-    - ArtifactRecord: TypedDict for artifact metadata database records
-
-Example (with extension_config):
-    from sqlspec.adapters.asyncpg import AsyncpgConfig
-    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
-    from sqlspec.extensions.adk import SQLSpecSessionService
-
- config = AsyncpgConfig(
- connection_config={"dsn": "postgresql://..."},
- extension_config={
- "adk": {
- "session_table": "my_sessions",
- "events_table": "my_events",
- "owner_id_column": "tenant_id INTEGER REFERENCES tenants(id)"
- }
- }
- )
-
- store = AsyncpgADKStore(config)
- await store.ensure_tables()
-
- service = SQLSpecSessionService(store)
- session = await service.create_session(
- app_name="my_app",
- user_id="user123",
- state={"key": "value"}
- )
+    - StoredSession: TypedDict for session database records
+    - StoredEvent: TypedDict for event database records
+    - StoredMemory: TypedDict for memory database records
+    - StoredArtifact: TypedDict for artifact metadata database records
 """
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk._types import EventRecord, SessionRecord
+from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 from sqlspec.extensions.adk.artifact import (
-    ArtifactRecord,
     BaseAsyncADKArtifactStore,
     BaseSyncADKArtifactStore,
     SQLSpecArtifactService,
+    StoredArtifact,
 )
 from sqlspec.extensions.adk.memory import (
     BaseAsyncADKMemoryStore,
     BaseSyncADKMemoryStore,
-    MemoryRecord,
     SQLSpecMemoryService,
     SQLSpecSyncMemoryService,
+    StoredMemory,
 )
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
 __all__ = (
     "ADKConfig",
-    "ArtifactRecord",
     "BaseAsyncADKArtifactStore",
     "BaseAsyncADKMemoryStore",
     "BaseAsyncADKStore",
     "BaseSyncADKArtifactStore",
     "BaseSyncADKMemoryStore",
     "BaseSyncADKStore",
-    "EventRecord",
-    "MemoryRecord",
     "SQLSpecArtifactService",
     "SQLSpecMemoryService",
     "SQLSpecSessionService",
     "SQLSpecSyncMemoryService",
-    "SessionRecord",
+    "StoredArtifact",
+    "StoredEvent",
+    "StoredMemory",
+    "StoredSession",
 )

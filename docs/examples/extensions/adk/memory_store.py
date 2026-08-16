@@ -7,7 +7,7 @@ import anyio
 import pytest
 
 if TYPE_CHECKING:
-    from sqlspec.extensions.adk import EventRecord
+    from sqlspec.extensions.adk import StoredEvent
 
 __all__ = ("test_adk_memory_store",)
 
@@ -16,7 +16,7 @@ def test_adk_memory_store() -> None:
     pytest.importorskip("aiosqlite")
     pytest.importorskip("google.adk")
 
-    async def _run() -> list[EventRecord]:
+    async def _run() -> list[StoredEvent]:
         # start-example
         from google.adk.events.event import Event
         from google.genai import types

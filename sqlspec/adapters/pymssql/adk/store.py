@@ -2,14 +2,14 @@
 
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlCursor
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.pymssql.config import PymssqlConfig
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
-    from sqlspec.extensions.adk.memory._types import MemoryRecord
+    from sqlspec.extensions.adk.memory._types import StoredMemory
 
 __all__ = ("PymssqlADKConfig", "PymssqlADKMemoryStore", "PymssqlADKStore")
 
@@ -74,7 +74,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new ADK session."""
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", %s" if self._owner_id_column_name else ""
@@ -98,7 +98,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
             if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -137,7 +137,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             commit=True,
         )
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """List ADK sessions for an application, optionally scoped to a user."""
         if user_id is None:
             sql = f"""
@@ -171,13 +171,13 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             commit=True,
         )
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -185,7 +185,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
@@ -217,7 +217,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Return events for a scoped session ordered by event timestamp."""
         if limit == 0:
             return []
@@ -422,7 +422,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with event-id deduplication."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
@@ -436,10 +436,10 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         IF NOT EXISTS (SELECT 1 FROM {_table_ref(self._memory_table)} WHERE event_id = %s)
         BEGIN
             INSERT INTO {_table_ref(self._memory_table)} (
-                id, session_id, app_name, user_id, event_id, author, timestamp,
+                id, session_id, app_name, user_id, scope, event_id, author, timestamp,
                 content_json, content_text, metadata_json{owner_column}
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s{owner_value});
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{owner_value});
         END;
         """
         inserted = 0
@@ -451,6 +451,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                     entry["session_id"],
                     entry["app_name"],
                     entry["user_id"],
+                    entry.get("scope", "user"),
                     entry["event_id"],
                     entry.get("author"),
                     entry["timestamp"],
@@ -466,22 +467,28 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         return inserted
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
             raise RuntimeError(msg)
         limit_value = limit or self._max_results
+        where_scope, scope_params = _build_mssql_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT TOP (%s)
-            id, session_id, app_name, user_id, event_id, author, timestamp,
+            id, session_id, app_name, user_id, scope, event_id, author, timestamp,
             content_json, content_text, metadata_json, inserted_at
         FROM {_table_ref(self._memory_table)}
-        WHERE app_name = %s AND user_id = %s AND content_text LIKE %s
+        WHERE {where_scope} AND content_text LIKE %s
         ORDER BY timestamp DESC
         """
-        rows = self._execute_fetchall(sql, (limit_value, app_name, user_id, f"%{query}%"))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{query}%"))
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
@@ -490,12 +497,19 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
             f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = %s", (session_id,), commit=True
         )
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than the retention window."""
+        clauses = ["inserted_at < DATEADD(day, -%s, SYSUTCDATETIME())"]
+        params: list[Any] = [days]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = %s")
+            params.append(scope)
+        where_sql = " AND ".join(clauses)
         return self._execute(
-            f"DELETE FROM {_table_ref(self._memory_table)} WHERE inserted_at < DATEADD(day, -%s, SYSUTCDATETIME())",
-            (days,),
-            commit=True,
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
     def _memory_table_ddl(self) -> str:
@@ -509,6 +523,7 @@ BEGIN
         session_id NVARCHAR(128) NOT NULL,
         app_name NVARCHAR(128) NOT NULL,
         user_id NVARCHAR(128) NOT NULL,
+        scope NVARCHAR(16) NOT NULL CONSTRAINT {_constraint_ref("df", self._memory_table, "scope")} DEFAULT N'user',
         event_id NVARCHAR(128) NOT NULL,
         author NVARCHAR(256) NULL,
         timestamp DATETIME2(6) NOT NULL,
@@ -526,7 +541,12 @@ END;
     def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
         return [
-            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, user_id"),
+            (
+                f"idx_{self._memory_table}_app_scope_user_time",
+                self._memory_table,
+                "app_name, scope, user_id, timestamp DESC",
+            ),
+            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, scope"),
             (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
             (f"idx_{self._memory_table}_timestamp", self._memory_table, "timestamp DESC"),
         ]
@@ -748,7 +768,7 @@ def _events_query(
     return sql, tuple(params)
 
 
-def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -760,14 +780,14 @@ def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
     )
 
 
-def _session_record_from_row(row: Any) -> SessionRecord:
-    return SessionRecord(
+def _session_record_from_row(row: Any) -> StoredSession:
+    return StoredSession(
         id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
     )
 
 
-def _event_record_from_row(row: Any) -> EventRecord:
-    return EventRecord(
+def _event_record_from_row(row: Any) -> StoredEvent:
+    return StoredEvent(
         id=row[0],
         app_name=row[1],
         user_id=row[2],
@@ -778,21 +798,23 @@ def _event_record_from_row(row: Any) -> EventRecord:
     )
 
 
-def _memory_record_from_row(row: Any) -> "MemoryRecord":
+def _memory_record_from_row(row: Any) -> "StoredMemory":
     return cast(
-        "MemoryRecord",
+        "StoredMemory",
         {
             "id": row[0],
             "session_id": row[1],
             "app_name": row[2],
             "user_id": row[3],
-            "event_id": row[4],
-            "author": row[5],
-            "timestamp": row[6],
-            "content_json": _json_dict(row[7]),
-            "content_text": row[8],
-            "metadata_json": _json_dict(row[9]) if row[9] is not None else None,
-            "inserted_at": row[10],
+            "scope": row[4],
+            "event_id": row[5],
+            "author": row[6],
+            "timestamp": row[7],
+            "content_json": _json_dict(row[8]),
+            "content_text": row[9],
+            "metadata_json": _json_dict(row[10]) if row[10] is not None else None,
+            "inserted_at": row[11],
+            "embedding": None,
         },
     )
 
@@ -848,3 +870,13 @@ def _escape_sql_literal(value: str) -> str:
 def _raise_session_not_found(session_id: str) -> None:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _build_mssql_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> tuple[str, tuple[Any, ...]]:
+    if scope_filter == "all":
+        return "app_name = %s AND ((scope = 'user' AND user_id = %s) OR scope = 'app')", (app_name, user_id)
+    if scope_filter == "user":
+        return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
+    return "app_name = %s AND scope = 'app'", (app_name,)

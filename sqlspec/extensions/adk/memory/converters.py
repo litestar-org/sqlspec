@@ -7,7 +7,7 @@ and converting between ADK models and database records.
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.extensions.adk.memory._types import MemoryRecord
+from sqlspec.extensions.adk.memory._types import StoredMemory
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
@@ -58,17 +58,20 @@ def extract_content_text(content: "types.Content") -> str:
     return " ".join(parts_text)
 
 
-def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_id: str) -> "MemoryRecord | None":
-    """Convert an ADK Event to a memory record.
+def event_to_memory_record(
+    event: "Event", session_id: str, app_name: str, user_id: str, scope: str = "user"
+) -> "StoredMemory | None":
+    """Convert an ADK Event to a stored memory record.
 
     Args:
         event: ADK Event object.
         session_id: ID of the parent session.
         app_name: Name of the application.
         user_id: ID of the user.
+        scope: Visibility scope ('user' or 'app').
 
     Returns:
-        MemoryRecord for database storage, or None if event has no content.
+        StoredMemory for database storage, or None if event has no content.
     """
     if event.content is None:
         return None
@@ -79,15 +82,16 @@ def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_
 
     content_dict = event.content.model_dump(exclude_none=True, mode="json")
 
-    custom_metadata = event.custom_metadata or None
+    custom_metadata = dict(event.custom_metadata) if event.custom_metadata else None
 
     now = datetime.now(timezone.utc)
 
-    return MemoryRecord(
+    return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
         app_name=app_name,
         user_id=user_id,
+        scope=scope,
         event_id=event.id,
         author=event.author,
         timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
@@ -95,12 +99,17 @@ def event_to_memory_record(event: "Event", session_id: str, app_name: str, user_
         content_text=content_text,
         metadata_json=custom_metadata,
         inserted_at=now,
+        embedding=None,
     )
 
 
 def memory_entry_to_record(
-    entry: "MemoryEntry", app_name: str, user_id: str, extra_metadata: "dict[str, Any] | None" = None
-) -> "MemoryRecord | None":
+    entry: "MemoryEntry",
+    app_name: str,
+    user_id: str,
+    extra_metadata: "dict[str, Any] | None" = None,
+    scope: str = "user",
+) -> "StoredMemory | None":
     """Convert an ADK MemoryEntry to a database record.
 
     Serializes the entry's ``content`` to ``content_json``, extracts text
@@ -113,9 +122,10 @@ def memory_entry_to_record(
         user_id: ID of the user.
         extra_metadata: Optional call-level metadata to merge with the
             entry's own ``custom_metadata``.
+        scope: Visibility scope ('user' or 'app').
 
     Returns:
-        MemoryRecord for database storage, or None if entry has no
+        StoredMemory for database storage, or None if entry has no
         indexable content.
     """
     content_text = extract_content_text(entry.content)
@@ -143,11 +153,12 @@ def memory_entry_to_record(
         except (ValueError, TypeError):
             timestamp = now
 
-    return MemoryRecord(
+    return StoredMemory(
         id=entry.id or str(uuid4()),
         session_id="",
         app_name=app_name,
         user_id=user_id,
+        scope=scope,
         event_id="",
         author=entry.author or "",
         timestamp=timestamp,
@@ -155,29 +166,31 @@ def memory_entry_to_record(
         content_text=content_text,
         metadata_json=merged_metadata,
         inserted_at=now,
+        embedding=None,
     )
 
 
-def session_to_memory_records(session: "Session") -> list["MemoryRecord"]:
-    """Convert a completed ADK Session to a list of memory records.
+def session_to_memory_records(session: "Session", scope: str = "user") -> list["StoredMemory"]:
+    """Convert a completed ADK Session to a list of stored memory records.
 
     Extracts all events with content from the session and converts
     them to memory records for storage.
 
     Args:
         session: ADK Session object with events.
+        scope: Visibility scope ('user' or 'app').
 
     Returns:
-        List of MemoryRecord objects for database storage.
+        List of StoredMemory objects for database storage.
     """
-    records: list[MemoryRecord] = []
+    records: list[StoredMemory] = []
 
     if not session.events:
         return records
 
     for event in session.events:
         record = event_to_memory_record(
-            event=event, session_id=session.id, app_name=session.app_name, user_id=session.user_id
+            event=event, session_id=session.id, app_name=session.app_name, user_id=session.user_id, scope=scope
         )
         if record is not None:
             records.append(record)
@@ -185,11 +198,11 @@ def session_to_memory_records(session: "Session") -> list["MemoryRecord"]:
     return records
 
 
-def record_to_memory_entry(record: "MemoryRecord") -> "MemoryEntry":
+def record_to_memory_entry(record: "StoredMemory") -> "MemoryEntry":
     """Convert a database record to an ADK MemoryEntry.
 
-    Preserves ``id`` and ``custom_metadata`` fields that were previously
-    dropped on readback.
+    Preserves ``id``, ``custom_metadata``, and propagates ``scope``
+    into the entry's custom metadata.
 
     Args:
         record: Memory database record.
@@ -204,16 +217,20 @@ def record_to_memory_entry(record: "MemoryRecord") -> "MemoryEntry":
 
     timestamp_str = record["timestamp"].isoformat() if record["timestamp"] else None
 
+    custom_metadata = dict(record["metadata_json"] or {})
+    if "scope" not in custom_metadata and record.get("scope"):
+        custom_metadata["scope"] = record["scope"]
+
     return MemoryEntry(
         id=record["id"],
         content=content,
         author=record["author"],
         timestamp=timestamp_str,
-        custom_metadata=record["metadata_json"] or {},
+        custom_metadata=custom_metadata,
     )
 
 
-def records_to_memory_entries(records: list["MemoryRecord"]) -> list["Any"]:
+def records_to_memory_entries(records: list["StoredMemory"]) -> list["Any"]:
     """Convert a list of database records to ADK MemoryEntry objects.
 
     Args:

@@ -52,7 +52,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
     SmokeImport("event_channel", "sqlspec.extensions.events._channel", "SyncEventChannel", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
-    SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),
+    SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
 )

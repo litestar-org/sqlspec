@@ -11,7 +11,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.sqlite.config import _render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     import logging
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 __all__ = ("SqliteADKConfig", "SqliteADKMemoryStore", "SqliteADKStore")
 
@@ -98,7 +98,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session.
 
         Args:
@@ -136,13 +136,13 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             conn.execute(sql, params)
             conn.commit()
 
-        return SessionRecord(
+        return StoredSession(
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
         )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID.
 
         Args:
@@ -187,7 +187,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 if row is None:
                     return None
 
-                return SessionRecord(
+                return StoredSession(
                     id=row[0],
                     app_name=row[1],
                     user_id=row[2],
@@ -224,7 +224,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -259,7 +259,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 rows = cursor.fetchall()
 
                 return [
-                    SessionRecord(
+                    StoredSession(
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
@@ -290,7 +290,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             conn.execute(sql, (app_name, user_id, session_id))
             conn.commit()
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
 
         Args:
@@ -324,7 +324,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -332,11 +332,11 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update the session's durable state.
 
         Inserts the event and updates the session state + update_time in a
-        single transaction, returning the updated SessionRecord via RETURNING.
+        single transaction, returning the updated StoredSession via RETURNING.
 
         Args:
             event_record: Event record to store.
@@ -418,7 +418,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
-        return SessionRecord(
+        return StoredSession(
             id=row[0],
             app_name=row[1],
             user_id=row[2],
@@ -434,7 +434,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session.
 
         Args:
@@ -475,7 +475,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 rows = cursor.fetchall()
 
                 return [
-                    EventRecord(
+                    StoredEvent(
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
@@ -780,7 +780,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             self._enable_foreign_keys(driver.connection)
             driver.execute_script(self._memory_table_ddl())
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication.
 
@@ -813,20 +813,22 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                 inserted_at_julian = _datetime_to_julian(entry["inserted_at"])
                 content_json_str = to_json(entry["content_json"])
                 metadata_json_str = to_json(entry["metadata_json"]) if entry["metadata_json"] else None
+                scope = entry.get("scope", "user")
 
                 if self._owner_id_column_name:
                     sql = f"""
                     INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, event_id, author,
+                    (id, session_id, app_name, user_id, scope, event_id, author,
                      {self._owner_id_column_name}, timestamp, content_json,
                      content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                     params: tuple[Any, ...] = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        scope,
                         entry["event_id"],
                         entry["author"],
                         owner_id,
@@ -839,15 +841,16 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                 else:
                     sql = f"""
                     INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, event_id, author,
+                    (id, session_id, app_name, user_id, scope, event_id, author,
                      timestamp, content_json, content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                     params = (
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        scope,
                         entry["event_id"],
                         entry["author"],
                         timestamp_julian,
@@ -866,23 +869,14 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return inserted_count
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
-        """Search memory entries by text query.
-
-        Args:
-            query: Text query to search for.
-            app_name: Application name to filter by.
-            user_id: User ID to filter by.
-            limit: Maximum number of results (defaults to max_results config).
-
-        Returns:
-            List of matching memory records ordered by relevance/timestamp.
-
-        Raises:
-            RuntimeError: If memory store is disabled.
-        """
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -891,21 +885,13 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         if self._use_fts:
             try:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit)
+                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
             except Exception as exc:  # pragma: no cover
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
-        return self._search_entries_simple(query, app_name, user_id, effective_limit)
+        return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        """Delete all memory entries for a specific session.
-
-        Args:
-            session_id: Session ID to delete entries for.
-
-        Returns:
-            Number of entries deleted.
-        """
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
 
         with self._config.provide_connection() as conn:
@@ -916,25 +902,22 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return deleted_count
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
-        """Delete memory entries older than specified days.
-
-        Used for TTL cleanup operations.
-
-        Args:
-            days: Number of days to retain entries.
-
-        Returns:
-            Number of entries deleted.
-        """
         cutoff_julian = _datetime_to_julian(datetime.now(timezone.utc)) - days
 
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
+        params: list[Any] = [cutoff_julian]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
+        if scope is not None:
+            sql += " AND scope = ?"
+            params.append(scope)
 
         with self._config.provide_connection() as conn:
             self._enable_foreign_keys(conn)
-            cursor = conn.execute(sql, (cutoff_julian,))
+            cursor = conn.execute(sql, tuple(params))
             deleted_count = cursor.rowcount
             conn.commit()
 
@@ -982,6 +965,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             session_id TEXT NOT NULL,
             app_name TEXT NOT NULL,
             user_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'user',
             event_id TEXT NOT NULL UNIQUE,
             author TEXT{owner_id_line},
             timestamp REAL NOT NULL,
@@ -991,8 +975,11 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             inserted_at REAL NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
+            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
+            ON {self._memory_table}(app_name, scope);
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
             ON {self._memory_table}(session_id);
@@ -1018,37 +1005,41 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         """
         connection.execute("PRAGMA foreign_keys = ON")
 
-    def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    def _search_entries_fts(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)
         sql = f"""
-        SELECT m.id, m.session_id, m.app_name, m.user_id, m.event_id, m.author,
+        SELECT m.id, m.session_id, m.app_name, m.user_id, m.scope, m.event_id, m.author,
                m.timestamp, m.content_json, m.content_text, m.metadata_json, m.inserted_at
         FROM {self._memory_table} m
         JOIN {self._memory_table}_fts fts ON m.rowid = fts.rowid
-        WHERE m.app_name = ?
-          AND m.user_id = ?
+        WHERE {where_scope}
           AND fts.content_text MATCH ?
         ORDER BY m.timestamp DESC
         LIMIT ?
         """
-        params: tuple[Any, ...] = (app_name, user_id, query, limit)
+        params = (*scope_params, query, limit)
         return self._fetch_records(sql, params)
 
-    def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    def _search_entries_simple(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_sqlite_scope_clause("", app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM {self._memory_table}
-        WHERE app_name = ?
-          AND user_id = ?
+        WHERE {where_scope}
           AND content_text LIKE ?
         ORDER BY timestamp DESC
         LIMIT ?
         """
         pattern = f"%{query}%"
-        params = (app_name, user_id, pattern, limit)
+        params = (*scope_params, pattern, limit)
         return self._fetch_records(sql, params)
 
-    def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[MemoryRecord]":
+    def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[StoredMemory]":
         with self._config.provide_connection() as conn:
             self._enable_foreign_keys(conn)
             cursor = conn.execute(sql, params)
@@ -1059,13 +1050,15 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                 "session_id": row[1],
                 "app_name": row[2],
                 "user_id": row[3],
-                "event_id": row[4],
-                "author": row[5],
-                "timestamp": _julian_to_datetime(row[6]),
-                "content_json": from_json(row[7]) if row[7] else {},
-                "content_text": row[8],
-                "metadata_json": from_json(row[9]) if row[9] else None,
-                "inserted_at": _julian_to_datetime(row[10]),
+                "scope": row[4],
+                "event_id": row[5],
+                "author": row[6],
+                "timestamp": _julian_to_datetime(row[7]),
+                "content_json": from_json(row[8]) if row[8] else {},
+                "content_text": row[9],
+                "metadata_json": from_json(row[10]) if row[10] else None,
+                "inserted_at": _julian_to_datetime(row[11]),
+                "embedding": None,
             }
             for row in rows
         ]
@@ -1153,3 +1146,16 @@ def _julian_to_datetime(julian: float) -> datetime:
     days_since_epoch = julian - JULIAN_EPOCH
     timestamp = days_since_epoch * SECONDS_PER_DAY
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+def _build_sqlite_scope_clause(
+    prefix: str, app_name: str, user_id: str, scope_filter: "Literal['all', 'user', 'app']"
+) -> "tuple[str, tuple[Any, ...]]":
+    if scope_filter == "all":
+        return (
+            f"{prefix}app_name = ? AND (({prefix}scope = 'user' AND {prefix}user_id = ?) OR {prefix}scope = 'app')",
+            (app_name, user_id),
+        )
+    if scope_filter == "user":
+        return f"{prefix}app_name = ? AND {prefix}scope = 'user' AND {prefix}user_id = ?", (app_name, user_id)
+    return f"{prefix}app_name = ? AND {prefix}scope = 'app'", (app_name,)

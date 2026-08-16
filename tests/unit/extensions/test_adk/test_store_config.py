@@ -4,14 +4,14 @@
 import importlib
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
-from sqlspec.extensions.adk import EventRecord, SessionRecord
-from sqlspec.extensions.adk.artifact._types import ArtifactRecord
+from sqlspec.extensions.adk import StoredEvent, StoredSession
+from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.extensions.adk.artifact.store import BaseSyncADKArtifactStore
-from sqlspec.extensions.adk.memory import MemoryRecord
+from sqlspec.extensions.adk.memory import StoredMemory
 from sqlspec.extensions.adk.memory import store as memory_store_module
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
@@ -33,8 +33,8 @@ class _Config:
 class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
-    ) -> SessionRecord:
-        return SessionRecord(
+    ) -> StoredSession:
+        return StoredSession(
             id=session_id,
             app_name=app_name,
             user_id=user_id,
@@ -45,24 +45,24 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: Any | None = None
-    ) -> SessionRecord | None:
+    ) -> StoredSession | None:
         return None
 
     async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         return None
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]:
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> list[StoredSession]:
         return []
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         return None
 
-    async def append_event(self, event_record: EventRecord) -> None:
+    async def append_event(self, event_record: StoredEvent) -> None:
         return None
 
     async def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -70,7 +70,7 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
         *,
         app_state: dict[str, Any] | None = None,
         user_state: dict[str, Any] | None = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         return await self.create_session(session_id, app_name, user_id, state)
 
     async def get_events(
@@ -80,7 +80,7 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
         session_id: str,
         after_timestamp: datetime | None = None,
         limit: int | None = None,
-    ) -> list[EventRecord]:
+    ) -> list[StoredEvent]:
         return []
 
     async def delete_expired_events(self, before: datetime) -> int:
@@ -151,8 +151,8 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
-    ) -> SessionRecord:
-        return SessionRecord(
+    ) -> StoredSession:
+        return StoredSession(
             id=session_id,
             app_name=app_name,
             user_id=user_id,
@@ -163,24 +163,24 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: Any | None = None
-    ) -> SessionRecord | None:
+    ) -> StoredSession | None:
         return None
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         return None
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> list[SessionRecord]:
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> list[StoredSession]:
         return []
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         return None
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         return None
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -188,7 +188,7 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
         *,
         app_state: dict[str, Any] | None = None,
         user_state: dict[str, Any] | None = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         return self.create_session(session_id, app_name, user_id, state)
 
     def get_events(
@@ -198,7 +198,7 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
         session_id: str,
         after_timestamp: datetime | None = None,
         limit: int | None = None,
-    ) -> list[EventRecord]:
+    ) -> list[StoredEvent]:
         return []
 
     def delete_expired_events(self, before: datetime) -> int:
@@ -270,16 +270,23 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
     def create_tables(self) -> None:
         self.create_tables_called = True
 
-    def insert_memory_entries(self, entries: list[MemoryRecord], owner_id: object | None = None) -> int:
+    def insert_memory_entries(self, entries: list[StoredMemory], owner_id: object | None = None) -> int:
         return len(entries)
 
-    def search_entries(self, query: str, app_name: str, user_id: str, limit: int | None = None) -> list[MemoryRecord]:
+    def search_entries(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int | None = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> list[StoredMemory]:
         return []
 
     def delete_entries_by_session(self, session_id: str) -> int:
         return 0
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         return 0
 
     def _memory_table_ddl(self) -> str | list[str]:
@@ -290,12 +297,12 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
 
 
 class _SyncArtifactStore(BaseSyncADKArtifactStore[Any]):
-    def insert_artifact(self, record: ArtifactRecord) -> None:
+    def insert_artifact(self, record: StoredArtifact) -> None:
         return None
 
     def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: str | None = None, version: int | None = None
-    ) -> ArtifactRecord | None:
+    ) -> StoredArtifact | None:
         return None
 
     def list_artifact_keys(self, app_name: str, user_id: str, session_id: str | None = None) -> list[str]:
@@ -303,12 +310,12 @@ class _SyncArtifactStore(BaseSyncADKArtifactStore[Any]):
 
     def list_artifact_versions(
         self, app_name: str, user_id: str, filename: str, session_id: str | None = None
-    ) -> list[ArtifactRecord]:
+    ) -> list[StoredArtifact]:
         return []
 
     def delete_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: str | None = None
-    ) -> list[ArtifactRecord]:
+    ) -> list[StoredArtifact]:
         return []
 
     def get_next_version(self, app_name: str, user_id: str, filename: str, session_id: str | None = None) -> int:

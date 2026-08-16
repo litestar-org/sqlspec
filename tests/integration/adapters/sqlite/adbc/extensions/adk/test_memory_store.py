@@ -8,18 +8,21 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore
-from sqlspec.extensions.adk import MemoryRecord
+from sqlspec.extensions.adk import StoredMemory
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
 
-def _build_record(*, session_id: str, event_id: str, content_text: str, inserted_at: datetime) -> MemoryRecord:
+def _build_record(
+    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
+) -> StoredMemory:
     now = datetime.now(timezone.utc)
-    return MemoryRecord(
+    return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
         app_name="app",
         user_id="user",
+        scope=scope,
         event_id=event_id,
         author="user",
         timestamp=now,
@@ -27,6 +30,7 @@ def _build_record(*, session_id: str, event_id: str, content_text: str, inserted
         content_text=content_text,
         metadata_json=None,
         inserted_at=inserted_at,
+        embedding=None,
     )
 
 

@@ -15,7 +15,7 @@ import pytest
 
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
@@ -52,7 +52,7 @@ def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
     session_id = "session-008"
     duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
 
-    event_record: EventRecord = {
+    event_record: StoredEvent = {
         "id": "event-full",
         "app_name": "test-app",
         "user_id": "user-008",
@@ -96,7 +96,7 @@ def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
     t2 = datetime.now(timezone.utc)
     t3 = datetime.now(timezone.utc)
 
-    ev_middle: EventRecord = {
+    ev_middle: StoredEvent = {
         "id": "event-middle",
         "app_name": "test-app",
         "user_id": "user-009",
@@ -105,7 +105,7 @@ def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
         "timestamp": t2,
         "event_data": {"id": "event-middle", "app_name": "test-app", "user_id": "user-009"},
     }
-    ev_last: EventRecord = {
+    ev_last: StoredEvent = {
         "id": "event-last",
         "app_name": "test-app",
         "user_id": "user-009",
@@ -114,7 +114,7 @@ def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
         "timestamp": t3,
         "event_data": {"id": "event-last", "app_name": "test-app", "user_id": "user-009"},
     }
-    ev_first: EventRecord = {
+    ev_first: StoredEvent = {
         "id": "event-first",
         "app_name": "test-app",
         "user_id": "user-009",
@@ -163,7 +163,7 @@ def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
     session_id = "session-json-rt"
     duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
 
-    event_record: EventRecord = {
+    event_record: StoredEvent = {
         "id": "event-json",
         "app_name": "test-app",
         "user_id": "user-012",

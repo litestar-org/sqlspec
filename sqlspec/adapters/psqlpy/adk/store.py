@@ -1,12 +1,12 @@
 """Psqlpy ADK store for Google Agent Development Kit session/event storage."""
 
 import re
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_query_result_metadata
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 
 __all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore")
@@ -88,7 +88,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             if self._owner_id_column_name:
                 sql = f"""
@@ -112,7 +112,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             sql = f"""
             UPDATE {self._session_table}
@@ -136,7 +136,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                     return None
 
                 row = rows[0]
-                return SessionRecord(
+                return StoredSession(
                     id=row["id"],
                     app_name=row["app_name"],
                     user_id=row["user_id"],
@@ -159,7 +159,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             await conn.execute(sql, [state, app_name, user_id, session_id])
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         if user_id is None:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -183,7 +183,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 rows: list[dict[str, Any]] = result.result() if result else []
 
                 return [
-                    SessionRecord(
+                    StoredSession(
                         id=row["id"],
                         app_name=row["app_name"],
                         user_id=row["user_id"],
@@ -204,7 +204,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
             await conn.execute(sql, [app_name, user_id, session_id])
 
-    async def append_event(self, event_record: EventRecord) -> None:
+    async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
             id, session_id, invocation_id, timestamp, event_data
@@ -225,7 +225,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -233,7 +233,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, session_id, invocation_id, timestamp, event_data
@@ -287,7 +287,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await conn.execute("COMMIT")
 
         row = rows[0]
-        return SessionRecord(
+        return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
@@ -303,7 +303,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         if limit == 0:
             return []
 
@@ -333,7 +333,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 rows: list[dict[str, Any]] = result.result() if result else []
 
                 return [
-                    EventRecord(
+                    StoredEvent(
                         id=row["id"],
                         session_id=row["session_id"],
                         invocation_id=row["invocation_id"],
@@ -573,7 +573,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._memory_table_ddl())
 
-    async def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -645,8 +645,13 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         return inserted_count
 
     async def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -687,7 +692,9 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                     return 0
             raise
 
-    async def delete_entries_older_than(self, days: int) -> int:
+    async def delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
         """Delete memory entries older than specified days."""
         count_sql = f"""
         SELECT COUNT(*) AS count FROM {self._memory_table}
@@ -752,39 +759,68 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
 
-    async def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    async def _search_entries_fts(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        if scope_filter == "all":
+            where_scope = "app_name = $2 AND ((scope = 'user' AND user_id = $3) OR scope = 'app')"
+            scope_params: list[Any] = [query, app_name, user_id]
+            p_lim = "$4"
+        elif scope_filter == "user":
+            where_scope = "app_name = $2 AND scope = 'user' AND user_id = $3"
+            scope_params = [query, app_name, user_id]
+            p_lim = "$4"
+        else:
+            where_scope = "app_name = $2 AND scope = 'app'"
+            scope_params = [query, app_name]
+            p_lim = "$3"
+
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at,
                ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
         FROM {self._memory_table}
-        WHERE app_name = $2
-          AND user_id = $3
+        WHERE {where_scope}
           AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $1)
         ORDER BY rank DESC, timestamp DESC
-        LIMIT $4
+        LIMIT {p_lim}
         """
-        params = [query, app_name, user_id, limit]
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            result = await conn.fetch(sql, params)
+            result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
-    async def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    async def _search_entries_simple(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        pattern = f"%{query}%"
+        if scope_filter == "all":
+            where_scope = "app_name = $1 AND ((scope = 'user' AND user_id = $2) OR scope = 'app')"
+            scope_params = [app_name, user_id, pattern]
+            p_lim = "$4"
+            p_pat = "$3"
+        elif scope_filter == "user":
+            where_scope = "app_name = $1 AND scope = 'user' AND user_id = $2"
+            scope_params = [app_name, user_id, pattern]
+            p_lim = "$4"
+            p_pat = "$3"
+        else:
+            where_scope = "app_name = $1 AND scope = 'app'"
+            scope_params = [app_name, pattern]
+            p_lim = "$3"
+            p_pat = "$2"
+
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM {self._memory_table}
-        WHERE app_name = $1
-          AND user_id = $2
-          AND content_text ILIKE $3
+        WHERE {where_scope}
+          AND content_text ILIKE {p_pat}
         ORDER BY timestamp DESC
-        LIMIT $4
+        LIMIT {p_lim}
         """
-        pattern = f"%{query}%"
-        params = [app_name, user_id, pattern, limit]
         async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-            result = await conn.fetch(sql, params)
+            result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
@@ -817,13 +853,14 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         return -1
 
 
-def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[MemoryRecord]":
+def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[StoredMemory]":
     return [
         {
             "id": row["id"],
             "session_id": row["session_id"],
             "app_name": row["app_name"],
             "user_id": row["user_id"],
+            "scope": row.get("scope", "user"),
             "event_id": row["event_id"],
             "author": row["author"],
             "timestamp": row["timestamp"],
@@ -831,6 +868,7 @@ def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[MemoryRecord]":
             "content_text": row["content_text"],
             "metadata_json": row["metadata_json"],
             "inserted_at": row["inserted_at"],
+            "embedding": None,
         }
         for row in rows
     ]

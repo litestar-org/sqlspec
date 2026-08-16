@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
 
 from google.api_core.exceptions import NotFound
 from google.cloud.spanner_v1 import param_types
@@ -11,7 +11,7 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import OperationalError
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import Transaction
 
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
 
@@ -91,13 +91,13 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session."""
         return self._create_session(session_id, app_name, user_id, state, owner_id)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID."""
         try:
             return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
@@ -110,7 +110,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """Update session state."""
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app."""
         try:
             return self._list_sessions(app_name, user_id)
@@ -123,13 +123,13 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """Delete session and associated events."""
         self._delete_session(app_name, user_id, session_id)
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         self._append_event(event_record)
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -137,7 +137,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         return self._append_event_and_update_state(
             event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
@@ -150,7 +150,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session."""
         try:
             return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
@@ -260,7 +260,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         state_json = to_json(state)
         params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
         columns = "id, app_name, user_id, state, create_time, update_time"
@@ -289,7 +289,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             update_sql = f"""
             UPDATE {self._session_table}
@@ -333,7 +333,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
         row = rows[0]
         state_value = self._decode_state(row[3])
-        record: SessionRecord = {
+        record: StoredSession = {
             "id": row[0],
             "app_name": row[1],
             "user_id": row[2],
@@ -366,7 +366,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             )
         ])
 
-    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
@@ -383,10 +383,10 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         sql = f"{sql} ORDER BY update_time DESC"
 
         rows = self._run_read(sql, params, types)
-        records: list[SessionRecord] = []
+        records: list[StoredSession] = []
         for row in rows:
             state_value = self._decode_state(row[3])
-            record: SessionRecord = {
+            record: StoredSession = {
                 "id": row[0],
                 "app_name": row[1],
                 "user_id": row[2],
@@ -413,7 +413,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _append_event_and_update_state(
         self,
-        event_record: "EventRecord",
+        event_record: "StoredEvent",
         app_name: str,
         user_id: str,
         session_id: str,
@@ -421,12 +421,12 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically insert an event and update session state in one transaction.
 
         Both the event INSERT and the session state UPDATE execute within a single
         Spanner transaction so they succeed or fail together. A follow-up
-        single-use read returns the SessionRecord; we can't capture update_time
+        single-use read returns the StoredSession; we can't capture update_time
         inside the write txn because PENDING_COMMIT_TIMESTAMP() only materialises
         on commit.
 
@@ -506,7 +506,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             raise ValueError(msg)
         return record
 
-    def _insert_event(self, event_record: "EventRecord") -> None:
+    def _insert_event(self, event_record: "StoredEvent") -> None:
         event_params: dict[str, Any] = {
             "id": event_record["id"],
             "session_id": event_record["session_id"],
@@ -527,7 +527,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         if limit == 0:
             return []
 
@@ -568,7 +568,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             for row in rows
         ]
 
-    def _append_event(self, event_record: EventRecord) -> None:
+    def _append_event(self, event_record: StoredEvent) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
 
@@ -781,23 +781,28 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
         self._create_tables()
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         return self._insert_memory_entries(entries, owner_id)
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return self._delete_entries_by_session(session_id)
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
+        return self._delete_entries_older_than(days, app_name, scope)
 
     def _database(self) -> "Database":
         return self._config.get_database()
@@ -829,6 +834,7 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             "session_id": SPANNER_PARAM_TYPES.STRING,
             "app_name": SPANNER_PARAM_TYPES.STRING,
             "user_id": SPANNER_PARAM_TYPES.STRING,
+            "scope": SPANNER_PARAM_TYPES.STRING,
             "event_id": SPANNER_PARAM_TYPES.STRING,
             "author": SPANNER_PARAM_TYPES.STRING,
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
@@ -888,6 +894,7 @@ CREATE TABLE {self._memory_table} (
   session_id STRING(128) NOT NULL,
   app_name STRING(128) NOT NULL,
   user_id STRING(128) NOT NULL,
+  scope STRING(16) NOT NULL,
   event_id STRING(128) NOT NULL,
   author STRING(256){owner_line},
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
@@ -898,10 +905,11 @@ CREATE TABLE {self._memory_table} (
 ) {pk}{options}{self._memory_row_deletion_policy}
 """
 
-        app_user_idx = f"CREATE INDEX idx_{self._memory_table}_app_user_time ON {self._memory_table}(app_name, user_id, timestamp DESC)"
+        app_scope_user_idx = f"CREATE INDEX idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
+        scope_idx = f"CREATE INDEX idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
         session_idx = f"CREATE INDEX idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
 
-        statements = [table_sql, app_user_idx, session_idx]
+        statements = [table_sql, app_scope_user_idx, scope_idx, session_idx]
         if fts_index:
             statements.append(fts_index)
         return statements
@@ -917,12 +925,13 @@ CREATE TABLE {self._memory_table} (
             statements.append(f"DROP SEARCH INDEX idx_{self._memory_table}_fts")
         statements.extend([
             f"DROP INDEX idx_{self._memory_table}_session",
-            f"DROP INDEX idx_{self._memory_table}_app_user_time",
+            f"DROP INDEX idx_{self._memory_table}_app_scope_user_time",
+            f"DROP INDEX idx_{self._memory_table}_scope",
             f"DROP TABLE {self._memory_table}",
         ])
         return statements
 
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -938,10 +947,10 @@ CREATE TABLE {self._memory_table} (
 
         insert_sql = f"""
         INSERT INTO {self._memory_table} (
-            id, session_id, app_name, user_id, event_id, author{owner_column},
+            id, session_id, app_name, user_id, scope, event_id, author{owner_column},
             timestamp, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
-            @id, @session_id, @app_name, @user_id, @event_id, @author{owner_param},
+            @id, @session_id, @app_name, @user_id, @scope, @event_id, @author{owner_param},
             @timestamp, @content_json, @content_text, @metadata_json, @inserted_at
         )
         """
@@ -954,6 +963,7 @@ CREATE TABLE {self._memory_table} (
                 "session_id": entry["session_id"],
                 "app_name": entry["app_name"],
                 "user_id": entry["user_id"],
+                "scope": entry.get("scope", "user"),
                 "event_id": entry["event_id"],
                 "author": entry["author"],
                 "timestamp": entry["timestamp"],
@@ -977,8 +987,13 @@ CREATE TABLE {self._memory_table} (
         return bool(rows)
 
     def _search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -986,49 +1001,43 @@ CREATE TABLE {self._memory_table} (
         effective_limit = limit if limit is not None else self._max_results
 
         if self._use_fts:
-            return self._search_entries_fts(query, app_name, user_id, effective_limit)
-        return self._search_entries_simple(query, app_name, user_id, effective_limit)
+            return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+        return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
 
-    def _search_entries_fts(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    def _search_entries_fts(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params, scope_types = _build_spanner_scope_where(app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM {self._memory_table}
-        WHERE app_name = @app_name
-          AND user_id = @user_id
+        WHERE {where_scope}
           AND SEARCH(content_tokens, @query)
         ORDER BY timestamp DESC
         LIMIT @limit
         """
-        params = {"app_name": app_name, "user_id": user_id, "query": query, "limit": limit}
-        types = {
-            "app_name": SPANNER_PARAM_TYPES.STRING,
-            "user_id": SPANNER_PARAM_TYPES.STRING,
-            "query": SPANNER_PARAM_TYPES.STRING,
-            "limit": SPANNER_PARAM_TYPES.INT64,
-        }
+        params = {**scope_params, "query": query, "limit": limit}
+        types = {**scope_types, "query": SPANNER_PARAM_TYPES.STRING, "limit": SPANNER_PARAM_TYPES.INT64}
         rows = self._run_read(sql, params, types)
         return self._rows_to_records(rows)
 
-    def _search_entries_simple(self, query: str, app_name: str, user_id: str, limit: int) -> "list[MemoryRecord]":
+    def _search_entries_simple(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params, scope_types = _build_spanner_scope_where(app_name, user_id, scope_filter)
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM {self._memory_table}
-        WHERE app_name = @app_name
-          AND user_id = @user_id
+        WHERE {where_scope}
           AND LOWER(content_text) LIKE @pattern
         ORDER BY timestamp DESC
         LIMIT @limit
         """
         pattern = f"%{query.lower()}%"
-        params = {"app_name": app_name, "user_id": user_id, "pattern": pattern, "limit": limit}
-        types = {
-            "app_name": SPANNER_PARAM_TYPES.STRING,
-            "user_id": SPANNER_PARAM_TYPES.STRING,
-            "pattern": SPANNER_PARAM_TYPES.STRING,
-            "limit": SPANNER_PARAM_TYPES.INT64,
-        }
+        params = {**scope_params, "pattern": pattern, "limit": limit}
+        types = {**scope_types, "pattern": SPANNER_PARAM_TYPES.STRING, "limit": SPANNER_PARAM_TYPES.INT64}
         rows = self._run_read(sql, params, types)
         return self._rows_to_records(rows)
 
@@ -1038,27 +1047,39 @@ CREATE TABLE {self._memory_table} (
         types = {"session_id": SPANNER_PARAM_TYPES.STRING}
         return self._execute_update(sql, params, types)
 
-    def _delete_entries_older_than(self, days: int) -> int:
+    def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < @cutoff"
-        params = {"cutoff": cutoff}
-        types = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}
+        clauses = ["inserted_at < @cutoff"]
+        params: dict[str, Any] = {"cutoff": cutoff}
+        types: dict[str, Any] = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}
+        if app_name is not None:
+            clauses.append("app_name = @app_name")
+            params["app_name"] = app_name
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        if scope is not None:
+            clauses.append("scope = @scope")
+            params["scope"] = scope
+            types["scope"] = SPANNER_PARAM_TYPES.STRING
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         return self._execute_update(sql, params, types)
 
-    def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
+    def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
         return [
             {
                 "id": row[0],
                 "session_id": row[1],
                 "app_name": row[2],
                 "user_id": row[3],
-                "event_id": row[4],
-                "author": row[5],
-                "timestamp": row[6],
-                "content_json": self._decode_json(row[7]),
-                "content_text": row[8],
-                "metadata_json": self._decode_json(row[9]),
-                "inserted_at": row[10],
+                "scope": row[4],
+                "event_id": row[5],
+                "author": row[6],
+                "timestamp": row[7],
+                "content_json": self._decode_json(row[8]),
+                "content_text": row[9],
+                "metadata_json": self._decode_json(row[10]),
+                "inserted_at": row[11],
+                "embedding": None,
             }
             for row in rows
         ]
@@ -1194,3 +1215,22 @@ class _SpannerReadProtocol(Protocol):
     def execute_sql(
         self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
     ) -> Iterable[Any]: ...
+
+
+def _build_spanner_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    if scope_filter == "all":
+        where = "app_name = @app_name AND ((scope = 'user' AND user_id = @user_id) OR scope = 'app')"
+        params = {"app_name": app_name, "user_id": user_id}
+        types = {"app_name": SPANNER_PARAM_TYPES.STRING, "user_id": SPANNER_PARAM_TYPES.STRING}
+        return where, params, types
+    if scope_filter == "user":
+        where = "app_name = @app_name AND scope = 'user' AND user_id = @user_id"
+        params = {"app_name": app_name, "user_id": user_id}
+        types = {"app_name": SPANNER_PARAM_TYPES.STRING, "user_id": SPANNER_PARAM_TYPES.STRING}
+        return where, params, types
+    where = "app_name = @app_name AND scope = 'app'"
+    params = {"app_name": app_name}
+    types = {"app_name": SPANNER_PARAM_TYPES.STRING}
+    return where, params, types

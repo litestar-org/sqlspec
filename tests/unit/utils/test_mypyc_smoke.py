@@ -169,7 +169,7 @@ def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) ->
     monkeypatch.setattr(
         module,
         "SMOKE_IMPORTS",
-        (module.SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),),
+        (module.SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),),
     )
 
     def import_missing_optional_dependency(name: str) -> ModuleType:
@@ -183,7 +183,7 @@ def test_smoke_runner_skips_optional_adk_dependency(monkeypatch: MonkeyPatch) ->
         {
             "name": "adk_record_types",
             "module": "sqlspec.extensions.adk._types",
-            "attribute": "SessionRecord",
+            "attribute": "StoredSession",
             "imported": False,
             "compiled": False,
             "compiled_required": True,
@@ -200,7 +200,7 @@ def test_smoke_runner_skips_missing_optional_parent_package(monkeypatch: MonkeyP
     monkeypatch.setattr(
         module,
         "SMOKE_IMPORTS",
-        (module.SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "SessionRecord", True, "google.adk"),),
+        (module.SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),),
     )
 
     def import_missing_optional_parent(name: str) -> ModuleType:

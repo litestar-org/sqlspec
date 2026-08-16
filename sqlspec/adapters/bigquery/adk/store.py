@@ -17,7 +17,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
@@ -95,13 +95,13 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create or refresh a session row for the analytics replica."""
         return self._create_session(session_id, app_name, user_id, state, owner_id)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get a session by app, user, and session identifier."""
         return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
 
@@ -109,7 +109,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         """Replace the durable session state snapshot."""
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user."""
         return self._list_sessions(app_name, user_id)
 
@@ -117,13 +117,13 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         """Delete a session and its replicated events."""
         self._delete_session(app_name, user_id, session_id)
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an ADK event blob."""
         self._append_event(event_record)
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -131,7 +131,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Append an event and then update analytics-replica state.
 
         BigQuery has no cross-statement transaction for this path. The method
@@ -149,7 +149,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session."""
         return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
 
@@ -216,7 +216,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         now = datetime.now(timezone.utc)
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_select = ", @owner_id AS owner_id" if self._owner_id_column_name else ""
@@ -257,7 +257,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def _get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             self._update_session_touch(app_name, user_id, session_id)
 
@@ -313,7 +313,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             ],
         )
 
-    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         window_start = datetime.now(timezone.utc) - timedelta(days=self._lookup_window_days)
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -343,7 +343,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         self._run_query(events_sql, params)
         self._run_query(sessions_sql, params)
 
-    def _append_event(self, event_record: EventRecord) -> None:
+    def _append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._qualified(self._events_table)}
             (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -362,7 +362,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def _append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -370,7 +370,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         self._append_event(event_record)
         self._update_session_state(app_name, user_id, session_id, state)
         if app_state is not None:
@@ -391,7 +391,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         sql = f"""
         SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
         FROM {self._qualified(self._events_table)} e
@@ -601,7 +601,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return str(uuid4())
 
 
-def _session_record_from_row(row: "dict[str, Any]") -> SessionRecord:
+def _session_record_from_row(row: "dict[str, Any]") -> StoredSession:
     return {
         "id": row["id"],
         "app_name": row["app_name"],
@@ -612,7 +612,7 @@ def _session_record_from_row(row: "dict[str, Any]") -> SessionRecord:
     }
 
 
-def _event_record_from_row(row: "dict[str, Any]") -> EventRecord:
+def _event_record_from_row(row: "dict[str, Any]") -> StoredEvent:
     return {
         "id": row["id"],
         "app_name": row["app_name"],

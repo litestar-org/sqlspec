@@ -7,10 +7,10 @@ They are separate from the Pydantic models to keep mypyc compilation working.
 from datetime import datetime
 from typing import Any, TypedDict
 
-__all__ = ("ArtifactRecord",)
+__all__ = ("StoredArtifact",)
 
 
-class ArtifactRecord(TypedDict):
+class StoredArtifact(TypedDict):
     """Database record for an artifact version.
 
     Represents the schema for artifact metadata stored in the database.

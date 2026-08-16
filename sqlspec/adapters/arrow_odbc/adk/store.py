@@ -1,14 +1,14 @@
 """arrow-odbc ADK stores for Google Agent Development Kit session storage."""
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
-from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, MemoryRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new ADK session."""
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
@@ -93,7 +93,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
             with self._config.provide_session() as driver:
@@ -129,7 +129,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             commit=True,
         )
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """List ADK sessions for an application, optionally scoped to a user."""
         if user_id is None:
             sql = f"""
@@ -163,13 +163,13 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             commit=True,
         )
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -177,7 +177,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         with self._config.provide_session() as driver:
             driver.execute(
@@ -206,7 +206,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Return events for a scoped session ordered by event timestamp."""
         if limit is not None and limit <= 0:
             return []
@@ -414,7 +414,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Insert memory entries, skipping duplicates by event_id."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -442,10 +442,10 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
                 driver.execute(
                     f"""
                     INSERT INTO {_table_ref(self._memory_table)} (
-                        id, session_id, app_name, user_id, event_id, author,
+                        id, session_id, app_name, user_id, scope, event_id, author,
                         timestamp, content_json, content_text, metadata_json, inserted_at{owner_column}
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_param})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_param})
                     """,
                     params,
                 )
@@ -454,8 +454,13 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         return inserted_count
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries with SQL Server LIKE matching."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -463,18 +468,18 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         effective_limit = max(0, int(limit if limit is not None else self._max_results))
         if effective_limit == 0:
             return []
+        where_scope, scope_params = _build_arrow_odbc_scope_where(app_name, user_id, scope_filter)
         rows = self._execute_fetchall(
             f"""
-            SELECT id, session_id, app_name, user_id, event_id, author,
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
                    timestamp, content_json, content_text, metadata_json, inserted_at
             FROM {_table_ref(self._memory_table)}
-            WHERE app_name = ?
-              AND user_id = ?
+            WHERE {where_scope}
               AND content_text LIKE ?
             ORDER BY timestamp DESC
             OFFSET 0 ROWS FETCH NEXT {effective_limit} ROWS ONLY
             """,
-            (app_name, user_id, f"%{query}%"),
+            (*scope_params, f"%{query}%"),
         )
         return [_memory_record_from_row(row) for row in rows]
 
@@ -486,19 +491,23 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         self._execute(f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True)
         return count
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than ``days`` days."""
         cutoff = datetime.now(timezone.utc).timestamp() - (days * 86_400)
         cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
+        clauses = ["inserted_at < ?"]
+        params: list[Any] = [_format_datetime(cutoff_dt)]
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = ?")
+            params.append(scope)
+        where_sql = " AND ".join(clauses)
         count = self._select_count(
-            f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._memory_table)} WHERE inserted_at < ?",
-            (_format_datetime(cutoff_dt),),
+            f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params)
         )
-        self._execute(
-            f"DELETE FROM {_table_ref(self._memory_table)} WHERE inserted_at < ?",
-            (_format_datetime(cutoff_dt),),
-            commit=True,
-        )
+        self._execute(f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True)
         return count
 
     def _memory_table_ddl(self) -> str:
@@ -509,6 +518,7 @@ CREATE TABLE {_table_ref(self._memory_table)} (
     session_id NVARCHAR(128) NOT NULL,
     app_name NVARCHAR(128) NOT NULL,
     user_id NVARCHAR(128) NOT NULL,
+    scope NVARCHAR(16) NOT NULL DEFAULT 'user',
     event_id NVARCHAR(128) NOT NULL,
     author NVARCHAR(256) NULL,
     timestamp DATETIME2(6) NOT NULL,
@@ -524,7 +534,12 @@ CREATE TABLE {_table_ref(self._memory_table)} (
     def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
         return [
-            (f"idx_{self._memory_table}_app_user_time", self._memory_table, "app_name, user_id, timestamp DESC"),
+            (
+                f"idx_{self._memory_table}_app_scope_user_time",
+                self._memory_table,
+                "app_name, scope, user_id, timestamp DESC",
+            ),
+            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, scope"),
             (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
         ]
 
@@ -717,7 +732,7 @@ def _events_query(
     return sql, tuple(params)
 
 
-def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -729,8 +744,8 @@ def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
     )
 
 
-def _session_record_from_row(row: Any) -> SessionRecord:
-    return SessionRecord(
+def _session_record_from_row(row: Any) -> StoredSession:
+    return StoredSession(
         id=str(_row_value(row, "id", 0)),
         app_name=str(_row_value(row, "app_name", 1)),
         user_id=str(_row_value(row, "user_id", 2)),
@@ -740,8 +755,8 @@ def _session_record_from_row(row: Any) -> SessionRecord:
     )
 
 
-def _event_record_from_row(row: Any) -> EventRecord:
-    return EventRecord(
+def _event_record_from_row(row: Any) -> StoredEvent:
+    return StoredEvent(
         id=str(_row_value(row, "id", 0)),
         app_name=str(_row_value(row, "app_name", 1)),
         user_id=str(_row_value(row, "user_id", 2)),
@@ -752,12 +767,13 @@ def _event_record_from_row(row: Any) -> EventRecord:
     )
 
 
-def _memory_insert_params(entry: MemoryRecord) -> "tuple[Any, ...]":
+def _memory_insert_params(entry: StoredMemory) -> "tuple[Any, ...]":
     return (
         entry["id"],
         entry["session_id"],
         entry["app_name"],
         entry["user_id"],
+        entry.get("scope", "user"),
         entry["event_id"],
         entry["author"],
         _format_datetime(entry["timestamp"]),
@@ -768,19 +784,21 @@ def _memory_insert_params(entry: MemoryRecord) -> "tuple[Any, ...]":
     )
 
 
-def _memory_record_from_row(row: Any) -> MemoryRecord:
-    return MemoryRecord(
+def _memory_record_from_row(row: Any) -> StoredMemory:
+    return StoredMemory(
         id=str(_row_value(row, "id", 0)),
         session_id=str(_row_value(row, "session_id", 1)),
         app_name=str(_row_value(row, "app_name", 2)),
         user_id=str(_row_value(row, "user_id", 3)),
-        event_id=str(_row_value(row, "event_id", 4)),
-        author=cast("str | None", _row_value(row, "author", 5)),
-        timestamp=_datetime_value(_row_value(row, "timestamp", 6)),
-        content_json=_json_dict(_row_value(row, "content_json", 7)),
-        content_text=str(_row_value(row, "content_text", 8) or ""),
-        metadata_json=_optional_json_dict(_row_value(row, "metadata_json", 9)),
-        inserted_at=_datetime_value(_row_value(row, "inserted_at", 10)),
+        scope=str(_row_value(row, "scope", 4) or "user"),
+        event_id=str(_row_value(row, "event_id", 5)),
+        author=cast("str | None", _row_value(row, "author", 6)),
+        timestamp=_datetime_value(_row_value(row, "timestamp", 7)),
+        content_json=_json_dict(_row_value(row, "content_json", 8)),
+        content_text=str(_row_value(row, "content_text", 9) or ""),
+        metadata_json=_optional_json_dict(_row_value(row, "metadata_json", 10)),
+        inserted_at=_datetime_value(_row_value(row, "inserted_at", 11)),
+        embedding=None,
     )
 
 
@@ -862,3 +880,13 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
 def _raise_session_not_found(session_id: str) -> None:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _build_arrow_odbc_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> tuple[str, tuple[Any, ...]]:
+    if scope_filter == "all":
+        return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (app_name, user_id)
+    if scope_filter == "user":
+        return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
+    return "app_name = ? AND scope = 'app'", (app_name,)

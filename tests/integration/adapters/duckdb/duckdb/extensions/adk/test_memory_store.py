@@ -9,18 +9,21 @@ import pytest
 
 from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.extensions.adk import MemoryRecord
+from sqlspec.extensions.adk import StoredMemory
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
-def _build_record(*, session_id: str, event_id: str, content_text: str, inserted_at: datetime) -> MemoryRecord:
+def _build_record(
+    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
+) -> StoredMemory:
     now = datetime.now(timezone.utc)
-    return MemoryRecord(
+    return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
         app_name="app",
         user_id="user",
+        scope=scope,
         event_id=event_id,
         author="user",
         timestamp=now,
@@ -28,6 +31,7 @@ def _build_record(*, session_id: str, event_id: str, content_text: str, inserted
         content_text=content_text,
         metadata_json=None,
         inserted_at=inserted_at,
+        embedding=None,
     )
 
 
@@ -120,3 +124,75 @@ def test_duckdb_memory_store_fts_search_uses_bm25_path(tmp_path: Path) -> None:
     assert len(results) == 1
     assert results[0]["event_id"] == "evt-fts-1"
     assert results[0]["content_json"] == {"text": "espresso roast"}
+
+
+def test_duckdb_memory_store_scoped_search_combined_default(tmp_path: Path) -> None:
+    """Default search recall returns both user-scoped and app-scoped memories."""
+    store = _build_store(tmp_path)
+
+    now = datetime.now(timezone.utc)
+    record_user = _build_record(
+        session_id="s1", event_id="evt-u1", content_text="project architecture guideline", inserted_at=now, scope="user"
+    )
+    record_app = _build_record(
+        session_id="s2", event_id="evt-a1", content_text="company architecture standard", inserted_at=now, scope="app"
+    )
+    record_other_user = _build_record(
+        session_id="s3",
+        event_id="evt-other",
+        content_text="other user architecture note",
+        inserted_at=now,
+        scope="user",
+    )
+    record_other_user["user_id"] = "other_user"
+
+    store.insert_memory_entries([record_user, record_app, record_other_user])
+
+    results = store.search_entries(query="architecture", app_name="app", user_id="user")
+    event_ids = {r["event_id"] for r in results}
+    assert event_ids == {"evt-u1", "evt-a1"}
+    assert "evt-other" not in event_ids
+
+
+def test_duckdb_memory_store_explicit_scope_filters(tmp_path: Path) -> None:
+    """Explicit scope filters restrict results to only user or only app memories."""
+    store = _build_store(tmp_path)
+
+    now = datetime.now(timezone.utc)
+    record_user = _build_record(
+        session_id="s1", event_id="evt-u1", content_text="scoped query plan", inserted_at=now, scope="user"
+    )
+    record_app = _build_record(
+        session_id="s2", event_id="evt-a1", content_text="scoped release plan", inserted_at=now, scope="app"
+    )
+    store.insert_memory_entries([record_user, record_app])
+
+    user_only = store.search_entries(query="scoped", app_name="app", user_id="user", scope_filter="user")
+    assert len(user_only) == 1
+    assert user_only[0]["event_id"] == "evt-u1"
+
+    app_only = store.search_entries(query="scoped", app_name="app", user_id="user", scope_filter="app")
+    assert len(app_only) == 1
+    assert app_only[0]["event_id"] == "evt-a1"
+
+
+def test_duckdb_memory_store_scoped_retention(tmp_path: Path) -> None:
+    """Scoped retention deletes entries matching app_name and scope filters."""
+    store = _build_store(tmp_path)
+
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=40)
+    record_user_old = _build_record(
+        session_id="s1", event_id="evt-uo", content_text="old user memo", inserted_at=old, scope="user"
+    )
+    record_app_old = _build_record(
+        session_id="s2", event_id="evt-ao", content_text="old app guideline", inserted_at=old, scope="app"
+    )
+    store.insert_memory_entries([record_user_old, record_app_old])
+
+    deleted = store.delete_entries_older_than(30, app_name="app", scope="user")
+    assert deleted == 1
+
+    remaining = store.search_entries(query="old", app_name="app", user_id="user")
+    assert len(remaining) == 1
+    assert remaining[0]["event_id"] == "evt-ao"

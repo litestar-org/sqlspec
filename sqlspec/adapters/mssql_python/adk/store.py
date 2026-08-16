@@ -9,7 +9,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonCursor
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new ADK session."""
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
@@ -96,7 +96,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
             if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -135,7 +135,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             commit=True,
         )
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
         """List ADK sessions for an application, optionally scoped to a user."""
         if user_id is None:
             sql = f"""
@@ -169,13 +169,13 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             commit=True,
         )
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -183,7 +183,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
@@ -215,7 +215,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Return events for a scoped session ordered by event timestamp."""
         if limit == 0:
             return []
@@ -596,7 +596,7 @@ def _events_query(
     return sql, tuple(params)
 
 
-def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -608,14 +608,14 @@ def _event_insert_params(event_record: EventRecord) -> "tuple[Any, ...]":
     )
 
 
-def _session_record_from_row(row: Any) -> SessionRecord:
-    return SessionRecord(
+def _session_record_from_row(row: Any) -> StoredSession:
+    return StoredSession(
         id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
     )
 
 
-def _event_record_from_row(row: Any) -> EventRecord:
-    return EventRecord(
+def _event_record_from_row(row: Any) -> StoredEvent:
+    return StoredEvent(
         id=row[0],
         app_name=row[1],
         user_id=row[2],

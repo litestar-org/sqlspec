@@ -12,7 +12,7 @@ Key capabilities:
 
 - **Session and event storage** with atomic ``append_event_and_update_state()``
   ensuring events and state are always consistent.
-- **Full-event JSON storage** (EventRecord) that captures the entire ADK Event
+- **Full-event JSON storage** (StoredEvent) that captures the entire ADK Event
   in a single column, eliminating schema drift with upstream ADK releases.
 - **Scoped state semantics** (``app:``, ``user:``, ``temp:``) for controlling
   state visibility and persistence across sessions.
@@ -56,7 +56,7 @@ Choose a guide
       :link: schema
       :link-type: doc
 
-      Table layouts, EventRecord, scoped state, and artifact metadata.
+      Table layouts, StoredEvent, scoped state, and artifact metadata.
 
    .. grid-item-card:: API Reference
       :link: api

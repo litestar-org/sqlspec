@@ -7,10 +7,10 @@ They are separate from the Pydantic models to keep mypyc compilation working.
 from datetime import datetime
 from typing import Any, TypedDict
 
-__all__ = ("EventRecord", "SessionRecord")
+__all__ = ("StoredEvent", "StoredSession")
 
 
-class SessionRecord(TypedDict):
+class StoredSession(TypedDict):
     """Database record for a session.
 
     Represents the schema for sessions stored in the database.
@@ -24,7 +24,7 @@ class SessionRecord(TypedDict):
     update_time: datetime
 
 
-class EventRecord(TypedDict):
+class StoredEvent(TypedDict):
     """Database record for an event.
 
     Stores the full ADK Event as a single JSON blob (``event_data``) alongside

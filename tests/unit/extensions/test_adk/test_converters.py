@@ -1,7 +1,7 @@
 """Unit tests for ADK session/event converters and scoped state helpers.
 
 Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
-- EventRecord has exactly 7 keys (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
+- StoredEvent has exactly 7 keys (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
 - event_to_record takes (event, app_name, user_id, session_id)
 - record_to_event uses Event.model_validate for full round-trip fidelity
 - filter_temp_state, split_scoped_state, merge_scoped_state for scoped state handling
@@ -247,7 +247,7 @@ def test_compute_update_marker_normalizes_aware_datetime_to_utc() -> None:
 
 
 def test_event_to_record_clean_break_keys() -> None:
-    """EventRecord has exactly the clean-break indexed fields plus event_data."""
+    """StoredEvent has exactly the clean-break indexed fields plus event_data."""
     event = _make_event()
     record = event_to_record(event, "app", "u1", "session-1")
     assert set(record.keys()) == {"id", "app_name", "user_id", "session_id", "invocation_id", "timestamp", "event_data"}
@@ -496,9 +496,9 @@ def test_session_to_record_includes_required_fields() -> None:
 
 def test_record_to_session_with_events_round_trip() -> None:
     """Sessions with events reconstruct correctly using record_to_session."""
-    from sqlspec.extensions.adk._types import SessionRecord
+    from sqlspec.extensions.adk._types import StoredSession
 
-    session_record = SessionRecord(
+    session_record = StoredSession(
         id="s1",
         app_name="app",
         user_id="u1",
@@ -521,9 +521,9 @@ def test_record_to_session_with_events_round_trip() -> None:
 
 def test_record_to_session_empty_events() -> None:
     """Sessions without events reconstruct with empty events list."""
-    from sqlspec.extensions.adk._types import SessionRecord
+    from sqlspec.extensions.adk._types import StoredSession
 
-    session_record = SessionRecord(
+    session_record = StoredSession(
         id="s2",
         app_name="app",
         user_id="u2",

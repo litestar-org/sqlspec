@@ -3,16 +3,16 @@
 import contextlib
 import re
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
-from sqlspec.extensions.adk import BaseSyncADKStore, EventRecord, SessionRecord
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
-    from sqlspec.extensions.adk import MemoryRecord
+    from sqlspec.extensions.adk import StoredMemory
 
 __all__ = ("AdbcADKMemoryStore", "AdbcADKStore")
 
@@ -80,13 +80,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session."""
         return self._create_session(session_id, app_name, user_id, state, owner_id)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID."""
         return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
 
@@ -94,7 +94,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Update session state."""
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app."""
         return self._list_sessions(app_name, user_id)
 
@@ -102,13 +102,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Delete session and associated events."""
         self._delete_session(app_name, user_id, session_id)
 
-    def append_event(self, event_record: EventRecord) -> None:
+    def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         self._append_event(event_record)
 
     def append_event_and_update_state(
         self,
-        event_record: EventRecord,
+        event_record: StoredEvent,
         app_name: str,
         user_id: str,
         session_id: str,
@@ -116,7 +116,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         return self._append_event_and_update_state(
             event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
@@ -129,7 +129,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """Get events for a session."""
         return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
 
@@ -599,7 +599,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Create a new session.
 
         Args:
@@ -646,7 +646,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "SessionRecord | None":
+    ) -> "StoredSession | None":
         """Get session by ID.
 
         Args:
@@ -696,7 +696,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     if row is None:
                         return None
 
-                    return SessionRecord(
+                    return StoredSession(
                         id=row[0],
                         app_name=row[1],
                         user_id=row[2],
@@ -759,7 +759,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[SessionRecord]":
+    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
@@ -794,7 +794,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     rows = cursor.fetchall()
 
                     return [
-                        SessionRecord(
+                        StoredSession(
                             id=row[0],
                             app_name=row[1],
                             user_id=row[2],
@@ -812,7 +812,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 return []
             raise
 
-    def _insert_event(self, event_record: "EventRecord") -> None:
+    def _insert_event(self, event_record: "StoredEvent") -> None:
         """Insert an event record into the events table.
 
         Args:
@@ -845,7 +845,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _append_event_and_update_state(
         self,
-        event_record: "EventRecord",
+        event_record: "StoredEvent",
         app_name: str,
         user_id: str,
         session_id: str,
@@ -853,7 +853,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         *,
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
-    ) -> SessionRecord:
+    ) -> StoredSession:
         """Atomically insert an event and update the session's durable state.
 
         The event insert, state update, and refresh-SELECT are executed within
@@ -943,7 +943,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
-        return SessionRecord(
+        return StoredSession(
             id=row[0],
             app_name=row[1],
             user_id=row[2],
@@ -959,7 +959,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
-    ) -> "list[EventRecord]":
+    ) -> "list[StoredEvent]":
         """List events for a session ordered by timestamp.
 
         Args:
@@ -1000,7 +1000,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     rows = cursor.fetchall()
 
                     return [
-                        EventRecord(
+                        StoredEvent(
                             id=row[0],
                             session_id=row[1],
                             invocation_id=row[2] or "",
@@ -1160,7 +1160,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _append_event(self, event_record: EventRecord) -> None:
+    def _append_event(self, event_record: StoredEvent) -> None:
         """Synchronous implementation of append_event."""
         self._insert_event(event_record)
 
@@ -1186,23 +1186,28 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
         self._create_tables()
 
-    def insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
         return self._insert_memory_entries(entries, owner_id)
 
     def search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return self._delete_entries_by_session(session_id)
 
-    def delete_entries_older_than(self, days: int) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
-        return self._delete_entries_older_than(days)
+        return self._delete_entries_older_than(days, app_name, scope)
 
     def _detect_dialect(self) -> str:
         driver_name = self._config.connection_config.get("driver_name", "").lower()
@@ -1255,6 +1260,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
+            scope VARCHAR(16) NOT NULL DEFAULT 'user',
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMPTZ NOT NULL,
@@ -1273,6 +1279,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             session_id TEXT NOT NULL,
             app_name TEXT NOT NULL,
             user_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'user',
             event_id TEXT NOT NULL UNIQUE,
             author TEXT{owner_id_ddl},
             timestamp REAL NOT NULL,
@@ -1291,6 +1298,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
+            scope VARCHAR(16) NOT NULL DEFAULT 'user',
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMP NOT NULL,
@@ -1309,6 +1317,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             session_id VARCHAR NOT NULL,
             app_name VARCHAR NOT NULL,
             user_id VARCHAR NOT NULL,
+            scope VARCHAR NOT NULL DEFAULT 'user',
             event_id VARCHAR NOT NULL UNIQUE,
             author VARCHAR{owner_id_ddl},
             timestamp TIMESTAMP_TZ NOT NULL,
@@ -1327,6 +1336,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
+            scope VARCHAR(16) NOT NULL DEFAULT 'user',
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMP NOT NULL,
@@ -1350,8 +1360,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 cursor.execute(self._memory_table_ddl())
                 conn.commit()
 
-                idx_app_user = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time ON {self._memory_table}(app_name, user_id, timestamp DESC)"
-                cursor.execute(idx_app_user)
+                idx_app_scope_user = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
+                cursor.execute(idx_app_scope_user)
+                conn.commit()
+
+                idx_scope = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
+                cursor.execute(idx_scope)
                 conn.commit()
 
                 idx_session = (
@@ -1362,7 +1376,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _insert_memory_entries(self, entries: "list[MemoryRecord]", owner_id: "object | None" = None) -> int:
+    def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1377,39 +1391,39 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             if use_returning:
                 sql = f"""
                 INSERT INTO {self._memory_table} (
-                    id, session_id, app_name, user_id, event_id, author,
+                    id, session_id, app_name, user_id, scope, event_id, author,
                     {self._owner_id_column_name}, timestamp, content_json, content_text,
                     metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
                 """
             else:
                 sql = f"""
                 INSERT INTO {self._memory_table} (
-                    id, session_id, app_name, user_id, event_id, author,
+                    id, session_id, app_name, user_id, scope, event_id, author,
                     {self._owner_id_column_name}, timestamp, content_json, content_text,
                     metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """
         elif use_returning:
             sql = f"""
                 INSERT INTO {self._memory_table} (
-                    id, session_id, app_name, user_id, event_id, author,
+                    id, session_id, app_name, user_id, scope, event_id, author,
                     timestamp, content_json, content_text, metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
                 """
         else:
             sql = f"""
                 INSERT INTO {self._memory_table} (
-                    id, session_id, app_name, user_id, event_id, author,
+                    id, session_id, app_name, user_id, scope, event_id, author,
                     timestamp, content_json, content_text, metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """
 
@@ -1426,6 +1440,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             entry["session_id"],
                             entry["app_name"],
                             entry["user_id"],
+                            entry.get("scope", "user"),
                             entry["event_id"],
                             entry["author"],
                             owner_id,
@@ -1441,6 +1456,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             entry["session_id"],
                             entry["app_name"],
                             entry["user_id"],
+                            entry.get("scope", "user"),
                             entry["event_id"],
                             entry["author"],
                             self._encode_timestamp(entry["timestamp"]),
@@ -1469,8 +1485,13 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return inserted_count
 
     def _search_entries(
-        self, query: str, app_name: str, user_id: str, limit: "int | None" = None
-    ) -> "list[MemoryRecord]":
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1480,13 +1501,13 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
         effective_limit = limit if limit is not None else self._max_results
         pattern = f"%{query}%"
+        where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
 
         sql = f"""
-        SELECT id, session_id, app_name, user_id, event_id, author,
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM {self._memory_table}
-        WHERE app_name = ?
-          AND user_id = ?
+        WHERE {where_scope}
           AND content_text LIKE ?
         ORDER BY timestamp DESC
         LIMIT ?
@@ -1496,7 +1517,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, (app_name, user_id, pattern, effective_limit))
+                    cursor.execute(sql, (*scope_params, pattern, effective_limit))
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
@@ -1527,17 +1548,26 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _delete_entries_older_than(self, days: int) -> int:
+    def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         cutoff = self._encode_timestamp(datetime.now(timezone.utc) - timedelta(days=days))
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+        clauses = ["inserted_at < ?"]
+        params: list[Any] = [cutoff]
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = ?")
+            params.append(scope)
+        where_sql = " AND ".join(clauses)
         if use_returning:
-            sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ? RETURNING 1"
+            sql = f"DELETE FROM {self._memory_table} WHERE {where_sql} RETURNING 1"
         else:
-            sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
+            sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (cutoff,))
+                cursor.execute(sql, tuple(params))
                 if use_returning:
                     deleted_rows = cursor.fetchall()
                     conn.commit()
@@ -1547,16 +1577,16 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _rows_to_records(self, rows: "list[Any]") -> "list[MemoryRecord]":
-        records: list[MemoryRecord] = []
+    def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
+        records: list[StoredMemory] = []
         for row in rows:
-            content_json = row[7]
+            content_json = row[8]
             if isinstance(content_json, dict):
                 content_value = content_json
             else:
                 content_value = from_json(content_json if isinstance(content_json, (str, bytes)) else str(content_json))
 
-            metadata_json = row[9]
+            metadata_json = row[10]
             if metadata_json is None:
                 metadata_value = None
             elif isinstance(metadata_json, dict):
@@ -1571,12 +1601,24 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 "session_id": row[1],
                 "app_name": row[2],
                 "user_id": row[3],
-                "event_id": row[4],
-                "author": row[5],
-                "timestamp": self._decode_timestamp(row[6]),
+                "scope": row[4],
+                "event_id": row[5],
+                "author": row[6],
+                "timestamp": self._decode_timestamp(row[7]),
                 "content_json": content_value,
-                "content_text": row[8],
+                "content_text": row[9],
                 "metadata_json": metadata_value,
-                "inserted_at": self._decode_timestamp(row[10]),
+                "inserted_at": self._decode_timestamp(row[11]),
+                "embedding": None,
             })
         return records
+
+
+def _build_adbc_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> tuple[str, tuple[Any, ...]]:
+    if scope_filter == "all":
+        return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (app_name, user_id)
+    if scope_filter == "user":
+        return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
+    return "app_name = ? AND scope = 'app'", (app_name,)

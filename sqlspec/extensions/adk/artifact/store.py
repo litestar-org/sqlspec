@@ -19,7 +19,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.extensions.adk.artifact._types import ArtifactRecord
+    from sqlspec.extensions.adk.artifact._types import StoredArtifact
 
 __all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
 
@@ -71,7 +71,7 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     __slots__ = ()
 
     @abstractmethod
-    async def insert_artifact(self, record: "ArtifactRecord") -> None:
+    async def insert_artifact(self, record: "StoredArtifact") -> None:
         """Insert an artifact version metadata row.
 
         Args:
@@ -81,7 +81,7 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     async def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
-    ) -> "ArtifactRecord | None":
+    ) -> "StoredArtifact | None":
         """Get a specific artifact version's metadata.
 
         When ``version`` is None, returns the latest version.
@@ -117,7 +117,7 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     async def list_artifact_versions(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
-    ) -> "list[ArtifactRecord]":
+    ) -> "list[StoredArtifact]":
         """List all version records for an artifact, ordered by version ascending.
 
         Args:
@@ -133,7 +133,7 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     async def delete_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
-    ) -> "list[ArtifactRecord]":
+    ) -> "list[StoredArtifact]":
         """Delete all version records for an artifact and return them.
 
         The caller uses the returned records to clean up content from
@@ -197,7 +197,7 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     __slots__ = ()
 
     @abstractmethod
-    def insert_artifact(self, record: "ArtifactRecord") -> None:
+    def insert_artifact(self, record: "StoredArtifact") -> None:
         """Insert an artifact version metadata row.
 
         Args:
@@ -207,7 +207,7 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
-    ) -> "ArtifactRecord | None":
+    ) -> "StoredArtifact | None":
         """Get a specific artifact version's metadata.
 
         When ``version`` is None, returns the latest version.
@@ -239,7 +239,7 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     def list_artifact_versions(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
-    ) -> "list[ArtifactRecord]":
+    ) -> "list[StoredArtifact]":
         """List all version records for an artifact, ordered by version ascending.
 
         Args:
@@ -255,7 +255,7 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     def delete_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
-    ) -> "list[ArtifactRecord]":
+    ) -> "list[StoredArtifact]":
         """Delete all version records for an artifact and return them.
 
         Args:

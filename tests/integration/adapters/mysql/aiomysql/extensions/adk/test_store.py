@@ -13,7 +13,7 @@ import pytest
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.aiomysql, pytest.mark.integration]
 
@@ -76,7 +76,7 @@ async def test_timestamp_precision(aiomysql_adk_store: AiomysqlADKStore) -> None
     assert hasattr(created["create_time"], "microsecond")
 
     event_time = datetime.now(timezone.utc)
-    event: EventRecord = {
+    event: StoredEvent = {
         "id": "event-micro",
         "app_name": app_name,
         "user_id": user_id,

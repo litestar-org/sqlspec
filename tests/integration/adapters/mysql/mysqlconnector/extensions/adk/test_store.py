@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 
 from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql_connector, pytest.mark.integration]
 
@@ -75,7 +75,7 @@ async def test_timestamp_precision(mysqlconnector_adk_store: MysqlConnectorAsync
     assert hasattr(created["create_time"], "microsecond")
 
     event_time = datetime.now(timezone.utc)
-    event: EventRecord = {
+    event: StoredEvent = {
         "id": "event-micro",
         "app_name": app_name,
         "user_id": user_id,

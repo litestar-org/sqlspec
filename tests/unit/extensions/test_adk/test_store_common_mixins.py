@@ -4,7 +4,7 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore, SqliteADKStore
-from sqlspec.extensions.adk.artifact._types import ArtifactRecord
+from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.extensions.adk.artifact.store import (
     BaseAsyncADKArtifactStore,
     BaseSyncADKArtifactStore,
@@ -17,12 +17,12 @@ from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore, _A
 class _ConcreteArtifactStore(BaseSyncADKArtifactStore[SqliteConfig]):
     __slots__ = ()
 
-    def insert_artifact(self, record: ArtifactRecord) -> None:
+    def insert_artifact(self, record: StoredArtifact) -> None:
         return None
 
     def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: str | None = None, version: int | None = None
-    ) -> ArtifactRecord | None:
+    ) -> StoredArtifact | None:
         return None
 
     def list_artifact_keys(self, app_name: str, user_id: str, session_id: str | None = None) -> list[str]:
@@ -30,12 +30,12 @@ class _ConcreteArtifactStore(BaseSyncADKArtifactStore[SqliteConfig]):
 
     def list_artifact_versions(
         self, app_name: str, user_id: str, filename: str, session_id: str | None = None
-    ) -> list[ArtifactRecord]:
+    ) -> list[StoredArtifact]:
         return []
 
     def delete_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: str | None = None
-    ) -> list[ArtifactRecord]:
+    ) -> list[StoredArtifact]:
         return []
 
     def get_next_version(self, app_name: str, user_id: str, filename: str, session_id: str | None = None) -> int:

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
-from sqlspec.extensions.adk import EventRecord
+from sqlspec.extensions.adk import StoredEvent
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.asyncmy, pytest.mark.integration]
 
@@ -75,7 +75,7 @@ async def test_timestamp_precision(asyncmy_adk_store: AsyncmyADKStore) -> None:
     assert hasattr(created["create_time"], "microsecond")
 
     event_time = datetime.now(timezone.utc)
-    event: EventRecord = {
+    event: StoredEvent = {
         "id": "event-micro",
         "app_name": app_name,
         "user_id": user_id,

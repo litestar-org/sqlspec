@@ -16,7 +16,7 @@ from sqlspec.adapters.spanner.adk import (
     SpannerSyncADKStore,
 )
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import EventRecord, MemoryRecord
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -57,7 +57,7 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
     """Spanner stores the ADK event timestamp, not the commit timestamp."""
     store = SpannerSyncADKStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
-    event: EventRecord = {
+    event: StoredEvent = {
         "id": "event-1",
         "app_name": "app",
         "user_id": "u1",
@@ -82,7 +82,7 @@ def test_append_event_and_update_state_preserves_event_record_timestamp() -> Non
     """Atomic append uses the ADK event timestamp while session update uses commit time."""
     store = SpannerSyncADKStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
-    event: EventRecord = {
+    event: StoredEvent = {
         "id": "event-1",
         "app_name": "app",
         "user_id": "u1",
@@ -172,11 +172,12 @@ def test_spanner_session_store_drops_expiration_indexes_before_tables() -> None:
 def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
     store = SpannerSyncADKMemoryStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
-    entry: MemoryRecord = {
+    entry: StoredMemory = {
         "id": "memory-1",
         "session_id": "session-1",
         "app_name": "app",
         "user_id": "user",
+        "scope": "user",
         "event_id": "event-1",
         "author": "assistant",
         "timestamp": timestamp,
@@ -184,6 +185,7 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
         "content_text": "hello",
         "metadata_json": {"source": "unit"},
         "inserted_at": timestamp,
+        "embedding": None,
     }
 
     with patch.object(store, "_event_exists", return_value=False), patch.object(store, "_run_write") as run_write:
@@ -208,6 +210,7 @@ def test_spanner_memory_rows_to_records_decodes_json_fields() -> None:
             "session-1",
             "app",
             "user",
+            "user",
             "event-1",
             "assistant",
             timestamp,
@@ -221,6 +224,8 @@ def test_spanner_memory_rows_to_records_decodes_json_fields() -> None:
     assert records[0]["content_json"] == {"text": "hello"}
     assert records[0]["metadata_json"] == {"source": "unit"}
     assert records[0]["content_text"] == "hello"
+    assert records[0]["scope"] == "user"
+    assert records[0]["embedding"] is None
 
 
 def test_spanner_reset_drop_tables_filters_absent_tables() -> None:
@@ -242,7 +247,8 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
 
     assert statements == [
         "DROP INDEX idx_adk_memory_entries_session",
-        "DROP INDEX idx_adk_memory_entries_app_user_time",
+        "DROP INDEX idx_adk_memory_entries_app_scope_user_time",
+        "DROP INDEX idx_adk_memory_entries_scope",
         "DROP TABLE adk_memory_entries",
     ]
 
