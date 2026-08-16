@@ -73,18 +73,9 @@ def _resolve_memory_store(target: Any) -> Any:
 
 
 async def _call_store_method(store: Any, method_name: str, *args: Any, **kwargs: Any) -> int:
-    """Call a store method handling both async and sync implementations.
-
-    Attempts to invoke the target method with provided keyword arguments, falling
-    back to positional arguments if the method signature does not accept kwargs.
-    """
-    if not hasattr(store, method_name):
-        return 0
+    """Call a store method handling both async and sync implementations."""
     method = getattr(store, method_name)
-    try:
-        result = method(*args, **kwargs)
-    except TypeError:
-        result = method(*args)
+    result = method(*args, **kwargs)
     if hasattr(result, "__await__"):
         deleted = await result
     else:
@@ -107,7 +98,7 @@ async def prune_sessions(target: Any, *, idle_days: int = 30, app_name: str | No
     store = _resolve_session_store(target)
     table_name = getattr(store, "session_table", "adk_session")
     cutoff = datetime.now(timezone.utc) - timedelta(days=idle_days)
-    deleted = await _call_store_method(store, "delete_idle_sessions", cutoff)
+    deleted = await _call_store_method(store, "delete_idle_sessions", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
 
@@ -127,7 +118,7 @@ async def prune_events(target: Any, *, older_than_days: int = 90, app_name: str 
     store = _resolve_session_store(target)
     table_name = getattr(store, "events_table", "adk_event")
     cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-    deleted = await _call_store_method(store, "delete_expired_events", cutoff)
+    deleted = await _call_store_method(store, "delete_expired_events", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
 
@@ -175,7 +166,8 @@ async def prune_user_state(target: Any, *, idle_days: int = 180, app_name: str |
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "user_state_table", "adk_user_state")
-    deleted = await _call_store_method(store, "delete_idle_user_states", idle_days, app_name=app_name)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=idle_days)
+    deleted = await _call_store_method(store, "delete_idle_user_states", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
 
@@ -322,7 +314,6 @@ async def maintain_tables(
     *,
     vacuum: bool = True,
     analyze: bool = True,
-    reindex: bool = False,
     tables: Sequence[str] | None = None,
 ) -> MaintenanceReport:
     """Execute dialect-specific maintenance (vacuum, analyze, checkpoint, optimize) on ADK tables.
@@ -331,7 +322,6 @@ async def maintain_tables(
         target: ADKStore, DatabaseConfig, or DriverAdapter.
         vacuum: Whether to run vacuum / storage compaction.
         analyze: Whether to update database optimizer statistics.
-        reindex: Whether to rebuild indexes.
         tables: Optional explicit sequence of table names to maintain.
 
     Returns:

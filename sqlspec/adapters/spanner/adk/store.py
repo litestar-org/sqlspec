@@ -169,6 +169,10 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """Delete sessions older than a timestamp, optionally scoped to one application."""
         return self._delete_idle_sessions(updated_before, app_name)
 
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_user_states(updated_before, app_name)
+
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
         return self._get_app_state(app_name)
@@ -592,6 +596,16 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
+        if app_name is not None:
+            sql += " AND app_name = @app_name"
+            params["app_name"] = app_name
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+
+    def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < @updated_before"
         params: dict[str, Any] = {"updated_before": updated_before}
         types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:

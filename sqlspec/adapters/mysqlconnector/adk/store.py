@@ -431,6 +431,9 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         return await _async_delete_before(self, self._session_table, "update_time", updated_before, app_name)
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        return await _async_delete_before(self, self._user_state_table, "update_time", updated_before, app_name)
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         return await _async_state(self, self._app_state_table, "app_name = %s", (app_name,))
 
@@ -790,6 +793,10 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the threshold."""
         return _sync_delete_before(self, self._session_table, "update_time", updated_before, app_name)
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the threshold."""
+        return _sync_delete_before(self, self._user_state_table, "update_time", updated_before, app_name)
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""

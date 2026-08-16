@@ -65,6 +65,7 @@ async def test_prune_sessions_async() -> None:
     assert report["elapsed_ms"] >= 0.0
     store.delete_idle_sessions.assert_awaited_once()
     assert isinstance(store.delete_idle_sessions.call_args[0][0], datetime)
+    assert "app_name" in store.delete_idle_sessions.call_args.kwargs
 
 
 def test_prune_sessions_sync() -> None:
@@ -85,6 +86,7 @@ async def test_prune_events_async() -> None:
     assert report["table"] == "adk_event"
     store.delete_expired_events.assert_awaited_once()
     assert isinstance(store.delete_expired_events.call_args[0][0], datetime)
+    assert "app_name" in store.delete_expired_events.call_args.kwargs
 
 
 def test_prune_events_sync() -> None:
@@ -121,7 +123,9 @@ async def test_prune_user_state_async() -> None:
 
     assert report["deleted_count"] == 3
     assert report["table"] == "adk_user_state"
-    store.delete_idle_user_states.assert_awaited_once_with(120, app_name=None)
+    store.delete_idle_user_states.assert_awaited_once()
+    assert isinstance(store.delete_idle_user_states.call_args[0][0], datetime)
+    assert store.delete_idle_user_states.call_args.kwargs["app_name"] is None
 
 
 def test_prune_user_state_sync() -> None:
@@ -130,7 +134,9 @@ def test_prune_user_state_sync() -> None:
 
     assert report["deleted_count"] == 4
     assert report["table"] == "adk_user_state"
-    store.delete_idle_user_states.assert_called_once_with(180, app_name="app1")
+    store.delete_idle_user_states.assert_called_once()
+    assert isinstance(store.delete_idle_user_states.call_args[0][0], datetime)
+    assert store.delete_idle_user_states.call_args.kwargs["app_name"] == "app1"
 
 
 async def test_maintain_tables_unknown_dialect() -> None:

@@ -398,6 +398,30 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 return 0
             raise
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            count_sql = (
+                f"SELECT COUNT(*) AS count FROM {self._user_state_table} WHERE update_time < $1 AND app_name = $2"
+            )
+            delete_sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1 AND app_name = $2"
+            params: list[Any] = [updated_before, app_name]
+        else:
+            count_sql = f"SELECT COUNT(*) AS count FROM {self._user_state_table} WHERE update_time < $1"
+            delete_sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1"
+            params = [updated_before]
+
+        try:
+            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+                count_result = await conn.fetch(count_sql, params)
+                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
+                count = int(count_rows[0]["count"]) if count_rows else 0
+                await conn.execute(delete_sql, params)
+                return count
+        except Exception as e:
+            if _is_table_missing_error(e):
+                return 0
+            raise
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = $1"
 

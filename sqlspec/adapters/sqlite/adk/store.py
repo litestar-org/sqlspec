@@ -514,9 +514,29 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             raise
 
     def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
-        """Delete sessions whose update_time predates the given threshold."""
-        """Synchronous implementation of delete_idle_sessions."""
+        """Delete sessions whose update_time predates the threshold, optionally scoped to one application."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+        params: list[Any] = [_datetime_to_julian(updated_before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
+
+        try:
+            with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
+                cursor = conn.execute(sql, tuple(params))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the given threshold."""
+        """Synchronous implementation of delete_idle_user_states."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < ?"
         params: list[Any] = [_datetime_to_julian(updated_before)]
         if app_name is not None:
             sql += " AND app_name = ?"

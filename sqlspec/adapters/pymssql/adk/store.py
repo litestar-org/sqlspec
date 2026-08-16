@@ -259,6 +259,20 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
                 return 0
             raise
 
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time is older than ``updated_before``."""
+        sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < %s"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
+        try:
+            return self._execute(sql, tuple(params), commit=True)
+        except MSSQL_ERROR as exc:
+            if _is_mssql_table_missing(exc):
+                return 0
+            raise
+
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
         try:

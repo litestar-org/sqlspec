@@ -143,6 +143,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Delete sessions older than a timestamp."""
         return self._delete_idle_sessions(updated_before, app_name)
 
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows older than a timestamp."""
+        return self._delete_idle_user_states(updated_before, app_name)
+
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
         return self._get_app_state(app_name)
@@ -1084,6 +1088,33 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     count = int(row[0]) if row is not None else 0
                     self._execute(cursor, delete_events_sql, params)
                     self._execute(cursor, delete_sessions_sql, params)
+                    conn.commit()
+                    return count
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                return 0
+            raise
+
+    def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        where = "WHERE update_time < ?"
+        params: tuple[Any, ...] = (updated_before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (updated_before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._user_state_table} {where}"
+        delete_sql = f"DELETE FROM {self._user_state_table} {where}"
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, count_sql, params)
+                    row = cursor.fetchone()
+                    count = int(row[0]) if row is not None else 0
+                    self._execute(cursor, delete_sql, params)
                     conn.commit()
                     return count
                 finally:

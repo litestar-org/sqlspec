@@ -509,6 +509,22 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         except errors.UndefinedTable:
             return 0
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s AND app_name = %s"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+            params = (updated_before,)
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(sql.encode(), params)
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
@@ -948,6 +964,23 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             params: tuple[Any, ...] = (updated_before, app_name)
         else:
             sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+            params = (updated_before,)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.encode(), params)
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold."""
+        if app_name is not None:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s AND app_name = %s"
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
             params = (updated_before,)
 
         try:

@@ -258,6 +258,25 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         else:
             return count
 
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time is older than ``updated_before``."""
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
+        delete_sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
+        params: list[Any] = [_format_datetime(updated_before)]
+        if app_name is not None:
+            count_sql += " AND app_name = ?"
+            delete_sql += " AND app_name = ?"
+            params.append(app_name)
+        try:
+            count = self._select_count(count_sql, tuple(params))
+            self._execute(delete_sql, tuple(params), commit=True)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return 0
+            raise
+        else:
+            return count
+
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
         try:

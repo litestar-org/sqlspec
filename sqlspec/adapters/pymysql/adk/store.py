@@ -132,6 +132,10 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         """Delete sessions whose update_time predates the threshold."""
         return _delete_idle_sessions(self, updated_before, app_name)
 
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the threshold."""
+        return _delete_idle_user_states(self, updated_before, app_name)
+
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
         return _app_state(self, app_name)
@@ -719,6 +723,12 @@ def _delete_expired_events(store: PyMysqlADKStore, before: "datetime", app_name:
 
 def _delete_idle_sessions(store: PyMysqlADKStore, updated_before: "datetime", app_name: "str | None" = None) -> int:
     return _delete_before(store, store._session_table, "update_time", updated_before, app_name)
+
+
+def _delete_idle_user_states(
+    store: PyMysqlADKStore, updated_before: "datetime", app_name: "str | None" = None
+) -> int:
+    return _delete_before(store, store._user_state_table, "update_time", updated_before, app_name)
 
 
 def _delete_before(

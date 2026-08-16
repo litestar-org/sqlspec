@@ -66,6 +66,8 @@ def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
         """
         CREATE TABLE IF NOT EXISTS adk_event (
             id VARCHAR PRIMARY KEY,
+            app_name VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL,
             session_id VARCHAR NOT NULL,
             invocation_id VARCHAR,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -73,6 +75,7 @@ def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
             FOREIGN KEY (session_id) REFERENCES adk_session(id)
         );
         CREATE INDEX IF NOT EXISTS idx_adk_event_session ON adk_event(session_id, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS idx_adk_event_app_timestamp ON adk_event(app_name, timestamp ASC);
         """
     )
     assert "author_gc" not in sql

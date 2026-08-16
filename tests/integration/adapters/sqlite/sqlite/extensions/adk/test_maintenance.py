@@ -2,14 +2,21 @@
 
 import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore, SqliteADKStore
-from sqlspec.extensions.adk import StoredMemory
-from sqlspec.extensions.adk.maintenance import maintain_tables_sync, prune_memory_sync, prune_sessions_sync
+from sqlspec.adapters.sqlite.adk.store import _datetime_to_julian
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
+from sqlspec.extensions.adk.maintenance import (
+    maintain_tables_sync,
+    prune_events_sync,
+    prune_memory_sync,
+    prune_sessions_sync,
+)
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -92,3 +99,66 @@ def test_sqlite_maintenance_prune_and_vacuum() -> None:
         assert maint_report["operations"]["incremental_vacuum"] == "executed"
         assert maint_report["operations"]["optimize"] == "executed"
         assert maint_report["total_elapsed_ms"] >= 0.0
+
+
+def test_sqlite_prune_sessions_scopes_to_app_name() -> None:
+    """Pruning with app_name must leave other applications' sessions untouched."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    config = SqliteConfig(connection_config={"database": db_path})
+    try:
+        store = SqliteADKStore(config)
+        store.create_tables()
+
+        stale = datetime.now(timezone.utc) - timedelta(days=90)
+        for app in ("app_keep", "app_prune"):
+            store.create_session(f"session_{app}", app, "user_1", {})
+        with config.provide_connection() as conn:
+            conn.execute(
+                f"UPDATE {store.session_table} SET update_time = ?",
+                (_datetime_to_julian(stale),),
+            )
+            conn.commit()
+
+        report = prune_sessions_sync(store, idle_days=30, app_name="app_prune")
+
+        assert report["deleted_count"] == 1
+        assert store.get_session("app_prune", "user_1", "session_app_prune") is None
+        assert store.get_session("app_keep", "user_1", "session_app_keep") is not None
+    finally:
+        config.close_pool()
+        Path(db_path).unlink(missing_ok=True)
+
+
+def test_sqlite_prune_events_scopes_to_app_name() -> None:
+    """Pruning events with app_name must leave other applications' events untouched."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    config = SqliteConfig(connection_config={"database": db_path})
+    try:
+        store = SqliteADKStore(config)
+        store.create_tables()
+
+        stale = datetime.now(timezone.utc) - timedelta(days=200)
+        for app in ("app_keep", "app_prune"):
+            store.create_session(f"session_{app}", app, "user_1", {})
+            store.append_event(
+                StoredEvent(
+                    id=f"event_{app}",
+                    app_name=app,
+                    user_id="user_1",
+                    session_id=f"session_{app}",
+                    invocation_id="inv_1",
+                    timestamp=stale,
+                    event_data={"text": "hello"},
+                )
+            )
+
+        report = prune_events_sync(store, older_than_days=90, app_name="app_prune")
+
+        assert report["deleted_count"] == 1
+        assert store.get_events("app_prune", "user_1", "session_app_prune") == []
+        assert len(store.get_events("app_keep", "user_1", "session_app_keep")) == 1
+    finally:
+        config.close_pool()
+        Path(db_path).unlink(missing_ok=True)

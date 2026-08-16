@@ -511,6 +511,26 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 return 0
             raise
 
+    async def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the given threshold."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < ?"
+        params: list[Any] = [_datetime_to_julian(updated_before)]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            params.append(app_name)
+
+        try:
+            async with self._config.provide_connection() as conn:
+                await self._apply_pragmas(conn)
+                cursor = await conn.execute(sql, tuple(params))
+                deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                await conn.commit()
+                return deleted_count
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return 0
+            raise
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = ?"

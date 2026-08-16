@@ -829,6 +829,25 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return 0
             raise
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
+
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                await cursor.execute(sql, params)
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
@@ -1795,6 +1814,26 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold, optionally scoped to one application."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
+
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except OracleDatabaseError as e:
+            error_obj = e.args[0] if e.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold, optionally scoped to one application."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < :updated_before"
         params: dict[str, Any] = {"updated_before": updated_before}
         if app_name is not None:
             sql += " AND app_name = :app_name"

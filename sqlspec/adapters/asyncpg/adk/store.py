@@ -358,6 +358,20 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         except asyncpg.exceptions.UndefinedTableError:
             return 0
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = $2"
+            params.append(app_name)
+
+        try:
+            async with self._config.provide_connection() as conn:
+                result = await conn.execute(sql, *params)
+                return int(result.split()[-1]) if result else 0
+        except asyncpg.exceptions.UndefinedTableError:
+            return 0
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = $1"
 

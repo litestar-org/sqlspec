@@ -40,6 +40,7 @@ def _all_indexes(store: ArrowOdbcADKStore) -> "list[dict[str, Any]]":
         f"idx_{store._events_table}_session",
         f"idx_{store._events_table}_invocation",
         f"idx_{store._events_table}_timestamp",
+        f"idx_{store._events_table}_app_timestamp",
     ]
     return [{"index_name": name} for name in (*session_indexes, *event_indexes)]
 

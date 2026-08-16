@@ -540,6 +540,26 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         except errors.UndefinedTable:
             return 0
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params = (updated_before,)
+
+        try:
+            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(query, params)
+                await conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s").format(
             table=pg_sql.Identifier(self._app_state_table)
@@ -1002,6 +1022,27 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         else:
             query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
                 table=pg_sql.Identifier(self._session_table)
+            )
+            params = (updated_before,)
+
+        try:
+            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, params)
+                conn.commit()
+                return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except errors.UndefinedTable:
+            return 0
+
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user-scoped state rows whose update_time predates the given threshold."""
+        if app_name is not None:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
+            )
+            params: tuple[Any, ...] = (updated_before, app_name)
+        else:
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=pg_sql.Identifier(self._user_state_table)
             )
             params = (updated_before,)
 

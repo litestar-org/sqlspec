@@ -371,6 +371,27 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 return 0
             raise
 
+    async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows whose update_time predates the threshold."""
+        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = %s"
+            params.append(app_name)
+
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, tuple(params))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+        except pymysql.err.ProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
+
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"

@@ -252,6 +252,10 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """Delete sessions older than a timestamp, optionally scoped to one application."""
         return self._delete_idle_sessions(updated_before, app_name)
 
+    def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete user state rows older than a timestamp, optionally scoped to one application."""
+        return self._delete_idle_user_states(updated_before, app_name)
+
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
         return self._get_app_state(app_name)
@@ -796,6 +800,27 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
                 count = int(count_row[0]) if count_row is not None else 0
                 conn.execute(delete_events_sql, params)
                 conn.execute(delete_sessions_sql, params)
+                conn.commit()
+                return count
+        except Exception as e:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(e):
+                return 0
+            raise
+
+    def _delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        where = "WHERE update_time < ?"
+        params: tuple[Any, ...] = (updated_before,)
+        if app_name is not None:
+            where += " AND app_name = ?"
+            params = (updated_before, app_name)
+        count_sql = f"SELECT COUNT(*) FROM {self._user_state_table} {where}"
+        delete_sql = f"DELETE FROM {self._user_state_table} {where}"
+
+        try:
+            with self._config.provide_connection() as conn:
+                count_row = conn.execute(count_sql, params).fetchone()
+                count = int(count_row[0]) if count_row is not None else 0
+                conn.execute(delete_sql, params)
                 conn.commit()
                 return count
         except Exception as e:
