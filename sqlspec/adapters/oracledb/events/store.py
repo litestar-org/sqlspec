@@ -20,11 +20,7 @@ Configuration (optional override):
 import logging
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.oracledb._storage import (
-    _oracle_table_feature_report,
-    _resolve_oracle_storage_capabilities_async,
-    _resolve_oracle_storage_capabilities_sync,
-)
+from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, _storage_type_from_version
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -80,9 +76,6 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         """Return drop statements in reverse dependency order."""
         return _oracle_drop_sql(self.table_name, self._index_name())
 
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        _resolve_oracle_storage_capabilities_sync(driver)
 
     def create_table(self) -> None:
         """Create the event queue table with auto-detected storage type."""
@@ -92,7 +85,6 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         )
 
         with self._config.provide_session() as driver:
-            _resolve_oracle_storage_capabilities_sync(driver)
             sql = _oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name())
             driver.execute_script(sql)
 
@@ -200,9 +192,6 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         """Return drop statements in reverse dependency order."""
         return _oracle_drop_sql(self.table_name, self._index_name())
 
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def create_table(self) -> None:
         """Create the event queue table with auto-detected storage type."""
@@ -212,7 +201,6 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         )
 
         async with self._config.provide_session() as driver:
-            await _resolve_oracle_storage_capabilities_async(driver)
             sql = _oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name())
             await driver.execute_script(sql)
 

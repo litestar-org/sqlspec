@@ -7,12 +7,7 @@ import oracledb
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
-from sqlspec.adapters.oracledb._storage import (
-    _oracle_table_feature_report,
-    _resolve_oracle_storage_capabilities_async,
-    _resolve_oracle_storage_capabilities_sync,
-    _validate_oracle_identifier,
-)
+from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
 from sqlspec.adapters.oracledb.data_dictionary import (
     JSONStorageType,
     OracleVersionInfo,
@@ -358,7 +353,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         logger.debug("Creating ADK tables with storage type: %s", storage_type)
 
         async with self._config.provide_session() as driver:
-            await _resolve_oracle_storage_capabilities_async(driver)
             existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._session_table) not in existing:
                 await driver.execute_script(self._sessions_table_ddl_for_type(storage_type))
@@ -372,9 +366,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await driver.execute_script(await self._metadata_table_ddl())
             await driver.commit()
 
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1360,7 +1351,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         logger.info("Creating ADK tables with storage type: %s", storage_type)
 
         with self._config.provide_session() as driver:
-            _resolve_oracle_storage_capabilities_sync(driver)
             existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._session_table) not in existing:
                 driver.execute_script(SQL(self._sessions_table_ddl_for_type(storage_type)))
@@ -1374,9 +1364,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 driver.execute_script(SQL(self._metadata_table_ddl()))
             driver.commit()
 
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        _resolve_oracle_storage_capabilities_sync(driver)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -2320,14 +2307,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             return
 
         async with self._config.provide_session() as driver:
-            await _resolve_oracle_storage_capabilities_async(driver)
             existing = _existing_table_names(await driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._memory_table) not in existing:
                 await driver.execute_script(await self._memory_table_ddl())
 
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        await _resolve_oracle_storage_capabilities_async(driver)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2657,14 +2640,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            _resolve_oracle_storage_capabilities_sync(driver)
             existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._memory_table) not in existing:
                 driver.execute_script(self._memory_table_ddl())
 
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Resolve pool-scoped Oracle storage capabilities before DDL generation."""
-        _resolve_oracle_storage_capabilities_sync(driver)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
