@@ -12,6 +12,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from google.adk.events.event import Event
     from google.adk.memory.memory_entry import MemoryEntry
     from google.adk.sessions import Session
@@ -59,7 +61,12 @@ def extract_content_text(content: "types.Content") -> str:
 
 
 def event_to_memory_record(
-    event: "Event", session_id: str, app_name: str, user_id: str, scope: str = "user"
+    event: "Event",
+    session_id: str,
+    app_name: str,
+    user_id: str,
+    scope: str = "user",
+    embedding: "Sequence[float] | None" = None,
 ) -> "StoredMemory | None":
     """Convert an ADK Event to a stored memory record.
 
@@ -69,6 +76,7 @@ def event_to_memory_record(
         app_name: Name of the application.
         user_id: ID of the user.
         scope: Visibility scope ('user' or 'app').
+        embedding: Optional vector embedding stored alongside the entry.
 
     Returns:
         StoredMemory for database storage, or None if event has no content.
@@ -99,7 +107,7 @@ def event_to_memory_record(
         content_text=content_text,
         metadata_json=custom_metadata,
         inserted_at=now,
-        embedding=None,
+        embedding=embedding,
     )
 
 
@@ -109,6 +117,7 @@ def memory_entry_to_record(
     user_id: str,
     extra_metadata: "dict[str, Any] | None" = None,
     scope: str = "user",
+    embedding: "Sequence[float] | None" = None,
 ) -> "StoredMemory | None":
     """Convert an ADK MemoryEntry to a database record.
 
@@ -123,6 +132,7 @@ def memory_entry_to_record(
         extra_metadata: Optional call-level metadata to merge with the
             entry's own ``custom_metadata``.
         scope: Visibility scope ('user' or 'app').
+        embedding: Optional vector embedding stored alongside the entry.
 
     Returns:
         StoredMemory for database storage, or None if entry has no
@@ -166,11 +176,13 @@ def memory_entry_to_record(
         content_text=content_text,
         metadata_json=merged_metadata,
         inserted_at=now,
-        embedding=None,
+        embedding=embedding,
     )
 
 
-def session_to_memory_records(session: "Session", scope: str = "user") -> list["StoredMemory"]:
+def session_to_memory_records(
+    session: "Session", scope: str = "user", embeddings: "Mapping[str, Sequence[float]] | None" = None
+) -> list["StoredMemory"]:
     """Convert a completed ADK Session to a list of stored memory records.
 
     Extracts all events with content from the session and converts
@@ -179,6 +191,7 @@ def session_to_memory_records(session: "Session", scope: str = "user") -> list["
     Args:
         session: ADK Session object with events.
         scope: Visibility scope ('user' or 'app').
+        embeddings: Optional map of event id to vector embedding.
 
     Returns:
         List of StoredMemory objects for database storage.
@@ -190,7 +203,12 @@ def session_to_memory_records(session: "Session", scope: str = "user") -> list["
 
     for event in session.events:
         record = event_to_memory_record(
-            event=event, session_id=session.id, app_name=session.app_name, user_id=session.user_id, scope=scope
+            event=event,
+            session_id=session.id,
+            app_name=session.app_name,
+            user_id=session.user_id,
+            scope=scope,
+            embedding=embeddings.get(event.id) if embeddings else None,
         )
         if record is not None:
             records.append(record)

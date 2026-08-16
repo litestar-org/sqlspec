@@ -178,23 +178,37 @@ class SQLSpecMemoryService(BaseMemoryService):
         )
 
     async def search_memory(
-        self, *, app_name: str, user_id: str, query: str, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        query: str,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "SearchMemoryResponse":
-        """Search memory entries by text query.
+        """Search memory entries by text query, optionally fused with vector similarity.
 
-        Uses the store's configured search strategy (simple ILIKE or FTS).
+        Uses the store's configured search strategy. Supplying an embedding lets
+        stores that support vector indexes combine similarity with text rank;
+        omitting it performs the text-only search.
 
         Args:
             app_name: Name of the application.
             user_id: ID of the user.
             query: Text query to search for.
             scope_filter: Scope filter ('all', 'user', 'app'). Defaults to 'all'.
+            embedding: Optional query vector for similarity search.
 
         Returns:
             SearchMemoryResponse with memories: List[MemoryEntry].
         """
         records = await self._call_store(
-            "search_entries", query=query, app_name=app_name, user_id=user_id, scope_filter=scope_filter
+            "search_entries",
+            query=query,
+            app_name=app_name,
+            user_id=user_id,
+            scope_filter=scope_filter,
+            embedding=embedding,
         )
 
         memories = records_to_memory_entries(records)
@@ -264,20 +278,29 @@ class SQLSpecSyncMemoryService:
         )
 
     def search_memory(
-        self, *, app_name: str, user_id: str, query: str, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        query: str,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> list["MemoryEntry"]:
-        """Search memory entries by text query.
+        """Search memory entries by text query, optionally fused with vector similarity.
 
         Args:
             app_name: Name of the application.
             user_id: ID of the user.
             query: Text query to search for.
             scope_filter: Scope filter ('all', 'user', 'app'). Defaults to 'all'.
+            embedding: Optional query vector for similarity search.
 
         Returns:
             List of MemoryEntry objects.
         """
-        records = self._store.search_entries(query=query, app_name=app_name, user_id=user_id, scope_filter=scope_filter)
+        records = self._store.search_entries(
+            query=query, app_name=app_name, user_id=user_id, scope_filter=scope_filter, embedding=embedding
+        )
 
         memories = records_to_memory_entries(records)
 
