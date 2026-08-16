@@ -111,13 +111,6 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
 )
 
 
-_ADK_MEMORY_TABLE_DDL_TEMPLATE = (
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{0}_fts\n"
-    "            ON {1} USING GIN (to_tsvector('english', content_text));\n"
-    "            "
-)
-
 _ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
@@ -129,21 +122,14 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
     "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
     "            author VARCHAR(256){1},\n"
     "            timestamp TIMESTAMPTZ NOT NULL,\n"
+    "            embedding VECTOR({2}),\n"
     "            content_json JSONB NOT NULL,\n"
     "            content_text TEXT NOT NULL,\n"
     "            metadata_json JSONB,\n"
     "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
     "        );\n"
     "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{2}_app_scope_user_time\n"
-    "            ON {3}(app_name, scope, user_id, timestamp DESC);\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{4}_scope\n"
-    "            ON {5}(app_name, scope);\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{6}_session\n"
-    "            ON {7}(session_id);\n"
-    "        {8}\n"
+    "        {3}\n"
     "        "
 )
 
@@ -1309,9 +1295,18 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query and embedding is None:
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._enable_bm25 and query:
+                return await self._search_entries_hybrid(
+                    query, app_name, user_id, effective_limit, scope_filter, embedding
+                )
+            if embedding is not None:
+                return await self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
@@ -1363,25 +1358,85 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+        indexes_sql = _postgres_memory_indexes(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        )
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
-            self._memory_table,
-            owner_id_line,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            fts_index,
+            self._memory_table, owner_id_line, self._vector_dimensions, indexes_sql
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    async def _search_entries_hybrid(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        candidate_limit = max(limit * 2, 50)
+        sql = pg_sql.SQL(
+            """
+            WITH vector_matches AS (
+                SELECT id, RANK() OVER (ORDER BY embedding <=> %s) AS rank_vec
+                FROM {table}
+                WHERE {where_scope} AND embedding IS NOT NULL
+                LIMIT %s
+            ),
+            text_matches AS (
+                SELECT id, RANK() OVER (ORDER BY content_text <@> %s) AS rank_txt
+                FROM {table}
+                WHERE {where_scope}
+                LIMIT %s
+            )
+            SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+            FROM {table} m
+            LEFT JOIN vector_matches v ON m.id = v.id
+            LEFT JOIN text_matches t ON m.id = t.id
+            WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+            ORDER BY rrf_score DESC, m.timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        return _rows_to_records(rows)
+
+    async def _search_entries_vector(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        sql = pg_sql.SQL(
+            """
+            SELECT * FROM {table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s ASC, timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (*scope_params, list(embedding), limit)
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        return _rows_to_records(rows)
 
     async def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -1504,9 +1559,16 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query and embedding is None:
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._enable_bm25 and query:
+                return self._search_entries_hybrid(query, app_name, user_id, effective_limit, scope_filter, embedding)
+            if embedding is not None:
+                return self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
             if self._use_fts:
                 try:
                     return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
@@ -1557,25 +1619,85 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
 
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+        indexes_sql = _postgres_memory_indexes(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        )
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(
-            self._memory_table,
-            owner_id_line,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
-            fts_index,
+            self._memory_table, owner_id_line, self._vector_dimensions, indexes_sql
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    def _search_entries_hybrid(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        candidate_limit = max(limit * 2, 50)
+        sql = pg_sql.SQL(
+            """
+            WITH vector_matches AS (
+                SELECT id, RANK() OVER (ORDER BY embedding <=> %s) AS rank_vec
+                FROM {table}
+                WHERE {where_scope} AND embedding IS NOT NULL
+                LIMIT %s
+            ),
+            text_matches AS (
+                SELECT id, RANK() OVER (ORDER BY content_text <@> %s) AS rank_txt
+                FROM {table}
+                WHERE {where_scope}
+                LIMIT %s
+            )
+            SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+            FROM {table} m
+            LEFT JOIN vector_matches v ON m.id = v.id
+            LEFT JOIN text_matches t ON m.id = t.id
+            WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+            ORDER BY rrf_score DESC, m.timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return _rows_to_records(rows)
+
+    def _search_entries_vector(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
+        sql = pg_sql.SQL(
+            """
+            SELECT * FROM {table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s ASC, timestamp DESC
+            LIMIT %s
+            """
+        ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
+        params = (*scope_params, list(embedding), limit)
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return _rows_to_records(rows)
 
     def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -1672,7 +1794,7 @@ def _rows_to_records(rows: "list[Any]") -> "list[StoredMemory]":
             "content_text": row["content_text"],
             "metadata_json": row["metadata_json"],
             "inserted_at": row["inserted_at"],
-            "embedding": None,
+            "embedding": row.get("embedding"),
         }
         for row in rows
     ]
@@ -1715,6 +1837,43 @@ def _postgres_autovacuum_options(adk_config: PsycopgADKConfig) -> "list[str]":
                 raise ValueError(msg)
             options.append(f"{key} = {float(value):g}")
     return options
+
+
+def _postgres_memory_indexes(
+    memory_table: str, use_fts: bool, enable_bm25: bool, vector_index_type: str, scann_num_leaves: int, scann_quantizer: str
+) -> str:
+    """Return the index DDL statements for the ADK memory table."""
+
+    indexes: list[str] = [
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_app_scope_user_time ON {memory_table}(app_name, scope, user_id, timestamp DESC);",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scope ON {memory_table}(app_name, scope);",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_session ON {memory_table}(session_id);",
+    ]
+
+    if use_fts:
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_fts ON {memory_table} USING GIN (to_tsvector('english', content_text));"
+        )
+
+    if enable_bm25:
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_bm25 ON {memory_table} USING bm25 (content_text);"
+        )
+
+    if vector_index_type == "scann":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scann ON {memory_table} USING scann (embedding) WITH (num_leaves = {scann_num_leaves}, quantizer = '{scann_quantizer}');"
+        )
+    elif vector_index_type == "ivfflat":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_ivfflat ON {memory_table} USING ivfflat (embedding vector_cosine_ops);"
+        )
+    elif vector_index_type == "hnsw":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_hnsw ON {memory_table} USING hnsw (embedding vector_cosine_ops);"
+        )
+
+    return "\n        ".join(indexes)
 
 
 def _postgres_event_ddl_options(adk_config: PsycopgADKConfig, events_table: str) -> "tuple[str, str, str]":
