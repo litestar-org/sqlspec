@@ -102,6 +102,8 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
     "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
     "                session_id VARCHAR2(128) NOT NULL,\n"
     "                invocation_id VARCHAR2(256),\n"
     "                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
@@ -124,6 +126,11 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{9}_timestamp\n"
     "                ON {10}(timestamp ASC)';\n"
+    "        END;\n"
+    "\n"
+    "        BEGIN\n"
+    "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{11}_app_timestamp\n"
+    "                ON {12}(app_name, timestamp ASC)';\n"
     "        END;\n"
     "        "
 )
@@ -170,6 +177,8 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
     "                id VARCHAR2(128) PRIMARY KEY,\n"
+    "                app_name VARCHAR2(128) NOT NULL,\n"
+    "                user_id VARCHAR2(128) NOT NULL,\n"
     "                session_id VARCHAR2(128) NOT NULL,\n"
     "                app_name VARCHAR2(128) NOT NULL,\n"
     "                user_id VARCHAR2(128) NOT NULL,\n"
@@ -587,9 +596,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -599,6 +608,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 sql,
                 {
                     "id": event_record["id"],
+                    "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
                     "timestamp": event_record["timestamp"],
@@ -625,9 +636,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -680,7 +691,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     insert_sql,
                     {
                         "id": event_record["id"],
-                        "session_id": event_record["session_id"],
+                        "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
+                    "session_id": event_record["session_id"],
                         "invocation_id": event_record["invocation_id"],
                         "timestamp": event_record["timestamp"],
                         "event_data": await self._serialize_event_data(event_record["event_data"]),
@@ -778,13 +791,17 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return []
             raise
 
-    async def delete_expired_events(self, before: "datetime") -> int:
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+        params: dict[str, Any] = {"before": before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             async with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                await cursor.execute(sql, {"before": before})
+                await cursor.execute(sql, params)
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -793,13 +810,17 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 return 0
             raise
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             async with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                await cursor.execute(sql, {"updated_before": updated_before})
+                await cursor.execute(sql, params)
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -1119,6 +1140,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             self._events_table,
             self._session_table,
             table_clauses,
+            self._events_table,
+            self._events_table,
             self._events_table,
             self._events_table,
             self._events_table,
@@ -1561,9 +1584,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Synchronous implementation of append_event."""
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -1573,6 +1596,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 sql,
                 {
                     "id": event_record["id"],
+                    "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
                     "session_id": event_record["session_id"],
                     "invocation_id": event_record["invocation_id"],
                     "timestamp": event_record["timestamp"],
@@ -1596,9 +1621,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Atomically create an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (
-            :id, :session_id, :invocation_id, :timestamp, :event_data
+            :id, :app_name, :user_id, :session_id, :invocation_id, :timestamp, :event_data
         )
         """
 
@@ -1651,7 +1676,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     insert_sql,
                     {
                         "id": event_record["id"],
-                        "session_id": event_record["session_id"],
+                        "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
+                    "session_id": event_record["session_id"],
                         "invocation_id": event_record["invocation_id"],
                         "timestamp": event_record["timestamp"],
                         "event_data": self._serialize_event_data(event_record["event_data"]),
@@ -1745,14 +1772,18 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return []
             raise
 
-    def delete_expired_events(self, before: "datetime") -> int:
-        """Delete events older than the given timestamp."""
+    def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete events older than the given timestamp, optionally scoped to one application."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < :before"
+        params: dict[str, Any] = {"before": before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(sql, {"before": before})
+                cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -1761,14 +1792,18 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 return 0
             raise
 
-    def delete_idle_sessions(self, updated_before: "datetime") -> int:
-        """Delete sessions whose update_time predates the given threshold."""
+    def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete sessions whose update_time predates the given threshold, optionally scoped to one application."""
         sql = f"DELETE FROM {self._session_table} WHERE update_time < :updated_before"
+        params: dict[str, Any] = {"updated_before": updated_before}
+        if app_name is not None:
+            sql += " AND app_name = :app_name"
+            params["app_name"] = app_name
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(sql, {"updated_before": updated_before})
+                cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
@@ -2088,6 +2123,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             self._events_table,
             self._session_table,
             table_clauses,
+            self._events_table,
+            self._events_table,
             self._events_table,
             self._events_table,
             self._events_table,

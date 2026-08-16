@@ -198,14 +198,16 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
 
         async with self._config.provide_connection() as conn:
             await conn.execute(
                 sql,
                 event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
                 event_record["session_id"],
                 event_record["invocation_id"],
                 event_record["timestamp"],
@@ -225,8 +227,8 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     ) -> StoredSession:
         insert_sql = f"""
         INSERT INTO {self._events_table} (
-            id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5)
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
         update_sql = f"""
         UPDATE {self._session_table}
@@ -253,6 +255,8 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             await conn.execute(
                 insert_sql,
                 event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
                 event_record["session_id"],
                 event_record["invocation_id"],
                 event_record["timestamp"],
@@ -326,22 +330,30 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         except asyncpg.exceptions.UndefinedTableError:
             return []
 
-    async def delete_expired_events(self, before: "datetime") -> int:
+    async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+        params: list[Any] = [before]
+        if app_name is not None:
+            sql += " AND app_name = $2"
+            params.append(app_name)
 
         try:
             async with self._config.provide_connection() as conn:
-                result = await conn.execute(sql, before)
+                result = await conn.execute(sql, *params)
                 return int(result.split()[-1]) if result else 0
         except asyncpg.exceptions.UndefinedTableError:
             return 0
 
-    async def delete_idle_sessions(self, updated_before: "datetime") -> int:
+    async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+        params: list[Any] = [updated_before]
+        if app_name is not None:
+            sql += " AND app_name = $2"
+            params.append(app_name)
 
         try:
             async with self._config.provide_connection() as conn:
-                result = await conn.execute(sql, updated_before)
+                result = await conn.execute(sql, *params)
                 return int(result.split()[-1]) if result else 0
         except asyncpg.exceptions.UndefinedTableError:
             return 0
@@ -462,6 +474,8 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
             id VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
             session_id VARCHAR(128) NOT NULL,
             invocation_id VARCHAR(256),
             timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -471,6 +485,8 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
 
         CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
             ON {self._events_table}(session_id, timestamp ASC){covering_columns};
+        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
+            ON {self._events_table}(app_name, timestamp ASC);
         {generated_indexes}
         """
 
