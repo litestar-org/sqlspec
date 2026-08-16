@@ -9,6 +9,66 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.61.0 - Scoped memory recall and ADK modernization
+------------------------------------------------------------------------------
+
+**Added:**
+
+* Google ADK memory stores now support scoped memory recall. The ``adk_memory``
+  table stores a ``scope`` column (``'user'`` or ``'app'``) with composite
+  indexes for efficient partitioned lookups across all 14 database dialect
+  adapters.
+* Memory recall retrieves both user-scoped memory (``scope = 'user'``) and
+  app-scoped memory (``scope = 'app'``) by default, and supports filtering via
+  ``scope_filter`` (``"all"``, ``"user"``, or ``"app"``).
+* Memory ingestion methods (``add_memories``, ``add_events_to_memory``, and
+  ``add_session_to_memory``) accept a ``scope`` argument (defaulting to
+  ``'user'``).
+* New :mod:`sqlspec.extensions.adk.maintenance` module provides
+  :func:`~sqlspec.extensions.adk.maintenance.prune_events`,
+  :func:`~sqlspec.extensions.adk.maintenance.prune_sessions`, and
+  :func:`~sqlspec.extensions.adk.maintenance.prune_user_state` for programmatic
+  retention maintenance with structured deletion reporting.
+* The ``adk_event`` table now persists ``app_name`` and ``user_id`` directly
+  across all database adapters, backed by ``(app_name, timestamp)`` composite
+  indexes.
+* psycopg now supports AlloyDB / PostgreSQL 17+ BM25 full-text indexing, vector
+  embeddings, and hybrid similarity ranking parity with asyncpg.
+* :meth:`MemoryService.search_memory() <sqlspec.extensions.adk.memory.service.MemoryService.search_memory>`
+  accepts an optional ``embedding`` vector parameter to fuse vector similarity
+  scoring with text search.
+* Added ADK configuration options for vector search: ``vector_index_type``,
+  ``vector_dimensions``, ``enable_bm25``, ``scann_num_leaves``, and
+  ``scann_quantizer``.
+
+**Changed:**
+
+* ADK domain record types are modernized to clean domain models:
+  ``StoredMemory``, ``StoredSession``, ``StoredEvent``, and ``StoredArtifact``.
+  Legacy type aliases (``MemoryRecord``, ``SessionRecord``, etc.) have been
+  removed.
+* ADK database table names are standardized to singular form across all 14
+  dialect adapters: ``adk_session``, ``adk_event``, ``adk_memory``,
+  ``adk_app_state``, ``adk_user_state``, ``adk_artifact``, and
+  ``adk_internal_metadata``.
+* ADK table migration ``0001_create_adk_tables.py`` consolidates singular table
+  names and the ``scope`` column into the base migration.
+* Table maintenance (``maintain_tables``) strictly performs row retention
+  pruning across all stores; dialect-specific storage commands (``VACUUM``,
+  ``ANALYZE``, ``CHECKPOINT``, etc.) and the unused ``reindex`` flag have been
+  removed.
+* Oracle ADK storage features (compression, in-memory, partitioning) emit DDL
+  clauses directly without dynamic ``v$option`` server probes at runtime.
+
+**Fixed:**
+
+* ADK retention pruning (``delete_entries_older_than``) now consistently honors
+  ``app_name`` filtering across all stores and database adapters.
+* Arrow conversion now preserves declared SQL / cursor column types for columns
+  containing only ``NULL`` values when using psycopg or MySQL drivers
+  (aiomysql, asyncmy, mysqlconnector, pymysql), preventing type collapse to
+  ``null`` or ``string``.
+
 v0.60.0 - Queue limits
 ------------------------------------------------------------------------------
 
