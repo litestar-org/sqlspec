@@ -366,7 +366,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await driver.execute_script(await self._metadata_table_ddl())
             await driver.commit()
 
-
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
@@ -683,8 +682,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     {
                         "id": event_record["id"],
                         "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
                         "invocation_id": event_record["invocation_id"],
                         "timestamp": event_record["timestamp"],
                         "event_data": await self._serialize_event_data(event_record["event_data"]),
@@ -1364,7 +1363,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 driver.execute_script(SQL(self._metadata_table_ddl()))
             driver.commit()
 
-
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
@@ -1683,8 +1681,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     {
                         "id": event_record["id"],
                         "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
                         "invocation_id": event_record["invocation_id"],
                         "timestamp": event_record["timestamp"],
                         "event_data": self._serialize_event_data(event_record["event_data"]),
@@ -2311,7 +2309,6 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             if _bare_table_name(self._memory_table) not in existing:
                 await driver.execute_script(await self._memory_table_ddl())
 
-
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2643,7 +2640,6 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             existing = _existing_table_names(driver.data_dictionary.get_tables(driver))
             if _bare_table_name(self._memory_table) not in existing:
                 driver.execute_script(self._memory_table_ddl())
-
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""

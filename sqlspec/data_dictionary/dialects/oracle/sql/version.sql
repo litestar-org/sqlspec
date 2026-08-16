@@ -18,4 +18,3 @@ SELECT sys_context('USERENV', 'CLOUD_SERVICE') AS "service" FROM dual;
 SELECT value AS compatible
 FROM v$parameter
 WHERE name = 'compatible';
-

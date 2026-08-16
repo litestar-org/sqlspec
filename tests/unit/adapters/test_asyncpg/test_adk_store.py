@@ -101,9 +101,12 @@ async def test_asyncpg_memory_ddl_emits_bm25_index_when_enabled() -> None:
 async def test_asyncpg_memory_ddl_emits_scann_index_with_configured_tuning() -> None:
     """A ScaNN index carries the configured leaf count and quantizer."""
 
-    ddl = await _memory_ddl(
-        {"vector_index_type": "scann", "vector_dimensions": 768, "scann_num_leaves": 250, "scann_quantizer": "sq8"}
-    )
+    ddl = await _memory_ddl({
+        "vector_index_type": "scann",
+        "vector_dimensions": 768,
+        "scann_num_leaves": 250,
+        "scann_quantizer": "sq8",
+    })
 
     assert "USING scann (embedding)" in ddl
     assert "num_leaves = 250" in ddl

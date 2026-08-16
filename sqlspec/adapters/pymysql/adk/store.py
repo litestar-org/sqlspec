@@ -725,9 +725,7 @@ def _delete_idle_sessions(store: PyMysqlADKStore, updated_before: "datetime", ap
     return _delete_before(store, store._session_table, "update_time", updated_before, app_name)
 
 
-def _delete_idle_user_states(
-    store: PyMysqlADKStore, updated_before: "datetime", app_name: "str | None" = None
-) -> int:
+def _delete_idle_user_states(store: PyMysqlADKStore, updated_before: "datetime", app_name: "str | None" = None) -> int:
     return _delete_before(store, store._user_state_table, "update_time", updated_before, app_name)
 
 

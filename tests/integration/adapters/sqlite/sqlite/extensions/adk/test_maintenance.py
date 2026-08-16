@@ -104,10 +104,7 @@ def test_sqlite_prune_sessions_scopes_to_app_name() -> None:
         for app in ("app_keep", "app_prune"):
             store.create_session(f"session_{app}", app, "user_1", {})
         with config.provide_connection() as conn:
-            conn.execute(
-                f"UPDATE {store.session_table} SET update_time = ?",
-                (_datetime_to_julian(stale),),
-            )
+            conn.execute(f"UPDATE {store.session_table} SET update_time = ?", (_datetime_to_julian(stale),))
             conn.commit()
 
         report = prune_sessions_sync(store, idle_days=30, app_name="app_prune")

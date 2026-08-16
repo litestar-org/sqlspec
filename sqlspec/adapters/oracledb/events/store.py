@@ -76,7 +76,6 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         """Return drop statements in reverse dependency order."""
         return _oracle_drop_sql(self.table_name, self._index_name())
 
-
     def create_table(self) -> None:
         """Create the event queue table with auto-detected storage type."""
         storage_type = self._detect_json_storage_type()
@@ -191,7 +190,6 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
     def drop_statements(self) -> "list[str]":
         """Return drop statements in reverse dependency order."""
         return _oracle_drop_sql(self.table_name, self._index_name())
-
 
     async def create_table(self) -> None:
         """Create the event queue table with auto-detected storage type."""

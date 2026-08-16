@@ -102,8 +102,6 @@ def _resolve_column_types(prepared: Any) -> "dict[str, str] | None":
     return column_types or None
 
 
-
-
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling AsyncPG database exceptions.
 

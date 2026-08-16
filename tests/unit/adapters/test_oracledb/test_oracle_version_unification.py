@@ -74,8 +74,6 @@ def test_oracle_version_resolved_once_per_pool() -> None:
     assert second_driver.select_one_or_none.call_count == 0
 
 
-
-
 def test_oracle_storage_ladder_native_requires_compatible() -> None:
     """A 21c server with a low COMPATIBLE degrades to the BLOB_JSON rung."""
     version = OracleVersionInfo(21, 0, 0, compatible="19.0.0")

@@ -52,7 +52,7 @@ logger = get_logger("sqlspec.adapters.pymysql")
 json_type_value = PyMysqlFieldType.JSON if supports_json_type(PyMysqlFieldType) else None
 PYMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
-_MYSQL_TYPE_CODE_TOKENS: "Final[dict[int, str]]" = {
+_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
     0: "decimal",
     1: "int32",
     2: "int32",

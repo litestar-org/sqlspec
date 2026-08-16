@@ -119,12 +119,10 @@ def test_duckdb_prune_memory_respects_scope(tmp_path: Path) -> None:
     store.create_tables()
 
     stale = datetime.now(timezone.utc) - timedelta(days=200)
-    store.insert_memory_entries(
-        [
-            _memory_record(app_name="app", inserted_at=stale, scope="user"),
-            _memory_record(app_name="app", inserted_at=stale, scope="app"),
-        ]
-    )
+    store.insert_memory_entries([
+        _memory_record(app_name="app", inserted_at=stale, scope="user"),
+        _memory_record(app_name="app", inserted_at=stale, scope="app"),
+    ])
 
     report = prune_memory_sync(store, older_than_days=90, app_name="app", scope="user")
 
@@ -132,5 +130,3 @@ def test_duckdb_prune_memory_respects_scope(tmp_path: Path) -> None:
     remaining = store.search_entries(query="note", app_name="app", user_id="user", scope_filter="all")
     assert len(remaining) == 1
     assert remaining[0]["scope"] == "app"
-
-

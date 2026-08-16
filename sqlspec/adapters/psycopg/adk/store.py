@@ -1840,7 +1840,12 @@ def _postgres_autovacuum_options(adk_config: PsycopgADKConfig) -> "list[str]":
 
 
 def _postgres_memory_indexes(
-    memory_table: str, use_fts: bool, enable_bm25: bool, vector_index_type: str, scann_num_leaves: int, scann_quantizer: str
+    memory_table: str,
+    use_fts: bool,
+    enable_bm25: bool,
+    vector_index_type: str,
+    scann_num_leaves: int,
+    scann_quantizer: str,
 ) -> str:
     """Return the index DDL statements for the ADK memory table."""
 

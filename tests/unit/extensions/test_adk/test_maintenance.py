@@ -138,8 +138,6 @@ def test_prune_user_state_sync() -> None:
     assert store.delete_idle_user_states.call_args.kwargs["app_name"] == "app1"
 
 
-
-
 def test_invalid_target_resolution() -> None:
     with pytest.raises(TypeError, match="Cannot resolve ADK session store"):
         prune_sessions_sync("invalid_target_string")

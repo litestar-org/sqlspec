@@ -105,7 +105,6 @@ ORACLE_SYSTEM_REDACTION_FIELDS = ("query_text", "sql_text", "username", "user_na
 _STORAGE_OPTION_FIELD_COUNT = 2
 
 
-
 class OracleVersionInfo(VersionInfo):
     """Oracle database version information."""
 
@@ -179,10 +178,7 @@ class OracleVersionCache:
     next pool restart.
     """
 
-    __slots__ = (
-        "resolved",
-        "version",
-    )
+    __slots__ = ("resolved", "version")
 
     def __init__(self) -> None:
         self.resolved: bool = False
@@ -435,7 +431,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         else:
             self.cache_version(driver_id, version_info)
         return version_info
-
 
     def get_feature_flag(self, driver: "OracleSyncDriver", feature: str) -> bool:
         """Check if Oracle database supports a specific feature."""
@@ -811,7 +806,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             self.cache_version(driver_id, version_info)
         return version_info
 
-
     async def get_feature_flag(self, driver: "OracleAsyncDriver", feature: str) -> bool:
         """Check if Oracle database supports a specific feature."""
         version_info = await self.get_version(driver)
@@ -1152,6 +1146,3 @@ def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSON
     if version_info is None:
         return JSONStorageType.BLOB_JSON
     return JSONStorageType(resolve_oracle_json_storage(version_info.major, version_info.compatible_major))
-
-
-

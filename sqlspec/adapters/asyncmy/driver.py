@@ -54,7 +54,7 @@ json_type_value = (
 )
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
-_MYSQL_TYPE_CODE_TOKENS: "Final[dict[int, str]]" = {
+_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
     0: "decimal",
     1: "int32",
     2: "int32",
