@@ -5,7 +5,8 @@ from textwrap import dedent
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
-from typing_extensions import NotRequired
+import pytest
+from typing_extensions import NotRequired, Self
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
 from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore
@@ -147,3 +148,100 @@ def test_duckdb_adk_memory_fts_pragmas_apply_adapter_local_options() -> None:
         "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
         "overwrite=1, stemmer='none', stopwords='none', ignore='[^a-z]+', strip_accents=0, lower=0)"
     )
+
+
+class _SessionListCursor:
+    def fetchall(self) -> "list[Any]":
+        return []
+
+
+class _SessionListConnection:
+    """Record the session-list query and its bound parameters."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def execute(self, sql: str, params: "tuple[Any, ...] | None" = None) -> _SessionListCursor:
+        self.calls.append((sql, tuple(params or ())))
+        return _SessionListCursor()
+
+    def __enter__(self) -> "Self":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _session_store_with_connection() -> "tuple[DuckdbADKStore, _SessionListConnection]":
+    conn = _SessionListConnection()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    return DuckdbADKStore(config), conn
+
+
+def test_duckdb_list_sessions_binds_order_and_page() -> None:
+    """Explicit ordering renders inline while page bounds bind as qmark parameters."""
+    store, conn = _session_store_with_connection()
+
+    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = ? AND user_id = ? "
+        "ORDER BY create_time ASC, id ASC LIMIT ? OFFSET ?"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+def test_duckdb_list_sessions_defaults_to_recent_first_without_a_page() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store, conn = _session_store_with_connection()
+
+    store.list_sessions("app")
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql).endswith("WHERE app_name = ? ORDER BY update_time DESC, id DESC")
+    assert params == ("app",)
+
+
+def test_duckdb_list_sessions_orders_page_after_scope_parameters() -> None:
+    """Page values bind after the scope parameters that are actually present."""
+    store, conn = _session_store_with_connection()
+
+    store.list_sessions("app", limit=5)
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC LIMIT ? OFFSET ?")
+    assert params == ("app", 5, 0)
+
+
+def test_duckdb_list_sessions_zero_limit_never_opens_a_connection() -> None:
+    """A zero limit short-circuits before any database work."""
+    store, conn = _session_store_with_connection()
+
+    assert store.list_sessions("app", limit=0) == []
+    assert conn.calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_duckdb_list_sessions_rejects_invalid_options_before_connecting(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store, conn = _session_store_with_connection()
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)
+
+    assert conn.calls == []

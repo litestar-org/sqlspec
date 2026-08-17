@@ -11,7 +11,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.sqlite.config import _render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("SqliteADKConfig", "SqliteADKMemoryStore", "SqliteADKStore")
 
@@ -225,33 +225,34 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
             user_id: User identifier. If None, lists all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction for the timestamp column and the id tie-break.
+            limit: Maximum number of sessions to return.
+            offset: Number of leading rows to skip.
 
         Returns:
-            List of session records ordered by update_time DESC.
+            List of session records.
         """
-        """Synchronous implementation of list_sessions."""
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ?
-            ORDER BY update_time DESC
-            """
-            params: tuple[str, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ? AND user_id = ?
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        sql, params = _session_list_query(self._session_table, app_name, user_id, order_clause, page_limit, page_offset)
 
         try:
             with self._config.provide_connection() as conn:
@@ -1191,3 +1192,27 @@ def _build_sqlite_scope_clause(
     if scope_filter == "user":
         return f"{prefix}app_name = ? AND {prefix}scope = 'user' AND {prefix}user_id = ?", (app_name, user_id)
     return f"{prefix}app_name = ? AND {prefix}scope = 'app'", (app_name,)
+
+
+def _session_list_query(
+    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+) -> "tuple[str, tuple[Any, ...]]":
+    """Return the bounded session-list query and its bound values."""
+    params: list[Any] = [app_name]
+    where_clause = "app_name = ?"
+    if user_id is not None:
+        params.append(user_id)
+        where_clause = f"{where_clause} AND user_id = ?"
+
+    page_clause = ""
+    if limit is not None:
+        params.extend((limit, offset))
+        page_clause = "\n            LIMIT ? OFFSET ?"
+
+    sql = f"""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {session_table}
+    WHERE {where_clause}
+    ORDER BY {order_clause}{page_clause}
+    """
+    return sql, tuple(params)

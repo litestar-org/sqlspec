@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.duckdb.config import DuckDBConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
 __all__ = ("DuckdbADKConfig", "DuckdbADKFTSOptions", "DuckdbADKMemoryStore", "DuckdbADKStore")
@@ -161,17 +161,32 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
             user_id: User identifier. If None, lists all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction for the timestamp column and the id tie-break.
+            limit: Maximum number of sessions to return.
+            offset: Number of leading rows to skip.
 
         Returns:
-            List of session records ordered by update_time DESC.
+            List of session records.
         """
-        return self._list_sessions(app_name, user_id)
+        return self._list_sessions(
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+        )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events.
@@ -560,24 +575,22 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.execute(delete_session_sql, (app_name, user_id, session_id))
             conn.commit()
 
-    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
+    def _list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """Synchronous implementation of list_sessions."""
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ?
-            ORDER BY update_time DESC
-            """
-            params: tuple[str, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ? AND user_id = ?
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        sql, params = _session_list_query(self._session_table, app_name, user_id, order_clause, page_limit, page_offset)
 
         try:
             with self._config.provide_connection() as conn:
@@ -1310,3 +1323,27 @@ def _build_duckdb_scope_where(
     if scope_filter == "user":
         return f"{pfx}app_name = ? AND {pfx}scope = 'user' AND {pfx}user_id = ?", (app_name, user_id)
     return f"{pfx}app_name = ? AND {pfx}scope = 'app'", (app_name,)
+
+
+def _session_list_query(
+    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+) -> "tuple[str, tuple[Any, ...]]":
+    """Return the bounded session-list query and its bound values."""
+    params: list[Any] = [app_name]
+    where_clause = "app_name = ?"
+    if user_id is not None:
+        params.append(user_id)
+        where_clause = f"{where_clause} AND user_id = ?"
+
+    page_clause = ""
+    if limit is not None:
+        params.extend((limit, offset))
+        page_clause = "\n            LIMIT ? OFFSET ?"
+
+    sql = f"""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {session_table}
+    WHERE {where_clause}
+    ORDER BY {order_clause}{page_clause}
+    """
+    return sql, tuple(params)

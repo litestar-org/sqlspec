@@ -1,8 +1,10 @@
 """Aiosqlite ADK adapter-local configuration tests."""
 
-from typing import get_type_hints
+from typing import Any, get_type_hints
+from unittest.mock import MagicMock
 
 import pytest
+from typing_extensions import Self
 
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKConfig, AiosqliteADKMemoryStore, AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -86,3 +88,105 @@ async def test_aiosqlite_adk_fts5_options_render_only_when_fts_enabled() -> None
     sql = await configured_store._memory_table_ddl()
     assert "tokenize = 'porter unicode61'" in sql
     assert "detail = column" in sql
+
+
+class _SessionListCursor:
+    def __init__(self) -> None:
+        self.rows: list[Any] = []
+
+    async def fetchall(self) -> "list[Any]":
+        return self.rows
+
+
+class _SessionListConnection:
+    """Record the session-list query and its bound parameters."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def execute(self, sql: str, params: "tuple[Any, ...] | None" = None) -> _SessionListCursor:
+        if params is not None:
+            self.calls.append((sql, params))
+        return _SessionListCursor()
+
+    async def __aenter__(self) -> "Self":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _session_store_with_connection() -> "tuple[AiosqliteADKStore, _SessionListConnection]":
+    conn = _SessionListConnection()
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    config.provide_connection = lambda *_a, **_k: conn
+    return AiosqliteADKStore(config), conn
+
+
+async def test_aiosqlite_list_sessions_binds_order_and_page() -> None:
+    """Explicit ordering renders inline while page bounds bind as qmark parameters."""
+    store, conn = _session_store_with_connection()
+
+    await store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = ? AND user_id = ? "
+        "ORDER BY create_time ASC, id ASC LIMIT ? OFFSET ?"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+async def test_aiosqlite_list_sessions_defaults_to_recent_first_without_a_page() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store, conn = _session_store_with_connection()
+
+    await store.list_sessions("app")
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql).endswith("WHERE app_name = ? ORDER BY update_time DESC, id DESC")
+    assert params == ("app",)
+
+
+async def test_aiosqlite_list_sessions_orders_page_after_scope_parameters() -> None:
+    """Page values bind after the scope parameters that are actually present."""
+    store, conn = _session_store_with_connection()
+
+    await store.list_sessions("app", limit=5)
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC LIMIT ? OFFSET ?")
+    assert params == ("app", 5, 0)
+
+
+async def test_aiosqlite_list_sessions_zero_limit_never_opens_a_connection() -> None:
+    """A zero limit short-circuits before any database work."""
+    store, conn = _session_store_with_connection()
+
+    assert await store.list_sessions("app", limit=0) == []
+    assert conn.calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+async def test_aiosqlite_list_sessions_rejects_invalid_options_before_connecting(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store, conn = _session_store_with_connection()
+
+    with pytest.raises(ValueError):
+        await store.list_sessions("app", **options)
+
+    assert conn.calls == []
