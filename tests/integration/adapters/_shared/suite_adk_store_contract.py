@@ -11,6 +11,11 @@ from tests.integration.adapters._shared.adk_behaviors import (
     assert_adk_get_events_filtering_contract,
     assert_adk_get_nonexistent_session_contract,
     assert_adk_list_sessions_contract,
+    assert_adk_list_sessions_default_order_contract,
+    assert_adk_list_sessions_filtering_precedes_paging_contract,
+    assert_adk_list_sessions_option_validation_contract,
+    assert_adk_list_sessions_ordering_contract,
+    assert_adk_list_sessions_paging_contract,
     assert_adk_reads_empty_when_tables_missing_contract,
     assert_adk_session_round_trip_contract,
     assert_adk_update_session_state_contract,
@@ -40,6 +45,31 @@ async def test_adk_update_session_state_contract(adk_store_case: AdkStoreCaseCon
 async def test_adk_list_sessions_contract(adk_store_case: AdkStoreCaseContext) -> None:
     """list_sessions filters by app and optional user."""
     await assert_adk_list_sessions_contract(adk_store_case.make_store)
+
+
+async def test_adk_list_sessions_default_order_contract(adk_store_case: AdkStoreCaseContext) -> None:
+    """The default listing stays recent-first and unbounded."""
+    await assert_adk_list_sessions_default_order_contract(adk_store_case.make_store)
+
+
+async def test_adk_list_sessions_ordering_contract(adk_store_case: AdkStoreCaseContext) -> None:
+    """Both order columns sort in both directions and stay a stable total order."""
+    await assert_adk_list_sessions_ordering_contract(adk_store_case.make_store)
+
+
+async def test_adk_list_sessions_paging_contract(adk_store_case: AdkStoreCaseContext) -> None:
+    """Finite pages partition the ordered listing without overlaps or gaps."""
+    await assert_adk_list_sessions_paging_contract(adk_store_case.make_store)
+
+
+async def test_adk_list_sessions_filtering_precedes_paging_contract(adk_store_case: AdkStoreCaseContext) -> None:
+    """User and app filtering narrow the result set before the page is taken."""
+    await assert_adk_list_sessions_filtering_precedes_paging_contract(adk_store_case.make_store)
+
+
+async def test_adk_list_sessions_option_validation_contract(adk_store_case: AdkStoreCaseContext) -> None:
+    """A zero limit answers empty and invalid options raise before any query runs."""
+    await assert_adk_list_sessions_option_validation_contract(adk_store_case.make_store)
 
 
 async def test_adk_delete_session_cascade_contract(adk_store_case: AdkStoreCaseContext) -> None:
