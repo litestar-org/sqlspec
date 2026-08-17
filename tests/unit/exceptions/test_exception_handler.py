@@ -78,7 +78,7 @@ async def test_async_exception_runner_preserves_async_only_mapping() -> None:
     mapped = UniqueViolationError("mapped")
     handler = _AsyncOnlyExceptionHandler(mapped=mapped)
 
-    async def operation() -> None:
+    async def operation() -> str:
         raise RuntimeError("adapter")
 
     result = await _run_with_async_exception_handler(handler, operation)
