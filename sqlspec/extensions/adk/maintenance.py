@@ -1,8 +1,8 @@
 """Retention helpers for ADK stores.
 
-Standalone functions to prune aged sessions, purge expired events, and sweep
-scoped memories, decoupled from any framework worker so retention can run from
-a cron job, a CLI, or a task queue.
+Standalone functions to prune aged sessions, purge expired events, sweep scoped
+memories, and prune aged artifact versions, decoupled from any framework worker
+so retention can run from a cron job, a CLI, or a task queue.
 
 Storage-level upkeep such as vacuuming, checkpointing, or refreshing optimizer
 statistics is deliberately out of scope. Those are operator decisions that need
@@ -21,6 +21,8 @@ from sqlspec.utils.sync_tools import await_
 
 __all__ = (
     "PruneReport",
+    "prune_artifacts",
+    "prune_artifacts_sync",
     "prune_events",
     "prune_events_sync",
     "prune_memory",
@@ -60,6 +62,46 @@ def _resolve_memory_store(target: Any) -> Any:
         return store_cls(target)
     msg = f"Cannot resolve ADK memory store from target of type {type(target).__name__}"
     raise TypeError(msg)
+
+
+def _resolve_artifact_service(target: Any) -> Any:
+    """Resolve a storage-aware ADK artifact service instance from target.
+
+    Args:
+        target: Candidate artifact service.
+
+    Returns:
+        The artifact service.
+
+    Raises:
+        TypeError: If target does not expose both the retention method and its metadata store.
+    """
+    if hasattr(target, "delete_artifacts_older_than") and hasattr(target, "store"):
+        return target
+    msg = (
+        f"Cannot resolve ADK artifact service from target of type {type(target).__name__}. "
+        "Artifact pruning removes content objects as well as metadata rows, so it requires a "
+        "storage-aware artifact service rather than a database config or a bare metadata store."
+    )
+    raise TypeError(msg)
+
+
+def _ensure_positive_days(older_than_days: Any) -> int:
+    """Validate a retention age expressed in whole days.
+
+    Args:
+        older_than_days: Candidate age value.
+
+    Returns:
+        The validated age in days.
+
+    Raises:
+        ValueError: If the value is not a positive built-in integer.
+    """
+    if type(older_than_days) is not int or older_than_days <= 0:
+        msg = f"older_than_days must be a positive integer, got {older_than_days!r}"
+        raise ValueError(msg)
+    return older_than_days
 
 
 async def _call_store_method(store: Any, method_name: str, *args: Any, **kwargs: Any) -> int:
@@ -162,7 +204,36 @@ async def prune_user_state(target: Any, *, idle_days: int = 180, app_name: str |
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
 
 
+async def prune_artifacts(target: Any, *, older_than_days: int = 90, app_name: str | None = None) -> PruneReport:
+    """Prune artifact versions created more than the specified number of days ago.
+
+    Metadata rows are deleted first, then the content objects they referenced are
+    removed on a best-effort basis. ``deleted_count`` is the number of artifact
+    version rows deleted, not the number of distinct filenames. Content deletions
+    that fail are logged per canonical URI and version by the service; rerunning
+    this helper cannot retry them because their metadata is already gone.
+
+    Args:
+        target: SQLSpecArtifactService instance. A database config or bare
+            metadata store is rejected because it lacks storage context.
+        older_than_days: Number of days of artifact versions to retain.
+        app_name: Optional application name to limit pruning.
+
+    Returns:
+        PruneReport containing deleted version-row count and timing.
+    """
+    retention_days = _ensure_positive_days(older_than_days)
+    start = time.perf_counter()
+    service = _resolve_artifact_service(target)
+    table_name = getattr(service.store, "artifact_table", "adk_artifact")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    deleted = await _call_store_method(service, "delete_artifacts_older_than", cutoff, app_name=app_name)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
+
+
 prune_sessions_sync = await_(prune_sessions)
 prune_events_sync = await_(prune_events)
 prune_memory_sync = await_(prune_memory)
 prune_user_state_sync = await_(prune_user_state)
+prune_artifacts_sync = await_(prune_artifacts)

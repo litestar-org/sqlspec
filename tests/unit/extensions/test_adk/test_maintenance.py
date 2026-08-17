@@ -1,9 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.extensions.adk.maintenance import (
+    prune_artifacts,
+    prune_artifacts_sync,
     prune_events,
     prune_events_sync,
     prune_memory,
@@ -53,6 +56,26 @@ class MockSyncMemoryStore:
     def __init__(self) -> None:
         self.memory_table = "adk_memory"
         self.delete_entries_older_than = MagicMock(return_value=9)
+
+
+class MockArtifactStore:
+    """Mock ADK artifact metadata store."""
+
+    def __init__(self) -> None:
+        self.artifact_table = "adk_artifact"
+        self.delete_artifacts_older_than = AsyncMock(return_value=6)
+
+
+class MockArtifactService:
+    """Mock storage-aware ADK artifact service."""
+
+    def __init__(self) -> None:
+        self.store = MockArtifactStore()
+        self.delete_artifacts_older_than = AsyncMock(return_value=6)
+
+
+def _elapsed_days(cutoff: datetime) -> float:
+    return (datetime.now(timezone.utc) - cutoff).total_seconds() / 86400.0
 
 
 async def test_prune_sessions_async() -> None:
@@ -136,6 +159,94 @@ def test_prune_user_state_sync() -> None:
     store.delete_idle_user_states.assert_called_once()
     assert isinstance(store.delete_idle_user_states.call_args[0][0], datetime)
     assert store.delete_idle_user_states.call_args.kwargs["app_name"] == "app1"
+
+
+async def test_prune_artifacts_defaults_to_ninety_day_utc_cutoff() -> None:
+    service = MockArtifactService()
+
+    report = await prune_artifacts(service)
+
+    assert report["deleted_count"] == 6
+    assert report["table"] == "adk_artifact"
+    assert report["elapsed_ms"] >= 0.0
+    service.delete_artifacts_older_than.assert_awaited_once()
+    cutoff = service.delete_artifacts_older_than.call_args[0][0]
+    assert cutoff.tzinfo is not None
+    assert cutoff.utcoffset() == timedelta(0)
+    assert _elapsed_days(cutoff) == pytest.approx(90.0, abs=0.01)
+    assert service.delete_artifacts_older_than.call_args.kwargs["app_name"] is None
+
+
+async def test_prune_artifacts_forwards_explicit_age_and_app_name() -> None:
+    service = MockArtifactService()
+
+    report = await prune_artifacts(service, older_than_days=7, app_name="agent_app")
+
+    assert report["deleted_count"] == 6
+    cutoff = service.delete_artifacts_older_than.call_args[0][0]
+    assert _elapsed_days(cutoff) == pytest.approx(7.0, abs=0.01)
+    assert service.delete_artifacts_older_than.call_args.kwargs["app_name"] == "agent_app"
+
+
+def test_prune_artifacts_sync_matches_async_report() -> None:
+    service = MockArtifactService()
+
+    report = prune_artifacts_sync(service, older_than_days=30, app_name="agent_app")
+
+    assert report["deleted_count"] == 6
+    assert report["table"] == "adk_artifact"
+    assert report["elapsed_ms"] >= 0.0
+    cutoff = service.delete_artifacts_older_than.call_args[0][0]
+    assert _elapsed_days(cutoff) == pytest.approx(30.0, abs=0.01)
+    assert service.delete_artifacts_older_than.call_args.kwargs["app_name"] == "agent_app"
+
+
+def test_prune_artifacts_rejects_bare_metadata_store() -> None:
+    store = MockArtifactStore()
+
+    with pytest.raises(TypeError, match="Cannot resolve ADK artifact service"):
+        prune_artifacts_sync(store)
+
+    store.delete_artifacts_older_than.assert_not_called()
+
+
+def test_prune_artifacts_rejects_bare_config() -> None:
+    with pytest.raises(TypeError, match="Cannot resolve ADK artifact service"):
+        prune_artifacts_sync("invalid_target_string")
+
+
+@pytest.mark.parametrize(
+    "older_than_days",
+    [
+        pytest.param(True, id="true"),
+        pytest.param(False, id="false"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(1.5, id="float"),
+        pytest.param("30", id="string"),
+        pytest.param(None, id="none"),
+    ],
+)
+def test_prune_artifacts_rejects_invalid_age(older_than_days: Any) -> None:
+    service = MockArtifactService()
+
+    with pytest.raises(ValueError, match="older_than_days must be a positive integer"):
+        prune_artifacts_sync(service, older_than_days=older_than_days)
+
+    service.delete_artifacts_older_than.assert_not_called()
+
+
+def test_prune_artifacts_rejects_invalid_age_before_target_resolution() -> None:
+    with pytest.raises(ValueError, match="older_than_days must be a positive integer"):
+        prune_artifacts_sync("invalid_target_string", older_than_days=0)
+
+
+def test_artifact_prune_helpers_are_publicly_exported() -> None:
+    import sqlspec.extensions.adk as adk
+
+    assert adk.prune_artifacts is prune_artifacts
+    assert adk.prune_artifacts_sync is prune_artifacts_sync
+    assert {"prune_artifacts", "prune_artifacts_sync"}.issubset(adk.__all__)
 
 
 def test_invalid_target_resolution() -> None:

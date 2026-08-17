@@ -31,6 +31,8 @@ from sqlspec.extensions.adk.artifact import (
 )
 from sqlspec.extensions.adk.maintenance import (
     PruneReport,
+    prune_artifacts,
+    prune_artifacts_sync,
     prune_events,
     prune_events_sync,
     prune_memory,
@@ -67,6 +69,8 @@ __all__ = (
     "StoredEvent",
     "StoredMemory",
     "StoredSession",
+    "prune_artifacts",
+    "prune_artifacts_sync",
     "prune_events",
     "prune_events_sync",
     "prune_memory",
