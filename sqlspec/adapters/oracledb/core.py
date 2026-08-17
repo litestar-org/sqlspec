@@ -43,7 +43,7 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_readable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
     from sqlspec.adapters.oracledb._typing import (
         OracleAsyncConnection,
@@ -154,7 +154,7 @@ def _resolve_oracledb_version() -> "tuple[int, int, int]":
         version = oracledb.__version__
     except AttributeError:
         version = "0.0.0"
-    return _parse_version_tuple(version)
+    return _parse_version_tuple(str(version))
 
 
 ORACLEDB_VERSION: "tuple[int, int, int]" = _resolve_oracledb_version()
@@ -718,34 +718,34 @@ class OracleAsyncStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
-            cursor = self._driver.connection.cursor()
-            self._cursor = cursor
-            cursor.arraysize = self._chunk_size
-            cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
-            if self._fetch_lobs is not None:
-                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-            parameters = await coerce_large_parameters_async(
-                self._driver.connection,
-                self._parameters,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=getattr(self._driver, "_oracle_version_cache", None),
-            )
-            await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    async def _start(self) -> None:
+        cursor = self._driver.connection.cursor()
+        self._cursor = cursor
+        cursor.arraysize = self._chunk_size
+        cursor.prefetchrows = self._chunk_size
+        fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+        if self._fetch_lobs is not None:
+            fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+        parameters = await coerce_large_parameters_async(
+            self._driver.connection,
+            self._parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=getattr(self._driver, "_oracle_version_cache", None),
+        )
+        await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         cursor = self._cursor
         if cursor is None:
             return []
-        rows: list[Any] = []
-        async with handler:
-            rows = await cursor.fetchmany(self._chunk_size)
+        rows = await self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -951,6 +951,14 @@ class _OracleAsyncStreamDriver(Protocol):
     def handle_database_exceptions(self) -> "AsyncExceptionHandler": ...
 
     def _check_pending_exception(self, exc_handler: "AsyncExceptionHandler") -> None: ...
+
+    async def _run_with_exception_handler(
+        self,
+        exc_handler: "AsyncExceptionHandler",
+        operation: "Callable[..., Awaitable[Any]]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any: ...
 
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 

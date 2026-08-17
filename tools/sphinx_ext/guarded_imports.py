@@ -12,13 +12,23 @@ _AUTODOC_TYPEHINTS_LOGGER = "sphinx.sphinx_autodoc_typehints"
 
 
 class AutodocTypehintsGuardedImportFilter(Filter):
-    """Suppress known optional-driver type aliases that exist only in stubs."""
+    """Suppress known optional-driver annotations unavailable at runtime."""
 
     def filter(self, record: LogRecord) -> bool:
         message = record.getMessage()
-        return not (
-            "Failed guarded type import" in message and "QueryParams" in message and "pymssql._pymssql" in message
-        )
+        if "Failed guarded type import" in message:
+            return not (
+                ("QueryParams" in message and "pymssql._pymssql" in message)
+                or ("oracledb.__version__" in message and "str object expected" in message)
+            )
+        if "Cannot resolve forward reference" in message:
+            return not (
+                "sqlspec.adapters.oracledb.data_dictionary.Oracledb" in message
+                and any(
+                    type_name in message for type_name in ("DialectConfig", "OracleAsyncDriver", "OracleSyncDriver")
+                )
+            )
+        return True
 
 
 def setup(app: Sphinx) -> dict[str, bool]:

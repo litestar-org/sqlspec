@@ -219,26 +219,26 @@ class PsqlpyStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
-            transaction = self._driver.connection.transaction()
-            await transaction.begin()
-            self._transaction = transaction
-            try:
-                cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
-                await cursor.start()
-                self._cursor = cursor
-            except BaseException:
-                self._transaction = None
-                with contextlib.suppress(Exception):
-                    await transaction.rollback()
-                raise
+        await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    async def _start(self) -> None:
+        transaction = self._driver.connection.transaction()
+        await transaction.begin()
+        self._transaction = transaction
+        try:
+            cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+            await cursor.start()
+            self._cursor = cursor
+        except BaseException:
+            self._transaction = None
+            with contextlib.suppress(Exception):
+                await transaction.rollback()
+            raise
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        query_result: Any = None
-        async with handler:
-            query_result = await self._cursor.fetchmany(self._chunk_size)
+        query_result = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if query_result is None:
             return []

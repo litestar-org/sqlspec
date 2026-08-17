@@ -277,18 +277,18 @@ class MysqlConnectorAsyncStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
-            cursor = await self._driver.connection.cursor(**self._cursor_options)
-            self._cursor = cursor
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    async def _start(self) -> None:
+        cursor = await self._driver.connection.cursor(**self._cursor_options)
+        self._cursor = cursor
+        await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+        self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        async with handler:
-            rows = await self._cursor.fetchmany(self._chunk_size)
+        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []

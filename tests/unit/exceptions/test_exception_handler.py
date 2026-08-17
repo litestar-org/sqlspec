@@ -1,10 +1,37 @@
 # pyright: reportPrivateUsage=false
 """Tests for shared exception handler bases and representative adapter handlers."""
 
+from types import TracebackType
+
 import pytest
+from typing_extensions import Self
 
 from sqlspec.driver import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
-from sqlspec.exceptions import SerializationConflictError
+from sqlspec.driver._exception_handler import _run_with_async_exception_handler
+from sqlspec.exceptions import SerializationConflictError, UniqueViolationError
+
+
+class _AsyncOnlyExceptionHandler:
+    """Async-only custom handler used to lock the extension contract."""
+
+    def __init__(self, *, mapped: Exception | None = None, suppress: bool = False) -> None:
+        self.pending_exception: Exception | None = None
+        self._mapped = mapped
+        self._suppress = suppress
+        self.events: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        self.events.append("enter")
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> bool:
+        self.events.append("exit")
+        if exc_val is not None and self._mapped is not None:
+            self.pending_exception = self._mapped
+            return True
+        return self._suppress
 
 
 def test_base_sync_exception_handler_defaults_to_passthrough() -> None:
@@ -26,6 +53,55 @@ async def test_base_async_exception_handler_defaults_to_passthrough() -> None:
     assert handler.pending_exception is None
     assert await handler.__aexit__(None, None, None) is False
     assert handler.pending_exception is None
+
+
+@pytest.mark.anyio
+async def test_async_exception_runner_ignores_ambient_exception() -> None:
+    """A successful operation should not re-raise the exception being handled by its caller."""
+    handler = _AsyncOnlyExceptionHandler()
+
+    async def operation() -> str:
+        return "ok"
+
+    try:
+        raise ValueError("ambient")
+    except ValueError:
+        result = await _run_with_async_exception_handler(handler, operation)
+
+    assert result == "ok"
+    assert handler.events == ["enter", "exit"]
+
+
+@pytest.mark.anyio
+async def test_async_exception_runner_preserves_async_only_mapping() -> None:
+    """An async-only custom handler should still be able to defer a mapped exception."""
+    mapped = UniqueViolationError("mapped")
+    handler = _AsyncOnlyExceptionHandler(mapped=mapped)
+
+    async def operation() -> None:
+        raise RuntimeError("adapter")
+
+    result = await _run_with_async_exception_handler(handler, operation)
+
+    assert result is None
+    assert handler.pending_exception is mapped
+    assert handler.events == ["enter", "exit"]
+
+
+@pytest.mark.anyio
+async def test_async_exception_runner_preserves_passthrough_identity() -> None:
+    """An unsuppressed operation error should retain its identity and traceback."""
+    handler = _AsyncOnlyExceptionHandler()
+    error = RuntimeError("adapter")
+
+    async def operation() -> None:
+        raise error
+
+    with pytest.raises(RuntimeError, match="adapter") as exc_info:
+        await _run_with_async_exception_handler(handler, operation)
+
+    assert exc_info.value is error
+    assert handler.events == ["enter", "exit"]
 
 
 def test_sync_exception_handlers_inherit_shared_base() -> None:
