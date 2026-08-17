@@ -18,6 +18,8 @@ from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.artifact._types import StoredArtifact
 
@@ -173,6 +175,29 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     async def create_table(self) -> None:
         """Create the artifact versions table if it does not exist."""
 
+    async def delete_artifacts_older_than(
+        self, before: "datetime", app_name: "str | None" = None
+    ) -> "list[StoredArtifact]":
+        """Delete artifact version rows created before a cutoff and return them.
+
+        Implementations delete and return the affected version rows in a single
+        atomic operation where the database supports it, ordered deterministically
+        so cleanup logs stay reproducible. The caller uses the returned records to
+        remove content from object storage.
+
+        Args:
+            before: Timezone-aware UTC cutoff; rows created strictly before it are deleted.
+            app_name: Application name to limit the deletion, or None for every application.
+
+        Returns:
+            List of deleted artifact records (needed for content cleanup).
+
+        Raises:
+            NotImplementedError: If the store does not implement artifact retention.
+        """
+        msg = f"{type(self).__name__} does not support artifact retention pruning"
+        raise NotImplementedError(msg)
+
     async def ensure_table(self) -> None:
         """Create the artifact table and emit a standardized log entry."""
         await self.create_table()
@@ -285,6 +310,27 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     @abstractmethod
     def create_table(self) -> None:
         """Create the artifact versions table if it does not exist."""
+
+    def delete_artifacts_older_than(self, before: "datetime", app_name: "str | None" = None) -> "list[StoredArtifact]":
+        """Delete artifact version rows created before a cutoff and return them.
+
+        Implementations delete and return the affected version rows in a single
+        atomic operation where the database supports it, ordered deterministically
+        so cleanup logs stay reproducible. The caller uses the returned records to
+        remove content from object storage.
+
+        Args:
+            before: Timezone-aware UTC cutoff; rows created strictly before it are deleted.
+            app_name: Application name to limit the deletion, or None for every application.
+
+        Returns:
+            List of deleted artifact records (needed for content cleanup).
+
+        Raises:
+            NotImplementedError: If the store does not implement artifact retention.
+        """
+        msg = f"{type(self).__name__} does not support artifact retention pruning"
+        raise NotImplementedError(msg)
 
     def ensure_table(self) -> None:
         """Create the artifact table and emit a standardized log entry."""
