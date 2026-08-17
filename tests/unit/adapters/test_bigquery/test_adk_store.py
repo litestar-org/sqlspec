@@ -213,3 +213,84 @@ def test_bigquery_adk_create_session_includes_owner_column_when_configured(monke
     assert any(
         getattr(param, "name", "") == "owner_id" and getattr(param, "value", None) == "tenant-1" for param in params
     )
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _capture_session_list(monkeypatch: Any, store: BigQueryADKStore) -> "list[tuple[str, list[Any]]]":
+    calls: list[tuple[str, list[Any]]] = []
+
+    def capture(_store: BigQueryADKStore, sql: str, parameters: Any = None) -> "list[dict[str, Any]]":
+        calls.append((sql, list(parameters or [])))
+        return []
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+    return calls
+
+
+def test_bigquery_list_sessions_binds_order_and_page(monkeypatch: Any) -> None:
+    """Explicit ordering renders inline while page bounds bind as named INT64 parameters."""
+    store = _make_store()
+    calls = _capture_session_list(monkeypatch, store)
+
+    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, parameters = calls[0]
+    assert _normalized(sql).endswith("ORDER BY create_time ASC, id ASC LIMIT @limit OFFSET @offset")
+    assert [(p.name, p.type_, p.value) for p in parameters[-2:]] == [("limit", "INT64", 10), ("offset", "INT64", 20)]
+
+
+def test_bigquery_list_sessions_defaults_to_recent_first_without_a_page(monkeypatch: Any) -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store = _make_store()
+    calls = _capture_session_list(monkeypatch, store)
+
+    store.list_sessions("app")
+
+    sql, parameters = calls[0]
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC")
+    assert [p.name for p in parameters] == ["app_name", "window_start"]
+
+
+def test_bigquery_list_sessions_composes_user_filter_with_a_page(monkeypatch: Any) -> None:
+    """User filtering precedes the bound page values."""
+    store = _make_store()
+    calls = _capture_session_list(monkeypatch, store)
+
+    store.list_sessions("app", "u1", limit=5)
+
+    sql, parameters = calls[0]
+    assert "AND user_id = @user_id" in sql
+    assert [p.name for p in parameters] == ["app_name", "window_start", "user_id", "limit", "offset"]
+    assert [p.value for p in parameters[-2:]] == [5, 0]
+
+
+def test_bigquery_list_sessions_zero_limit_never_queries(monkeypatch: Any) -> None:
+    """A zero limit short-circuits before any query is issued."""
+    store = _make_store()
+    calls = _capture_session_list(monkeypatch, store)
+
+    assert store.list_sessions("app", limit=0) == []
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_bigquery_list_sessions_rejects_invalid_options(monkeypatch: Any, options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a query is issued."""
+    store = _make_store()
+    calls = _capture_session_list(monkeypatch, store)
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)
+
+    assert calls == []
