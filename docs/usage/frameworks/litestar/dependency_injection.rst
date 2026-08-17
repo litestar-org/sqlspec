@@ -99,6 +99,59 @@ sync DuckDB for ETL operations:
        plugins=[SQLSpecPlugin(sqlspec=sqlspec)]  # Single plugin handles all configs
    )
 
+Config Lookup Outside App Construction
+--------------------------------------
+
+``SQLSpecPlugin.get_config()`` accepts two kinds of identifier, and they become
+available at different points in the application lifecycle:
+
+- **Registry identities** - a config instance, its concrete config type, or its
+  ``bind_key``. These exist as soon as the plugin is constructed, so composition
+  roots, CLI commands, and background workers can resolve a config without building
+  a Litestar application first.
+- **Litestar dependency identities** - ``session_key``, ``connection_key``, and
+  ``pool_key``. These name dependency providers generated during plugin
+  registration, so they resolve only after the plugin has been added to a
+  ``Litestar`` application.
+
+.. code-block:: python
+
+   from litestar import Litestar
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.extensions.litestar import SQLSpecPlugin
+
+   sqlspec = SQLSpec()
+   sqlspec.add_config(
+       AsyncpgConfig(
+           bind_key="primary",
+           connection_config={
+               "host": "localhost",
+               "port": 5432,
+               "database": "app",
+               "user": "app",
+               "password": "secret",
+           },
+       )
+   )
+
+   plugin = SQLSpecPlugin(sqlspec=sqlspec)
+
+   # Registry identity: resolves before the app exists
+   primary = plugin.get_config("primary")
+
+   app = Litestar(route_handlers=[], plugins=[plugin])
+
+   # Dependency identity: resolves only after registration
+   session_config = plugin.get_config("db_session")
+
+Give each database a distinct ``bind_key`` when several share the same config class.
+A config type resolves only when exactly one configuration uses it; a repeated type
+raises ``KeyError`` listing the candidate bind keys so you can pick the right one.
+A ``bind_key`` takes precedence over a dependency key of the same value in
+``get_config()``, while the request-scoped accessors always read strings as
+dependency keys.
+
 Advanced DuckDB Configuration
 -----------------------------
 
