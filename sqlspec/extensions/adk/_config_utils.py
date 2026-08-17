@@ -15,10 +15,12 @@ __all__ = (
     "_adk_adapter_store_class",
     "_adk_artifact_store_config",
     "_adk_config_from_extension",
+    "_adk_feature_enabled",
     "_adk_memory_migration_enabled",
     "_adk_memory_migration_store_class",
     "_adk_memory_store_config",
     "_adk_session_store_config",
+    "_adk_sessions_migration_enabled",
     "_ensure_adk_store_registration",
 )
 
@@ -186,21 +188,31 @@ def _adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
     return getattr(module, store_names[0]) if len(store_names) == 1 else None
 
 
+def _adk_feature_enabled(config: Any, feature_key: str) -> bool:
+    """Return whether an ADK feature flag enables its store and DDL."""
+
+    adk_config = _adk_config_from_extension(cast("_ADKConfigSource", config))
+    enabled = adk_config.get(feature_key)
+    return bool(enabled) if enabled is not None else True
+
+
+def _adk_sessions_migration_enabled(config: Any) -> bool:
+    """Return whether ADK session DDL should be included for this config."""
+
+    return _adk_feature_enabled(config, "enable_sessions")
+
+
 def _adk_memory_migration_enabled(config: Any) -> bool:
     """Return whether ADK memory DDL should be included for this config."""
 
-    adk_config = _adk_config_from_extension(cast("_ADKConfigSource", config))
-    include_memory = adk_config.get("include_memory_migration")
-    if include_memory is not None:
-        return bool(include_memory)
-    enable_memory = adk_config.get("enable_memory")
-    return bool(enable_memory) if enable_memory is not None else True
+    return _adk_feature_enabled(config, "enable_memory")
 
 
 def _ensure_adk_store_registration(config: Any) -> None:
     """Validate ADK store class resolution before extension migrations run."""
 
-    _adk_adapter_store_class(config, "ADKStore")
+    if _adk_sessions_migration_enabled(config):
+        _adk_adapter_store_class(config, "ADKStore")
     if _adk_memory_migration_enabled(config):
         _adk_adapter_store_class(config, "ADKMemoryStore")
 

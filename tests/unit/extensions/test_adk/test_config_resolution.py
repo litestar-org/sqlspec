@@ -2,14 +2,20 @@
 
 from typing import Any, cast
 
+import pytest
+
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.adk import _config_utils
 from sqlspec.extensions.adk._config_utils import (
     _adk_artifact_store_config,
     _adk_memory_migration_enabled,
     _adk_memory_store_config,
     _adk_session_store_config,
+    _adk_sessions_migration_enabled,
     _ADKSessionStoreConfig,
     _apply_owner_id,
+    _ensure_adk_store_registration,
 )
 
 
@@ -124,15 +130,59 @@ def test_flat_artifact_config_resolves_store_owned_table_only() -> None:
     assert resolved == {"artifact_table": "agent_artifacts"}
 
 
-def test_include_memory_migration_overrides_enable_memory() -> None:
-    config = _Config({"enable_memory": True, "include_memory_migration": False})
+def test_adk_config_has_no_separate_migration_include_flags() -> None:
+    """Migration inclusion is not configurable per feature."""
+    annotations = set(ADKConfig.__annotations__)
 
-    assert not _adk_memory_migration_enabled(config)
+    assert "include_sessions_migration" not in annotations
+    assert "include_memory_migration" not in annotations
 
 
-def test_include_memory_migration_defaults_to_enable_memory() -> None:
+def test_memory_migration_gate_follows_enable_memory() -> None:
     enabled = _Config({"enable_memory": True})
     disabled = _Config({"enable_memory": False})
+    defaulted = _Config({})
 
     assert _adk_memory_migration_enabled(enabled) is True
     assert _adk_memory_migration_enabled(disabled) is False
+    assert _adk_memory_migration_enabled(defaulted) is True
+
+
+def test_sessions_migration_gate_follows_enable_sessions() -> None:
+    enabled = _Config({"enable_sessions": True})
+    disabled = _Config({"enable_sessions": False})
+    defaulted = _Config({})
+
+    assert _adk_sessions_migration_enabled(enabled) is True
+    assert _adk_sessions_migration_enabled(disabled) is False
+    assert _adk_sessions_migration_enabled(defaulted) is True
+
+
+def test_retired_migration_include_keys_are_rejected() -> None:
+    """Adapter configs reject the removed include flags through normal validation."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    for retired_key in ("include_sessions_migration", "include_memory_migration"):
+        with pytest.raises(ImproperConfigurationError, match=retired_key):
+            SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {retired_key: False}})
+
+
+def test_store_registration_skips_disabled_feature_store_classes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disabled features do not require their adapter store class to exist."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"adk": {"enable_sessions": False, "enable_memory": True}},
+    )
+    resolved: list[str] = []
+
+    def record_store_class(config: Any, store_suffix: str) -> object:
+        resolved.append(store_suffix)
+        return object
+
+    monkeypatch.setattr(_config_utils, "_adk_adapter_store_class", record_store_class)
+
+    _ensure_adk_store_registration(config)
+
+    assert resolved == ["ADKMemoryStore"]
