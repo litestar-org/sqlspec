@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
+import pytest
 from psycopg.types.json import Jsonb
 from typing_extensions import NotRequired, Self
 
@@ -262,3 +263,122 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
     assert user_state_params[:2] == ("app", "user")
     assert getattr(user_state_params[2], "obj", None) == {"user:theme": "dark"}
     assert connection.commit_called
+
+
+class _AsyncDummyCursor(_DummyCursor):
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+    async def execute(self, query: Any, params: Any = None) -> None:  # type: ignore[override]
+        _DummyCursor.execute(self, query, params)
+
+    async def fetchall(self) -> "list[dict[str, Any]]":  # type: ignore[override]
+        return self._rows
+
+
+class _AsyncDummyConnection(_DummyConnection):
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+
+def _rendered(query: Any) -> str:
+    return " ".join(query.as_string(None).split())
+
+
+def _async_session_store() -> "tuple[PsycopgAsyncADKStore, _AsyncDummyCursor]":
+    cursor = _AsyncDummyCursor()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: _AsyncDummyConnection(cursor)
+    return PsycopgAsyncADKStore(config), cursor
+
+
+def _sync_session_store() -> "tuple[PsycopgSyncADKStore, _DummyCursor]":
+    cursor = _DummyCursor()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: _DummyConnection(cursor)
+    return PsycopgSyncADKStore(config), cursor
+
+
+async def test_psycopg_async_list_sessions_binds_order_and_page() -> None:
+    """Explicit ordering renders inline while page bounds bind as pyformat parameters."""
+    store, cursor = _async_session_store()
+
+    await store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    query, params = cursor.execute_calls[0]
+    assert _rendered(query) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        'FROM "adk_session" WHERE app_name = %s AND user_id = %s '
+        "ORDER BY create_time ASC, id ASC LIMIT %s OFFSET %s"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+def test_psycopg_sync_list_sessions_binds_order_and_page() -> None:
+    """The sync path produces the same bounded query as the async path."""
+    store, cursor = _sync_session_store()
+
+    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    query, params = cursor.execute_calls[0]
+    assert _rendered(query) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        'FROM "adk_session" WHERE app_name = %s AND user_id = %s '
+        "ORDER BY create_time ASC, id ASC LIMIT %s OFFSET %s"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+async def test_psycopg_async_list_sessions_defaults_to_recent_first() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store, cursor = _async_session_store()
+
+    await store.list_sessions("app")
+
+    query, params = cursor.execute_calls[0]
+    assert _rendered(query).endswith("WHERE app_name = %s ORDER BY update_time DESC, id DESC")
+    assert params == ("app",)
+
+
+def test_psycopg_sync_list_sessions_orders_page_after_scope_parameters() -> None:
+    """Page placeholders follow the scope parameters that are actually present."""
+    store, cursor = _sync_session_store()
+
+    store.list_sessions("app", limit=5)
+
+    query, params = cursor.execute_calls[0]
+    assert _rendered(query).endswith("ORDER BY update_time DESC, id DESC LIMIT %s OFFSET %s")
+    assert params == ("app", 5, 0)
+
+
+def test_psycopg_sync_list_sessions_zero_limit_never_queries() -> None:
+    """A zero limit short-circuits before any database work."""
+    store, cursor = _sync_session_store()
+
+    assert store.list_sessions("app", limit=0) == []
+    assert cursor.execute_calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_psycopg_sync_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store, cursor = _sync_session_store()
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)
+
+    assert cursor.execute_calls == []

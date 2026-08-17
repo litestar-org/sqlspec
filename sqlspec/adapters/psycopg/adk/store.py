@@ -1,6 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 from psycopg import errors
 from psycopg import sql as pg_sql
@@ -9,7 +9,13 @@ from psycopg.types.json import Jsonb
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import (
+    BaseAsyncADKStore,
+    BaseSyncADKStore,
+    StoredEvent,
+    StoredSession,
+    normalize_session_list_options,
+)
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 
@@ -18,7 +24,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
 __all__ = (
@@ -31,6 +37,13 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
 
+
+SESSION_ORDER_CLAUSES: Final = {
+    "create_time ASC, id ASC": pg_sql.SQL("create_time ASC, id ASC"),
+    "create_time DESC, id DESC": pg_sql.SQL("create_time DESC, id DESC"),
+    "update_time ASC, id ASC": pg_sql.SQL("update_time ASC, id ASC"),
+    "update_time DESC, id DESC": pg_sql.SQL("update_time DESC, id DESC"),
+}
 
 _ADK_SESSIONS_TABLE_DDL_TEMPLATE = ",\n            {0}"
 
@@ -281,23 +294,23 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
-        if user_id is None:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s
-            ORDER BY update_time DESC
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params: tuple[str, ...] = (app_name,)
-        else:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s AND user_id = %s
-            ORDER BY update_time DESC
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params = (app_name, user_id)
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        query, params = _session_list_query(
+            self._session_table, app_name, user_id, order_clause, page_limit, page_offset
+        )
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -787,24 +800,24 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app."""
-        if user_id is None:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s
-            ORDER BY update_time DESC
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params: tuple[str, ...] = (app_name,)
-        else:
-            query = pg_sql.SQL("""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {table}
-            WHERE app_name = %s AND user_id = %s
-            ORDER BY update_time DESC
-            """).format(table=pg_sql.Identifier(self._session_table))
-            params = (app_name, user_id)
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        query, params = _session_list_query(
+            self._session_table, app_name, user_id, order_clause, page_limit, page_offset
+        )
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -1915,3 +1928,32 @@ def _build_psycopg_scope_where(
         return where, (app_name, user_id)
     where = pg_sql.SQL("app_name = %s AND scope = 'app'")
     return where, (app_name,)
+
+
+def _session_list_query(
+    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+) -> "tuple[pg_sql.Composed, tuple[Any, ...]]":
+    """Return the bounded session-list query and its bound values."""
+    params: list[Any] = [app_name]
+    user_filter = pg_sql.SQL("")
+    if user_id is not None:
+        params.append(user_id)
+        user_filter = pg_sql.SQL(" AND user_id = %s")
+
+    page_clause = pg_sql.SQL("")
+    if limit is not None:
+        params.extend((limit, offset))
+        page_clause = pg_sql.SQL(" LIMIT %s OFFSET %s")
+
+    query = pg_sql.SQL("""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {table}
+    WHERE app_name = %s{user_filter}
+    ORDER BY {order}{page}
+    """).format(
+        table=pg_sql.Identifier(session_table),
+        user_filter=user_filter,
+        order=SESSION_ORDER_CLAUSES[order_clause],
+        page=page_clause,
+    )
+    return query, tuple(params)

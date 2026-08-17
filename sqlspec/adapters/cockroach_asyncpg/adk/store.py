@@ -6,7 +6,7 @@ import asyncpg
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
 __all__ = ("CockroachAsyncpgADKConfig", "CockroachAsyncpgADKMemoryStore", "CockroachAsyncpgADKStore")
@@ -155,23 +155,40 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, state, app_name, user_id, session_id)
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = $1
-            ORDER BY update_time DESC
-            """
-            params: tuple[Any, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = $1 AND user_id = $2
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        values: list[Any] = [app_name]
+        where_clause = "app_name = $1"
+        if user_id is not None:
+            values.append(user_id)
+            where_clause = f"{where_clause} AND user_id = ${len(values)}"
+
+        page_clause = ""
+        if page_limit is not None:
+            values.append(page_limit)
+            limit_placeholder = f"${len(values)}"
+            values.append(page_offset)
+            page_clause = f"\n            LIMIT {limit_placeholder} OFFSET ${len(values)}"
+
+        sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE {where_clause}
+        ORDER BY {order_clause}{page_clause}
+        """
+        params: tuple[Any, ...] = tuple(values)
 
         try:
             async with self._config.provide_connection() as conn:

@@ -4,6 +4,7 @@
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
+import pytest
 from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKConfig, AsyncpgADKMemoryStore, AsyncpgADKStore
@@ -188,3 +189,81 @@ async def test_asyncpg_memory_search_embedding_only_orders_by_distance() -> None
     assert "ORDER BY embedding <=>" in sql
     assert "rrf_score" not in sql
     assert [0.5, 0.6] in params
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _session_store_with_connection() -> "tuple[AsyncpgADKStore, _RecordingConnection]":
+    conn = _RecordingConnection()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    return AsyncpgADKStore(config), conn
+
+
+async def test_asyncpg_list_sessions_binds_order_and_page() -> None:
+    """Explicit ordering renders inline while page bounds bind as numbered parameters."""
+    store, conn = _session_store_with_connection()
+
+    await store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = $1 AND user_id = $2 "
+        "ORDER BY create_time ASC, id ASC LIMIT $3 OFFSET $4"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+async def test_asyncpg_list_sessions_defaults_to_recent_first_without_a_page() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store, conn = _session_store_with_connection()
+
+    await store.list_sessions("app")
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = $1 ORDER BY update_time DESC, id DESC"
+    )
+    assert params == ("app",)
+
+
+async def test_asyncpg_list_sessions_numbers_page_placeholders_without_a_user_filter() -> None:
+    """Page placeholders follow the scope parameters that are actually present."""
+    store, conn = _session_store_with_connection()
+
+    await store.list_sessions("app", limit=5)
+
+    sql, params = conn.calls[0]
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC LIMIT $2 OFFSET $3")
+    assert params == ("app", 5, 0)
+
+
+async def test_asyncpg_list_sessions_zero_limit_never_opens_a_connection() -> None:
+    """A zero limit short-circuits before any database work."""
+    store, conn = _session_store_with_connection()
+
+    assert await store.list_sessions("app", limit=0) == []
+    assert conn.calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+async def test_asyncpg_list_sessions_rejects_invalid_options_before_connecting(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store, conn = _session_store_with_connection()
+
+    with pytest.raises(ValueError):
+        await store.list_sessions("app", **options)
+
+    assert conn.calls == []
