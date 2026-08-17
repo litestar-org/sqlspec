@@ -7,7 +7,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
+    from sqlspec.extensions.adk import SessionOrderBy
 else:
     ArrowOdbcConfig = Any
 
@@ -130,24 +131,22 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             commit=True,
         )
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List ADK sessions for an application, optionally scoped to a user."""
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {_table_ref(self._session_table)}
-            WHERE app_name = ?
-            ORDER BY update_time DESC
-            """
-            params: tuple[Any, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {_table_ref(self._session_table)}
-            WHERE app_name = ? AND user_id = ?
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        sql, params = _session_list_query(self._session_table, app_name, user_id, order_clause, page_limit, page_offset)
         try:
             rows = self._execute_fetchall(sql, params)
         except SQLSpecError as exc:
@@ -912,3 +911,27 @@ def _build_arrow_odbc_scope_where(
     if scope_filter == "user":
         return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
     return "app_name = ? AND scope = 'app'", (app_name,)
+
+
+def _session_list_query(
+    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+) -> "tuple[str, tuple[Any, ...]]":
+    """Return the bounded session-list query and its bound values."""
+    params: list[Any] = [app_name]
+    where_clause = "app_name = ?"
+    if user_id is not None:
+        params.append(user_id)
+        where_clause = f"{where_clause} AND user_id = ?"
+
+    page_clause = ""
+    if limit is not None:
+        params.extend((offset, limit))
+        page_clause = "\n            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+
+    sql = f"""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {_table_ref(session_table)}
+    WHERE {where_clause}
+    ORDER BY {order_clause}{page_clause}
+    """
+    return sql, tuple(params)
