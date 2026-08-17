@@ -9,7 +9,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.aiomysql.config import AiomysqlConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
 __all__ = ("AiomysqlADKConfig", "AiomysqlADKMemoryStore", "AiomysqlADKStore")
@@ -164,24 +164,22 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(sql, (to_json(state), app_name, user_id, session_id))
             await conn.commit()
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user."""
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = %s
-            ORDER BY update_time DESC
-            """
-            params: tuple[Any, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = %s AND user_id = %s
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
+        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        sql, params = _session_list_query(self._session_table, app_name, user_id, order_clause, page_limit, page_offset)
 
         try:
             async with (
@@ -953,3 +951,27 @@ def _build_mysql_scope_where(
     if scope_filter == "user":
         return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
     return "app_name = %s AND scope = 'app'", (app_name,)
+
+
+def _session_list_query(
+    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+) -> "tuple[str, tuple[Any, ...]]":
+    """Return the bounded session-list query and its bound values."""
+    params: list[Any] = [app_name]
+    where_clause = "app_name = %s"
+    if user_id is not None:
+        params.append(user_id)
+        where_clause = f"{where_clause} AND user_id = %s"
+
+    page_clause = ""
+    if limit is not None:
+        params.extend((limit, offset))
+        page_clause = "\n            LIMIT %s OFFSET %s"
+
+    sql = f"""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {session_table}
+    WHERE {where_clause}
+    ORDER BY {order_clause}{page_clause}
+    """
+    return sql, tuple(params)
