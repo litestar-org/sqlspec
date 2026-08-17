@@ -55,6 +55,46 @@ Events are persisted automatically when you use the session service with an
 ADK runner. Each call to ``append_event()`` atomically stores the event and
 updates the session's durable state via ``append_event_and_update_state()``.
 
+Listing Sessions
+----------------
+
+``SQLSpecSessionService.list_sessions()`` accepts optional ordering and paging
+arguments in addition to Google ADK's ``app_name`` and ``user_id``. They are a
+SQLSpec extension to ADK's narrower base signature, and the ordering and page
+bounds are applied in SQL rather than by trimming a fully materialized result.
+
+.. code-block:: python
+
+   # Most recently updated sessions for one user, 20 at a time
+   page = await session_service.list_sessions(
+       app_name="my_agent",
+       user_id="user_123",
+       limit=20,
+       offset=0,
+   )
+
+   # Oldest conversations first
+   oldest = await session_service.list_sessions(
+       app_name="my_agent",
+       user_id="user_123",
+       order_by="create_time",
+       descending=False,
+       limit=20,
+   )
+
+The contract is deliberately narrow:
+
+- The default is unchanged: ``update_time`` descending, with no page bounds.
+- ``order_by`` accepts only ``create_time`` or ``update_time``. No other value
+  and no raw SQL expression reaches a query.
+- ``id`` is applied as a secondary sort key in the same direction, so pages stay
+  deterministic when two sessions share a timestamp.
+- ``limit`` and ``offset`` accept non-negative integers. ``limit=0`` returns an
+  empty response without touching the database, and a positive ``offset``
+  requires a finite ``limit``.
+- The response is Google ADK's ``ListSessionsResponse``. It carries no total
+  count and no cursor token, so paginate by advancing ``offset`` yourself.
+
 Scoped State
 ------------
 
