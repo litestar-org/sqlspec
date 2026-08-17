@@ -117,6 +117,64 @@ the caller's polling cadence is respected.
 ``ack`` / ``nack`` semantics are unchanged. ``notify`` remains
 fire-and-forget; ``notify_queue`` acknowledges through the durable table queue.
 
+Notification payload budget
+---------------------------
+
+PostgreSQL rejects a ``NOTIFY`` payload of 8,000 bytes or more, so SQLSpec
+publishes at most :data:`~sqlspec.extensions.events.POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES`
+(7,999) bytes. That budget covers the **complete encoded envelope** — the event
+ID, your payload mapping, your metadata mapping, and the publication timestamp —
+not just the payload you pass to ``publish()``. Sizes are counted in UTF-8
+bytes, so accented characters, emoji, and CJK text each consume more than one
+byte per character.
+
+Use :func:`~sqlspec.extensions.events.fits_notify_payload` to check a
+prospective event and :func:`~sqlspec.extensions.events.measure_notify_payload`
+to size chunks. Pass your own ``event_id`` when you do not let the backend
+generate the canonical UUID-hex identifier, so the measurement matches exactly
+what is published:
+
+.. code-block:: python
+
+   from sqlspec.extensions.events import (
+       POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+       fits_notify_payload,
+       measure_notify_payload,
+   )
+
+
+   def chunk_records(records, event_id, metadata=None):
+       """Split records into batches that fit one native notification."""
+       chunk = []
+       for record in records:
+           candidate = [*chunk, record]
+           if chunk and not fits_notify_payload({"records": candidate}, metadata, event_id=event_id):
+               yield chunk
+               chunk = [record]
+               continue
+           chunk = candidate
+       if chunk:
+           yield chunk
+
+
+   payload = {"records": [{"id": 1}]}
+   if not fits_notify_payload(payload, event_id="ingest-42"):
+       overflow = measure_notify_payload(payload, event_id="ingest-42") - POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES
+       raise ValueError(f"event is {overflow} bytes over the notification budget")
+
+Publishing an oversized event raises
+:class:`~sqlspec.exceptions.EventChannelError` before any database call, and the
+message reports both the measured and the maximum byte count.
+
+Large content does not belong in a notification. Write it to a durable table or
+object store and notify with a compact reference — a row ID, a batch ID, or an
+object key — that the consumer resolves after it wakes up. For ``notify_queue``,
+SQLSpec already does this: batch markers carry only ``marker_id`` and
+``batch_size``, and the durable queue rows remain the source of truth. A
+transient ``notify`` event is never durable regardless of its size, so a
+notification that fits the budget is still a best-effort wakeup and not a
+delivery guarantee.
+
 Batch publication and recovery
 ==============================
 
@@ -319,6 +377,12 @@ Protocols
 
 Payload Helpers
 ===============
+
+.. autodata:: sqlspec.extensions.events.POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES
+
+.. autofunction:: sqlspec.extensions.events.measure_notify_payload
+
+.. autofunction:: sqlspec.extensions.events.fits_notify_payload
 
 .. autofunction:: sqlspec.extensions.events.encode_notify_payload
 
