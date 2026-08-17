@@ -5,9 +5,12 @@ They are separate from the Pydantic models to keep mypyc compilation working.
 """
 
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
-__all__ = ("StoredEvent", "StoredSession")
+__all__ = ("SessionOrderBy", "StoredEvent", "StoredSession")
+
+SessionOrderBy = Literal["create_time", "update_time"]
+"""Timestamp column a session listing may be ordered by."""
 
 
 class StoredSession(TypedDict):

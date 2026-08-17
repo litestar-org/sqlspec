@@ -10,6 +10,7 @@ The store is mocked — no database required.
 """
 
 import importlib.util
+import inspect
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +26,7 @@ from google.adk.sessions.session import Session
 
 from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 from sqlspec.extensions.adk.service import SQLSpecSessionService
+from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
 # ---------------------------------------------------------------------------
 # Mock store
@@ -44,6 +46,7 @@ class MockStore:
         self.append_event_and_update_state_called = False
         self.get_session_calls = 0
         self.get_events_calls: list[dict[str, Any]] = []
+        self.list_sessions_calls: list[dict[str, Any]] = []
         self.upsert_app_state_calls: list[dict[str, Any]] = []
         self.upsert_user_state_calls: list[dict[str, Any]] = []
 
@@ -150,8 +153,25 @@ class MockStore:
         })
         return []
 
-    async def list_sessions(self, *, app_name: str, user_id: "str | None" = None) -> list:
-        return []
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: str = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> list:
+        self.list_sessions_calls.append({
+            "app_name": app_name,
+            "user_id": user_id,
+            "order_by": order_by,
+            "descending": descending,
+            "limit": limit,
+            "offset": offset,
+        })
+        return [self._session_record]
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         pass
@@ -696,3 +716,88 @@ async def test_create_session_sets_storage_update_marker() -> None:
     session = await service.create_session(app_name="app", user_id="u1")
 
     assert session._storage_update_marker is not None
+
+
+# ---------------------------------------------------------------------------
+# list_sessions — ordering and bounded pagination
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_sessions_forwards_explicit_order_and_page() -> None:
+    """Explicit ordering and page bounds reach the store unchanged."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    await service.list_sessions(
+        app_name="app", user_id="u1", order_by="create_time", descending=False, limit=25, offset=50
+    )
+
+    assert store.list_sessions_calls == [
+        {"app_name": "app", "user_id": "u1", "order_by": "create_time", "descending": False, "limit": 25, "offset": 50}
+    ]
+
+
+@pytest.mark.anyio
+async def test_list_sessions_forwards_recent_first_defaults() -> None:
+    """Omitting the options keeps the historical recent-first listing."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    await service.list_sessions(app_name="app")
+
+    assert store.list_sessions_calls == [
+        {"app_name": "app", "user_id": None, "order_by": "update_time", "descending": True, "limit": None, "offset": 0}
+    ]
+
+
+@pytest.mark.anyio
+async def test_list_sessions_zero_limit_skips_the_store() -> None:
+    """A zero limit answers with an empty response without any store call."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    response = await service.list_sessions(app_name="app", limit=0)
+
+    assert response.sessions == []
+    assert store.list_sessions_calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "state"}, id="unknown-order-column"),
+        pytest.param({"order_by": "update_time; DROP TABLE adk_session"}, id="injected-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"offset": -1, "limit": 5}, id="negative-offset"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": False, "limit": 5}, id="boolean-offset"),
+        pytest.param({"offset": 10}, id="unbounded-offset"),
+    ],
+)
+@pytest.mark.anyio
+async def test_list_sessions_rejects_invalid_options_before_store_io(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before the store is reached."""
+    store = MockStore()
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        await service.list_sessions(app_name="app", **options)
+
+    assert store.list_sessions_calls == []
+
+
+def test_service_and_store_contracts_share_session_list_options() -> None:
+    """The concrete service exposes the same list options as both store bases."""
+
+    def options(func: Any) -> "dict[str, Any]":
+        return {
+            name: (parameter.kind, parameter.default)
+            for name, parameter in inspect.signature(func).parameters.items()
+            if name in {"order_by", "descending", "limit", "offset"}
+        }
+
+    service_options = options(SQLSpecSessionService.list_sessions)
+
+    assert service_options == options(BaseAsyncADKStore.list_sessions)
+    assert service_options == options(BaseSyncADKStore.list_sessions)

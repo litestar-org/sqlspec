@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Tests for shared ADK store configuration behavior."""
 
+import inspect
 import logging
 from collections.abc import Sequence
 from datetime import datetime
@@ -8,13 +9,13 @@ from typing import Any, Literal
 
 import pytest
 
-from sqlspec.extensions.adk import StoredEvent, StoredSession
+from sqlspec.extensions.adk import SessionOrderBy, StoredEvent, StoredSession
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.extensions.adk.artifact.store import BaseSyncADKArtifactStore
 from sqlspec.extensions.adk.memory import StoredMemory
 from sqlspec.extensions.adk.memory import store as memory_store_module
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
-from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore, normalize_session_list_options
 
 
 class _Config:
@@ -51,7 +52,16 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         return None
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> list[StoredSession]:
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: str | None = None,
+        *,
+        order_by: SessionOrderBy = "update_time",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[StoredSession]:
         return []
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -172,7 +182,16 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         return None
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> list[StoredSession]:
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: str | None = None,
+        *,
+        order_by: SessionOrderBy = "update_time",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[StoredSession]:
         return []
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -422,3 +441,73 @@ def test_sync_memory_store_reset_drop_tables_uses_drop_sql() -> None:
         "DROP TABLE IF EXISTS adk_memory",
         "DROP TABLE IF EXISTS adk_memory_entries",
     ]
+
+
+def _session_list_options(func: Any) -> "dict[str, Any]":
+    signature = inspect.signature(func)
+    return {
+        name: (parameter.kind, parameter.default)
+        for name, parameter in signature.parameters.items()
+        if name in {"order_by", "descending", "limit", "offset"}
+    }
+
+
+def test_base_stores_declare_identical_session_list_options() -> None:
+    """Sync and async base contracts expose the same keyword-only list options."""
+    expected = {
+        "order_by": (inspect.Parameter.KEYWORD_ONLY, "update_time"),
+        "descending": (inspect.Parameter.KEYWORD_ONLY, True),
+        "limit": (inspect.Parameter.KEYWORD_ONLY, None),
+        "offset": (inspect.Parameter.KEYWORD_ONLY, None),
+    }
+
+    assert _session_list_options(BaseAsyncADKStore.list_sessions) == expected
+    assert _session_list_options(BaseSyncADKStore.list_sessions) == expected
+
+
+def test_session_list_options_default_to_recent_first() -> None:
+    """The default contract keeps the historical recent-first ordering."""
+    assert normalize_session_list_options() == ("update_time DESC, id DESC", None, 0)
+
+
+@pytest.mark.parametrize(
+    ("order_by", "descending", "expected_clause"),
+    [
+        ("update_time", True, "update_time DESC, id DESC"),
+        ("update_time", False, "update_time ASC, id ASC"),
+        ("create_time", True, "create_time DESC, id DESC"),
+        ("create_time", False, "create_time ASC, id ASC"),
+    ],
+)
+def test_session_order_clause_ties_break_on_id_in_the_same_direction(
+    order_by: SessionOrderBy, descending: bool, expected_clause: str
+) -> None:
+    """The id tie-break always follows the timestamp column's direction."""
+    clause, _, _ = normalize_session_list_options(order_by, descending)
+
+    assert clause == expected_clause
+
+
+def test_session_list_options_normalize_absent_offset_to_zero() -> None:
+    """A missing offset is equivalent to starting at the first row."""
+    assert normalize_session_list_options("update_time", True, 10, None) == ("update_time DESC, id DESC", 10, 0)
+
+
+@pytest.mark.parametrize(
+    ("order_by", "limit", "offset"),
+    [
+        ("state", None, None),
+        ("id", None, None),
+        ("update_time", -1, None),
+        ("update_time", 5, -1),
+        ("update_time", True, None),
+        ("update_time", 5, True),
+        ("update_time", None, 10),
+        ("update_time", "5", None),
+        ("update_time", 5, "10"),
+    ],
+)
+def test_session_list_options_reject_invalid_input(order_by: Any, limit: Any, offset: Any) -> None:
+    """Unsupported order columns and page bounds raise before any query is built."""
+    with pytest.raises(ValueError):
+        normalize_session_list_options(order_by, True, limit, offset)

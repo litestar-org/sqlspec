@@ -15,6 +15,7 @@ from sqlspec.extensions.adk.converters import (
     record_to_session,
     split_scoped_state,
 )
+from sqlspec.extensions.adk.store import normalize_session_list_options
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.uuids import uuid4
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     from google.adk.events.event import Event
     from google.adk.sessions import Session
 
+    from sqlspec.extensions.adk._types import SessionOrderBy
     from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
     ADKStore = BaseAsyncADKStore | BaseSyncADKStore
@@ -179,17 +181,53 @@ class SQLSpecSessionService(BaseSessionService):
             return {}
         return {key.removeprefix("user:") if key.startswith("user:") else key: value for key, value in state.items()}
 
-    async def list_sessions(self, *, app_name: str, user_id: str | None = None) -> "ListSessionsResponse":
-        """List all sessions for an app, optionally filtered by user.
+    async def list_sessions(
+        self,
+        *,
+        app_name: str,
+        user_id: "str | None" = None,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "ListSessionsResponse":
+        """List sessions for an app, optionally filtered by user.
+
+        Ordering and bounded pagination are a SQLSpec extension to Google ADK's
+        narrower base signature; the response model itself is unchanged and
+        carries neither a total count nor a cursor token.
 
         Args:
             app_name: Name of the application.
             user_id: ID of the user. If None, all sessions for the app are listed.
+            order_by: Timestamp column to sort on. Only ``create_time`` and
+                ``update_time`` are accepted.
+            descending: Sort direction applied to the timestamp column and the
+                ``id`` tie-break that keeps pages deterministic.
+            limit: Maximum number of sessions to return. ``0`` returns an empty
+                response without reaching the store.
+            offset: Number of leading rows to skip. Requires a finite limit
+                when positive.
 
         Returns:
             Response containing list of sessions (without events).
         """
-        records = await self._call_store("list_sessions", app_name, user_id=user_id)
+        _, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            log_with_context(
+                logger, logging.DEBUG, "adk.session.list", app_name=app_name, has_user_id=user_id is not None, count=0
+            )
+            return ListSessionsResponse(sessions=[])
+
+        records = await self._call_store(
+            "list_sessions",
+            app_name,
+            user_id=user_id,
+            order_by=order_by,
+            descending=descending,
+            limit=page_limit,
+            offset=page_offset,
+        )
 
         sessions = [record_to_session(record, events=[]) for record in records]
         log_with_context(
