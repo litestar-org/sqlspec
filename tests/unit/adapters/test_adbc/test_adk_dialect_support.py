@@ -200,3 +200,75 @@ def test_owner_id_column_snowflake() -> None:
 
     ddl = store._sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "account_id VARCHAR NOT NULL" in ddl
+
+
+def _store_for(driver_name: str) -> AdbcADKStore:
+    return AdbcADKStore(AdbcConfig(connection_config={"driver_name": driver_name, "uri": ":memory:"}))
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+@pytest.mark.parametrize("driver_name", ["postgresql", "sqlite", "duckdb", "snowflake"])
+def test_limit_offset_dialects_bind_a_row_limited_page(driver_name: str) -> None:
+    """PostgreSQL, SQLite, DuckDB, and Snowflake page with bound LIMIT/OFFSET."""
+    store = _store_for(driver_name)
+
+    sql, params = store._session_list_query("app", "u1", "create_time ASC, id ASC", 10, 20)  # pyright: ignore[reportPrivateUsage]
+
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = ? AND user_id = ? "
+        "ORDER BY create_time ASC, id ASC LIMIT ? OFFSET ?"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+def test_generic_dialect_pages_with_standard_offset_fetch() -> None:
+    """The generic branch uses SQL:2008 row-limiting with the offset bound first."""
+    store = _store_for("unknown_driver")
+
+    sql, params = store._session_list_query("app", None, "update_time DESC, id DESC", 10, 0)  # pyright: ignore[reportPrivateUsage]
+
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = ? "
+        "ORDER BY update_time DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    )
+    assert params == ("app", 0, 10)
+
+
+@pytest.mark.parametrize("driver_name", ["postgresql", "sqlite", "duckdb", "snowflake", "unknown_driver"])
+def test_every_dialect_omits_pagination_for_an_unbounded_listing(driver_name: str) -> None:
+    """Without a limit no dialect emits a row-limiting clause."""
+    store = _store_for(driver_name)
+
+    sql, params = store._session_list_query("app", None, "update_time DESC, id DESC", None, 0)  # pyright: ignore[reportPrivateUsage]
+
+    assert _normalized(sql).endswith("WHERE app_name = ? ORDER BY update_time DESC, id DESC")
+    assert params == ("app",)
+
+
+def test_list_sessions_zero_limit_returns_empty_without_a_query() -> None:
+    """A zero limit short-circuits before any database work."""
+    store = _store_for("sqlite")
+
+    assert store.list_sessions("app", limit=0) == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_list_sessions_rejects_invalid_options_before_connecting(options: "dict[str, object]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store = _store_for("sqlite")
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)  # type: ignore[arg-type]
