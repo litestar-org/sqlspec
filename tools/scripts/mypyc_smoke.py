@@ -266,6 +266,122 @@ print(f"{sys.argv[1]}:SQLSpecError")
     return result
 
 
+def _check_aiosqlite_ambient_exception(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise successful compiled async operations while handling another exception."""
+    result = _new_smoke_result(
+        name="aiosqlite_ambient_exception",
+        module="sqlspec.driver._async",
+        attribute="AsyncDriverAdapterBase",
+        compiled_required=require_compiled,
+    )
+    try:
+        async_driver_module = importlib.import_module("sqlspec.driver._async")
+        importlib.import_module("aiosqlite")
+    except ModuleNotFoundError as exc:
+        if _is_missing_optional_dependency(exc.name or "", "aiosqlite"):
+            result["skipped"] = True
+            result["skip_reason"] = "optional dependency missing: aiosqlite"
+            return result
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(async_driver_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+
+    child_script = """
+import asyncio
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.observability import ObservabilityConfig
+
+
+async def main() -> None:
+    observed = []
+    config = AiosqliteConfig(observability_config=ObservabilityConfig(statement_observers=(observed.append,)))
+    spec = SQLSpec()
+    spec.add_config(config)
+    try:
+        async with spec.provide_session(config) as driver:
+            await driver.execute("CREATE TABLE smoke_items (id INTEGER PRIMARY KEY, value TEXT)")
+
+            try:
+                raise ValueError("ambient-select")
+            except ValueError:
+                rows = await driver.select("SELECT 1 AS value")
+            assert rows == [{"value": 1}]
+            assert observed
+
+            await driver.execute("SELECT ? AS value", [1])
+            try:
+                raise ValueError("ambient-direct-cache")
+            except ValueError:
+                direct_rows = await driver.execute("SELECT ? AS value", [2])
+            assert direct_rows.get_data() == [{"value": 2}]
+
+            await driver.execute("SELECT :value AS value", {"value": 3})
+            try:
+                raise ValueError("ambient-rebound-cache")
+            except ValueError:
+                rebound_rows = await driver.execute("SELECT :value AS value", {"value": 4})
+            assert rebound_rows.get_data() == [{"value": 4}]
+
+            try:
+                raise ValueError("ambient-many")
+            except ValueError:
+                await driver.execute_many(
+                    "INSERT INTO smoke_items (id, value) VALUES (?, ?)", [(1, "one"), (2, "two")]
+                )
+
+            try:
+                raise ValueError("ambient-script")
+            except ValueError:
+                await driver.execute_script(
+                    "INSERT INTO smoke_items (id, value) VALUES (3, 'three');"
+                    "INSERT INTO smoke_items (id, value) VALUES (4, 'four');"
+                )
+
+            try:
+                raise ValueError("ambient-stream")
+            except ValueError:
+                async with driver.select_stream(
+                    "SELECT id, value FROM smoke_items ORDER BY id", chunk_size=1
+                ) as stream:
+                    streamed = [row async for row in stream]
+            assert streamed == [
+                {"id": 1, "value": "one"},
+                {"id": 2, "value": "two"},
+                {"id": 3, "value": "three"},
+                {"id": 4, "value": "four"},
+            ]
+    finally:
+        await config.close_pool()
+
+
+asyncio.run(main())
+print("ambient:ok")
+"""
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", child_script], capture_output=True, check=False, text=True, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        result["error"] = "ambient exception subprocess timed out"
+        return result
+    if completed.returncode != 0 or "ambient:ok" not in completed.stdout:
+        result["error"] = (
+            f"ambient exception subprocess failed with return code {completed.returncode}; "
+            f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+        )
+    return result
+
+
 def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Import the compiled-wheel smoke matrix and return per-entry results."""
     results: list[dict[str, Any]] = []
@@ -439,6 +555,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_sqlspec_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
         _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
         _check_fastapi_filter_construction(require_compiled=require_compiled),
         _check_litestar_filter_construction(require_compiled=require_compiled),

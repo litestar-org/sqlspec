@@ -402,24 +402,25 @@ class AsyncpgStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
-            transaction = self._driver.connection.transaction()
-            await transaction.start()
-            self._transaction = transaction
-            try:
-                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
-            except BaseException:
-                await transaction.rollback()
-                self._transaction = None
-                raise
+        await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    async def _start(self) -> None:
+        transaction = self._driver.connection.transaction()
+        await transaction.start()
+        self._transaction = transaction
+        try:
+            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
+        except BaseException:
+            await transaction.rollback()
+            self._transaction = None
+            raise
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        records: list[Any] = []
-        async with handler:
-            records = await self._cursor.fetch(self._chunk_size)
+        records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
         self._driver._check_pending_exception(handler)
+        assert records is not None
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:

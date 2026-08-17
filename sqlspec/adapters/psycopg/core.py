@@ -310,27 +310,27 @@ class PsycopgAsyncStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
-            transaction = self._driver.connection.transaction()
-            await transaction.__aenter__()
-            self._transaction = transaction
-            try:
-                cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
-                cursor.itersize = self._chunk_size
-                await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
-                self._cursor = cursor
-            except BaseException as exc:
-                self._transaction = None
-                with contextlib.suppress(Exception):
-                    await transaction.__aexit__(type(exc), exc, exc.__traceback__)
-                raise
+        await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    async def _start(self) -> None:
+        transaction = self._driver.connection.transaction()
+        await transaction.__aenter__()
+        self._transaction = transaction
+        try:
+            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor.itersize = self._chunk_size
+            await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
+            self._cursor = cursor
+        except BaseException as exc:
+            self._transaction = None
+            with contextlib.suppress(Exception):
+                await transaction.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        async with handler:
-            rows = await self._cursor.fetchmany(self._chunk_size)
+        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []

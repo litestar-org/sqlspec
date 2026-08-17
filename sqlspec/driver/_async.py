@@ -4,7 +4,7 @@ import logging
 from abc import abstractmethod
 from inspect import isawaitable
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -23,6 +23,7 @@ from sqlspec.driver._common import (
     handle_single_row_error,
     validate_savepoint_name,
 )
+from sqlspec.driver._exception_handler import _run_with_async_exception_handler
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
@@ -36,7 +37,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -63,6 +64,7 @@ __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncPoolConnec
 
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
+_AsyncResultT = TypeVar("_AsyncResultT")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -211,6 +213,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         if exc_handler.pending_exception is not None:
             raise exc_handler.pending_exception from None
 
+    async def _run_with_exception_handler(
+        self,
+        exc_handler: AsyncExceptionHandler,
+        operation: "Callable[..., Awaitable[_AsyncResultT]]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> "_AsyncResultT | None":
+        """Run an async operation without inheriting the caller's active exception state."""
+        return await _run_with_async_exception_handler(exc_handler, operation, *args, **kwargs)
+
     @final
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -230,10 +242,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             # FAST PATH: Skip all instrumentation if runtime is absent or idle.
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                async with exc_handler:
-                    result = await self._dispatch_statement_with_cursor(
-                        connection, statement, has_execution_parameters=bool(execution_parameters)
-                    )
+                result = await self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=bool(execution_parameters),
+                )
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
@@ -258,10 +273,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
             exc_handler = self.handle_database_exceptions()
             try:
-                async with exc_handler:
-                    result = await self._dispatch_statement_with_cursor(
-                        connection, statement, has_execution_parameters=bool(execution_parameters)
-                    )
+                result = await self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=bool(execution_parameters),
+                )
             except Exception as exc:  # pragma: no cover
                 pending_exception = exc_handler.pending_exception
                 if pending_exception is not None:
@@ -433,8 +451,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
-        async with exc_handler:
-            result = await self._execute_cache_hit_with_cursor(sql, params, cached)
+        result = await self._run_with_exception_handler(
+            exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
+        )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
@@ -465,8 +484,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
-            async with exc_handler:
-                result = await self._execute_cached_statement_with_cursor(statement)
+            result = await self._run_with_exception_handler(
+                exc_handler, self._execute_cached_statement_with_cursor, statement
+            )
 
             self._check_pending_exception(exc_handler)
             assert result is not None
@@ -534,30 +554,38 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
         exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        async with exc_handler:
-            fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
-            if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
-                fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
-            elif not parameters and kwargs:
-                fast_params = kwargs
-            if (
-                self._stmt_cache_enabled
-                and (statement_config is None or statement_config is self.statement_config)
-                and isinstance(statement, str)
-                and fast_params is not None
-            ):
-                fast_result = await self._cached_execution(statement, fast_params)
-                if fast_result is not None:
-                    result = fast_result
-            if result is None:
-                sql_statement = self.prepare_statement(
-                    statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-                )
-                result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        result = await self._run_with_exception_handler(
+            exc_handler, self._execute, statement, parameters, statement_config, kwargs
+        )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
+
+    async def _execute(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]",
+        statement_config: "StatementConfig | None",
+        kwargs: "dict[str, Any]",
+    ) -> "SQLResult":
+        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
+        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
+            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
+        elif not parameters and kwargs:
+            fast_params = kwargs
+        if (
+            self._stmt_cache_enabled
+            and (statement_config is None or statement_config is self.statement_config)
+            and isinstance(statement, str)
+            and fast_params is not None
+        ):
+            fast_result = await self._cached_execution(statement, fast_params)
+            if fast_result is not None:
+                return fast_result
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     async def execute_many(
         self,
@@ -573,24 +601,32 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Parameters passed will be used as the batch execution sequence.
         """
         exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        async with exc_handler:
-            config = statement_config or self.statement_config
-
-            if isinstance(statement, str) and not filters and not kwargs:
-                sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-            elif isinstance(statement, SQL):
-                statement_seed = statement.raw_expression or statement.raw_sql
-                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-            else:
-                base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-                statement_seed = base_statement.raw_expression or base_statement.raw_sql
-                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-
-            result = await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        result = await self._run_with_exception_handler(
+            exc_handler, self._execute_many, statement, parameters, filters, statement_config, kwargs
+        )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
+
+    async def _execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        parameters: "Sequence[StatementParameters]",
+        filters: "tuple[StatementParameters | StatementFilter, ...]",
+        statement_config: "StatementConfig | None",
+        kwargs: "dict[str, Any]",
+    ) -> "SQLResult":
+        config = statement_config or self.statement_config
+        if isinstance(statement, str) and not filters and not kwargs:
+            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+        elif isinstance(statement, SQL):
+            statement_seed = statement.raw_expression or statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+        else:
+            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+            statement_seed = base_statement.raw_expression or base_statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     async def execute_script(
         self,
@@ -606,16 +642,23 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
         exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        async with exc_handler:
-            config = statement_config or self.statement_config
-            sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-            result = await self.dispatch_statement_execution(
-                statement=sql_statement.as_script(), connection=self.connection
-            )
+        result = await self._run_with_exception_handler(
+            exc_handler, self._execute_script, statement, parameters, statement_config, kwargs
+        )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
+
+    async def _execute_script(
+        self,
+        statement: "str | SQL",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]",
+        statement_config: "StatementConfig | None",
+        kwargs: "dict[str, Any]",
+    ) -> "SQLResult":
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PUBLIC API - Query Methods (select/fetch variants)

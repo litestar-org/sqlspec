@@ -9,6 +9,14 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.61.1 - Compiled async exception handling
+------------------------------------------------------------------------------
+
+**Fixed:**
+
+* Compiled async drivers no longer re-raise an exception already being handled
+  by the caller when a database operation inside that handler succeeds.
+
 v0.61.0 - Scoped memory recall and ADK modernization
 ------------------------------------------------------------------------------
 
