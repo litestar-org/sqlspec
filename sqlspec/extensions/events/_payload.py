@@ -10,14 +10,17 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 __all__ = (
+    "POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES",
     "coerce_dict",
     "coerce_optional_dict",
     "decode_notify_payload",
     "encode_notify_payload",
+    "fits_notify_payload",
+    "measure_notify_payload",
     "parse_event_timestamp",
 )
 
-MAX_NOTIFY_BYTES = 8000
+POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES = 7999
 
 
 def coerce_dict(value: Any) -> "dict[str, Any]":
@@ -30,25 +33,60 @@ def coerce_optional_dict(value: Any) -> "dict[str, Any] | None":
     return value if value is None or isinstance(value, dict) else {"value": value}
 
 
-def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
-    """Encode event data as JSON for NOTIFY payload.
+def _serialize_notify_envelope(
+    event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None", published_at: "datetime"
+) -> bytes:
+    """Serialize a native notification envelope to UTF-8 JSON bytes.
 
-    Raises:
-        EventChannelError: If the encoded payload exceeds PostgreSQL's 8KB limit.
+    The publication timestamp is normalized to UTC with microsecond precision so
+    the encoded envelope width is independent of the clock reading.
     """
-    encoded = to_json(
+    return to_json(
         {
             "event_id": event_id,
             "payload": payload,
             "metadata": metadata,
-            "published_at": datetime.now(timezone.utc).isoformat(),
+            "published_at": published_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
         },
         as_bytes=True,
     )
-    if len(encoded) > MAX_NOTIFY_BYTES:
-        msg = "PostgreSQL NOTIFY payload exceeds 8 KB limit"
+
+
+def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
+    """Encode event data as JSON for NOTIFY payload.
+
+    Raises:
+        EventChannelError: If the encoded envelope exceeds the PostgreSQL notification budget.
+    """
+    encoded = _serialize_notify_envelope(event_id, payload, metadata, datetime.now(timezone.utc))
+    encoded_bytes = len(encoded)
+    if encoded_bytes > POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES:
+        msg = (
+            f"PostgreSQL NOTIFY payload is {encoded_bytes} encoded bytes and exceeds the "
+            f"{POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES}-byte maximum. Use fits_notify_payload() or "
+            "measure_notify_payload() to split the batch before publishing."
+        )
         raise EventChannelError(msg)
     return encoded.decode("utf-8")
+
+
+def measure_notify_payload(
+    payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None, *, event_id: "str | None" = None
+) -> int:
+    """Return the encoded UTF-8 byte size of the native notification envelope.
+
+    The measurement covers the complete envelope rather than only the payload
+    mapping. Omitting ``event_id`` measures the canonical backend UUID-hex shape.
+    """
+    resolved_event_id = uuid4().hex if event_id is None else event_id
+    return len(_serialize_notify_envelope(resolved_event_id, payload, metadata, datetime.now(timezone.utc)))
+
+
+def fits_notify_payload(
+    payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None, *, event_id: "str | None" = None
+) -> bool:
+    """Return whether the native notification envelope fits the PostgreSQL budget."""
+    return measure_notify_payload(payload, metadata, event_id=event_id) <= POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES
 
 
 def decode_notify_payload(channel: str, payload: str) -> "EventMessage":

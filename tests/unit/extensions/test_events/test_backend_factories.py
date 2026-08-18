@@ -1,6 +1,8 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event backend factories."""
 
+from typing import Any
+
 import pytest
 
 
@@ -352,12 +354,155 @@ def test_oracle_backend_envelope_round_trip() -> None:
     assert message.metadata == {"source": "api"}
 
 
-def test_shared_payload_max_notify_bytes_constant() -> None:
-    """Shared payload module has MAX_NOTIFY_BYTES constant."""
+def test_public_notify_payload_budget_exports() -> None:
+    """The notification payload budget and preflight helpers are public."""
+    from sqlspec.extensions.events import POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES, fits_notify_payload, measure_notify_payload
+
+    assert POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES == 7999
+    assert callable(measure_notify_payload)
+    assert callable(fits_notify_payload)
+
+
+def _payload_measuring_exactly(size: int, event_id: str) -> "dict[str, Any]":
+    """Build an ASCII payload whose encoded envelope measures ``size`` bytes."""
+    from sqlspec.extensions.events import measure_notify_payload
+
+    overhead = measure_notify_payload({"chunk": ""}, None, event_id=event_id)
+    return {"chunk": "a" * (size - overhead)}
+
+
+def test_measure_notify_payload_matches_encoded_ascii_bytes() -> None:
+    """ASCII measurement equals the UTF-8 length of the encoded envelope."""
+    from sqlspec.extensions.events import encode_notify_payload, measure_notify_payload
+
+    payload = {"action": "test"}
+    metadata = {"user": "admin"}
+
+    encoded = encode_notify_payload("evt123", payload, metadata)
+
+    assert measure_notify_payload(payload, metadata, event_id="evt123") == len(encoded.encode("utf-8"))
+
+
+def test_measure_notify_payload_counts_multibyte_bytes() -> None:
+    """Multibyte measurement counts UTF-8 bytes rather than characters."""
+    from sqlspec.extensions.events import encode_notify_payload, measure_notify_payload
+
+    payload = {"message": "héllo → 世界"}
+    metadata = {"locale": "日本語"}
+
+    encoded = encode_notify_payload("evt_unicode", payload, metadata)
+
+    assert measure_notify_payload(payload, metadata, event_id="evt_unicode") == len(encoded.encode("utf-8"))
+    assert len(encoded.encode("utf-8")) > len(encoded)
+
+
+def test_measure_notify_payload_defaults_to_canonical_event_id_width() -> None:
+    """Omitting the event ID measures the canonical backend UUID-hex shape."""
+    from sqlspec.extensions.events import encode_notify_payload, measure_notify_payload
+    from sqlspec.utils.uuids import uuid4
+
+    payload = {"action": "refresh"}
+
+    measured = measure_notify_payload(payload)
+    encoded = encode_notify_payload(uuid4().hex, payload, None)
+
+    assert measured == len(encoded.encode("utf-8"))
+
+
+@pytest.mark.parametrize("event_id", ["e", "0123456789abcdef0123456789abcdef", "producer-shard-42-" + "x" * 64])
+def test_measure_notify_payload_matches_encoding_for_explicit_event_ids(event_id: str) -> None:
+    """Explicit event IDs of any width preflight exactly."""
+    from sqlspec.extensions.events import encode_notify_payload, measure_notify_payload
+
+    payload = {"action": "reindex", "shard": 42}
+    metadata = {"origin": "batch"}
+
+    encoded = encode_notify_payload(event_id, payload, metadata)
+
+    assert measure_notify_payload(payload, metadata, event_id=event_id) == len(encoded.encode("utf-8"))
+
+
+def test_notify_payload_at_maximum_bytes_publishes() -> None:
+    """An envelope of exactly the maximum size fits and encodes."""
+    from sqlspec.extensions.events import (
+        POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+        encode_notify_payload,
+        fits_notify_payload,
+        measure_notify_payload,
+    )
+
+    event_id = "evt_boundary"
+    payload = _payload_measuring_exactly(POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES, event_id)
+
+    assert measure_notify_payload(payload, None, event_id=event_id) == 7999
+    assert fits_notify_payload(payload, None, event_id=event_id) is True
+    assert len(encode_notify_payload(event_id, payload, None).encode("utf-8")) == 7999
+
+
+def test_notify_payload_one_byte_over_maximum_is_rejected() -> None:
+    """An envelope one byte past the maximum fails preflight and encoding."""
+    from sqlspec.exceptions import EventChannelError
+    from sqlspec.extensions.events import (
+        POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+        encode_notify_payload,
+        fits_notify_payload,
+        measure_notify_payload,
+    )
+
+    event_id = "evt_boundary"
+    payload = _payload_measuring_exactly(POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES + 1, event_id)
+
+    assert measure_notify_payload(payload, None, event_id=event_id) == 8000
+    assert fits_notify_payload(payload, None, event_id=event_id) is False
+
+    with pytest.raises(EventChannelError, match="8000"):
+        encode_notify_payload(event_id, payload, None)
+
+
+@pytest.mark.parametrize("microsecond", [0, 5, 123456])
+def test_serialized_envelope_timestamp_width_is_constant(microsecond: int) -> None:
+    """Envelope timestamps keep a constant width regardless of microsecond value."""
+    import json
+    from datetime import datetime, timezone
+
     from sqlspec.extensions.events import _payload
 
-    assert hasattr(_payload, "MAX_NOTIFY_BYTES")
-    assert _payload.MAX_NOTIFY_BYTES == 8000
+    published_at = datetime(2024, 1, 15, 10, 0, 0, microsecond, tzinfo=timezone.utc)
+    encoded = _payload._serialize_notify_envelope("evt_ts", {"action": "test"}, None, published_at)
+
+    assert json.loads(encoded)["published_at"] == f"2024-01-15T10:00:00.{microsecond:06d}+00:00"
+
+
+def test_encode_notify_payload_uses_fixed_width_microsecond_timestamp() -> None:
+    """New envelopes carry a fixed-width UTC microsecond timestamp."""
+    import json
+    import re
+
+    from sqlspec.extensions.events import encode_notify_payload
+
+    published_at = json.loads(encode_notify_payload("evt_ts", {"action": "test"}, None))["published_at"]
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00", published_at)
+    assert len(published_at) == 32
+
+
+@pytest.mark.parametrize(
+    "legacy_timestamp", ["2024-01-15T10:00:00+00:00", "2024-01-15T10:00:00.123+00:00", "2024-01-15T10:00:00.123456"]
+)
+def test_decode_notify_payload_accepts_legacy_timestamp_widths(legacy_timestamp: str) -> None:
+    """Envelopes emitted with variable-width ISO timestamps still decode."""
+    import json
+
+    from sqlspec.extensions.events import decode_notify_payload
+
+    payload = json.dumps({"event_id": "evt_legacy", "payload": {"a": 1}, "published_at": legacy_timestamp})
+
+    message = decode_notify_payload("alerts", payload)
+
+    assert message.created_at.year == 2024
+    assert message.created_at.month == 1
+    assert message.created_at.day == 15
+    assert message.created_at.hour == 10
 
 
 def test_shared_encode_notify_payload() -> None:
