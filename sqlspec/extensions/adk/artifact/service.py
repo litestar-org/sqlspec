@@ -22,6 +22,8 @@ from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from google.adk.artifacts.base_artifact_service import ArtifactVersion
     from google.genai import types
 
@@ -388,21 +390,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         deleted_records = await self._store.delete_artifact(
             app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
-
-        # Best-effort content cleanup
-        backend = self._registry.get(self._artifact_storage_uri)
-        for record in deleted_records:
-            content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
-            try:
-                await _call_storage_backend(backend, "delete_async", "delete_sync", content_path)
-            except Exception:
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    "adk.artifact.delete.content_cleanup_failed",
-                    canonical_uri=record["canonical_uri"],
-                    version=record["version"],
-                )
+        await self._delete_content(deleted_records)
 
         log_with_context(
             logger,
@@ -413,6 +401,37 @@ class SQLSpecArtifactService(BaseArtifactService):
             session_id=session_id,
             versions_deleted=len(deleted_records),
         )
+
+    async def delete_artifacts_older_than(self, before: "datetime", app_name: "str | None" = None) -> int:
+        """Delete artifact versions created before a cutoff.
+
+        Metadata rows are deleted first (fail-fast). Content objects for the
+        deleted versions are then removed on a best-effort basis: a failed
+        content delete is logged with its canonical URI and version, and the
+        remaining versions are still processed. Because the metadata row is
+        already gone, a later run of this method cannot rediscover that
+        content, so the warning records are the input to an independent
+        object-store orphan sweep.
+
+        Args:
+            before: Timezone-aware UTC cutoff; versions created strictly before it are deleted.
+            app_name: Application name to limit the deletion, or None for every application.
+
+        Returns:
+            Number of artifact version rows deleted from metadata storage.
+        """
+        deleted_records = await self._store.delete_artifacts_older_than(before, app_name=app_name)
+        await self._delete_content(deleted_records)
+
+        log_with_context(
+            logger,
+            logging.INFO,
+            "adk.artifact.retention.prune",
+            app_name=app_name,
+            before=before.isoformat(),
+            versions_deleted=len(deleted_records),
+        )
+        return len(deleted_records)
 
     async def list_versions(
         self, *, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
@@ -479,6 +498,33 @@ class SQLSpecArtifactService(BaseArtifactService):
         if record is None:
             return None
         return _record_to_artifact_version(record)
+
+    async def _delete_content(self, records: "list[StoredArtifact]") -> None:
+        """Remove stored content for deleted metadata records on a best-effort basis.
+
+        Each failure is logged with the canonical URI and version of the record
+        it belongs to, and the remaining records are still processed. No storage
+        backend is resolved when there is nothing to clean up.
+
+        Args:
+            records: Artifact metadata records whose content should be removed.
+        """
+        if not records:
+            return
+
+        backend = self._registry.get(self._artifact_storage_uri)
+        for record in records:
+            content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
+            try:
+                await _call_storage_backend(backend, "delete_async", "delete_sync", content_path)
+            except Exception:
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "adk.artifact.delete.content_cleanup_failed",
+                    canonical_uri=record["canonical_uri"],
+                    version=record["version"],
+                )
 
 
 async def _call_storage_backend(
