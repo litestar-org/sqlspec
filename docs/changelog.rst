@@ -9,7 +9,7 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.62.0 - ADK retention, migration prerequisites, and event payload budgets
+v0.62.0 - ADK session paging and retention, migrations, and event payloads
 ------------------------------------------------------------------------------
 
 **Added:**
@@ -30,6 +30,17 @@ v0.62.0 - ADK retention, migration prerequisites, and event payload budgets
   removed. Artifact stores gained an overridable
   ``delete_artifacts_older_than()`` hook that is non-abstract, so existing
   third-party subclasses continue to instantiate.
+* Google ADK session listings can be ordered and paged.
+  :meth:`SQLSpecSessionService.list_sessions() <sqlspec.extensions.adk.SQLSpecSessionService.list_sessions>`
+  and every adapter session store accept ``order_by`` (``"create_time"`` or
+  ``"update_time"``), ``descending``, ``limit``, and ``offset``. The bounds are
+  applied in SQL, so a page no longer reads the whole table into memory before
+  slicing it. ``limit=0`` returns an empty result without reaching the database,
+  and a positive ``offset`` requires a finite limit. The
+  :data:`~sqlspec.extensions.adk.SessionOrderBy` literal and the
+  :func:`~sqlspec.extensions.adk.normalize_session_list_options` validator are
+  exported so third-party stores can share the same allowlist and bounds
+  checking.
 * :meth:`SQLSpecPlugin.get_config() <sqlspec.extensions.litestar.SQLSpecPlugin.get_config>`
   resolves a configuration by instance, by concrete type, or by ``bind_key``
   immediately after plugin construction, which makes CLI commands, migration
@@ -38,6 +49,18 @@ v0.62.0 - ADK retention, migration prerequisites, and event payload budgets
 
 **Changed:**
 
+* Session listings order by the requested timestamp column and then by ``id``
+  in the same direction. The tie-break keeps paging deterministic when several
+  sessions share a timestamp, where equal timestamps previously came back in
+  whatever order the database chose. Unbounded listings still default to
+  ``update_time`` descending.
+* :func:`~sqlspec.extensions.adk.prune_sessions`,
+  :func:`~sqlspec.extensions.adk.prune_events`,
+  :func:`~sqlspec.extensions.adk.prune_memory`, and
+  :func:`~sqlspec.extensions.adk.prune_user_state` reject a non-positive
+  retention age. ``idle_days=0`` or ``older_than_days=0`` previously resolved to
+  a cutoff of "now" and deleted every row; all five prune helpers now raise
+  ``ValueError``, matching :func:`~sqlspec.extensions.adk.prune_artifacts`.
 * ``enable_sessions`` and ``enable_memory`` are now the only per-feature gates
   for ADK migrations, and they gate both the upgrade and downgrade directions
   consistently.
