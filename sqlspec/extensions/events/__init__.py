@@ -12,7 +12,7 @@ from sqlspec.extensions.events._channel import (
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._payload import (
-    POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+    MAX_NOTIFY_BYTES,
     decode_notify_payload,
     encode_notify_payload,
     fits_notify_payload,
@@ -33,7 +33,7 @@ from sqlspec.extensions.events._store import (
 )
 
 __all__ = (
-    "POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES",
+    "MAX_NOTIFY_BYTES",
     "AsyncEventBackendProtocol",
     "AsyncEventChannel",
     "AsyncEventHandler",

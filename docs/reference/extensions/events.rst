@@ -121,7 +121,7 @@ Notification payload budget
 ---------------------------
 
 PostgreSQL rejects a ``NOTIFY`` payload of 8,000 bytes or more, so SQLSpec
-publishes at most :data:`~sqlspec.extensions.events.POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES`
+publishes at most :data:`~sqlspec.extensions.events.MAX_NOTIFY_BYTES`
 (7,999) bytes. That budget covers the **complete encoded envelope** — the event
 ID, your payload mapping, your metadata mapping, and the publication timestamp —
 not just the payload you pass to ``publish()``. Sizes are counted in UTF-8
@@ -137,7 +137,7 @@ what is published:
 .. code-block:: python
 
    from sqlspec.extensions.events import (
-       POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+       MAX_NOTIFY_BYTES,
        fits_notify_payload,
        measure_notify_payload,
    )
@@ -159,7 +159,7 @@ what is published:
 
    payload = {"records": [{"id": 1}]}
    if not fits_notify_payload(payload, event_id="ingest-42"):
-       overflow = measure_notify_payload(payload, event_id="ingest-42") - POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES
+       overflow = measure_notify_payload(payload, event_id="ingest-42") - MAX_NOTIFY_BYTES
        raise ValueError(f"event is {overflow} bytes over the notification budget")
 
 Publishing an oversized event raises
@@ -378,7 +378,7 @@ Protocols
 Payload Helpers
 ===============
 
-.. autodata:: sqlspec.extensions.events.POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES
+.. autodata:: sqlspec.extensions.events.MAX_NOTIFY_BYTES
 
 .. autofunction:: sqlspec.extensions.events.measure_notify_payload
 

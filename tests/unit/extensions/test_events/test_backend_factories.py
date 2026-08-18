@@ -356,9 +356,9 @@ def test_oracle_backend_envelope_round_trip() -> None:
 
 def test_public_notify_payload_budget_exports() -> None:
     """The notification payload budget and preflight helpers are public."""
-    from sqlspec.extensions.events import POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES, fits_notify_payload, measure_notify_payload
+    from sqlspec.extensions.events import MAX_NOTIFY_BYTES, fits_notify_payload, measure_notify_payload
 
-    assert POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES == 7999
+    assert MAX_NOTIFY_BYTES == 7999
     assert callable(measure_notify_payload)
     assert callable(fits_notify_payload)
 
@@ -425,14 +425,14 @@ def test_measure_notify_payload_matches_encoding_for_explicit_event_ids(event_id
 def test_notify_payload_at_maximum_bytes_publishes() -> None:
     """An envelope of exactly the maximum size fits and encodes."""
     from sqlspec.extensions.events import (
-        POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+        MAX_NOTIFY_BYTES,
         encode_notify_payload,
         fits_notify_payload,
         measure_notify_payload,
     )
 
     event_id = "evt_boundary"
-    payload = _payload_measuring_exactly(POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES, event_id)
+    payload = _payload_measuring_exactly(MAX_NOTIFY_BYTES, event_id)
 
     assert measure_notify_payload(payload, None, event_id=event_id) == 7999
     assert fits_notify_payload(payload, None, event_id=event_id) is True
@@ -443,14 +443,14 @@ def test_notify_payload_one_byte_over_maximum_is_rejected() -> None:
     """An envelope one byte past the maximum fails preflight and encoding."""
     from sqlspec.exceptions import EventChannelError
     from sqlspec.extensions.events import (
-        POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES,
+        MAX_NOTIFY_BYTES,
         encode_notify_payload,
         fits_notify_payload,
         measure_notify_payload,
     )
 
     event_id = "evt_boundary"
-    payload = _payload_measuring_exactly(POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES + 1, event_id)
+    payload = _payload_measuring_exactly(MAX_NOTIFY_BYTES + 1, event_id)
 
     assert measure_notify_payload(payload, None, event_id=event_id) == 8000
     assert fits_notify_payload(payload, None, event_id=event_id) is False
