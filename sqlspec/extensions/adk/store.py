@@ -17,13 +17,15 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.extensions.adk._types import StoredEvent, StoredSession
+    from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
 
-__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore")
+__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore", "normalize_session_list_options")
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.extensions.adk.store")
+
+SESSION_ORDER_COLUMNS: Final = ("create_time", "update_time")
 
 ADK_RESET_TABLE_PROFILES: Final = (
     ("adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_internal_metadata"),
@@ -304,12 +306,28 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List all sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Name of the application.
             user_id: ID of the user. If None, returns all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction applied to the timestamp column and the
+                ``id`` tie-break.
+            limit: Maximum number of sessions to return. ``0`` returns an empty
+                list without database work.
+            offset: Number of leading rows to skip. Requires a finite limit
+                when positive.
 
         Returns:
             List of session records.
@@ -702,8 +720,32 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
-        """List all sessions for an app, optionally filtered by user."""
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
+        """List all sessions for an app, optionally filtered by user.
+
+        Args:
+            app_name: Name of the application.
+            user_id: ID of the user. If None, returns all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction applied to the timestamp column and the
+                ``id`` tie-break.
+            limit: Maximum number of sessions to return. ``0`` returns an empty
+                list without database work.
+            offset: Number of leading rows to skip. Requires a finite limit
+                when positive.
+
+        Returns:
+            List of session records.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -876,6 +918,51 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def _drop_tables_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
+
+
+def normalize_session_list_options(
+    order_by: "SessionOrderBy" = "update_time",
+    descending: bool = True,
+    limit: "int | None" = None,
+    offset: "int | None" = None,
+) -> "tuple[SessionOrderBy, str, int | None, int]":
+    """Validate session listing options and resolve their ordering parts.
+
+    Args:
+        order_by: Timestamp column to sort on. Only ``create_time`` and
+            ``update_time`` are accepted.
+        descending: Sort direction applied to both the timestamp column and the
+            ``id`` tie-break.
+        limit: Maximum number of sessions to return, or ``None`` for an
+            unbounded listing.
+        offset: Number of leading rows to skip. ``None`` is equivalent to zero.
+
+    Returns:
+        The allowlisted order column, the ``ASC``/``DESC`` direction keyword,
+        the validated limit, and the normalized offset. Callers render the
+        ``ORDER BY`` body in whichever form their driver accepts.
+
+    Raises:
+        ValueError: If the order column is outside the allowlist, a page bound
+            is a boolean or a negative integer, or a positive offset is
+            combined with an unbounded limit.
+    """
+    if order_by not in SESSION_ORDER_COLUMNS:
+        msg = f"order_by must be one of {SESSION_ORDER_COLUMNS}, got {order_by!r}"
+        raise ValueError(msg)
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
+        msg = f"limit must be a non-negative integer or None, got {limit!r}"
+        raise ValueError(msg)
+    if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0):
+        msg = f"offset must be a non-negative integer or None, got {offset!r}"
+        raise ValueError(msg)
+
+    normalized_offset = 0 if offset is None else offset
+    if normalized_offset > 0 and limit is None:
+        msg = "offset requires a limit; unbounded offset is not supported"
+        raise ValueError(msg)
+
+    return order_by, "DESC" if descending else "ASC", limit, normalized_offset
 
 
 def _run_lifecycle_sync(config: Any, statements: "list[str]") -> None:

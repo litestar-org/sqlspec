@@ -221,3 +221,118 @@ async def assert_adk_reads_empty_when_tables_missing_contract(make_store: Any) -
         assert await _resolve(store.get_user_state("app", "user")) is None
     finally:
         await _aclose(config)
+
+
+_LIST_ORDER_SESSION_IDS = ("s-c", "s-a", "s-d", "s-b")
+"""Creation order deliberately differs from id order so both sort keys are observable."""
+
+
+async def _seed_list_order_sessions(store: Any) -> None:
+    """Create the ordering fixture: four sessions for user-a and one each for the other scopes."""
+    await _resolve(store.create_tables())
+    for session_id in _LIST_ORDER_SESSION_IDS:
+        await _resolve(store.create_session(session_id, "app", "user-a", {}))
+    await _resolve(store.create_session("s-other-user", "app", "user-b", {}))
+    await _resolve(store.create_session("s-other-app", "other", "user-a", {}))
+
+
+async def _session_ids(store: Any, **options: Any) -> "list[str]":
+    rows = await _resolve(store.list_sessions("app", "user-a", **options))
+    return [row["id"] for row in rows]
+
+
+async def assert_adk_list_sessions_default_order_contract(make_store: Any) -> None:
+    """The default listing stays recent-first and unbounded."""
+    config, store = make_store()
+    try:
+        await _seed_list_order_sessions(store)
+
+        rows = await _resolve(store.list_sessions("app", "user-a"))
+        update_times = [row["update_time"] for row in rows]
+
+        assert {row["id"] for row in rows} == set(_LIST_ORDER_SESSION_IDS)
+        assert update_times == sorted(update_times, reverse=True)
+        assert [row["id"] for row in rows] == await _session_ids(store, order_by="update_time", descending=True)
+    finally:
+        await _aclose(config)
+
+
+async def assert_adk_list_sessions_ordering_contract(make_store: Any) -> None:
+    """Both order columns sort in both directions and stay a stable total order."""
+    config, store = make_store()
+    try:
+        await _seed_list_order_sessions(store)
+
+        for order_by in ("create_time", "update_time"):
+            ascending = await _session_ids(store, order_by=order_by, descending=False)
+            descending = await _session_ids(store, order_by=order_by, descending=True)
+
+            assert sorted(ascending) == sorted(_LIST_ORDER_SESSION_IDS)
+            assert descending == list(reversed(ascending))
+            assert ascending == await _session_ids(store, order_by=order_by, descending=False)
+    finally:
+        await _aclose(config)
+
+
+async def assert_adk_list_sessions_paging_contract(make_store: Any) -> None:
+    """Finite pages partition the ordered listing without overlaps or gaps."""
+    config, store = make_store()
+    try:
+        await _seed_list_order_sessions(store)
+
+        for order_by in ("create_time", "update_time"):
+            for descending in (True, False):
+                options = {"order_by": order_by, "descending": descending}
+                everything = await _session_ids(store, **options)
+                first = await _session_ids(store, limit=2, offset=0, **options)
+                second = await _session_ids(store, limit=2, offset=2, **options)
+
+                assert first + second == everything
+                assert not set(first) & set(second)
+                assert await _session_ids(store, limit=2, offset=len(everything), **options) == []
+                assert await _session_ids(store, limit=10, offset=1, **options) == everything[1:]
+    finally:
+        await _aclose(config)
+
+
+async def assert_adk_list_sessions_filtering_precedes_paging_contract(make_store: Any) -> None:
+    """User and app filtering narrow the result set before the page is taken."""
+    config, store = make_store()
+    try:
+        await _seed_list_order_sessions(store)
+
+        app_page = await _resolve(store.list_sessions("app", limit=10, offset=0))
+        user_page = await _resolve(store.list_sessions("app", "user-b", limit=10, offset=0))
+
+        assert {row["id"] for row in app_page} == {*_LIST_ORDER_SESSION_IDS, "s-other-user"}
+        assert [row["id"] for row in user_page] == ["s-other-user"]
+        assert await _resolve(store.list_sessions("app", "user-b", limit=1, offset=1)) == []
+    finally:
+        await _aclose(config)
+
+
+async def assert_adk_list_sessions_option_validation_contract(make_store: Any) -> None:
+    """A zero limit answers empty and invalid options raise before any query runs."""
+    config, store = make_store()
+    try:
+        await _seed_list_order_sessions(store)
+
+        assert await _resolve(store.list_sessions("app", "user-a", limit=0)) == []
+        assert await _resolve(store.list_sessions("app", "user-a", limit=0, offset=2)) == []
+
+        for options in (
+            {"order_by": "id"},
+            {"order_by": "state"},
+            {"limit": -1},
+            {"offset": -1, "limit": 5},
+            {"limit": True},
+            {"offset": False, "limit": 5},
+            {"offset": 1},
+        ):
+            try:
+                await _resolve(store.list_sessions("app", "user-a", **options))
+            except ValueError:
+                continue
+            raise AssertionError(f"list_sessions accepted invalid options: {options}")
+    finally:
+        await _aclose(config)

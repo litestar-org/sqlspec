@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.adbc.config import AdbcConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("AdbcADKMemoryStore", "AdbcADKStore")
 
@@ -96,9 +96,20 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Update session state."""
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app."""
-        return self._list_sessions(app_name, user_id)
+        return self._list_sessions(
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+        )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
@@ -607,6 +618,33 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
         return cursor.execute(self._format_sql(sql), params)
 
+    def _session_list_query(
+        self, app_name: str, user_id: "str | None", column: str, direction: str, limit: "int | None", offset: int
+    ) -> "tuple[str, tuple[Any, ...]]":
+        """Return the bounded session-list query in the current dialect's page grammar."""
+        params: list[Any] = [app_name]
+        where_clause = "app_name = ?"
+        if user_id is not None:
+            params.append(user_id)
+            where_clause = f"{where_clause} AND user_id = ?"
+
+        page_clause = ""
+        if limit is not None:
+            if self._dialect == DIALECT_GENERIC:
+                params.extend((offset, limit))
+                page_clause = "\n            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+            else:
+                params.extend((limit, offset))
+                page_clause = "\n            LIMIT ? OFFSET ?"
+
+        sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE {where_clause}
+        ORDER BY {column} {direction}, id {direction}{page_clause}
+        """
+        return sql, tuple(params)
+
     def _json_placeholder(self) -> str:
         """Return a JSON parameter placeholder for the current dialect."""
         if self._dialect == DIALECT_POSTGRESQL:
@@ -775,32 +813,34 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def _list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
             user_id: User identifier. If None, lists all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction for the timestamp column and the id tie-break.
+            limit: Maximum number of sessions to return.
+            offset: Number of leading rows to skip.
 
         Returns:
-            List of session records ordered by update_time DESC.
+            List of session records.
         """
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ?
-            ORDER BY update_time DESC
-            """
-            params: tuple[str, ...] = (app_name,)
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ? AND user_id = ?
-            ORDER BY update_time DESC
-            """
-            params = (app_name, user_id)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
+        sql, params = self._session_list_query(app_name, user_id, column, direction, page_limit, page_offset)
 
         try:
             with self._config.provide_connection() as conn:

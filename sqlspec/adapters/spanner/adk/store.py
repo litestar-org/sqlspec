@@ -11,7 +11,7 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import OperationalError
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
     from google.cloud.spanner_v1.transaction import Transaction
 
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
 
@@ -112,10 +112,21 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         """Update session state."""
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app."""
         try:
-            return self._list_sessions(app_name, user_id)
+            return self._list_sessions(
+                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+            )
         except NotFound as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return []
@@ -374,7 +385,20 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             )
         ])
 
-    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
+    def _list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
         sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time{", " + self._owner_id_column_name if self._owner_id_column_name else ""}
             FROM {self._session_table}
@@ -388,7 +412,13 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             types["user_id"] = SPANNER_PARAM_TYPES.STRING
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
-        sql = f"{sql} ORDER BY update_time DESC"
+        sql = f"{sql} ORDER BY {column} {direction}, id {direction}"
+        if page_limit is not None:
+            sql = f"{sql} LIMIT @limit OFFSET @offset"
+            params["limit"] = page_limit
+            params["offset"] = page_offset
+            types["limit"] = SPANNER_PARAM_TYPES.INT64
+            types["offset"] = SPANNER_PARAM_TYPES.INT64
 
         rows = self._run_read(sql, params, types)
         records: list[StoredSession] = []

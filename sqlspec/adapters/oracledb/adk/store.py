@@ -15,7 +15,13 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     storage_type_from_version,
 )
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseAsyncADKStore, BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import (
+    BaseAsyncADKStore,
+    BaseSyncADKStore,
+    StoredEvent,
+    StoredSession,
+    normalize_session_list_options,
+)
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -26,7 +32,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = (
     "JSONStorageType",
@@ -501,37 +507,40 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             await conn.commit()
 
-    async def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    async def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
             user_id: User identifier. If None, lists all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction for the timestamp column and the id tie-break.
+            limit: Maximum number of sessions to return.
+            offset: Number of leading rows to skip.
 
         Returns:
-            List of session records ordered by update_time DESC.
+            List of session records.
 
         Notes:
             Uses composite index on (app_name, user_id) when user_id is provided.
             State is deserialized using version-appropriate format.
         """
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
 
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = :app_name
-            ORDER BY update_time DESC
-            """
-            params = {"app_name": app_name}
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = :app_name AND user_id = :user_id
-            ORDER BY update_time DESC
-            """
-            params = {"app_name": app_name, "user_id": user_id}
+        sql, params = _session_list_query(
+            self._session_table, app_name, user_id, column, direction, page_limit, page_offset
+        )
 
         try:
             async with self._config.provide_connection() as conn:
@@ -1504,38 +1513,40 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
-        """List sessions for an app."""
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
             app_name: Application name.
             user_id: User identifier. If None, lists all sessions for the app.
+            order_by: Timestamp column to sort on.
+            descending: Sort direction for the timestamp column and the id tie-break.
+            limit: Maximum number of sessions to return.
+            offset: Number of leading rows to skip.
 
         Returns:
-            List of session records ordered by update_time DESC.
+            List of session records.
 
         Notes:
             Uses composite index on (app_name, user_id) when user_id is provided.
             State is deserialized using version-appropriate format.
         """
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
 
-        if user_id is None:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = :app_name
-            ORDER BY update_time DESC
-            """
-            params = {"app_name": app_name}
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = :app_name AND user_id = :user_id
-            ORDER BY update_time DESC
-            """
-            params = {"app_name": app_name, "user_id": user_id}
+        sql, params = _session_list_query(
+            self._session_table, app_name, user_id, column, direction, page_limit, page_offset
+        )
 
         try:
             with self._config.provide_connection() as conn:
@@ -3099,3 +3110,34 @@ def _build_oracle_scope_where(
             "user_id": user_id,
         }
     return "app_name = :app_name AND scope = 'app'", {"app_name": app_name}
+
+
+def _session_list_query(
+    session_table: str,
+    app_name: str,
+    user_id: "str | None",
+    column: str,
+    direction: str,
+    limit: "int | None",
+    offset: int,
+) -> "tuple[str, dict[str, Any]]":
+    """Return the bounded session-list query and its named binds."""
+    params: dict[str, Any] = {"app_name": app_name}
+    where_clause = "app_name = :app_name"
+    if user_id is not None:
+        params["user_id"] = user_id
+        where_clause = f"{where_clause} AND user_id = :user_id"
+
+    page_clause = ""
+    if limit is not None:
+        params["page_limit"] = limit
+        params["page_offset"] = offset
+        page_clause = "\n            OFFSET :page_offset ROWS FETCH NEXT :page_limit ROWS ONLY"
+
+    sql = f"""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {session_table}
+    WHERE {where_clause}
+    ORDER BY {column} {direction}, id {direction}{page_clause}
+    """
+    return sql, params

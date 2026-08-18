@@ -17,13 +17,15 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from sqlspec.extensions.adk import SessionOrderBy
 
 __all__ = ("BigQueryADKConfig", "BigQueryADKRetentionConfig", "BigQueryADKStore")
 
@@ -109,9 +111,20 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         """Replace the durable session state snapshot."""
         self._update_session_state(app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user."""
-        return self._list_sessions(app_name, user_id)
+        return self._list_sessions(
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+        )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete a session and its replicated events."""
@@ -317,7 +330,20 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             ],
         )
 
-    def _list_sessions(self, app_name: str, user_id: "str | None" = None) -> "list[StoredSession]":
+    def _list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        if page_limit == 0:
+            return []
+
         window_start = datetime.now(timezone.utc) - timedelta(days=self._lookup_window_days)
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -332,7 +358,11 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if user_id is not None:
             sql += " AND user_id = @user_id"
             params.append(self._query_param("user_id", user_id))
-        sql += " ORDER BY update_time DESC"
+        sql += f" ORDER BY {column} {direction}, id {direction}"
+        if page_limit is not None:
+            sql += " LIMIT @limit OFFSET @offset"
+            params.append(self._query_param("limit", page_limit, bq_type="INT64"))
+            params.append(self._query_param("offset", page_offset, bq_type="INT64"))
         rows = self._run_query(sql, params)
         return [_session_record_from_row(row) for row in rows]
 

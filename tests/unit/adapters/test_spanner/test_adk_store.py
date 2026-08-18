@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock, patch
 
+import pytest
 from google.api_core.exceptions import NotFound
+from google.cloud.spanner_v1 import param_types
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner.adk import (
@@ -278,3 +280,86 @@ def test_get_events_returns_empty_when_spanner_events_table_missing() -> None:
         result = store.get_events("app", "user", "session")
 
     assert result == []
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _capture_session_list(store: SpannerSyncADKStore) -> "list[tuple[str, dict[str, Any], dict[str, Any]]]":
+    calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def capture(sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> "list[Any]":
+        calls.append((sql, dict(params or {}), dict(types or {})))
+        return []
+
+    store._run_read = capture  # type: ignore[method-assign]
+    return calls
+
+
+def test_spanner_list_sessions_binds_order_and_page() -> None:
+    """Explicit ordering renders inline while page bounds bind as typed named parameters."""
+    store = SpannerSyncADKStore(_mock_config())
+    calls = _capture_session_list(store)
+
+    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params, types = calls[0]
+    assert _normalized(sql).endswith("ORDER BY create_time ASC, id ASC LIMIT @limit OFFSET @offset")
+    assert params["limit"] == 10
+    assert params["offset"] == 20
+    assert types["limit"] is param_types.INT64
+    assert types["offset"] is param_types.INT64
+
+
+def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store = SpannerSyncADKStore(_mock_config())
+    calls = _capture_session_list(store)
+
+    store.list_sessions("app")
+
+    sql, params, _ = calls[0]
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC")
+    assert set(params) == {"app_name"}
+
+
+def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
+    """User filtering composes with the bound page values."""
+    store = SpannerSyncADKStore(_mock_config())
+    calls = _capture_session_list(store)
+
+    store.list_sessions("app", "u1", limit=5)
+
+    sql, params, _ = calls[0]
+    assert "AND user_id = @user_id" in sql
+    assert params == {"app_name": "app", "user_id": "u1", "limit": 5, "offset": 0}
+
+
+def test_spanner_list_sessions_zero_limit_never_reads() -> None:
+    """A zero limit short-circuits before any read is issued."""
+    store = SpannerSyncADKStore(_mock_config())
+    calls = _capture_session_list(store)
+
+    assert store.list_sessions("app", limit=0) == []
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_spanner_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a read is issued."""
+    store = SpannerSyncADKStore(_mock_config())
+    calls = _capture_session_list(store)
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)
+
+    assert calls == []

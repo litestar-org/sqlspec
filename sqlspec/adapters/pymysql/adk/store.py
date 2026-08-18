@@ -8,7 +8,7 @@ import pymysql
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.pymysql.config import PyMysqlConfig
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
 __all__ = ("PyMysqlADKConfig", "PyMysqlADKMemoryStore", "PyMysqlADKStore")
@@ -85,9 +85,20 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         """Update session state."""
         _update_session_state(self, app_name, user_id, session_id, state)
 
-    def list_sessions(self, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
+    def list_sessions(
+        self,
+        app_name: str,
+        user_id: "str | None" = None,
+        *,
+        order_by: "SessionOrderBy" = "update_time",
+        descending: bool = True,
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List sessions for an app."""
-        return _list_sessions(self, app_name, user_id)
+        return _list_sessions(
+            self, app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+        )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
@@ -552,23 +563,23 @@ def _update_session_state(
         conn.commit()
 
 
-def _list_sessions(store: PyMysqlADKStore, app_name: str, user_id: str | None = None) -> "list[StoredSession]":
-    if user_id is None:
-        sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {store._session_table}
-        WHERE app_name = %s
-        ORDER BY update_time DESC
-        """
-        params: tuple[Any, ...] = (app_name,)
-    else:
-        sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {store._session_table}
-        WHERE app_name = %s AND user_id = %s
-        ORDER BY update_time DESC
-        """
-        params = (app_name, user_id)
+def _list_sessions(
+    store: PyMysqlADKStore,
+    app_name: str,
+    user_id: "str | None" = None,
+    *,
+    order_by: "SessionOrderBy" = "update_time",
+    descending: bool = True,
+    limit: "int | None" = None,
+    offset: "int | None" = None,
+) -> "list[StoredSession]":
+    column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+    if page_limit == 0:
+        return []
+
+    sql, params = _session_list_query(
+        store._session_table, app_name, user_id, column, direction, page_limit, page_offset
+    )
 
     try:
         with store._config.provide_connection() as conn:
@@ -1025,3 +1036,33 @@ def _build_mysql_scope_where(
     if scope_filter == "user":
         return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
     return "app_name = %s AND scope = 'app'", (app_name,)
+
+
+def _session_list_query(
+    session_table: str,
+    app_name: str,
+    user_id: "str | None",
+    column: str,
+    direction: str,
+    limit: "int | None",
+    offset: int,
+) -> "tuple[str, tuple[Any, ...]]":
+    """Return the bounded session-list query and its bound values."""
+    params: list[Any] = [app_name]
+    where_clause = "app_name = %s"
+    if user_id is not None:
+        params.append(user_id)
+        where_clause = f"{where_clause} AND user_id = %s"
+
+    page_clause = ""
+    if limit is not None:
+        params.extend((limit, offset))
+        page_clause = "\n            LIMIT %s OFFSET %s"
+
+    sql = f"""
+    SELECT id, app_name, user_id, state, create_time, update_time
+    FROM {session_table}
+    WHERE {where_clause}
+    ORDER BY {column} {direction}, id {direction}{page_clause}
+    """
+    return sql, tuple(params)

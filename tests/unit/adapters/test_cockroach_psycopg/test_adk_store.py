@@ -5,7 +5,7 @@ from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired
+from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.cockroach_psycopg.adk import (
     CockroachPsycopgADKConfig,
@@ -162,3 +162,161 @@ def test_cockroach_psycopg_sync_memory_table_applies_trigram_index_and_locality(
     assert "LOCALITY GLOBAL" in sql
     assert "idx_adk_memory_content_trgm" in sql
     assert "ON adk_memory USING GIN (content_text gin_trgm_ops)" in sql
+
+
+class _RecordingCursor:
+    """Captures the SQL and bound parameters a session listing issues."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def execute(self, sql: Any, params: Any = None) -> None:
+        self.calls.append((sql.decode() if isinstance(sql, bytes) else str(sql), tuple(params or ())))
+
+    def fetchall(self) -> "list[Any]":
+        return []
+
+    def __enter__(self) -> "Self":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+
+class _RecordingAsyncCursor(_RecordingCursor):
+    async def execute(self, sql: Any, params: Any = None) -> None:  # type: ignore[override]
+        _RecordingCursor.execute(self, sql, params)
+
+    async def fetchall(self) -> "list[Any]":  # type: ignore[override]
+        return []
+
+    async def __aenter__(self) -> "Self":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
+class _RecordingConnection:
+    def __init__(self, cursor: _RecordingCursor) -> None:
+        self._cursor = cursor
+
+    def cursor(self, **_: Any) -> Any:
+        return self._cursor
+
+    def __enter__(self) -> "Self":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+    async def __aenter__(self) -> "Self":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _async_session_store() -> "tuple[CockroachPsycopgAsyncADKStore, _RecordingCursor]":
+    cursor = _RecordingAsyncCursor()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: _RecordingConnection(cursor)
+    return CockroachPsycopgAsyncADKStore(config), cursor
+
+
+def _sync_session_store() -> "tuple[CockroachPsycopgSyncADKStore, _RecordingCursor]":
+    cursor = _RecordingCursor()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: _RecordingConnection(cursor)
+    return CockroachPsycopgSyncADKStore(config), cursor
+
+
+async def test_cockroach_psycopg_async_list_sessions_binds_order_and_page() -> None:
+    """Explicit ordering renders inline while page bounds bind as pyformat parameters."""
+    store, cursor = _async_session_store()
+
+    await store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = %s AND user_id = %s "
+        "ORDER BY create_time ASC, id ASC LIMIT %s OFFSET %s"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+def test_cockroach_psycopg_sync_list_sessions_binds_order_and_page() -> None:
+    """The sync path produces the same bounded query as the async path."""
+    store, cursor = _sync_session_store()
+
+    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = %s AND user_id = %s "
+        "ORDER BY create_time ASC, id ASC LIMIT %s OFFSET %s"
+    )
+    assert params == ("app", "u1", 10, 20)
+
+
+async def test_cockroach_psycopg_async_list_sessions_defaults_to_recent_first() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store, cursor = _async_session_store()
+
+    await store.list_sessions("app")
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql).endswith("WHERE app_name = %s ORDER BY update_time DESC, id DESC")
+    assert params == ("app",)
+
+
+def test_cockroach_psycopg_sync_list_sessions_orders_page_after_scope_parameters() -> None:
+    """Page placeholders follow the scope parameters that are actually present."""
+    store, cursor = _sync_session_store()
+
+    store.list_sessions("app", limit=5)
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC LIMIT %s OFFSET %s")
+    assert params == ("app", 5, 0)
+
+
+async def test_cockroach_psycopg_async_list_sessions_zero_limit_never_queries() -> None:
+    """A zero limit short-circuits before any database work."""
+    store, cursor = _async_session_store()
+
+    assert await store.list_sessions("app", limit=0) == []
+    assert cursor.calls == []
+
+
+def test_cockroach_psycopg_sync_list_sessions_zero_limit_never_queries() -> None:
+    """A zero limit short-circuits before any database work on the sync path."""
+    store, cursor = _sync_session_store()
+
+    assert store.list_sessions("app", limit=0) == []
+    assert cursor.calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_cockroach_psycopg_sync_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store, cursor = _sync_session_store()
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)
+
+    assert cursor.calls == []

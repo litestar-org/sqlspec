@@ -15,6 +15,8 @@ Public API exports:
     - BaseSyncADKMemoryStore: Base class for sync memory store implementations
     - BaseAsyncADKArtifactStore: Base class for async artifact metadata stores
     - BaseSyncADKArtifactStore: Base class for sync artifact metadata stores
+    - SessionOrderBy: Literal of the timestamp columns a session listing may order by
+    - normalize_session_list_options: Shared validator for session list ordering and paging
     - StoredSession: TypedDict for session database records
     - StoredEvent: TypedDict for event database records
     - StoredMemory: TypedDict for memory database records
@@ -22,7 +24,7 @@ Public API exports:
 """
 
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk._types import StoredEvent, StoredSession
+from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
 from sqlspec.extensions.adk.artifact import (
     BaseAsyncADKArtifactStore,
     BaseSyncADKArtifactStore,
@@ -50,7 +52,7 @@ from sqlspec.extensions.adk.memory import (
     StoredMemory,
 )
 from sqlspec.extensions.adk.service import SQLSpecSessionService
-from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
+from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore, normalize_session_list_options
 
 __all__ = (
     "ADKConfig",
@@ -65,10 +67,12 @@ __all__ = (
     "SQLSpecMemoryService",
     "SQLSpecSessionService",
     "SQLSpecSyncMemoryService",
+    "SessionOrderBy",
     "StoredArtifact",
     "StoredEvent",
     "StoredMemory",
     "StoredSession",
+    "normalize_session_list_options",
     "prune_artifacts",
     "prune_artifacts_sync",
     "prune_events",

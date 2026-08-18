@@ -6,7 +6,8 @@ from decimal import Decimal
 from typing import Any, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
-from typing_extensions import NotRequired
+import pytest
+from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.oracledb.adk import (
     JSONStorageType,
@@ -341,3 +342,155 @@ def test_oracle_adk_create_tables_creates_absent_tables() -> None:
     executed = " ".join(str(call.args[0]) for call in driver.execute_script.call_args_list)
     assert "CREATE TABLE" in executed.upper()
     assert "SQLCODE != -955" not in executed
+
+
+class _RecordingCursor:
+    """Records the SQL and named binds a session listing issues."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def execute(self, sql: str, params: "dict[str, Any] | None" = None) -> None:
+        self.calls.append((sql, dict(params or {})))
+
+    def fetchall(self) -> "list[Any]":
+        return []
+
+
+class _AsyncRecordingCursor(_RecordingCursor):
+    async def execute(self, sql: str, params: "dict[str, Any] | None" = None) -> None:  # type: ignore[override]
+        _RecordingCursor.execute(self, sql, params)
+
+    async def fetchall(self) -> "list[Any]":  # type: ignore[override]
+        return []
+
+
+class _RecordingConnection:
+    def __init__(self, cursor: _RecordingCursor) -> None:
+        self._cursor = cursor
+
+    def cursor(self) -> _RecordingCursor:
+        return self._cursor
+
+    def __enter__(self) -> "Self":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+    async def __aenter__(self) -> "Self":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _async_session_store() -> "tuple[OracleAsyncADKStore, _RecordingCursor]":
+    cursor = _AsyncRecordingCursor()
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    config.provide_connection = lambda *_a, **_k: _RecordingConnection(cursor)
+    return OracleAsyncADKStore(config), cursor
+
+
+def _sync_session_store() -> "tuple[OracleSyncADKStore, _RecordingCursor]":
+    cursor = _RecordingCursor()
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    config.provide_connection = lambda *_a, **_k: _RecordingConnection(cursor)
+    return OracleSyncADKStore(config), cursor
+
+
+async def test_oracle_async_list_sessions_binds_order_and_page() -> None:
+    """Oracle row limiting binds the page values as named parameters."""
+    store, cursor = _async_session_store()
+
+    await store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = :app_name AND user_id = :user_id "
+        "ORDER BY create_time ASC, id ASC "
+        "OFFSET :page_offset ROWS FETCH NEXT :page_limit ROWS ONLY"
+    )
+    assert params == {"app_name": "app", "user_id": "u1", "page_limit": 10, "page_offset": 20}
+
+
+def test_oracle_sync_list_sessions_binds_order_and_page() -> None:
+    """The sync cursor path produces the same bounded query as the async path."""
+    store, cursor = _sync_session_store()
+
+    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = :app_name AND user_id = :user_id "
+        "ORDER BY create_time ASC, id ASC "
+        "OFFSET :page_offset ROWS FETCH NEXT :page_limit ROWS ONLY"
+    )
+    assert params == {"app_name": "app", "user_id": "u1", "page_limit": 10, "page_offset": 20}
+
+
+async def test_oracle_async_list_sessions_defaults_to_recent_first_without_a_page() -> None:
+    """The default listing keeps recent-first ordering and binds no page values."""
+    store, cursor = _async_session_store()
+
+    await store.list_sessions("app")
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql).endswith("WHERE app_name = :app_name ORDER BY update_time DESC, id DESC")
+    assert params == {"app_name": "app"}
+
+
+def test_oracle_sync_list_sessions_pages_an_unfiltered_listing() -> None:
+    """Row limiting composes with an app-only listing."""
+    store, cursor = _sync_session_store()
+
+    store.list_sessions("app", limit=5)
+
+    sql, params = cursor.calls[0]
+    assert _normalized(sql).endswith(
+        "ORDER BY update_time DESC, id DESC OFFSET :page_offset ROWS FETCH NEXT :page_limit ROWS ONLY"
+    )
+    assert params == {"app_name": "app", "page_limit": 5, "page_offset": 0}
+
+
+async def test_oracle_async_list_sessions_zero_limit_never_queries() -> None:
+    """A zero limit short-circuits before any database work."""
+    store, cursor = _async_session_store()
+
+    assert await store.list_sessions("app", limit=0) == []
+    assert cursor.calls == []
+
+
+def test_oracle_sync_list_sessions_zero_limit_never_queries() -> None:
+    """A zero limit short-circuits before any database work on the sync path."""
+    store, cursor = _sync_session_store()
+
+    assert store.list_sessions("app", limit=0) == []
+    assert cursor.calls == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"order_by": "id"}, id="unknown-order-column"),
+        pytest.param({"limit": -1}, id="negative-limit"),
+        pytest.param({"limit": True}, id="boolean-limit"),
+        pytest.param({"offset": 5}, id="unbounded-offset"),
+    ],
+)
+def test_oracle_sync_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
+    """Invalid ordering or paging fails before a connection is acquired."""
+    store, cursor = _sync_session_store()
+
+    with pytest.raises(ValueError):
+        store.list_sessions("app", **options)
+
+    assert cursor.calls == []

@@ -241,6 +241,34 @@ def test_prune_artifacts_rejects_invalid_age_before_target_resolution() -> None:
         prune_artifacts_sync("invalid_target_string", older_than_days=0)
 
 
+@pytest.mark.parametrize(
+    "age", [pytest.param(False, id="false"), pytest.param(0, id="zero"), pytest.param(-1, id="negative")]
+)
+@pytest.mark.parametrize(
+    ("prune", "parameter", "store_factory", "deleter"),
+    [
+        pytest.param(prune_sessions_sync, "idle_days", MockSyncSessionStore, "delete_idle_sessions", id="sessions"),
+        pytest.param(prune_events_sync, "older_than_days", MockSyncSessionStore, "delete_expired_events", id="events"),
+        pytest.param(
+            prune_memory_sync, "older_than_days", MockSyncMemoryStore, "delete_entries_older_than", id="memory"
+        ),
+        pytest.param(
+            prune_user_state_sync, "idle_days", MockSyncSessionStore, "delete_idle_user_states", id="user_state"
+        ),
+    ],
+)
+def test_prune_helpers_reject_non_positive_ages(
+    prune: Any, parameter: str, store_factory: Any, deleter: str, age: Any
+) -> None:
+    """Every retention helper refuses a non-positive age instead of deleting everything."""
+    store = store_factory()
+
+    with pytest.raises(ValueError, match=f"{parameter} must be a positive integer"):
+        prune(store, **{parameter: age})
+
+    getattr(store, deleter).assert_not_called()
+
+
 def test_artifact_prune_helpers_are_publicly_exported() -> None:
     import sqlspec.extensions.adk as adk
 
