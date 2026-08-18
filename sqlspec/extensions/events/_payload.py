@@ -10,7 +10,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 __all__ = (
-    "POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES",
+    "MAX_NOTIFY_BYTES",
     "coerce_dict",
     "coerce_optional_dict",
     "decode_notify_payload",
@@ -20,7 +20,7 @@ __all__ = (
     "parse_event_timestamp",
 )
 
-POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES = 7999
+MAX_NOTIFY_BYTES = 7999
 
 
 def coerce_dict(value: Any) -> "dict[str, Any]":
@@ -60,10 +60,10 @@ def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "d
     """
     encoded = _serialize_notify_envelope(event_id, payload, metadata, datetime.now(timezone.utc))
     encoded_bytes = len(encoded)
-    if encoded_bytes > POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES:
+    if encoded_bytes > MAX_NOTIFY_BYTES:
         msg = (
             f"PostgreSQL NOTIFY payload is {encoded_bytes} encoded bytes and exceeds the "
-            f"{POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES}-byte maximum. Use fits_notify_payload() or "
+            f"{MAX_NOTIFY_BYTES}-byte maximum. Use fits_notify_payload() or "
             "measure_notify_payload() to split the batch before publishing."
         )
         raise EventChannelError(msg)
@@ -86,7 +86,7 @@ def fits_notify_payload(
     payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None, *, event_id: "str | None" = None
 ) -> bool:
     """Return whether the native notification envelope fits the PostgreSQL budget."""
-    return measure_notify_payload(payload, metadata, event_id=event_id) <= POSTGRES_NOTIFY_MAX_PAYLOAD_BYTES
+    return measure_notify_payload(payload, metadata, event_id=event_id) <= MAX_NOTIFY_BYTES
 
 
 def decode_notify_payload(channel: str, payload: str) -> "EventMessage":
