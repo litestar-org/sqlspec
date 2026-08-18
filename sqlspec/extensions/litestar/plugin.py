@@ -454,6 +454,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
 
     @overload
+    def get_config(self, name: "SyncConfigT") -> "SyncConfigT": ...
+
+    @overload
+    def get_config(self, name: "AsyncConfigT") -> "AsyncConfigT": ...
+
+    @overload
     def get_config(self, name: str) -> "AnyDatabaseConfig": ...
 
     def get_config(
@@ -461,16 +467,24 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "DatabaseConfigProtocol[Any, Any, Any]":
         """Get a configuration instance by name.
 
+        Registry identifiers are available as soon as the plugin is constructed: a
+        config instance, its concrete config type when exactly one configuration has
+        that type, or a non-null ``bind_key``. A ``bind_key`` wins over a dependency
+        key of the same value. The generated Litestar dependency keys
+        (``session_key``, ``connection_key``, ``pool_key``) resolve only after the
+        plugin is registered with a Litestar application.
+
         Args:
             name: The configuration identifier.
 
         Raises:
-            KeyError: If no configuration is found for the given name.
+            KeyError: If no configuration is found for the given name, or if several
+                configurations share the requested concrete type.
 
         Returns:
             The configuration instance for the specified name.
         """
-        state = self._get_plugin_state(name)
+        state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
     def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
@@ -783,10 +797,54 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         plugin_state = self._get_plugin_state(key)
         return await self._ensure_connection_async(plugin_state, state, scope)
 
+    def _registry_state(self, name: Any) -> "PluginConfigState | None":
+        """Resolve plugin state from registry identity, independent of Litestar registration.
+
+        Args:
+            name: A ``bind_key``, a config instance, or a concrete config type.
+
+        Raises:
+            KeyError: If several configurations share the requested concrete type.
+
+        Returns:
+            The matching plugin state, or ``None`` when the identifier is not a
+            registry identity.
+        """
+        if isinstance(name, str):
+            for state in self._plugin_configs:
+                if state.config.bind_key == name:
+                    return state
+            return None
+
+        if isinstance(name, type):
+            matches = [state for state in self._plugin_configs if type(state.config) is name]
+            if len(matches) > 1:
+                self._raise_ambiguous_config_type(name, matches)
+            return matches[0] if matches else None
+
+        for state in self._plugin_configs:
+            if state.config is name:
+                return state
+        return None
+
+    def _dependency_state(self, name: Any) -> PluginConfigState:
+        """Resolve plugin state from a Litestar dependency key, which exists only after registration.
+
+        Args:
+            name: A ``session_key``, ``connection_key``, or ``pool_key``.
+
+        Returns:
+            The matching plugin state.
+        """
+        for state in self._plugin_configs:
+            if state.annotation is None:
+                self._raise_plugin_not_registered()
+        return self._get_plugin_state(name)
+
     def _get_plugin_state(
         self, key: "str | DatabaseConfigProtocol[Any, Any, Any] | type[DatabaseConfigProtocol[Any, Any, Any]]"
     ) -> PluginConfigState:
-        """Get plugin state for a configuration by key."""
+        """Get plugin state for a configuration by Litestar dependency key, instance, or annotation."""
         if isinstance(key, str):
             for state in self._plugin_configs:
                 if key in {state.connection_key, state.pool_key, state.session_key}:
@@ -804,9 +862,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     def _get_available_keys(self) -> "list[str]":
         """Get a list of all available configuration keys for error messages."""
-        keys = []
+        keys: list[str] = []
         for state in self._plugin_configs:
-            keys.extend([state.connection_key, state.pool_key, state.session_key])
+            for key in (state.config.bind_key, state.connection_key, state.pool_key, state.session_key):
+                if key is not None and key not in keys:
+                    keys.append(key)
         return keys
 
     def _ensure_dependency_keys(self) -> None:
@@ -845,6 +905,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     def _raise_config_not_found(self, key: Any) -> NoReturn:
         """Raise error when configuration is not found."""
         msg = f"No database configuration found for name '{key}'. Available keys: {self._get_available_keys()}"
+        raise KeyError(msg)
+
+    def _raise_ambiguous_config_type(self, config_type: type, candidates: "list[PluginConfigState]") -> NoReturn:
+        """Raise error when several configurations share one concrete config type."""
+        bind_keys = [state.config.bind_key or "<unbound>" for state in candidates]
+        msg = (
+            f"Multiple database configurations use the type '{config_type.__name__}'. "
+            f"Look one up by its bind key instead. Candidate bind keys: {bind_keys}"
+        )
         raise KeyError(msg)
 
     def _raise_duplicate_connection_keys(self) -> None:
