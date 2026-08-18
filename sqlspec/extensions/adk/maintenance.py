@@ -86,22 +86,23 @@ def _resolve_artifact_service(target: Any) -> Any:
     raise TypeError(msg)
 
 
-def _ensure_positive_days(older_than_days: Any) -> int:
+def _ensure_positive_days(value: Any, parameter: str) -> int:
     """Validate a retention age expressed in whole days.
 
     Args:
-        older_than_days: Candidate age value.
+        value: Candidate age value.
+        parameter: Name of the keyword argument being validated.
 
     Returns:
         The validated age in days.
 
     Raises:
-        ValueError: If the value is not a positive built-in integer.
+        ValueError: If the value is not a positive integer.
     """
-    if type(older_than_days) is not int or older_than_days <= 0:
-        msg = f"older_than_days must be a positive integer, got {older_than_days!r}"
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"{parameter} must be a positive integer, got {value!r}"
         raise ValueError(msg)
-    return older_than_days
+    return value
 
 
 async def _call_store_method(store: Any, method_name: str, *args: Any, **kwargs: Any) -> int:
@@ -125,11 +126,15 @@ async def prune_sessions(target: Any, *, idle_days: int = 30, app_name: str | No
 
     Returns:
         PruneReport containing deleted row count and timing.
+
+    Raises:
+        ValueError: If ``idle_days`` is not a positive integer.
     """
+    retention_days = _ensure_positive_days(idle_days, "idle_days")
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "session_table", "adk_session")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=idle_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted = await _call_store_method(store, "delete_idle_sessions", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -145,11 +150,15 @@ async def prune_events(target: Any, *, older_than_days: int = 90, app_name: str 
 
     Returns:
         PruneReport containing deleted row count and timing.
+
+    Raises:
+        ValueError: If ``older_than_days`` is not a positive integer.
     """
+    retention_days = _ensure_positive_days(older_than_days, "older_than_days")
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "events_table", "adk_event")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted = await _call_store_method(store, "delete_expired_events", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -172,13 +181,17 @@ async def prune_memory(
 
     Returns:
         PruneReport containing deleted row count and timing.
+
+    Raises:
+        ValueError: If ``older_than_days`` is not a positive integer.
     """
+    retention_days = _ensure_positive_days(older_than_days, "older_than_days")
     start = time.perf_counter()
     store = _resolve_memory_store(target)
     table_name = getattr(store, "memory_table", "adk_memory")
     scope_param = None if scope == "all" else scope
     deleted = await _call_store_method(
-        store, "delete_entries_older_than", older_than_days, app_name=app_name, scope=scope_param
+        store, "delete_entries_older_than", retention_days, app_name=app_name, scope=scope_param
     )
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -194,11 +207,15 @@ async def prune_user_state(target: Any, *, idle_days: int = 180, app_name: str |
 
     Returns:
         PruneReport containing deleted row count and timing.
+
+    Raises:
+        ValueError: If ``idle_days`` is not a positive integer.
     """
+    retention_days = _ensure_positive_days(idle_days, "idle_days")
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "user_state_table", "adk_user_state")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=idle_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted = await _call_store_method(store, "delete_idle_user_states", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -221,8 +238,11 @@ async def prune_artifacts(target: Any, *, older_than_days: int = 90, app_name: s
 
     Returns:
         PruneReport containing deleted version-row count and timing.
+
+    Raises:
+        ValueError: If ``older_than_days`` is not a positive integer.
     """
-    retention_days = _ensure_positive_days(older_than_days)
+    retention_days = _ensure_positive_days(older_than_days, "older_than_days")
     start = time.perf_counter()
     service = _resolve_artifact_service(target)
     table_name = getattr(service.store, "artifact_table", "adk_artifact")

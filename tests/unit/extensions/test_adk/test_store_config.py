@@ -467,30 +467,30 @@ def test_base_stores_declare_identical_session_list_options() -> None:
 
 def test_session_list_options_default_to_recent_first() -> None:
     """The default contract keeps the historical recent-first ordering."""
-    assert normalize_session_list_options() == ("update_time DESC, id DESC", None, 0)
+    assert normalize_session_list_options() == ("update_time", "DESC", None, 0)
 
 
 @pytest.mark.parametrize(
-    ("order_by", "descending", "expected_clause"),
+    ("order_by", "descending", "expected_direction"),
     [
-        ("update_time", True, "update_time DESC, id DESC"),
-        ("update_time", False, "update_time ASC, id ASC"),
-        ("create_time", True, "create_time DESC, id DESC"),
-        ("create_time", False, "create_time ASC, id ASC"),
+        ("update_time", True, "DESC"),
+        ("update_time", False, "ASC"),
+        ("create_time", True, "DESC"),
+        ("create_time", False, "ASC"),
     ],
 )
-def test_session_order_clause_ties_break_on_id_in_the_same_direction(
-    order_by: SessionOrderBy, descending: bool, expected_clause: str
+def test_session_order_parts_resolve_column_and_direction(
+    order_by: SessionOrderBy, descending: bool, expected_direction: str
 ) -> None:
-    """The id tie-break always follows the timestamp column's direction."""
-    clause, _, _ = normalize_session_list_options(order_by, descending)
+    """Adapters receive the allowlisted column and direction as separate parts."""
+    column, direction, _, _ = normalize_session_list_options(order_by, descending)
 
-    assert clause == expected_clause
+    assert (column, direction) == (order_by, expected_direction)
 
 
 def test_session_list_options_normalize_absent_offset_to_zero() -> None:
     """A missing offset is equivalent to starting at the first row."""
-    assert normalize_session_list_options("update_time", True, 10, None) == ("update_time DESC, id DESC", 10, 0)
+    assert normalize_session_list_options("update_time", True, 10, None) == ("update_time", "DESC", 10, 0)
 
 
 @pytest.mark.parametrize(

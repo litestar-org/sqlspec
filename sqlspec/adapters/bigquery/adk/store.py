@@ -340,7 +340,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         limit: "int | None" = None,
         offset: "int | None" = None,
     ) -> "list[StoredSession]":
-        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
@@ -358,7 +358,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if user_id is not None:
             sql += " AND user_id = @user_id"
             params.append(self._query_param("user_id", user_id))
-        sql += f" ORDER BY {order_clause}"
+        sql += f" ORDER BY {column} {direction}, id {direction}"
         if page_limit is not None:
             sql += " LIMIT @limit OFFSET @offset"
             params.append(self._query_param("limit", page_limit, bq_type="INT64"))

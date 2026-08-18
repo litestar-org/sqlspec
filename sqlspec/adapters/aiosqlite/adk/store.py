@@ -231,11 +231,13 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Returns:
             List of session records.
         """
-        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
-        sql, params = _session_list_query(self._session_table, app_name, user_id, order_clause, page_limit, page_offset)
+        sql, params = _session_list_query(
+            self._session_table, app_name, user_id, column, direction, page_limit, page_offset
+        )
 
         try:
             async with self._config.provide_connection() as conn:
@@ -1115,7 +1117,13 @@ def _build_sqlite_scope_clause(
 
 
 def _session_list_query(
-    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+    session_table: str,
+    app_name: str,
+    user_id: "str | None",
+    column: str,
+    direction: str,
+    limit: "int | None",
+    offset: int,
 ) -> "tuple[str, tuple[Any, ...]]":
     """Return the bounded session-list query and its bound values."""
     params: list[Any] = [app_name]
@@ -1133,6 +1141,6 @@ def _session_list_query(
     SELECT id, app_name, user_id, state, create_time, update_time
     FROM {session_table}
     WHERE {where_clause}
-    ORDER BY {order_clause}{page_clause}
+    ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, tuple(params)

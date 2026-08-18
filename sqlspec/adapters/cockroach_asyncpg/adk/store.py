@@ -165,7 +165,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         limit: "int | None" = None,
         offset: "int | None" = None,
     ) -> "list[StoredSession]":
-        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
@@ -186,7 +186,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._session_table}
         WHERE {where_clause}
-        ORDER BY {order_clause}{page_clause}
+        ORDER BY {column} {direction}, id {direction}{page_clause}
         """
         params: tuple[Any, ...] = tuple(values)
 

@@ -395,7 +395,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         limit: "int | None" = None,
         offset: "int | None" = None,
     ) -> "list[StoredSession]":
-        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
@@ -412,7 +412,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             types["user_id"] = SPANNER_PARAM_TYPES.STRING
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
-        sql = f"{sql} ORDER BY {order_clause}"
+        sql = f"{sql} ORDER BY {column} {direction}, id {direction}"
         if page_limit is not None:
             sql = f"{sql} LIMIT @limit OFFSET @offset"
             params["limit"] = page_limit

@@ -215,7 +215,7 @@ def test_limit_offset_dialects_bind_a_row_limited_page(driver_name: str) -> None
     """PostgreSQL, SQLite, DuckDB, and Snowflake page with bound LIMIT/OFFSET."""
     store = _store_for(driver_name)
 
-    sql, params = store._session_list_query("app", "u1", "create_time ASC, id ASC", 10, 20)  # pyright: ignore[reportPrivateUsage]
+    sql, params = store._session_list_query("app", "u1", "create_time", "ASC", 10, 20)  # pyright: ignore[reportPrivateUsage]
 
     assert _normalized(sql) == (
         "SELECT id, app_name, user_id, state, create_time, update_time "
@@ -229,7 +229,7 @@ def test_generic_dialect_pages_with_standard_offset_fetch() -> None:
     """The generic branch uses SQL:2008 row-limiting with the offset bound first."""
     store = _store_for("unknown_driver")
 
-    sql, params = store._session_list_query("app", None, "update_time DESC, id DESC", 10, 0)  # pyright: ignore[reportPrivateUsage]
+    sql, params = store._session_list_query("app", None, "update_time", "DESC", 10, 0)  # pyright: ignore[reportPrivateUsage]
 
     assert _normalized(sql) == (
         "SELECT id, app_name, user_id, state, create_time, update_time "
@@ -244,7 +244,7 @@ def test_every_dialect_omits_pagination_for_an_unbounded_listing(driver_name: st
     """Without a limit no dialect emits a row-limiting clause."""
     store = _store_for(driver_name)
 
-    sql, params = store._session_list_query("app", None, "update_time DESC, id DESC", None, 0)  # pyright: ignore[reportPrivateUsage]
+    sql, params = store._session_list_query("app", None, "update_time", "DESC", None, 0)  # pyright: ignore[reportPrivateUsage]
 
     assert _normalized(sql).endswith("WHERE app_name = ? ORDER BY update_time DESC, id DESC")
     assert params == ("app",)

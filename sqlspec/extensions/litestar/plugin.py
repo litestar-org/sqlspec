@@ -836,9 +836,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             The matching plugin state.
         """
-        for state in self._plugin_configs:
-            if state.annotation is None:
-                self._raise_plugin_not_registered()
+        if any(state.annotation is None for state in self._plugin_configs):
+            self._raise_plugin_not_registered()
         return self._get_plugin_state(name)
 
     def _get_plugin_state(

@@ -925,8 +925,8 @@ def normalize_session_list_options(
     descending: bool = True,
     limit: "int | None" = None,
     offset: "int | None" = None,
-) -> "tuple[str, int | None, int]":
-    """Validate session listing options and render their deterministic order clause.
+) -> "tuple[SessionOrderBy, str, int | None, int]":
+    """Validate session listing options and resolve their ordering parts.
 
     Args:
         order_by: Timestamp column to sort on. Only ``create_time`` and
@@ -938,8 +938,9 @@ def normalize_session_list_options(
         offset: Number of leading rows to skip. ``None`` is equivalent to zero.
 
     Returns:
-        The ``ORDER BY`` clause body, the validated limit, and the normalized
-        offset.
+        The allowlisted order column, the ``ASC``/``DESC`` direction keyword,
+        the validated limit, and the normalized offset. Callers render the
+        ``ORDER BY`` body in whichever form their driver accepts.
 
     Raises:
         ValueError: If the order column is outside the allowlist, a page bound
@@ -961,8 +962,7 @@ def normalize_session_list_options(
         msg = "offset requires a limit; unbounded offset is not supported"
         raise ValueError(msg)
 
-    direction = "DESC" if descending else "ASC"
-    return f"{order_by} {direction}, id {direction}", limit, normalized_offset
+    return order_by, "DESC" if descending else "ASC", limit, normalized_offset
 
 
 def _run_lifecycle_sync(config: Any, statements: "list[str]") -> None:

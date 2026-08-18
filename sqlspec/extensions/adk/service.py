@@ -212,7 +212,7 @@ class SQLSpecSessionService(BaseSessionService):
         Returns:
             Response containing list of sessions (without events).
         """
-        _, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        _, _, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             log_with_context(
                 logger, logging.DEBUG, "adk.session.list", app_name=app_name, has_user_id=user_id is not None, count=0

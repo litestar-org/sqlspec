@@ -1,6 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from psycopg import errors
 from psycopg import sql as pg_sql
@@ -37,13 +37,6 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
 
-
-SESSION_ORDER_CLAUSES: Final = {
-    "create_time ASC, id ASC": pg_sql.SQL("create_time ASC, id ASC"),
-    "create_time DESC, id DESC": pg_sql.SQL("create_time DESC, id DESC"),
-    "update_time ASC, id ASC": pg_sql.SQL("update_time ASC, id ASC"),
-    "update_time DESC, id DESC": pg_sql.SQL("update_time DESC, id DESC"),
-}
 
 _ADK_SESSIONS_TABLE_DDL_TEMPLATE = ",\n            {0}"
 
@@ -304,12 +297,12 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         limit: "int | None" = None,
         offset: "int | None" = None,
     ) -> "list[StoredSession]":
-        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
         query, params = _session_list_query(
-            self._session_table, app_name, user_id, order_clause, page_limit, page_offset
+            self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
 
         try:
@@ -811,12 +804,12 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         offset: "int | None" = None,
     ) -> "list[StoredSession]":
         """List sessions for an app."""
-        order_clause, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
         query, params = _session_list_query(
-            self._session_table, app_name, user_id, order_clause, page_limit, page_offset
+            self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
 
         try:
@@ -1931,7 +1924,13 @@ def _build_psycopg_scope_where(
 
 
 def _session_list_query(
-    session_table: str, app_name: str, user_id: "str | None", order_clause: str, limit: "int | None", offset: int
+    session_table: str,
+    app_name: str,
+    user_id: "str | None",
+    column: str,
+    direction: str,
+    limit: "int | None",
+    offset: int,
 ) -> "tuple[pg_sql.Composed, tuple[Any, ...]]":
     """Return the bounded session-list query and its bound values."""
     params: list[Any] = [app_name]
@@ -1945,15 +1944,19 @@ def _session_list_query(
         params.extend((limit, offset))
         page_clause = pg_sql.SQL(" LIMIT %s OFFSET %s")
 
+    column_sql = pg_sql.SQL("create_time") if column == "create_time" else pg_sql.SQL("update_time")
+    direction_sql = pg_sql.SQL("DESC") if direction == "DESC" else pg_sql.SQL("ASC")
+
     query = pg_sql.SQL("""
     SELECT id, app_name, user_id, state, create_time, update_time
     FROM {table}
     WHERE app_name = %s{user_filter}
-    ORDER BY {order}{page}
+    ORDER BY {column} {direction}, id {direction}{page}
     """).format(
         table=pg_sql.Identifier(session_table),
         user_filter=user_filter,
-        order=SESSION_ORDER_CLAUSES[order_clause],
+        column=column_sql,
+        direction=direction_sql,
         page=page_clause,
     )
     return query, tuple(params)
