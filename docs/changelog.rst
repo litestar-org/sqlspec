@@ -9,13 +9,82 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.61.1 - Compiled async exception handling
+v0.62.0 - ADK retention, migration prerequisites, and event payload budgets
 ------------------------------------------------------------------------------
+
+**Added:**
+
+* Native PostgreSQL notification payloads can be measured before publishing.
+  :data:`~sqlspec.extensions.events.MAX_NOTIFY_BYTES`,
+  :func:`~sqlspec.extensions.events.measure_notify_payload`, and
+  :func:`~sqlspec.extensions.events.fits_notify_payload` are exported from
+  :mod:`sqlspec.extensions.events`, so producers can chunk a batch instead of
+  discovering an oversized envelope as an exception. Measurement covers the
+  complete encoded envelope in UTF-8 bytes and shares one serialization
+  function with the encoder.
+* Google ADK artifact versions can be pruned by age.
+  :func:`~sqlspec.extensions.adk.prune_artifacts` and
+  :func:`~sqlspec.extensions.adk.prune_artifacts_sync` delete SQL metadata
+  first, then remove the referenced content objects on a best-effort basis
+  through the configured storage registry, reporting the number of version rows
+  removed. Artifact stores gained an overridable
+  ``delete_artifacts_older_than()`` hook that is non-abstract, so existing
+  third-party subclasses continue to instantiate.
+* :meth:`SQLSpecPlugin.get_config() <sqlspec.extensions.litestar.SQLSpecPlugin.get_config>`
+  resolves a configuration by instance, by concrete type, or by ``bind_key``
+  immediately after plugin construction, which makes CLI commands, migration
+  scripts, and standalone workers able to share the application's plugin
+  instance.
+
+**Changed:**
+
+* ``enable_sessions`` and ``enable_memory`` are now the only per-feature gates
+  for ADK migrations, and they gate both the upgrade and downgrade directions
+  consistently.
+* The native notification payload ceiling is 7,999 encoded bytes rather than
+  8,000. PostgreSQL requires a payload shorter than 8,000 bytes, so an envelope
+  of exactly 8,000 bytes was previously accepted locally and then rejected by
+  the server. Oversize errors now report the measured size, the maximum, and
+  the helper to use.
+* Publication timestamps in native notification envelopes are serialized at
+  fixed microsecond width, so envelope size no longer varies with the clock
+  reading. Previously emitted variable-width timestamps still decode.
+
+**Removed:**
+
+* ``include_sessions_migration`` and ``include_memory_migration`` are removed
+  from the ADK configuration without an alias or deprecation shim. The first was
+  never read and the second duplicated ``enable_memory``; use ``enable_sessions``
+  and ``enable_memory`` instead. Passing the removed keys raises at
+  configuration construction.
+* The unused destructive ``0002_reset_adk_tables`` migration is deleted.
+  ``0001_create_adk_tables`` remains the single canonical ADK schema migration.
 
 **Fixed:**
 
+* Fresh PostgreSQL databases can run the packaged ADK schema migration with
+  memory enabled. The migration now emits ``CREATE EXTENSION IF NOT EXISTS
+  vector`` immediately before the first statement that declares a ``VECTOR``
+  column, scoped to PostgreSQL-family dialects. Previously the memory DDL
+  declared vector columns and indexes without installing the extension, failing
+  with ``type "vector" does not exist`` on any server where pgvector was not
+  already present. Startup paths such as ``create_tables()`` and
+  ``ensure_tables()`` never install extensions.
+* ``SQLSpecPlugin.get_config()`` no longer requires application registration to
+  resolve a configuration, and it honors each configuration's ``bind_key``.
+  Resolving by type raises ``KeyError`` listing candidate bind keys when several
+  configurations share a concrete type, rather than returning the first match.
+  Generated Litestar dependency keys remain registration-bound.
 * Compiled async drivers no longer re-raise an exception already being handled
   by the caller when a database operation inside that handler succeeds.
+
+**Upgrade notes:**
+
+* The pgvector migration change requires the database server to have the
+  pgvector files available and the migration role to be permitted to run
+  ``CREATE EXTENSION``. On managed services where that privilege is withheld, a
+  DBA or the provider must pre-provision the extension. The failure now surfaces
+  at ``CREATE EXTENSION`` rather than later as a missing type.
 
 v0.61.0 - Scoped memory recall and ADK modernization
 ------------------------------------------------------------------------------
