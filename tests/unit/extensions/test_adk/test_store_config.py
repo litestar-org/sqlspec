@@ -1,7 +1,6 @@
 # pyright: reportPrivateUsage=false
 """Tests for shared ADK store configuration behavior."""
 
-import importlib
 import logging
 from collections.abc import Sequence
 from datetime import datetime
@@ -413,19 +412,6 @@ def test_session_store_reset_drop_tables_does_not_duplicate_configured_legacy_me
 
     assert statements.count("DROP TABLE IF EXISTS adk_metadata") == 1
     assert store.metadata_table == "adk_metadata"
-
-
-@pytest.mark.anyio
-async def test_reset_migration_accepts_sync_session_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    migration = importlib.import_module("sqlspec.extensions.adk.migrations.0002_reset_adk_tables")
-    context = type("Context", (), {"config": _Config()})()
-
-    monkeypatch.setattr(migration, "_get_store_class", lambda _context: _SyncSessionStore)
-    monkeypatch.setattr(migration, "_get_memory_store_class", lambda _context: None)
-
-    statements = await migration.up(context)
-
-    assert "" in statements
 
 
 def test_sync_memory_store_reset_drop_tables_uses_drop_sql() -> None:

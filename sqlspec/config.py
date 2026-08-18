@@ -646,31 +646,19 @@ class ADKConfig(TypedDict):
     """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
 
     enable_sessions: NotRequired[bool]
-    """Enable session store at runtime. Default: True.
+    """Enable the session store at runtime and in packaged migrations. Default: True.
 
-    When False: session service unavailable, session store operations disabled.
-    Independent of migration control - can use externally-managed tables.
+    When False the session service is unavailable, session store operations are
+    disabled, and packaged ADK migrations emit no session, event, state, or
+    metadata DDL.
     """
 
     enable_memory: NotRequired[bool]
-    """Enable memory store at runtime. Default: True.
+    """Enable the memory store at runtime and in packaged migrations. Default: True.
 
-    When False: memory service unavailable, memory store operations disabled.
-    Independent of migration control - can use externally-managed tables.
-    """
-
-    include_sessions_migration: NotRequired[bool]
-    """Include session tables in SQLSpec migrations. Default: True.
-
-    When False: session migration DDL skipped (use external migration tools).
-    Decoupled from enable_sessions - allows external table management with SQLSpec runtime.
-    """
-
-    include_memory_migration: NotRequired[bool]
-    """Include memory tables in SQLSpec migrations. Default: True.
-
-    When False: memory migration DDL skipped (use external migration tools).
-    Decoupled from enable_memory - allows external table management with SQLSpec runtime.
+    When False the memory service is unavailable, memory store operations are
+    disabled, and packaged ADK migrations emit no memory table DDL or PostgreSQL
+    vector extension statement.
     """
 
     session_table: NotRequired[str]

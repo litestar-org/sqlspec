@@ -62,9 +62,7 @@ dropped columns, type changes, data backfills, and other complex work. Old
 ``schema_version`` rows remain readable, but they do not control the schema.
 
 Use versioned migrations when your release process needs a ledger. Also use
-them for changes that do more than add columns. The destructive
-``0002_reset_adk_tables`` migration remains for planned clean-break resets. It
-is not the normal upgrade path.
+them for changes that do more than add columns.
 
 .. note::
 
@@ -77,6 +75,56 @@ is not the normal upgrade path.
    ``migration_config={"include_extensions": ["adk"]}`` to opt in explicitly
    by extension name. Use ``migration_config={"enabled": False}`` to disable
    migrations entirely for a given database config.
+
+Feature Gating
+==============
+
+Your migration configuration decides whether ADK migrations run at all. Within
+those migrations, ``enable_sessions`` and ``enable_memory`` are the only
+per-feature switches:
+
+.. code-block:: python
+
+   config = AsyncpgConfig(
+       connection_config={"dsn": "postgresql://localhost/app"},
+       migration_config={"script_location": "migrations/postgres"},
+       extension_config={"adk": {"enable_sessions": True, "enable_memory": False}},
+   )
+
+``enable_sessions=False`` suppresses the session, event, state, and metadata
+DDL. ``enable_memory=False`` suppresses the memory table DDL and the PostgreSQL
+vector extension statement described below. Both default to ``True``.
+
+PostgreSQL pgvector Requirement
+===============================
+
+PostgreSQL memory tables store embeddings in a ``VECTOR`` column, which the
+pgvector extension provides. When memory is enabled on PostgreSQL, migration
+``0001_create_adk_tables`` runs ``CREATE EXTENSION IF NOT EXISTS vector``
+immediately before the first statement that uses the type. The statement is
+idempotent, so re-running the migration against a database that already has the
+extension succeeds.
+
+SQL can only enable an extension the server already ships. Two things must be
+true before the migration runs:
+
+- The pgvector server files are installed on the PostgreSQL host, so the
+  extension is listed in ``pg_available_extensions``.
+- The role running the migration is allowed to create the extension.
+
+On managed database services, ask your DBA or platform team to pre-provision
+pgvector through the provider's supported extension workflow rather than
+granting broad privileges to the migration role. A pre-provisioned extension
+costs nothing: the migration's ``IF NOT EXISTS`` statement becomes a no-op.
+
+If either requirement is unmet, the migration fails on the ``CREATE EXTENSION``
+statement with a clear permission or availability error instead of a later
+``type "vector" does not exist`` error from the memory table DDL.
+
+Automatic ``create_tables()`` / ``ensure_tables()`` reconciliation never
+attempts extension installation, so it runs no repeated startup privilege
+check. Deployments that rely on that path instead of versioned migrations must
+pre-provision pgvector themselves.
 
 Clean-Break Migration Notes
 ============================

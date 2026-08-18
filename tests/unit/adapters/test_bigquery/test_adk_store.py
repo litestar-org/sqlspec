@@ -18,7 +18,7 @@ from sqlspec.extensions.adk import BaseSyncADKStore
 def _make_store(
     adk_config: dict[str, object] | None = None, driver_features: dict[str, Any] | None = None
 ) -> BigQueryADKStore:
-    adk_settings: dict[str, Any] = {"enable_memory": False, "include_memory_migration": False}
+    adk_settings: dict[str, Any] = {"enable_memory": False}
     if adk_config:
         adk_settings.update(adk_config)
     extension_config: ExtensionConfigs = {"adk": adk_settings}
