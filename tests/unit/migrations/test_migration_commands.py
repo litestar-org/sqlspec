@@ -48,6 +48,22 @@ def test_migration_commands_async_config_initialization(async_config: AiosqliteC
     assert hasattr(commands, "runner")
 
 
+def test_cached_sync_migration_commands_have_resolved_dialect(sync_config: SqliteConfig) -> None:
+    """Cached sync migration commands inherit the config's resolved dialect."""
+    commands = sync_config.get_migration_commands()
+
+    assert commands.runner.context is not None
+    assert commands.runner.context.dialect == "sqlite"
+
+
+def test_cached_async_migration_commands_have_resolved_dialect(async_config: AiosqliteConfig) -> None:
+    """Cached async migration commands inherit the config's resolved dialect."""
+    commands = async_config.get_migration_commands()
+
+    assert commands.runner.context is not None
+    assert commands.runner.context.dialect == "sqlite"
+
+
 def test_migration_commands_sync_init_delegation(tmp_path: Path, sync_config: SqliteConfig) -> None:
     """Test that sync config init is delegated directly to sync implementation."""
     with patch.object(SyncMigrationCommands, "init") as mock_init:

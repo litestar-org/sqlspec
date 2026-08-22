@@ -1524,8 +1524,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self.extension_config = extension_config or {}
         self.migration_config = migration_config or {}
         self._init_observability(observability_config)
-        self._initialize_migration_components()
         self.statement_config = statement_config or build_default_statement_config(default_dialect)
+        self._initialize_migration_components()
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._attach_lifecycle_hooks()
