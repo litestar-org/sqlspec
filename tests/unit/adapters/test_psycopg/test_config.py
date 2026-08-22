@@ -1,7 +1,7 @@
 """Psycopg configuration tests covering statement config builders."""
 
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from psycopg import AsyncCursor, Connection, Cursor
@@ -18,6 +18,7 @@ from sqlspec.adapters.psycopg.core import (
     resolve_postgres_extension_state,
 )
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 class _CapturedSyncPool:
@@ -140,6 +141,43 @@ def test_psycopg_resolve_postgres_extension_state_promotes_paradedb() -> None:
     assert statement_config.dialect == "paradedb"
     assert pgvector_available is True
     assert paradedb_available is True
+
+
+def test_psycopg_sync_bm25_probe_is_cached_and_does_not_raise_from_pool_callback() -> None:
+    """The sync pool callback caches missing pg_textsearch without raising."""
+    connection = MagicMock()
+    connection.autocommit = True
+    connection.execute.return_value.fetchall.return_value = [("pg_search",)]
+    config = PsycopgSyncConfig(
+        driver_features={"enable_pgvector": False, "enable_paradedb": True},
+        extension_config={"adk": {"enable_bm25": True}},
+    )
+
+    config._configure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    config._configure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+    connection.execute.assert_called_once()
+    assert connection.execute.call_args.args[1] == (["pg_search", "pg_textsearch"],)
+    with pytest.raises(ImproperConfigurationError, match="requires the pg_textsearch"):
+        config._ensure_pg_textsearch_available()  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_psycopg_async_bm25_probe_failure_is_preserved_without_callback_failure() -> None:
+    """The async pool callback records a failed probe and exposes it after acquisition."""
+    probe_error = RuntimeError("probe failed")
+    connection = AsyncMock()
+    connection.autocommit = True
+    connection.execute.side_effect = probe_error
+    config = PsycopgAsyncConfig(
+        driver_features={"enable_pgvector": False, "enable_paradedb": False},
+        extension_config={"adk": {"enable_bm25": True}},
+    )
+
+    await config._configure_async_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        config._ensure_pg_textsearch_available()  # pyright: ignore[reportPrivateUsage]
+    assert exc_info.value.__cause__ is probe_error
 
 
 def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:

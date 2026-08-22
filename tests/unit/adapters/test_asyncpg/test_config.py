@@ -15,6 +15,7 @@ from sqlspec.adapters.asyncpg.core import (
     resolve_postgres_extension_state,
 )
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -168,6 +169,55 @@ def test_asyncpg_resolve_postgres_extension_state_promotes_paradedb() -> None:
     assert statement_config.dialect == "paradedb"
     assert pgvector_available is True
     assert paradedb_available is True
+
+
+async def test_asyncpg_bm25_extension_probe_is_required_and_cached() -> None:
+    """BM25 probes pg_textsearch once and accepts only that extension."""
+    connection = AsyncMock()
+    connection.fetch.return_value = [{"extname": "pg_search"}]
+    config = AsyncpgConfig(
+        driver_features={"enable_json_codecs": False, "enable_pgvector": False, "enable_paradedb": True},
+        extension_config={"adk": {"enable_memory": True, "enable_bm25": True}},
+    )
+
+    await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+    connection.fetch.assert_awaited_once()
+    assert connection.fetch.await_args.args[1] == ["pg_search", "pg_textsearch"]
+    with pytest.raises(ImproperConfigurationError, match="requires the pg_textsearch"):
+        config._ensure_pg_textsearch_available()  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_asyncpg_bm25_probe_failure_is_preserved_as_cause() -> None:
+    """A failed capability query remains distinguishable from an absent extension."""
+    probe_error = RuntimeError("probe failed")
+    connection = AsyncMock()
+    connection.fetch.side_effect = probe_error
+    config = AsyncpgConfig(
+        driver_features={"enable_json_codecs": False, "enable_pgvector": False, "enable_paradedb": False},
+        extension_config={"adk": {"enable_bm25": True}},
+    )
+
+    await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        config._ensure_pg_textsearch_available()  # pyright: ignore[reportPrivateUsage]
+    assert exc_info.value.__cause__ is probe_error
+
+
+async def test_asyncpg_does_not_probe_pg_textsearch_when_memory_or_bm25_is_disabled() -> None:
+    """Unneeded BM25 capability checks are omitted from first-connection setup."""
+    for adk_config in ({"enable_memory": False, "enable_bm25": True}, {"enable_bm25": False}):
+        connection = AsyncMock()
+        config = AsyncpgConfig(
+            driver_features={"enable_json_codecs": False, "enable_pgvector": False, "enable_paradedb": False},
+            extension_config={"adk": adk_config},
+        )
+
+        await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+        connection.fetch.assert_not_awaited()
 
 
 @pytest.mark.anyio

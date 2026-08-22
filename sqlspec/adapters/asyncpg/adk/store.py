@@ -599,6 +599,8 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             return
 
         async with self._config.provide_session() as driver:
+            if self._enable_bm25:
+                self._config._ensure_pg_textsearch_available()
             await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
@@ -616,9 +618,9 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                     sql = f"""
                     INSERT INTO {self._memory_table}
                     (id, session_id, app_name, user_id, scope, event_id, author,
-                     {self._owner_id_column_name}, timestamp, content_json,
+                     {self._owner_id_column_name}, timestamp, embedding, content_json,
                      content_text, metadata_json, inserted_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::float8[]::vector, $11, $12, $13, $14)
                     ON CONFLICT (event_id) DO NOTHING
                     """
                     result = await conn.execute(
@@ -632,6 +634,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                         entry["author"],
                         owner_id,
                         entry["timestamp"],
+                        entry.get("embedding"),
                         entry["content_json"],
                         entry["content_text"],
                         entry["metadata_json"],
@@ -641,8 +644,8 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                     sql = f"""
                     INSERT INTO {self._memory_table}
                     (id, session_id, app_name, user_id, scope, event_id, author,
-                     timestamp, content_json, content_text, metadata_json, inserted_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     timestamp, embedding, content_json, content_text, metadata_json, inserted_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::float8[]::vector, $10, $11, $12, $13)
                     ON CONFLICT (event_id) DO NOTHING
                     """
                     result = await conn.execute(
@@ -655,13 +658,14 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                         entry["event_id"],
                         entry["author"],
                         entry["timestamp"],
+                        entry.get("embedding"),
                         entry["content_json"],
                         entry["content_text"],
                         entry["metadata_json"],
                         entry["inserted_at"],
                     )
                 try:
-                    inserted_count += int(result.split(" ")[1])
+                    inserted_count += int(result.rsplit(" ", 1)[-1])
                 except (IndexError, ValueError):
                     continue
 
@@ -706,7 +710,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             candidate_limit = max(limit_value * 2, 50)
             sql = f"""
             WITH vector_matches AS (
-                SELECT id, RANK() OVER (ORDER BY embedding <=> {p_vec}) AS rank_vec
+                SELECT id, RANK() OVER (ORDER BY embedding <=> {p_vec}::float8[]::vector) AS rank_vec
                 FROM {self._memory_table}
                 WHERE {where_scope} AND embedding IS NOT NULL
                 LIMIT {p_cand}
@@ -732,7 +736,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope} AND embedding IS NOT NULL
-            ORDER BY embedding <=> {p_vec} ASC, timestamp DESC
+            ORDER BY embedding <=> {p_vec}::float8[]::vector ASC, timestamp DESC
             LIMIT {p_lim}
             """
             params = (*scope_params, list(embedding), limit_value)
@@ -759,6 +763,8 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             params = (*scope_params, f"%{query}%", limit_value)
 
         async with self._config.provide_connection() as conn:
+            if embedding is not None and self._enable_bm25 and query:
+                self._config._ensure_pg_textsearch_available()
             rows = await conn.fetch(sql, *params)
         return [cast("StoredMemory", dict(row)) for row in rows]
 
@@ -821,7 +827,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
 
         if self._enable_bm25:
             indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_bm25 ON {self._memory_table} USING bm25 (content_text);"
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_bm25 ON {self._memory_table} USING bm25 (content_text) WITH (text_config='english');"
             )
 
         if self._vector_index_type == "scann":

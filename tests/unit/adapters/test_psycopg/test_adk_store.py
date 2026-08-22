@@ -8,7 +8,13 @@ import pytest
 from psycopg.types.json import Jsonb
 from typing_extensions import NotRequired, Self
 
-from sqlspec.adapters.psycopg.adk import PsycopgADKConfig, PsycopgAsyncADKStore, PsycopgSyncADKStore
+from sqlspec.adapters.psycopg.adk import (
+    PsycopgADKConfig,
+    PsycopgAsyncADKMemoryStore,
+    PsycopgAsyncADKStore,
+    PsycopgSyncADKMemoryStore,
+    PsycopgSyncADKStore,
+)
 from sqlspec.config import ADKConfig
 
 
@@ -22,6 +28,7 @@ class _DummyCursor:
     def __init__(self, rows: "list[dict[str, Any]] | None" = None) -> None:
         self.execute_calls: list[tuple[Any, Any]] = []
         self._rows = rows or []
+        self.rowcount = 1
 
     def __enter__(self) -> Self:
         return self
@@ -57,12 +64,49 @@ class _DummyConnection:
         self.commit_called = True
 
 
-class _DummyConfig:
-    def __init__(self, connection: _DummyConnection) -> None:
-        self._connection = connection
+class _DummyAsyncCursor:
+    def __init__(self, rows: "list[dict[str, Any]] | None" = None) -> None:
+        self.execute_calls: list[tuple[Any, Any]] = []
+        self._rows = rows or []
+        self.rowcount = 1
 
-    def provide_connection(self) -> _DummyConnection:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+    async def execute(self, query: Any, params: Any = None) -> None:
+        self.execute_calls.append((query, params))
+
+    async def fetchall(self) -> "list[dict[str, Any]]":
+        return self._rows
+
+
+class _DummyAsyncConnection:
+    def __init__(self, cursor: _DummyAsyncCursor) -> None:
+        self._cursor = cursor
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+    def cursor(self, **kwargs: Any) -> _DummyAsyncCursor:
+        return self._cursor
+
+
+class _DummyConfig:
+    def __init__(self, connection: _DummyConnection | _DummyAsyncConnection) -> None:
+        self._connection = connection
+        self.extension_config: dict[str, Any] = {"adk": {}}
+
+    def provide_connection(self) -> _DummyConnection | _DummyAsyncConnection:
         return self._connection
+
+    def _ensure_pg_textsearch_available(self) -> None:
+        return None
 
 
 def _build_store(
@@ -177,6 +221,93 @@ def test_sync_append_event_inserts_without_session_update() -> None:
     assert params[3] == "session-1"
     assert isinstance(params[6], Jsonb)
     assert connection.commit_called
+
+
+@pytest.mark.parametrize("owner_column", [None, "tenant_id UUID"])
+@pytest.mark.parametrize("embedding", [None, [0.1, 0.2, 0.3]])
+def test_psycopg_sync_memory_insert_binds_embedding_with_portable_cast(
+    owner_column: str | None, embedding: list[float] | None
+) -> None:
+    """Psycopg memory inserts keep nullable embeddings in the expected parameter position."""
+    cursor = _DummyCursor()
+    connection = _DummyConnection(cursor)
+    config = _DummyConfig(connection)
+    config.extension_config = {"adk": {"owner_id_column": owner_column}} if owner_column else {"adk": {}}
+    store = PsycopgSyncADKMemoryStore(cast("Any", config))
+    entry = {
+        "id": "memory-1",
+        "session_id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "user",
+        "event_id": "event-1",
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "embedding": embedding,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": datetime.now(timezone.utc),
+    }
+
+    assert store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1") == 1
+
+    query, params = cursor.execute_calls[0]
+    assert "::float8[]::vector" in query.as_string()
+    embedding_index = 9 if owner_column else 8
+    assert params[embedding_index] == embedding
+
+
+@pytest.mark.parametrize("owner_column", [None, "tenant_id UUID"])
+async def test_psycopg_async_memory_insert_binds_embedding_with_portable_cast(owner_column: str | None) -> None:
+    """The async psycopg INSERT path carries the same embedding cast and ordering."""
+    cursor = _DummyAsyncCursor()
+    config = _DummyConfig(_DummyAsyncConnection(cursor))
+    config.extension_config = {"adk": {"owner_id_column": owner_column}} if owner_column else {"adk": {}}
+    store = PsycopgAsyncADKMemoryStore(cast("Any", config))
+    entry = {
+        "id": "memory-1",
+        "session_id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "user",
+        "event_id": "event-1",
+        "author": "user",
+        "timestamp": datetime.now(timezone.utc),
+        "embedding": [0.1, 0.2],
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": datetime.now(timezone.utc),
+    }
+
+    assert await store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1") == 1
+    query, params = cursor.execute_calls[0]
+    assert "::float8[]::vector" in query.as_string()
+    assert params[9 if owner_column else 8] == [0.1, 0.2]
+
+
+@pytest.mark.parametrize("store_type", [PsycopgSyncADKMemoryStore, PsycopgAsyncADKMemoryStore])
+@pytest.mark.parametrize("enable_bm25, query", [(False, ""), (True, "hello")])
+async def test_psycopg_memory_search_casts_vector_operands(
+    store_type: type[PsycopgSyncADKMemoryStore] | type[PsycopgAsyncADKMemoryStore], enable_bm25: bool, query: str
+) -> None:
+    """Sync and async vector-only and hybrid searches cast list bindings portably."""
+    if store_type is PsycopgAsyncADKMemoryStore:
+        cursor = _DummyAsyncCursor()
+        config = _DummyConfig(_DummyAsyncConnection(cursor))
+        config.extension_config = {"adk": {"enable_bm25": enable_bm25}}
+        store = PsycopgAsyncADKMemoryStore(cast("Any", config))
+        await store.search_entries(query, "app", "user", embedding=[0.1, 0.2])
+    else:
+        cursor = _DummyCursor()
+        config = _DummyConfig(_DummyConnection(cursor))
+        config.extension_config = {"adk": {"enable_bm25": enable_bm25}}
+        store = PsycopgSyncADKMemoryStore(cast("Any", config))
+        store.search_entries(query, "app", "user", embedding=[0.1, 0.2])
+
+    rendered = cursor.execute_calls[0][0].as_string()
+    assert "embedding <=> %s::float8[]::vector" in rendered
 
 
 def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
