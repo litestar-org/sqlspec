@@ -287,24 +287,29 @@ async def test_psycopg_async_memory_insert_binds_embedding_with_portable_cast(ow
     assert params[9 if owner_column else 8] == [0.1, 0.2]
 
 
-@pytest.mark.parametrize("store_type", [PsycopgSyncADKMemoryStore, PsycopgAsyncADKMemoryStore])
 @pytest.mark.parametrize("enable_bm25, query", [(False, ""), (True, "hello")])
-async def test_psycopg_memory_search_casts_vector_operands(
-    store_type: type[PsycopgSyncADKMemoryStore] | type[PsycopgAsyncADKMemoryStore], enable_bm25: bool, query: str
-) -> None:
-    """Sync and async vector-only and hybrid searches cast list bindings portably."""
-    if store_type is PsycopgAsyncADKMemoryStore:
-        cursor = _DummyAsyncCursor()
-        config = _DummyConfig(_DummyAsyncConnection(cursor))
-        config.extension_config = {"adk": {"enable_bm25": enable_bm25}}
-        store = PsycopgAsyncADKMemoryStore(cast("Any", config))
-        await store.search_entries(query, "app", "user", embedding=[0.1, 0.2])
-    else:
-        cursor = _DummyCursor()
-        config = _DummyConfig(_DummyConnection(cursor))
-        config.extension_config = {"adk": {"enable_bm25": enable_bm25}}
-        store = PsycopgSyncADKMemoryStore(cast("Any", config))
-        store.search_entries(query, "app", "user", embedding=[0.1, 0.2])
+async def test_psycopg_async_memory_search_casts_vector_operands(enable_bm25: bool, query: str) -> None:
+    """Async vector-only and hybrid searches cast list bindings portably."""
+    cursor = _DummyAsyncCursor()
+    config = _DummyConfig(_DummyAsyncConnection(cursor))
+    config.extension_config = {"adk": {"enable_bm25": enable_bm25}}
+    store = PsycopgAsyncADKMemoryStore(cast("Any", config))
+
+    await store.search_entries(query, "app", "user", embedding=[0.1, 0.2])
+
+    rendered = cursor.execute_calls[0][0].as_string()
+    assert "embedding <=> %s::float8[]::vector" in rendered
+
+
+@pytest.mark.parametrize("enable_bm25, query", [(False, ""), (True, "hello")])
+def test_psycopg_sync_memory_search_casts_vector_operands(enable_bm25: bool, query: str) -> None:
+    """Sync vector-only and hybrid searches cast list bindings portably."""
+    cursor = _DummyCursor()
+    config = _DummyConfig(_DummyConnection(cursor))
+    config.extension_config = {"adk": {"enable_bm25": enable_bm25}}
+    store = PsycopgSyncADKMemoryStore(cast("Any", config))
+
+    store.search_entries(query, "app", "user", embedding=[0.1, 0.2])
 
     rendered = cursor.execute_calls[0][0].as_string()
     assert "embedding <=> %s::float8[]::vector" in rendered
