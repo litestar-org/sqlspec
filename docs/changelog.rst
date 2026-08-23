@@ -9,6 +9,28 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.62.1 - PostgreSQL ADK memory and migration fixes
+---------------------------------------------------
+
+**Fixed:**
+
+* ADK now saves all memory vectors on PostgreSQL, including null values. Vector
+  and hybrid searches pass query values with a portable ``float8[]`` cast.
+  Asyncpg and psycopg no longer need optional pgvector codecs for these tasks.
+* BM25 search now checks for ``pg_textsearch``. It no longer treats ParadeDB's
+  ``pg_search`` as the same feature. The ADK migration enables
+  ``pg_textsearch`` before it creates a BM25 index. Table checks and searches
+  never try to install the extension.
+* Migration commands now set the SQL dialect before they build the context.
+  Calls made from Python no longer capture an empty statement config.
+
+**Upgrade notes:**
+
+* BM25 needs a server that ships ``pg_textsearch``. The role that runs the
+  migration must be able to run ``CREATE EXTENSION``. AlloyDB offers BM25 on
+  PostgreSQL 17 and 18. Use an ``alloydbsuperuser`` role or ask an administrator
+  to install the extension first.
+
 v0.62.0 - ADK session paging and retention, migrations, and event payloads
 ------------------------------------------------------------------------------
 
@@ -85,9 +107,6 @@ v0.62.0 - ADK session paging and retention, migrations, and event payloads
 
 **Fixed:**
 
-* PostgreSQL ADK memory inserts and vector searches now work without optional
-  pgvector codecs, enable ``pg_textsearch`` safely from the canonical ADK
-  migration, and validate it before BM25 use.
 * Fresh PostgreSQL databases can run the packaged ADK schema migration with
   memory enabled. The migration now emits ``CREATE EXTENSION IF NOT EXISTS
   vector`` immediately before the first statement that declares a ``VECTOR``
