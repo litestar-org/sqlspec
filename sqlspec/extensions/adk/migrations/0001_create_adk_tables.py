@@ -8,8 +8,8 @@ Creates the canonical ADK tables:
 - adk_internal_metadata
 - adk_memory (when memory is enabled)
 
-On PostgreSQL the migration installs the ``vector`` extension before the first
-memory statement that declares a ``VECTOR`` column.
+On PostgreSQL the migration installs required extensions before the first
+memory statement that uses them.
 """
 
 import inspect
@@ -38,9 +38,11 @@ __all__ = ("down", "up")
 logger = get_logger("sqlspec.migrations.adk.create")
 
 CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector"
+CREATE_PG_TEXTSEARCH_EXTENSION = "CREATE EXTENSION IF NOT EXISTS pg_textsearch"
 
 _POSTGRES_DIALECTS = frozenset({"postgres", "postgresql", "pgvector", "paradedb"})
 _VECTOR_COLUMN_PATTERN = re.compile(r"\bVECTOR\s*\(", re.IGNORECASE)
+_BM25_INDEX_PATTERN = re.compile(r"\bUSING\s+bm25\s*\(", re.IGNORECASE)
 
 
 async def up(context: "MigrationContext | None" = None) -> "list[str]":
@@ -70,7 +72,7 @@ async def up(context: "MigrationContext | None" = None) -> "list[str]":
             if inspect.isawaitable(memory_sql):
                 memory_sql = await memory_sql
             memory_statements = list(memory_sql) if isinstance(memory_sql, list) else [memory_sql]
-            statements.extend(_with_vector_extension(memory_statements, context))
+            statements.extend(_with_postgres_extensions(memory_statements, context))
             log_with_context(
                 logger, logging.DEBUG, "adk.migration.create.memory.create", table_name=memory_store.memory_table
             )
@@ -98,15 +100,24 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
     return statements
 
 
-def _with_vector_extension(statements: "list[str]", context: "MigrationContext") -> "list[str]":
-    """Prepend the PostgreSQL vector extension before the first vector statement."""
+def _with_postgres_extensions(statements: "list[str]", context: "MigrationContext") -> "list[str]":
+    """Prepend required PostgreSQL extensions before their first use."""
     dialect = (context.dialect or "").lower()
     if dialect not in _POSTGRES_DIALECTS:
         return statements
-    for index, statement in enumerate(statements):
-        if _VECTOR_COLUMN_PATTERN.search(statement):
-            return [*statements[:index], CREATE_VECTOR_EXTENSION, *statements[index:]]
-    return statements
+
+    result: list[str] = []
+    vector_enabled = False
+    pg_textsearch_enabled = False
+    for statement in statements:
+        if not vector_enabled and _VECTOR_COLUMN_PATTERN.search(statement):
+            result.append(CREATE_VECTOR_EXTENSION)
+            vector_enabled = True
+        if not pg_textsearch_enabled and _BM25_INDEX_PATTERN.search(statement):
+            result.append(CREATE_PG_TEXTSEARCH_EXTENSION)
+            pg_textsearch_enabled = True
+        result.append(statement)
+    return result
 
 
 def _raise_missing_config() -> NoReturn:

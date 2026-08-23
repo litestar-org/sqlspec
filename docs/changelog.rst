@@ -86,7 +86,8 @@ v0.62.0 - ADK session paging and retention, migrations, and event payloads
 **Fixed:**
 
 * PostgreSQL ADK memory inserts and vector searches now work without optional
-  pgvector codecs, and validate ``pg_textsearch`` before BM25 use.
+  pgvector codecs, enable ``pg_textsearch`` safely from the canonical ADK
+  migration, and validate it before BM25 use.
 * Fresh PostgreSQL databases can run the packaged ADK schema migration with
   memory enabled. The migration now emits ``CREATE EXTENSION IF NOT EXISTS
   vector`` immediately before the first statement that declares a ``VECTOR``
