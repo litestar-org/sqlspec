@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlspec.adapters.asyncmy.core import resolve_rowcount
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -227,7 +228,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute(sql)
             await conn.commit()
-            count: int = cursor.rowcount
+            count = resolve_rowcount(cursor)
             if count > 0:
                 self._log_delete_expired(count)
             return count

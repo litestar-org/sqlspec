@@ -325,7 +325,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         Future driver_features can be added here if needed.
         """
-        return cast("AsyncmyPool", await asyncmy.create_pool(**_pool_config(self.connection_config)))
+        return await asyncmy.create_pool(**_pool_config(self.connection_config))
 
     async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
