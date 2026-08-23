@@ -113,7 +113,7 @@ release:                                           ## Bump version and create re
 	@make docs
 	@make clean
 	@make build
-	@uv run bump-my-version bump $(bump)
+	@uv run bump-my-version bump --current-version "$$(uv version --short)" $(bump)
 	@uv lock --upgrade-package sqlspec >/dev/null 2>&1
 	@echo "${OK} Release complete 🎉"
 
@@ -133,7 +133,7 @@ pre-release:                                       ## Start a pre-release: make 
 	@echo "${INFO} Preparing pre-release $(version)... 🧪"
 	@make clean
 	@make build
-	@uv run bump-my-version bump --new-version $(version) pre
+	@uv run bump-my-version bump --current-version "$$(uv version --short)" --new-version $(version) pre
 	@uv lock --upgrade-package sqlspec >/dev/null 2>&1
 	@echo "${OK} Pre-release $(version) complete 🧪"
 	@echo ""

@@ -739,7 +739,7 @@ class ADKConfig(TypedDict):
     """Dimensionality of embedding vectors (e.g. 768 for gemini-embedding-001 with MRL). Default: 768."""
 
     enable_bm25: NotRequired[bool]
-    """Enable native pg_textsearch BM25 full-text indexing on AlloyDB / PostgreSQL 17+. Default: False."""
+    """Enable native BM25 full-text indexing. Requires the pg_textsearch extension. Default: False."""
 
     scann_num_leaves: NotRequired[int]
     """Number of partition leaves (clusters) for ScaNN tree quantization. Default: 100."""

@@ -16,6 +16,7 @@ from sqlspec.migrations.context import MigrationContext
 migration = importlib.import_module("sqlspec.extensions.adk.migrations.0001_create_adk_tables")
 
 CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector"
+CREATE_PG_TEXTSEARCH_EXTENSION = "CREATE EXTENSION IF NOT EXISTS pg_textsearch"
 POSTGRES_CONNECTION = {"host": "localhost", "port": 5432, "user": "adk", "password": "adk", "database": "adk"}
 
 
@@ -29,6 +30,13 @@ class _VectorMemoryStore:
 
     def _memory_table_ddl(self) -> str:
         return "CREATE TABLE adk_memory (id VARCHAR(128) PRIMARY KEY, embedding VECTOR(3))"
+
+
+class _BM25MemoryStore(_VectorMemoryStore):
+    """Memory store stub whose DDL uses BM25 without a vector column."""
+
+    def _memory_table_ddl(self) -> str:
+        return "CREATE INDEX idx_adk_memory_bm25 ON adk_memory USING bm25 (content_text)"
 
 
 def _sqlite_config(adk_settings: "dict[str, Any] | None" = None) -> SqliteConfig:
@@ -122,6 +130,27 @@ async def test_psycopg_memory_migration_installs_vector_extension() -> None:
     )
 
 
+async def test_postgres_bm25_migration_installs_pg_textsearch_extension() -> None:
+    """BM25 DDL is preceded by an idempotent pg_textsearch enablement statement."""
+    context = MigrationContext(config=_asyncpg_config({"enable_bm25": True}), dialect="postgres")
+
+    statements = await migration.up(context)
+
+    assert statements.count(CREATE_PG_TEXTSEARCH_EXTENSION) == 1
+    extension_index = statements.index(CREATE_PG_TEXTSEARCH_EXTENSION)
+    bm25_index = next(index for index, sql in enumerate(statements) if "USING bm25 (content_text)" in sql)
+    assert extension_index < bm25_index
+
+
+async def test_postgres_memory_migration_omits_pg_textsearch_when_bm25_is_disabled() -> None:
+    """The optional BM25 extension is not enabled for vector-only memory stores."""
+    context = MigrationContext(config=_asyncpg_config({"enable_bm25": False}), dialect="postgres")
+
+    statements = await migration.up(context)
+
+    assert CREATE_PG_TEXTSEARCH_EXTENSION not in statements
+
+
 async def test_disabled_memory_emits_no_vector_extension() -> None:
     """Disabling memory suppresses the memory DDL and its extension prerequisite."""
     context = MigrationContext(config=_asyncpg_config({"enable_memory": False}), dialect="postgres")
@@ -165,6 +194,20 @@ async def test_non_postgres_dialect_with_vector_ddl_emits_no_extension(monkeypat
 
     assert CREATE_VECTOR_EXTENSION not in statements
     assert any("embedding VECTOR(3)" in sql for sql in statements)
+
+
+async def test_postgres_bm25_only_ddl_installs_only_pg_textsearch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BM25 and vector extension prerequisites are independent."""
+    context = MigrationContext(config=_asyncpg_config({"enable_sessions": False}), dialect="postgres")
+    monkeypatch.setattr(migration, "_get_memory_store_class", lambda _context: _BM25MemoryStore)
+
+    statements = await migration.up(context)
+
+    assert CREATE_VECTOR_EXTENSION not in statements
+    assert statements == [
+        CREATE_PG_TEXTSEARCH_EXTENSION,
+        "CREATE INDEX idx_adk_memory_bm25 ON adk_memory USING bm25 (content_text)",
+    ]
 
 
 def test_reset_migration_is_not_packaged() -> None:

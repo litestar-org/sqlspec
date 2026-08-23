@@ -1240,6 +1240,8 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             return
 
         async with self._config.provide_session() as driver:
+            if self._enable_bm25:
+                self._config._ensure_pg_textsearch_available()
             await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
@@ -1256,10 +1258,10 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                {owner_id_col}, timestamp, content_json, content_text,
+                {owner_id_col}, timestamp, embedding, content_json, content_text,
                 metadata_json, inserted_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::float8[]::vector, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(
@@ -1269,9 +1271,9 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                timestamp, content_json, content_text, metadata_json, inserted_at
+                timestamp, embedding, content_json, content_text, metadata_json, inserted_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s::float8[]::vector, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=pg_sql.Identifier(self._memory_table))
@@ -1395,7 +1397,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         sql = pg_sql.SQL(
             """
             WITH vector_matches AS (
-                SELECT id, RANK() OVER (ORDER BY embedding <=> %s) AS rank_vec
+                SELECT id, RANK() OVER (ORDER BY embedding <=> %s::float8[]::vector) AS rank_vec
                 FROM {table}
                 WHERE {where_scope} AND embedding IS NOT NULL
                 LIMIT %s
@@ -1417,6 +1419,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            self._config._ensure_pg_textsearch_available()
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -1434,7 +1437,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             """
             SELECT * FROM {table}
             WHERE {where_scope} AND embedding IS NOT NULL
-            ORDER BY embedding <=> %s ASC, timestamp DESC
+            ORDER BY embedding <=> %s::float8[]::vector ASC, timestamp DESC
             LIMIT %s
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
@@ -1504,6 +1507,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             return
 
         with self._config.provide_session() as driver:
+            if self._enable_bm25:
+                self._config._ensure_pg_textsearch_available()
             driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
@@ -1520,10 +1525,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                {owner_id_col}, timestamp, content_json, content_text,
+                {owner_id_col}, timestamp, embedding, content_json, content_text,
                 metadata_json, inserted_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::float8[]::vector, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(
@@ -1533,9 +1538,9 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                timestamp, content_json, content_text, metadata_json, inserted_at
+                timestamp, embedding, content_json, content_text, metadata_json, inserted_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s::float8[]::vector, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=pg_sql.Identifier(self._memory_table))
@@ -1656,7 +1661,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         sql = pg_sql.SQL(
             """
             WITH vector_matches AS (
-                SELECT id, RANK() OVER (ORDER BY embedding <=> %s) AS rank_vec
+                SELECT id, RANK() OVER (ORDER BY embedding <=> %s::float8[]::vector) AS rank_vec
                 FROM {table}
                 WHERE {where_scope} AND embedding IS NOT NULL
                 LIMIT %s
@@ -1678,6 +1683,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            self._config._ensure_pg_textsearch_available()
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
@@ -1695,7 +1701,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             """
             SELECT * FROM {table}
             WHERE {where_scope} AND embedding IS NOT NULL
-            ORDER BY embedding <=> %s ASC, timestamp DESC
+            ORDER BY embedding <=> %s::float8[]::vector ASC, timestamp DESC
             LIMIT %s
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
@@ -1760,6 +1766,7 @@ def _build_insert_params(entry: "StoredMemory") -> "tuple[object, ...]":
         entry["event_id"],
         entry["author"],
         entry["timestamp"],
+        entry.get("embedding"),
         Jsonb(entry["content_json"]),
         entry["content_text"],
         Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
@@ -1778,6 +1785,7 @@ def _build_insert_params_with_owner(entry: "StoredMemory", owner_id: "object | N
         entry["author"],
         owner_id,
         entry["timestamp"],
+        entry.get("embedding"),
         Jsonb(entry["content_json"]),
         entry["content_text"],
         Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
@@ -1868,7 +1876,7 @@ def _postgres_memory_indexes(
 
     if enable_bm25:
         indexes.append(
-            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_bm25 ON {memory_table} USING bm25 (content_text);"
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_bm25 ON {memory_table} USING bm25 (content_text) WITH (text_config='english');"
         )
 
     if vector_index_type == "scann":

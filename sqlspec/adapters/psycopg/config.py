@@ -312,6 +312,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         features_dict.setdefault("alloydb_ip_type", "PRIVATE")
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
+        self._pg_textsearch_available: bool | None = None
+        self._pg_textsearch_probe_error: Exception | None = None
         self._alloydb_connector: Any | None = None
 
         super().__init__(
@@ -428,6 +430,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
+            adk_config = self.extension_config.get("adk", {})
+            bm25_enabled = bool(
+                isinstance(adk_config, dict)
+                and adk_config.get("enable_memory", True)
+                and adk_config.get("enable_bm25", False)
+            )
+            if bm25_enabled:
+                extensions.append("pg_textsearch")
             if extensions:
                 try:
                     cursor = conn.execute(
@@ -435,11 +445,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                     )
                     results = cursor.fetchall()
                     detected_extensions = {r[0] for r in results}  # type: ignore[index]
-                except Exception:
+                except Exception as exc:
                     detected_extensions = set()
+                    if bm25_enabled:
+                        self._pg_textsearch_probe_error = exc
             self.statement_config, self._pgvector_available, self._paradedb_available = (
                 resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
             )
+            self._pg_textsearch_available = "pg_textsearch" in detected_extensions if bm25_enabled else False
 
         if self._pgvector_available:
             register_pgvector_sync(conn)
@@ -451,6 +464,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
+
+    def _ensure_pg_textsearch_available(self) -> None:
+        if self._pg_textsearch_available:
+            return
+        msg = "ADK memory enable_bm25 requires the pg_textsearch PostgreSQL extension"
+        raise ImproperConfigurationError(msg) from self._pg_textsearch_probe_error
 
     def _close_pool(self) -> None:
         """Close the actual connection pool and cleanup connectors."""
@@ -638,6 +657,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         )
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
+        self._pg_textsearch_available: bool | None = None
+        self._pg_textsearch_probe_error: Exception | None = None
 
         super().__init__(
             connection_config=connection_config,
@@ -700,6 +721,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
+            adk_config = self.extension_config.get("adk", {})
+            bm25_enabled = bool(
+                isinstance(adk_config, dict)
+                and adk_config.get("enable_memory", True)
+                and adk_config.get("enable_bm25", False)
+            )
+            if bm25_enabled:
+                extensions.append("pg_textsearch")
             if extensions:
                 try:
                     cursor = await conn.execute(
@@ -707,11 +736,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                     )
                     results = await cursor.fetchall()
                     detected_extensions = {r[0] for r in results}  # type: ignore[index]
-                except Exception:
+                except Exception as exc:
                     detected_extensions = set()
+                    if bm25_enabled:
+                        self._pg_textsearch_probe_error = exc
             self.statement_config, self._pgvector_available, self._paradedb_available = (
                 resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
             )
+            self._pg_textsearch_available = "pg_textsearch" in detected_extensions if bm25_enabled else False
 
         if self._pgvector_available:
             await register_pgvector_async(conn)
@@ -723,6 +755,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             await self._user_connection_hook(conn)
+
+    def _ensure_pg_textsearch_available(self) -> None:
+        if self._pg_textsearch_available:
+            return
+        msg = "ADK memory enable_bm25 requires the pg_textsearch PostgreSQL extension"
+        raise ImproperConfigurationError(msg) from self._pg_textsearch_probe_error
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

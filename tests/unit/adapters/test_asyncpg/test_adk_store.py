@@ -9,6 +9,7 @@ from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKConfig, AsyncpgADKMemoryStore, AsyncpgADKStore
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -96,6 +97,7 @@ async def test_asyncpg_memory_ddl_emits_bm25_index_when_enabled() -> None:
     ddl = await _memory_ddl({"enable_bm25": True})
 
     assert "USING bm25 (content_text)" in ddl
+    assert "WITH (text_config='english')" in ddl
     assert "idx_adk_memory_bm25" in ddl
 
 
@@ -136,6 +138,10 @@ class _RecordingConnection:
         self.calls.append((sql, params))
         return []
 
+    async def execute(self, sql: str, *params: Any) -> str:
+        self.calls.append((sql, params))
+        return "INSERT 0 1"
+
     async def __aenter__(self) -> "Self":
         return self
 
@@ -162,6 +168,7 @@ async def test_asyncpg_memory_search_fuses_vector_and_text_ranks() -> None:
     assert "RANK() OVER (ORDER BY content_text <@>" in sql
     assert "rrf_score" in sql
     assert "ORDER BY rrf_score DESC" in sql
+    assert "embedding <=> $3::float8[]::vector" in sql
     assert [0.1, 0.2, 0.3] in params
     assert "hello" in params
 
@@ -178,6 +185,17 @@ async def test_asyncpg_memory_search_without_embedding_stays_text_only() -> None
     assert "embedding <=>" not in sql
 
 
+async def test_asyncpg_missing_pg_textsearch_prevents_hybrid_sql_execution() -> None:
+    """A missing BM25 capability fails before the prepared hybrid query is sent."""
+    store, conn = _memory_store_with_connection({"enable_bm25": True})
+    store._config._ensure_pg_textsearch_available.side_effect = ImproperConfigurationError("missing")
+
+    with pytest.raises(ImproperConfigurationError, match="missing"):
+        await store.search_entries(query="hello", app_name="app", user_id="user", embedding=[0.1, 0.2])
+
+    assert conn.calls == []
+
+
 async def test_asyncpg_memory_search_embedding_only_orders_by_distance() -> None:
     """An embedding without BM25 uses a plain vector-distance ordering."""
 
@@ -187,8 +205,40 @@ async def test_asyncpg_memory_search_embedding_only_orders_by_distance() -> None
 
     sql, params = conn.calls[0]
     assert "ORDER BY embedding <=>" in sql
+    assert "embedding <=> $3::float8[]::vector" in sql
     assert "rrf_score" not in sql
     assert [0.5, 0.6] in params
+
+
+@pytest.mark.parametrize("owner_column", [None, "tenant_id UUID"])
+@pytest.mark.parametrize("embedding", [None, [0.1, 0.2, 0.3]])
+async def test_asyncpg_memory_insert_binds_embedding_with_portable_cast(
+    owner_column: str | None, embedding: list[float] | None
+) -> None:
+    """Memory inserts persist nullable embeddings without requiring an asyncpg vector codec."""
+    store, conn = _memory_store_with_connection({"owner_id_column": owner_column} if owner_column else {})
+    entry = {
+        "id": "memory-1",
+        "session_id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "user",
+        "event_id": "event-1",
+        "author": "user",
+        "timestamp": "2026-08-22T00:00:00Z",
+        "embedding": embedding,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": "2026-08-22T00:00:00Z",
+    }
+
+    assert await store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1") == 1
+
+    sql, params = conn.calls[0]
+    assert "::float8[]::vector" in sql
+    embedding_index = 9 if owner_column else 8
+    assert params[embedding_index] == embedding
 
 
 def _normalized(sql: str) -> str:

@@ -92,8 +92,8 @@ per-feature switches:
    )
 
 ``enable_sessions=False`` suppresses the session, event, state, and metadata
-DDL. ``enable_memory=False`` suppresses the memory table DDL and the PostgreSQL
-vector extension statement described below. Both default to ``True``.
+DDL. ``enable_memory=False`` suppresses the memory table DDL and its PostgreSQL
+extension statements described below. Both default to ``True``.
 
 PostgreSQL pgvector Requirement
 ===============================
@@ -125,6 +125,21 @@ Automatic ``create_tables()`` / ``ensure_tables()`` reconciliation never
 attempts extension installation, so it runs no repeated startup privilege
 check. Deployments that rely on that path instead of versioned migrations must
 pre-provision pgvector themselves.
+
+PostgreSQL BM25 Requirement
+===========================
+
+When ``enable_bm25=True``, the same migration runs
+``CREATE EXTENSION IF NOT EXISTS pg_textsearch`` before creating the BM25
+index. This is the extension used by AlloyDB for PostgreSQL 17 and 18 as well
+as PostgreSQL installations that package ``pg_textsearch``. ParadeDB's
+``pg_search`` extension does not satisfy this requirement.
+
+As with pgvector, the server must provide the extension and the migration role
+must be allowed to enable it. On managed AlloyDB, run the migration as a role
+with the documented ``alloydbsuperuser`` privileges or have an administrator
+pre-provision ``pg_textsearch``. The idempotent migration statement is then a
+no-op. Automatic table reconciliation never attempts to enable it.
 
 Clean-Break Migration Notes
 ============================

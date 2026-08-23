@@ -858,7 +858,7 @@ class _CursorCloseRecordingConnection:
     def cursor(self, *args: Any, **kwargs: Any) -> Any:
         closes = object.__getattribute__(self, "_closes")
         result = object.__getattribute__(self, "_inner").cursor(*args, **kwargs)
-        if inspect.isawaitable(result):
+        if inspect.isawaitable(result) and not hasattr(result, "execute"):
             return _await_recording_cursor(result, closes)
         return _CursorCloseRecordingCursor(result, closes)
 

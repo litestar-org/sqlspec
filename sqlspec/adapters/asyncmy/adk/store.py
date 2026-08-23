@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 import asyncmy
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.asyncmy.core import resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -309,7 +310,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             async with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                return resolve_rowcount(cursor)
         except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return 0
@@ -327,7 +328,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             async with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                return resolve_rowcount(cursor)
         except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return 0
@@ -345,7 +346,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             async with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                return resolve_rowcount(cursor)
         except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return 0
@@ -545,7 +546,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
                             entry["inserted_at"],
                         )
                     await cursor.execute(sql, params)
-                    inserted_count += cursor.rowcount
+                    inserted_count += resolve_rowcount(cursor)
             await conn.commit()
         return inserted_count
 
@@ -608,7 +609,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute(sql, (session_id,))
             await conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            return resolve_rowcount(cursor)
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -632,7 +633,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
         async with self._config.provide_connection() as conn, conn.cursor() as cursor:
             await cursor.execute(sql, tuple(params))
             await conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            return resolve_rowcount(cursor)
 
     async def _memory_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for memory entries."""
