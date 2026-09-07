@@ -9,6 +9,19 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.62.2 - Litestar config lookup diagnostics
+---------------------------------------------
+
+**Fixed:**
+
+* :meth:`SQLSpecPlugin.get_config() <sqlspec.extensions.litestar.SQLSpecPlugin.get_config>`
+  raises ``KeyError`` listing the available bind keys and dependency keys when an
+  identifier matches no configuration. On a plugin not yet registered with a
+  Litestar application, unknown names, unmatched config types, and configs from
+  another registry previously raised ``ImproperConfigurationError`` about
+  registration instead. Generated Litestar dependency keys remain
+  registration-bound.
+
 v0.62.1 - PostgreSQL ADK memory and migration fixes
 ---------------------------------------------------
 

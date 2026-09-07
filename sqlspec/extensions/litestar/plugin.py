@@ -833,12 +833,21 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Args:
             name: A ``session_key``, ``connection_key``, or ``pool_key``.
 
+        Raises:
+            KeyError: If ``name`` is not a known dependency key.
+
         Returns:
             The matching plugin state.
         """
-        if any(state.annotation is None for state in self._plugin_configs):
-            self._raise_plugin_not_registered()
-        return self._get_plugin_state(name)
+        if isinstance(name, str) and any(
+            name in {state.connection_key, state.pool_key, state.session_key} for state in self._plugin_configs
+        ):
+            if any(state.annotation is None for state in self._plugin_configs):
+                self._raise_plugin_not_registered()
+            return self._get_plugin_state(name)
+        self._raise_config_not_found(name)
+        msg = "unreachable"
+        raise AssertionError(msg)
 
     def _get_plugin_state(
         self, key: "str | DatabaseConfigProtocol[Any, Any, Any] | type[DatabaseConfigProtocol[Any, Any, Any]]"

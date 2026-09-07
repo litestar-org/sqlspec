@@ -152,6 +152,10 @@ A ``bind_key`` takes precedence over a dependency key of the same value in
 ``get_config()``, while the request-scoped accessors always read strings as
 dependency keys.
 
+An identifier that matches neither a registry identity nor a dependency key raises
+``KeyError`` listing every available bind key and dependency key. This holds both
+before and after the plugin is registered with a ``Litestar`` application.
+
 Advanced DuckDB Configuration
 -----------------------------
 

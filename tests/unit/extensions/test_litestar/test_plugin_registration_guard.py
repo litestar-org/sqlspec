@@ -3,8 +3,10 @@
 from typing import Any
 
 import pytest
+from litestar.config.app import AppConfig
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.plugin import (
@@ -76,3 +78,33 @@ def test_get_config_by_custom_di_key_before_registration_raises(di_key: str) -> 
     plugin, _ = _build_unregistered_plugin(bind_key="primary", extension_config={"litestar": CUSTOM_KEYS})
     with pytest.raises(ImproperConfigurationError, match="on_app_init"):
         plugin.get_config(di_key)
+
+
+def test_get_config_unknown_string_before_registration_raises_key_error() -> None:
+    """An unknown identifier reports available keys instead of a registration error."""
+    plugin, _ = _build_unregistered_plugin(bind_key="primary")
+    with pytest.raises(KeyError, match="Available keys"):
+        plugin.get_config("missing")
+
+
+def test_get_config_unknown_type_before_registration_raises_key_error() -> None:
+    """An unmatched config type is an unknown identifier, not a registration error."""
+    plugin, _ = _build_unregistered_plugin(bind_key="primary")
+    with pytest.raises(KeyError, match="Available keys"):
+        plugin.get_config(SqliteConfig)
+
+
+def test_get_config_foreign_instance_before_registration_raises_key_error() -> None:
+    """A config instance from another registry is an unknown identifier."""
+    plugin, _ = _build_unregistered_plugin(bind_key="primary")
+    foreign = AiosqliteConfig(connection_config={"database": ":memory:"}, bind_key="foreign")
+    with pytest.raises(KeyError, match="Available keys"):
+        plugin.get_config(foreign)
+
+
+def test_get_config_unknown_string_after_registration_raises_key_error() -> None:
+    """The unknown-identifier contract holds in both lifecycle phases."""
+    plugin, _ = _build_unregistered_plugin(bind_key="primary")
+    plugin.on_app_init(AppConfig())
+    with pytest.raises(KeyError, match="Available keys"):
+        plugin.get_config("missing")

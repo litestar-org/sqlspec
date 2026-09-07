@@ -107,3 +107,23 @@ def test_drop_index_on_table_renders_table() -> None:
     result = sql.drop_index("idx").on_table("t").build(dialect="mysql")
     assert "ON" in result.sql
     assert "t" in result.sql.split("ON")[-1]
+
+
+def test_drop_table_renders_table_name() -> None:
+    """Verify DROP TABLE includes the target table identifier."""
+    result = sql.drop_table("users").build()
+    assert result.sql == 'DROP TABLE "users"'
+
+
+def test_alter_table_drop_column_renders_column_name() -> None:
+    """Verify ALTER TABLE DROP COLUMN includes the target column identifier."""
+    result = sql.alter_table("users").drop_column("email").build()
+    assert "DROP COLUMN" in result.sql
+    assert "email" in result.sql
+
+
+def test_alter_table_drop_constraint_renders_constraint_name() -> None:
+    """Verify ALTER TABLE DROP CONSTRAINT includes the target constraint identifier."""
+    result = sql.alter_table("users").drop_constraint("fk_users_orders").build()
+    assert "DROP CONSTRAINT" in result.sql
+    assert "fk_users_orders" in result.sql
