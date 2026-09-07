@@ -688,7 +688,7 @@ class _SingleObjectDropBuilder(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDD
         self._require(self._name, f"{self._object_label} name must be set for DROP {self._drop_kind}.")
         return exp.Drop(
             kind=self._drop_kind,
-            this=self._build_drop_this(),
+            tables=[self._build_drop_this()],
             exists=self._if_exists,
             cascade=self._cascade,
             **self._drop_expression_args(),
@@ -1464,10 +1464,10 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             return build_column_expression(op.column_definition)
 
         if op_type == "DROP COLUMN":
-            return exp.Drop(this=exp.to_identifier(op.column_name), kind="COLUMN", exists=True)
+            return exp.Drop(tables=[exp.to_identifier(op.column_name)], kind="COLUMN", exists=True)
 
         if op_type == "DROP COLUMN CASCADE":
-            return exp.Drop(this=exp.to_identifier(op.column_name), kind="COLUMN", cascade=True, exists=True)
+            return exp.Drop(tables=[exp.to_identifier(op.column_name)], kind="COLUMN", cascade=True, exists=True)
 
         if op_type == "ALTER COLUMN TYPE":
             if not op.new_type:
@@ -1488,10 +1488,12 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             return exp.AddConstraint(expressions=[constraint_expr])
 
         if op_type == "DROP CONSTRAINT":
-            return exp.Drop(this=exp.to_identifier(op.constraint_name), kind="CONSTRAINT", exists=True)
+            return exp.Drop(tables=[exp.to_identifier(op.constraint_name)], kind="CONSTRAINT", exists=True)
 
         if op_type == "DROP CONSTRAINT CASCADE":
-            return exp.Drop(this=exp.to_identifier(op.constraint_name), kind="CONSTRAINT", cascade=True, exists=True)
+            return exp.Drop(
+                tables=[exp.to_identifier(op.constraint_name)], kind="CONSTRAINT", cascade=True, exists=True
+            )
 
         if op_type == "ALTER COLUMN SET NOT NULL":
             return exp.AlterColumn(this=exp.to_identifier(op.column_name), allow_null=False)
