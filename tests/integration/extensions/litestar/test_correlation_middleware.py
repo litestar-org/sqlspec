@@ -1,6 +1,8 @@
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litestar import Litestar, get
+from litestar.middleware import AbstractMiddleware, DefineMiddleware
+from litestar.response.base import ASGIResponse
 from litestar.testing import TestClient
 
 from sqlspec import SQLSpec
@@ -8,6 +10,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import ExtensionConfigs
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.utils.correlation import CorrelationContext
+
+if TYPE_CHECKING:
+    from litestar.types import Receive, Scope, Send
 
 
 def setup_function() -> None:
@@ -99,3 +104,28 @@ def test_correlation_middleware_auto_detection_can_be_disabled() -> None:
 
         response = client.get("/correlation", headers={"X-Custom-ID": "custom-value"})
         assert response.json()["correlation_id"] == "custom-value"
+
+
+def test_correlation_middleware_runs_before_user_middleware() -> None:
+    """A request rejected by user middleware still carries correlation context."""
+    observed: dict[str, str | None] = {}
+
+    class RejectingMiddleware(AbstractMiddleware):
+        async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+            observed["correlation_id"] = CorrelationContext.get()
+            await ASGIResponse(body=b'{"detail":"unauthorized"}', status_code=401)(scope, receive, send)
+
+    extension_config = cast("ExtensionConfigs", {"litestar": {"enable_correlation_middleware": True}})
+    spec = SQLSpec()
+    spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}, extension_config=extension_config))
+    app = Litestar(
+        route_handlers=[correlation_handler],
+        plugins=[SQLSpecPlugin(sqlspec=spec)],
+        middleware=[DefineMiddleware(RejectingMiddleware)],
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/correlation", headers={"X-Request-ID": "abc-123"})
+
+    assert response.status_code == 401
+    assert observed["correlation_id"] == "abc-123"

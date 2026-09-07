@@ -399,7 +399,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if self._enable_sqlcommenter_middleware:
             new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
         if new_middlewares:
-            app_config.middleware = [*(app_config.middleware or []), *new_middlewares]
+            # Prepend so correlation context is established at the outer boundary of the
+            # pipeline. Appending makes these the innermost middleware, so a request
+            # rejected earlier (auth, CORS, rate limiting) never reaches them and its
+            # access log and error hooks have no correlation ID.
+            app_config.middleware = [*new_middlewares, *(app_config.middleware or [])]
 
         log_with_context(
             logger,
