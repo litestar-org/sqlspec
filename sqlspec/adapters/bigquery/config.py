@@ -170,8 +170,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supports_arrow_streaming: ClassVar[bool] = True
     supports_native_row_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
-    requires_staging_for_load: ClassVar[bool] = True
-    staging_protocols: "ClassVar[tuple[str, ...]]" = ("gs://",)
     _connection_context_class: "ClassVar[type[BigQueryConnectionContext]]" = BigQueryConnectionContext
     _session_factory_class: "ClassVar[type[_BigQuerySessionConnectionHandler]]" = _BigQuerySessionConnectionHandler
     _session_context_class: "ClassVar[type[BigQuerySessionContext]]" = BigQuerySessionContext

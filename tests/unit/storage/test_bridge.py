@@ -29,15 +29,11 @@ from sqlspec.adapters.pymysql import PyMysqlDriver
 from sqlspec.adapters.pymysql import default_statement_config as pymysql_statement_config
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
+from sqlspec.exceptions import StoragePathTraversalError
+from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
-from sqlspec.storage.pipeline import (
-    AsyncStoragePipeline,
-    StagedArtifact,
-    StorageDestination,
-    _encode_row_payload,
-    _StoragePipelineBase,
-)
-from sqlspec.storage.registry import storage_registry
+from sqlspec.storage.pipeline import AsyncStoragePipeline, StorageDestination, _encode_row_payload, _StoragePipelineBase
+from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
 CAPABILITIES = {
@@ -45,8 +41,6 @@ CAPABILITIES = {
     "arrow_import_enabled": True,
     "parquet_export_enabled": True,
     "parquet_import_enabled": True,
-    "requires_staging_for_load": False,
-    "staging_protocols": [],
     "partition_strategies": ["fixed"],
 }
 
@@ -169,13 +163,10 @@ class _CountingStorageBackend:
     backend_type = "counting"
 
     def __init__(self) -> None:
-        self.deleted_paths: list[str] = []
+        self.written_paths: list[str] = []
 
-    def delete_sync(self, path: str) -> None:
-        self.deleted_paths.append(path)
-
-    async def delete_async(self, path: str) -> None:
-        self.deleted_paths.append(path)
+    async def write_bytes_async(self, path: str, payload: bytes) -> None:
+        self.written_paths.append(path)
 
 
 class _CountingStorageRegistry:
@@ -235,36 +226,20 @@ def test_sync_pipeline_bypasses_resolution_cache_for_storage_options() -> None:
     ]
 
 
-async def test_async_pipeline_cleanup_reuses_cached_backend_resolution() -> None:
+async def test_async_pipeline_write_reuses_cached_backend_resolution() -> None:
     registry = _CountingStorageRegistry()
     pipeline = AsyncStoragePipeline(registry=cast(Any, registry))
-    artifacts: list[StagedArtifact] = [
-        {
-            "partition_id": "0",
-            "uri": "file://tmp/payload.jsonl",
-            "cleanup_token": "cleanup::0",
-            "ttl_seconds": 0,
-            "expires_at": 0.0,
-            "correlation_id": "cleanup",
-        },
-        {
-            "partition_id": "1",
-            "uri": "file://tmp/payload.jsonl",
-            "cleanup_token": "cleanup::1",
-            "ttl_seconds": 0,
-            "expires_at": 0.0,
-            "correlation_id": "cleanup",
-        },
-    ]
+    table = pa.table({"id": [1]})
 
-    await pipeline.cleanup_staging_artifacts(artifacts)
+    await pipeline.write_arrow(table, "file://tmp/payload.parquet")
+    await pipeline.write_arrow(table, "file://tmp/payload.parquet")
 
-    assert registry.calls == [("file://tmp/payload.jsonl", {})]
-    assert registry.backend.deleted_paths == ["tmp/payload.jsonl", "tmp/payload.jsonl"]
+    assert registry.calls == [("file://tmp/payload.parquet", {})]
+    assert registry.backend.written_paths == ["tmp/payload.parquet", "tmp/payload.parquet"]
 
     pipeline.clear_cache()
-    await pipeline.cleanup_staging_artifacts(artifacts[:1])
-    assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
+    await pipeline.write_arrow(table, "file://tmp/payload.parquet")
+    assert registry.calls == [("file://tmp/payload.parquet", {}), ("file://tmp/payload.parquet", {})]
 
 
 async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -704,6 +679,127 @@ def test_storage_bridge_diagnostics_include_serializer_metrics() -> None:
     serialize_collection([{"id": 1}])
     diagnostics = get_storage_bridge_diagnostics()
     assert "serializer.size" in diagnostics
+
+
+class _ResolutionCountingRegistry(StorageRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
+        self.calls.append((str(uri_or_alias), backend, kwargs))
+        return super().get(uri_or_alias, backend=backend, **kwargs)
+
+
+@pytest.mark.parametrize("pipeline_type", [SyncStoragePipeline, AsyncStoragePipeline])
+@pytest.mark.parametrize(
+    ("destination", "options", "protocol"),
+    [
+        (
+            "s3://example-bucket/prefix/file.parquet",
+            {"backend": "obstore", "skip_signature": True, "region": "us-east-1"},
+            "s3",
+        ),
+        ("gs://example-bucket/prefix/file.parquet", {"backend": "obstore", "skip_signature": True}, "gs"),
+        ("s3://example-bucket/prefix/file.parquet", {"backend": "fsspec", "anon": True}, "s3"),
+    ],
+)
+def test_resolve_destination_remote_uri(
+    pipeline_type: type[SyncStoragePipeline | AsyncStoragePipeline],
+    destination: str,
+    options: dict[str, Any],
+    protocol: str,
+) -> None:
+    pipeline = pipeline_type(registry=StorageRegistry())
+
+    target = pipeline.resolve_destination(destination, options)
+
+    assert target.uri == destination
+    assert target.protocol == protocol
+
+
+@pytest.mark.parametrize("pipeline_type", [SyncStoragePipeline, AsyncStoragePipeline])
+@pytest.mark.parametrize("backend", ["obstore", "fsspec"])
+def test_resolve_destination_remote_alias_prefix_and_options(
+    pipeline_type: type[SyncStoragePipeline | AsyncStoragePipeline], backend: str
+) -> None:
+    registry = StorageRegistry()
+    options = {"skip_signature": True, "region": "us-east-1"} if backend == "obstore" else {"anon": True}
+    registry.register_alias("assets", "s3://example-bucket/prefix", backend=backend, base_path="default", **options)
+    pipeline = pipeline_type(registry=registry)
+
+    target = pipeline.resolve_destination("alias://assets/sub/file.parquet", {"base_path": "override"})
+
+    assert target.uri == "s3://example-bucket/prefix/override/sub/file.parquet"
+    assert target.protocol == "s3"
+
+
+@pytest.mark.parametrize("pipeline_type", [SyncStoragePipeline, AsyncStoragePipeline])
+@pytest.mark.parametrize("path_kind", ["absolute", "relative", "uri"])
+def test_resolve_destination_local_path(
+    pipeline_type: type[SyncStoragePipeline | AsyncStoragePipeline],
+    path_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "folder" / "data file.parquet"
+    destination: str | Path = path
+    if path_kind == "relative":
+        destination = path.relative_to(tmp_path)
+    elif path_kind == "uri":
+        destination = path.as_uri()
+    pipeline = pipeline_type(registry=StorageRegistry())
+
+    target = pipeline.resolve_destination(destination, {"backend": "local"})
+
+    assert target.uri == str(path)
+    assert target.protocol == "file"
+
+
+@pytest.mark.parametrize("pipeline_type", [SyncStoragePipeline, AsyncStoragePipeline])
+@pytest.mark.parametrize("backend", ["local", "obstore", "fsspec"])
+def test_resolve_destination_local_alias_prefix(
+    pipeline_type: type[SyncStoragePipeline | AsyncStoragePipeline], backend: str, tmp_path: Path
+) -> None:
+    registry = StorageRegistry()
+    registry.register_alias("assets", tmp_path.as_uri(), backend=backend, base_path="prefix")
+    pipeline = pipeline_type(registry=registry)
+
+    target = pipeline.resolve_destination("alias://assets/sub/file.parquet")
+
+    assert target.uri == str(tmp_path / "prefix" / "sub" / "file.parquet")
+    assert target.protocol == "file"
+
+
+@pytest.mark.parametrize("pipeline_type", [SyncStoragePipeline, AsyncStoragePipeline])
+@pytest.mark.parametrize("backend", ["local", "obstore"])
+def test_resolve_destination_local_options_preserve_root_guard(
+    pipeline_type: type[SyncStoragePipeline | AsyncStoragePipeline], backend: str, tmp_path: Path
+) -> None:
+    pipeline = pipeline_type(registry=StorageRegistry())
+
+    with pytest.raises(StoragePathTraversalError):
+        pipeline.resolve_destination(tmp_path / "file.parquet", {"backend": backend, "base_path": "nested"})
+
+
+@pytest.mark.parametrize("pipeline_type", [SyncStoragePipeline, AsyncStoragePipeline])
+def test_resolve_destination_cache_and_explicit_options(
+    pipeline_type: type[SyncStoragePipeline | AsyncStoragePipeline], tmp_path: Path
+) -> None:
+    registry = _ResolutionCountingRegistry()
+    pipeline = pipeline_type(registry=registry, storage_options={"write_options": {"delimiter": "|"}})
+    destination = tmp_path / "file.parquet"
+
+    assert pipeline.resolve_destination(destination) == pipeline.resolve_destination(destination, {})
+    assert registry.calls == [(str(destination), None, {})]
+    pipeline.clear_cache()
+    assert pipeline.resolve_destination(destination).uri == str(destination)
+    assert len(registry.calls) == 2
+
+    for _ in range(2):
+        assert pipeline.resolve_destination(destination, {"backend": "local"}).uri == str(destination)
+    assert registry.calls[2:] == [(str(destination), "local", {}), (str(destination), "local", {})]
 
 
 class _CsvTestBackend:

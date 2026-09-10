@@ -126,8 +126,6 @@ class _CapabilityConfig(_NoPoolSyncConfigBase):
     supports_native_arrow_import = True
     supports_native_parquet_export = False
     supports_native_parquet_import = False
-    requires_staging_for_load = True
-    staging_protocols = ("s3://",)
     storage_partition_strategies = ("fixed", "rows_per_chunk")
     default_storage_profile = "local-temp"
 
@@ -148,8 +146,6 @@ class _AsyncCapabilityConfig(_NoPoolAsyncConfigBase):
     connection_type = object
     supports_native_arrow_export = True
     supports_native_arrow_import = True
-    requires_staging_for_load = True
-    staging_protocols = ("s3://",)
     storage_partition_strategies = ("fixed", "rows_per_chunk")
 
     async def create_connection(self) -> object:
@@ -216,7 +212,6 @@ def test_storage_capabilities_snapshot(monkeypatch):
     assert capabilities["arrow_export_enabled"] is True
     assert capabilities["arrow_import_enabled"] is True
     assert capabilities["parquet_export_enabled"] is False
-    assert capabilities["requires_staging_for_load"] is True
     assert capabilities["partition_strategies"] == ["fixed", "rows_per_chunk"]
     assert capabilities["default_storage_profile"] == "local-temp"
 

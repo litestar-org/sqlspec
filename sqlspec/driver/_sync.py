@@ -1636,39 +1636,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         arrow_table = self._records_to_arrow_table(prepared_records, columns)
         return self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
-    def stage_artifact(self, request: "dict[str, Any]") -> "dict[str, Any]":
-        """Provision staging metadata for adapters that require remote URIs.
-
-        Args:
-            request: Staging request configuration.
-
-        Returns:
-            Staging metadata dict.
-        """
-        self._raise_storage_not_implemented("stage_artifact")
-        raise NotImplementedError
-
-    def flush_staging_artifacts(self, artifacts: "list[dict[str, Any]]", *, error: Exception | None = None) -> None:
-        """Clean up staged artifacts after a job completes.
-
-        Args:
-            artifacts: List of staging artifacts to clean up.
-            error: Optional error that triggered cleanup.
-        """
-        if artifacts:
-            self._raise_storage_not_implemented("flush_staging_artifacts")
-
-    def get_storage_job(self, job_id: str) -> "StorageBridgeJob | None":
-        """Fetch a previously created job handle.
-
-        Args:
-            job_id: Job identifier.
-
-        Returns:
-            StorageBridgeJob if found, None otherwise.
-        """
-        return None
-
     # ─────────────────────────────────────────────────────────────────────────────
     # UTILITY METHODS
     # ─────────────────────────────────────────────────────────────────────────────

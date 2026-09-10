@@ -3,19 +3,21 @@
 from collections import deque
 from functools import partial
 from pathlib import Path
-from time import perf_counter, time
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
+from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
 from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload
+from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, strip_windows_drive_prefix
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
+from sqlspec.utils.type_guards import supports_async_read_bytes, supports_async_write_bytes
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -28,13 +30,12 @@ if TYPE_CHECKING:
 __all__ = (
     "AsyncStoragePipeline",
     "PartitionStrategyConfig",
-    "StagedArtifact",
+    "ResolvedStorageTarget",
     "StorageBridgeJob",
     "StorageCapabilities",
     "StorageDestination",
     "StorageDiagnostics",
     "StorageFormat",
-    "StorageLoadRequest",
     "StorageTelemetry",
     "SyncStoragePipeline",
     "create_storage_bridge_job",
@@ -57,8 +58,6 @@ class StorageCapabilities(TypedDict):
     arrow_import_enabled: bool
     parquet_export_enabled: bool
     parquet_import_enabled: bool
-    requires_staging_for_load: bool
-    staging_protocols: "list[str]"
     partition_strategies: "list[str]"
     default_storage_profile: NotRequired[str | None]
 
@@ -70,27 +69,6 @@ class PartitionStrategyConfig(TypedDict, total=False):
     partitions: int
     rows_per_chunk: int
     manifest_path: str
-
-
-class StorageLoadRequest(TypedDict):
-    """Request describing a staging allocation."""
-
-    partition_id: str
-    destination_uri: str
-    ttl_seconds: int
-    correlation_id: str
-    source_uri: NotRequired[str]
-
-
-class StagedArtifact(TypedDict):
-    """Metadata describing a staged artifact managed by the pipeline."""
-
-    partition_id: str
-    uri: str
-    cleanup_token: str
-    ttl_seconds: int
-    expires_at: float
-    correlation_id: str
 
 
 class StorageTelemetry(TypedDict, total=False):
@@ -109,6 +87,13 @@ class StorageTelemetry(TypedDict, total=False):
     bind_key: str
 
 
+class ResolvedStorageTarget(NamedTuple):
+    """A storage destination resolved to an address and its backend protocol."""
+
+    uri: str
+    protocol: str
+
+
 class StorageBridgeJob(NamedTuple):
     """Handle representing a storage bridge operation."""
 
@@ -118,27 +103,19 @@ class StorageBridgeJob(NamedTuple):
 
 
 class _StorageBridgeMetrics:
-    __slots__ = ("bytes_written", "partitions_created")
+    __slots__ = ("bytes_written",)
 
     def __init__(self) -> None:
         self.bytes_written = 0
-        self.partitions_created = 0
 
     def record_bytes(self, count: int) -> None:
         self.bytes_written += max(count, 0)
 
-    def record_partitions(self, count: int) -> None:
-        self.partitions_created += max(count, 0)
-
     def snapshot(self) -> "dict[str, int]":
-        return {
-            "storage_bridge.bytes_written": self.bytes_written,
-            "storage_bridge.partitions_created": self.partitions_created,
-        }
+        return {"storage_bridge.bytes_written": self.bytes_written}
 
     def reset(self) -> None:
         self.bytes_written = 0
-        self.partitions_created = 0
 
 
 _METRICS = _StorageBridgeMetrics()
@@ -269,12 +246,6 @@ def _encode_arrow_payload(
     return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
 
 
-def _delete_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> None:
-    execute_sync_storage_operation(
-        partial(backend.delete_sync, path), backend=backend_name, operation="delete", path=path
-    )
-
-
 def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
     execute_sync_storage_operation(
         partial(backend.write_bytes_sync, path, payload), backend=backend_name, operation="write_bytes", path=path
@@ -370,6 +341,39 @@ class _StoragePipelineBase:
         self._resolved_backend_cache[cache_key] = resolved
         return resolved
 
+    def resolve_destination(
+        self, destination: StorageDestination, storage_options: "dict[str, Any] | None" = None
+    ) -> ResolvedStorageTarget:
+        """Resolve a destination without opening a database session or reading an object.
+
+        Direct remote URIs retain their address. Alias paths resolve relative to
+        the registered backend. Local paths resolve to absolute filesystem paths
+        through the backend's path checks.
+
+        Args:
+            destination: Remote URI, local path, or ``alias://name/path``.
+            storage_options: Explicit backend options. Pipeline writer defaults
+                are not inherited by this method.
+
+        Returns:
+            The resolved address and backend protocol.
+
+        Raises:
+            ImproperConfigurationError: If the destination or alias is invalid.
+            StoragePathTraversalError: If the backend rejects the local path.
+        """
+        backend, path, _backend_name = self._backend(destination, storage_options)
+        destination_str = str(destination)
+        if destination_str.startswith("alias://"):
+            uri = backend.resolve_uri(path)
+        elif backend.protocol == FILE_PROTOCOL:
+            if destination_str.startswith(FILE_SCHEME_PREFIX):
+                path = strip_windows_drive_prefix(unquote(urlparse(destination_str).path))
+            uri = backend.resolve_uri(Path(path).expanduser().resolve())
+        else:
+            uri = destination_str
+        return ResolvedStorageTarget(uri, backend.protocol)
+
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SyncStoragePipeline(_StoragePipelineBase):
@@ -449,38 +453,6 @@ class SyncStoragePipeline(_StoragePipelineBase):
         backend, path, _backend_name = self._backend(source, storage_options)
         return backend.stream_read_sync(path, chunk_size=chunk_size)
 
-    def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
-        """Allocate staging metadata for upcoming loads."""
-
-        artifacts: list[StagedArtifact] = []
-        now = time()
-
-        for request in requests:
-            ttl = max(request["ttl_seconds"], 0)
-            cleanup_token = f"{request['correlation_id']}::{request['partition_id']}"
-            artifacts.append({
-                "partition_id": request["partition_id"],
-                "uri": request["destination_uri"],
-                "cleanup_token": cleanup_token,
-                "ttl_seconds": ttl,
-                "expires_at": now + ttl if ttl else now,
-                "correlation_id": request["correlation_id"],
-            })
-        if artifacts:
-            _METRICS.record_partitions(len(artifacts))
-        return artifacts
-
-    def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
-        """Delete staged artifacts best-effort."""
-
-        for artifact in artifacts:
-            backend, path, backend_name = self._backend(artifact["uri"], None)
-            try:
-                _delete_backend_sync(backend, path, backend_name=backend_name)
-            except Exception:
-                if not ignore_errors:
-                    raise
-
     def _write_bytes(
         self,
         payload: bytes,
@@ -551,25 +523,6 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         return await self._write_bytes_async(
             payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
-
-    async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
-        for artifact in artifacts:
-            backend, path, backend_name = self._backend(artifact["uri"], None)
-            if supports_async_delete(backend):
-                try:
-                    await execute_async_storage_operation(
-                        partial(backend.delete_async, path), backend=backend_name, operation="delete", path=path
-                    )
-                except Exception:
-                    if not ignore_errors:
-                        raise
-                continue
-
-            try:
-                await async_(_delete_backend_sync)(backend=backend, path=path, backend_name=backend_name)
-            except Exception:
-                if not ignore_errors:
-                    raise
 
     async def _write_bytes_async(
         self,

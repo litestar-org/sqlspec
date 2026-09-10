@@ -23,6 +23,27 @@ Unreleased
 * Removed the undocumented ``sqlspec.exceptions.wrap_exceptions`` helper,
   superseded by the typed per-adapter exception handlers.
 
+**Added:**
+
+* Storage pipelines expose ``resolve_destination()``, returning a
+  ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.
+  Direct remote URIs retain their address, alias paths resolve relative to the
+  configured backend, and local paths become absolute. Backend options come
+  only from the method's explicit ``storage_options`` argument, not pipeline
+  writer defaults.
+
+**Breaking changes:**
+
+* Removed the unimplemented driver methods ``stage_artifact()``,
+  ``flush_staging_artifacts()``, and ``get_storage_job()``, and the exported
+  ``StorageLoadRequest`` and ``StagedArtifact`` types. Retain the
+  ``StorageBridgeJob`` returned by a storage operation instead of looking it up.
+* Removed pipeline ``allocate_staging_artifacts()`` and
+  ``cleanup_staging_artifacts()``, the ``requires_staging_for_load`` and
+  ``staging_protocols`` capability settings, and the unused
+  ``storage_bridge.partitions_created`` diagnostic counter. Working storage
+  import, export, and per-operation partition telemetry remain available.
+
 v0.62.2 - Litestar config lookup diagnostics
 ---------------------------------------------
 

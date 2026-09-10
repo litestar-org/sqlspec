@@ -64,10 +64,12 @@ Pipelines
 
 .. autoclass:: sqlspec.storage.SyncStoragePipeline
    :members:
+   :inherited-members:
    :show-inheritance:
 
 .. autoclass:: sqlspec.storage.AsyncStoragePipeline
    :members:
+   :inherited-members:
    :show-inheritance:
 
 Registry
@@ -88,19 +90,15 @@ Configuration Types
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.storage.StorageLoadRequest
-   :members:
-   :show-inheritance:
-
-.. autoclass:: sqlspec.storage.StagedArtifact
-   :members:
-   :show-inheritance:
-
 .. autoclass:: sqlspec.storage.StorageTelemetry
    :members:
    :show-inheritance:
 
 .. autoclass:: sqlspec.storage.StorageBridgeJob
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.storage.ResolvedStorageTarget
    :members:
    :show-inheritance:
 
