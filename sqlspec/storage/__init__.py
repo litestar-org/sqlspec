@@ -12,6 +12,7 @@ from sqlspec.storage._paths import resolve_storage_path
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
     PartitionStrategyConfig,
+    ResolvedStorageTarget,
     StorageBridgeJob,
     StorageCapabilities,
     StorageDestination,
@@ -28,6 +29,7 @@ from sqlspec.storage.registry import StorageRegistry, storage_registry
 __all__ = (
     "AsyncStoragePipeline",
     "PartitionStrategyConfig",
+    "ResolvedStorageTarget",
     "StorageBridgeJob",
     "StorageCapabilities",
     "StorageDestination",

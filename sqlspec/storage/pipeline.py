@@ -5,12 +5,14 @@ from functools import partial
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
+from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
 from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload
+from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, strip_windows_drive_prefix
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
 __all__ = (
     "AsyncStoragePipeline",
     "PartitionStrategyConfig",
+    "ResolvedStorageTarget",
     "StorageBridgeJob",
     "StorageCapabilities",
     "StorageDestination",
@@ -82,6 +85,13 @@ class StorageTelemetry(TypedDict, total=False):
     correlation_id: str
     config: str
     bind_key: str
+
+
+class ResolvedStorageTarget(NamedTuple):
+    """A storage destination resolved to an address and its backend protocol."""
+
+    uri: str
+    protocol: str
 
 
 class StorageBridgeJob(NamedTuple):
@@ -330,6 +340,39 @@ class _StoragePipelineBase:
         resolved = _storage_backend(self.registry, destination, backend_options)
         self._resolved_backend_cache[cache_key] = resolved
         return resolved
+
+    def resolve_destination(
+        self, destination: StorageDestination, storage_options: "dict[str, Any] | None" = None
+    ) -> ResolvedStorageTarget:
+        """Resolve a destination without opening a database session or reading an object.
+
+        Direct remote URIs retain their address. Alias paths resolve relative to
+        the registered backend. Local paths resolve to absolute filesystem paths
+        through the backend's path checks.
+
+        Args:
+            destination: Remote URI, local path, or ``alias://name/path``.
+            storage_options: Explicit backend options. Pipeline writer defaults
+                are not inherited by this method.
+
+        Returns:
+            The resolved address and backend protocol.
+
+        Raises:
+            ImproperConfigurationError: If the destination or alias is invalid.
+            StoragePathTraversalError: If the backend rejects the local path.
+        """
+        backend, path, _backend_name = self._backend(destination, storage_options)
+        destination_str = str(destination)
+        if destination_str.startswith("alias://"):
+            uri = backend.resolve_uri(path)
+        elif backend.protocol == FILE_PROTOCOL:
+            if destination_str.startswith(FILE_SCHEME_PREFIX):
+                path = strip_windows_drive_prefix(unquote(urlparse(destination_str).path))
+            uri = backend.resolve_uri(Path(path).expanduser().resolve())
+        else:
+            uri = destination_str
+        return ResolvedStorageTarget(uri, backend.protocol)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
