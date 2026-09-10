@@ -1,5 +1,6 @@
 """Pure storage path helpers safe for mypyc compilation."""
 
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
 
@@ -9,6 +10,8 @@ __all__ = (
     "FILE_PROTOCOL",
     "FILE_SCHEME_PREFIX",
     "ensure_path_within_root",
+    "extract_glob_static_prefix",
+    "glob_to_regex",
     "is_file_destination",
     "reject_parent_traversal",
     "resolve_storage_path",
@@ -69,6 +72,99 @@ def ensure_path_within_root(path: "str | Path", root: "str | Path") -> str:
     if resolved == root_obj:
         return ""
     return resolved.relative_to(root_obj).as_posix()
+
+
+_GLOB_MAGIC: Final = re.compile(r"[*?\[]")
+
+
+def _glob_segment_regex(segment: str) -> str:
+    """Translate one glob path segment to regex source that never crosses ``/``."""
+    out: list[str] = []
+    index = 0
+    length = len(segment)
+    while index < length:
+        char = segment[index]
+        if char == "*":
+            out.append("[^/]*")
+            index += 1
+        elif char == "?":
+            out.append("[^/]")
+            index += 1
+        elif char == "[":
+            close = segment.find("]", index + 1)
+            body = segment[index + 1 : close] if close != -1 else ""
+            negated = body.startswith(("!", "^"))
+            if negated:
+                body = body[1:]
+            if close == -1 or not body:
+                out.append(re.escape(char))
+                index += 1
+                continue
+            escaped = body.replace("\\", "\\\\").replace("[", "\\[")
+            prefix = "^" if negated else ""
+            out.append(f"[{prefix}{escaped}]")
+            index = close + 1
+        else:
+            out.append(re.escape(char))
+            index += 1
+    return "".join(out)
+
+
+def extract_glob_static_prefix(pattern: str) -> str:
+    """Return the literal directory prefix of a glob pattern.
+
+    The result is either ``""`` or a string ending in ``/`` made of whole path
+    segments that contain no glob metacharacters. A pattern with no wildcards
+    yields its directory portion, never the full key.
+
+    Args:
+        pattern: Glob pattern in POSIX form.
+
+    Returns:
+        Static directory prefix suitable for a listing API.
+    """
+    segments = pattern.lstrip("/").split("/")
+    static: list[str] = []
+    for segment in segments[:-1]:
+        if not segment or _GLOB_MAGIC.search(segment):
+            break
+        static.append(segment)
+    return "/".join(static) + "/" if static else ""
+
+
+def glob_to_regex(pattern: str) -> "re.Pattern[str]":
+    """Compile a glob pattern to an anchored regex with pathlib semantics.
+
+    ``*`` and ``?`` match within a single path segment. A ``**`` segment matches
+    zero or more whole segments. Matching is anchored at both ends, so a pattern
+    describes the entire object key rather than a suffix of it.
+
+    The honored magic characters are ``*``, ``?`` and ``[``. There is no brace
+    expansion and no escape syntax, matching what the local and fsspec backends
+    accept. Compiled patterns are cached by :mod:`re` itself, so repeated calls
+    with the same pattern do not recompile.
+
+    Args:
+        pattern: Glob pattern.
+
+    Returns:
+        A compiled, anchored regex. An empty pattern matches nothing.
+    """
+    if not pattern:
+        return re.compile(r"(?!)")
+
+    parts = pattern.split("/")
+    pieces: list[str] = []
+    last_index = len(parts) - 1
+    for index, part in enumerate(parts):
+        if part == "**":
+            pieces.append(".*" if index == last_index else "(?:[^/]+/)*")
+            continue
+        pieces.append(_glob_segment_regex(part))
+        if index != last_index:
+            pieces.append("/")
+
+    return re.compile(f"(?s:{''.join(pieces)})\\Z")
 
 
 def strip_windows_drive_prefix(path: str) -> str:

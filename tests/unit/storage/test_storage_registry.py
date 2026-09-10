@@ -259,3 +259,29 @@ def test_protocol_conformance_stream_arrow_async_notes_are_present() -> None:
     """Source comments document why stream_arrow_async is not async def."""
     assert "Returns AsyncIterator directly" in Path("sqlspec/protocols.py").read_text()
     assert "Returns AsyncIterator directly" in Path("sqlspec/storage/backends/base.py").read_text()
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_alias_named_like_a_scheme_does_not_capture_scheme_uris(tmp_path: Path) -> None:
+    registry = StorageRegistry()
+    registry.register_alias("memory", f"file://{tmp_path}")
+
+    by_alias = registry.get("memory")
+    by_scheme = registry.get("memory://bucket/key")
+
+    assert by_alias.protocol == "file"
+    assert by_scheme.protocol == "memory"
+    assert by_scheme.store_uri == "memory://bucket/key"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_alias_does_not_match_partial_path_segment(tmp_path: Path) -> None:
+    registry = StorageRegistry()
+    registry.register_alias("db", f"file://{tmp_path}")
+
+    via_alias = registry.get("db/queries.sql")
+    not_alias = registry.get("db_backup/queries.sql")
+
+    assert via_alias.store_uri == f"file://{tmp_path}"
+    assert not_alias.store_uri.endswith("/db_backup")
+    assert str(tmp_path) not in not_alias.store_uri

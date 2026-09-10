@@ -4,13 +4,12 @@ Implements the ObjectStoreProtocol using obstore for S3, GCS, Azure,
 and local file storage.
 """
 
-import fnmatch
 import io
 import re
 from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from functools import partial
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, overload
 from urllib.parse import urlparse
 
@@ -21,6 +20,8 @@ from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
     ensure_path_within_root,
+    extract_glob_static_prefix,
+    glob_to_regex,
     is_file_destination,
     reject_parent_traversal,
     resolve_storage_path,
@@ -92,6 +93,31 @@ class _ObStoreFileProxy:
 
     def __exit__(self, *_: Any) -> None:
         self.close()
+
+
+class _ObstoreSink:
+    """Adapt an obstore writer to the file-like surface ``pyarrow.PythonFile`` expects.
+
+    obstore exposes ``closed`` as a method; pyarrow reads it as an attribute.
+    """
+
+    __slots__ = ("_writer",)
+
+    def __init__(self, writer: Any) -> None:
+        self._writer = writer
+
+    @property
+    def closed(self) -> bool:
+        return bool(self._writer.closed())
+
+    def write(self, data: Any) -> int:
+        return int(self._writer.write(data))
+
+    def flush(self) -> None:
+        self._writer.flush()
+
+    def close(self) -> None:
+        self._writer.close()
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -233,6 +259,24 @@ class ObStoreBackend:
             return self._local_store_path(path)
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
+    def _resolve_list_prefix(self, prefix: str) -> str:
+        """Resolve a caller-supplied listing prefix to a store-relative one.
+
+        A local store's root already contains ``base_path``, so resolving the
+        prefix against ``base_path`` again would look for that segment twice and
+        match nothing.
+
+        Args:
+            prefix: Caller-supplied listing prefix, possibly empty.
+
+        Returns:
+            The prefix as the store expects it, or ``""`` to list everything.
+        """
+        if not prefix:
+            return "" if self._is_local_store else (self.base_path or "")
+        base = "" if self._is_local_store else self.base_path
+        return resolve_storage_path(prefix, base, self.protocol, strip_file_scheme=True)
+
     def _local_store_path(self, path: "str | Path") -> str:
         """Resolve path for LocalStore, which expects relative paths from its root.
 
@@ -303,19 +347,25 @@ class ObStoreBackend:
         """Write text using obstore synchronously."""
         self.write_bytes_sync(path, data.encode(encoding), **kwargs)
 
-    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
-        """List objects using obstore synchronously."""
-        if prefix:
-            resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
-        elif self._is_local_store:
-            resolved_prefix = ""
-        else:
-            resolved_prefix = self.base_path or ""
+    def _list_resolved_sync(self, resolved_prefix: str, recursive: bool) -> "list[str]":
+        """List object keys under a prefix that is already store-relative.
+
+        Args:
+            resolved_prefix: Prefix as the store expects it; ``""`` lists everything.
+            recursive: Whether to descend into nested prefixes.
+
+        Returns:
+            Sorted object keys.
+        """
         if not recursive:
             result = self.store.list_with_delimiter(resolved_prefix)
-            paths = sorted(item["path"] for item in result["objects"])
-        else:
-            paths = sorted(item["path"] for batch in self.store.list(resolved_prefix) for item in batch)
+            return sorted(item["path"] for item in result["objects"])
+        return sorted(item["path"] for batch in self.store.list(resolved_prefix) for item in batch)
+
+    def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
+        """List objects using obstore synchronously."""
+        resolved_prefix = self._resolve_list_prefix(prefix)
+        paths = self._list_resolved_sync(resolved_prefix, recursive)
         _log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
@@ -412,34 +462,23 @@ class ObStoreBackend:
     def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching pattern synchronously.
 
-        Lists all objects and filters them client-side using the pattern.
+        Lists objects under the pattern's static directory prefix and filters
+        them client-side. ``*`` and ``?`` match
+        within one path segment and ``**`` spans zero or more segments, matching
+        the local and fsspec backends.
         """
 
+        if not pattern:
+            return []
+        reject_parent_traversal(pattern)
         resolved_pattern = (
             pattern
             if self._is_local_store
             else resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         )
-        all_objects = self.list_objects_sync(recursive=True, **kwargs)
-
-        if "**" in pattern:
-            matching_objects = []
-
-            if pattern.startswith("**/"):
-                suffix_pattern = pattern[3:]
-
-                for obj in all_objects:
-                    obj_path = PurePosixPath(obj)
-                    if obj_path.match(resolved_pattern) or obj_path.match(suffix_pattern):
-                        matching_objects.append(obj)
-            else:
-                for obj in all_objects:
-                    obj_path = PurePosixPath(obj)
-                    if obj_path.match(resolved_pattern):
-                        matching_objects.append(obj)
-            results = matching_objects
-        else:
-            results = [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
+        all_objects = self._list_resolved_sync(extract_glob_static_prefix(resolved_pattern), recursive=True)
+        matcher = glob_to_regex(resolved_pattern)
+        results = [obj for obj in all_objects if matcher.match(obj)]
         _log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
@@ -518,7 +557,7 @@ class ObStoreBackend:
     def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table using obstore synchronously."""
         pa = import_pyarrow()
-        pq = import_pyarrow_parquet()
+        import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
 
         schema = table.schema
@@ -536,15 +575,12 @@ class ObStoreBackend:
                     new_fields.append(field)
             table = table.cast(pa.schema(new_fields))
 
-        buffer = io.BytesIO()
         execute_sync_storage_operation(
-            partial(pq.write_table, table, buffer, **kwargs),
+            partial(self._stream_parquet_sync, resolved_path, table, **kwargs),
             backend=self.backend_type,
             operation="write_arrow",
             path=resolved_path,
         )
-        buffer.seek(0)
-        self._write_bytes_resolved_sync(resolved_path, buffer.read())
         _log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
@@ -553,6 +589,32 @@ class ObStoreBackend:
             mode="sync",
             path=resolved_path,
         )
+
+    def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
+        """Serialize a table row group by row group into an obstore multipart writer.
+
+        Peak memory is bounded by one serialized row group plus the upload
+        buffer rather than the serialized size of the whole table. The writer
+        and the sink are closed only after every row group is written; a
+        failure leaves the multipart upload unfinished, and it is discarded
+        when the writer is released, so no partial object is published.
+
+        Args:
+            resolved_path: Store-relative destination key.
+            table: Table to serialize.
+            **kwargs: Options forwarded to ``pyarrow.parquet.ParquetWriter``;
+                ``row_group_size`` is forwarded to ``write_table``.
+        """
+        from obstore import open_writer
+
+        pa = import_pyarrow()
+        pq = import_pyarrow_parquet()
+        row_group_size = kwargs.pop("row_group_size", None)
+        sink = open_writer(self.store, resolved_path)
+        writer = pq.ParquetWriter(pa.PythonFile(_ObstoreSink(sink), mode="w"), table.schema, **kwargs)
+        writer.write_table(table, row_group_size=row_group_size)
+        writer.close()
+        sink.close()
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes using obstore's native streaming synchronously.
@@ -727,12 +789,7 @@ class ObStoreBackend:
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
-        if prefix:
-            resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
-        elif self._is_local_store:
-            resolved_prefix = ""
-        else:
-            resolved_prefix = self.base_path or ""
+        resolved_prefix = self._resolve_list_prefix(prefix)
 
         objects: list[str] = []
         async for batch in self.store.list_async(resolved_prefix):  # pyright: ignore[reportAttributeAccessIssue]
@@ -906,17 +963,9 @@ class ObStoreBackend:
         Uses async_() with storage limiter to offload blocking PyArrow serialization
         to thread pool, preventing event loop blocking.
         """
-        pq = import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
 
-        def _serialize() -> bytes:
-            buffer = io.BytesIO()
-            pq.write_table(table, buffer, **kwargs)
-            buffer.seek(0)
-            return buffer.read()
-
-        data = await async_(_serialize)()
-        await self._write_bytes_resolved_async(resolved_path, data)
+        await async_(self._stream_parquet_sync)(resolved_path, table, **kwargs)
 
         _log_storage_event(
             "storage.write",
