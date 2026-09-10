@@ -17,6 +17,33 @@ from tests.unit.adapters.test_pymssql._fakes import (
 UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
 
 
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        (
+            [{"name": "Ada", "id": 1}, {"name": "Grace", "id": 2}],
+            [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}],
+        ),
+        ([(1, "Ada"), (2, "Grace")], [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]),
+        ([], []),
+    ],
+    ids=["dict", "tuple", "empty"],
+)
+def test_execute_maps_pymssql_row_formats(
+    rows: list[tuple[int, str] | dict[str, int | str]], expected: list[dict[str, int | str]]
+) -> None:
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor(rows=rows, description=[("id",), ("name",)])
+    driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)))
+
+    result = driver.execute("SELECT id, name FROM dbo.users")
+
+    assert result.get_data() == expected
+    assert result.column_names == ["id", "name"]
+    assert len(cursor.calls) == 1
+
+
 @pytest.mark.parametrize("bad_name", UNSAFE_SAVEPOINT_NAMES)
 def test_pymssql_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
     """The T-SQL savepoint overrides must reject unsafe identifiers before interpolation."""
