@@ -28,10 +28,8 @@ async def asyncmy_infile_config(
             "db": mysql_service.db,
             "autocommit": True,
             "cursor_cls": request.param,
-            "local_infile": True,
             "allow_local_infile": True,
-        },
-        driver_features={"enable_local_infile_bulk_load": True},
+        }
     )
     original = 0
     try:

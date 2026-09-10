@@ -140,6 +140,7 @@ class _MysqlConnectorBaseConnectionParams(TypedDict):
     option_files: NotRequired[MysqlConnectorPathSequence]
     option_groups: NotRequired[MysqlConnectorStringSequence]
     allow_local_infile: NotRequired[bool]
+    local_infile: NotRequired[bool]
     allow_local_infile_in_path: NotRequired[str]
     use_pure: NotRequired[bool]
     dsn: NotRequired[str]
@@ -197,8 +198,8 @@ class MysqlConnectorDriverFeatures(TypedDict):
 def _normalize_local_infile(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Normalize mysql-connector local-infile consent."""
     config = normalize_connection_config(connection_config)
-    config.pop("local_infile", None)
-    config["allow_local_infile"] = bool(config.get("allow_local_infile", False))
+    local_infile = bool(config.pop("local_infile", False))
+    config["allow_local_infile"] = bool(config.get("allow_local_infile", False) or local_infile)
     return config
 
 
@@ -324,8 +325,9 @@ class MysqlConnectorSyncConfig(
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
+        features_dict.setdefault("enable_local_infile_bulk_load", connection_config["allow_local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("allow_local_infile"):
-            msg = "enable_local_infile_bulk_load requires allow_local_infile=True in connection_config."
+            msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
         super().__init__(
@@ -440,8 +442,9 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
             features_dict.pop("on_connection_create", None)
         )
 
+        features_dict.setdefault("enable_local_infile_bulk_load", self.connection_config["allow_local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not self.connection_config.get("allow_local_infile"):
-            msg = "enable_local_infile_bulk_load requires allow_local_infile=True in connection_config."
+            msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
         super().__init__(

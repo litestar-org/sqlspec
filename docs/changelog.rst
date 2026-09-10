@@ -14,6 +14,11 @@ Unreleased
 
 **Fixed:**
 
+* MySQL adapters accept either ``local_infile=True`` or
+  ``allow_local_infile=True`` to enable eligible native bulk loads. A separate
+  bulk-load opt-in is no longer required; set
+  ``enable_local_infile_bulk_load=False`` to retain ``executemany``.
+
 * ``sqlspec.extensions.litestar.LitestarConfig`` now exposes the complete plugin
   configuration, including ``session_table=True``, through the same type as
   ``sqlspec.config.LitestarConfig``.

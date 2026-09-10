@@ -28,9 +28,7 @@ def test_sync_config_gate_raises_when_allow_local_infile_disabled() -> None:
 
 
 def test_sync_config_gate_allows_when_allow_local_infile_enabled() -> None:
-    config = MysqlConnectorSyncConfig(
-        connection_config={"allow_local_infile": True}, driver_features={"enable_local_infile_bulk_load": True}
-    )
+    config = MysqlConnectorSyncConfig(connection_config={"allow_local_infile": True})
     assert config.driver_features["enable_local_infile_bulk_load"] is True
 
 
@@ -40,7 +38,5 @@ def test_async_config_gate_raises_when_allow_local_infile_disabled() -> None:
 
 
 def test_async_config_gate_allows_when_allow_local_infile_enabled() -> None:
-    config = MysqlConnectorAsyncConfig(
-        connection_config={"allow_local_infile": True}, driver_features={"enable_local_infile_bulk_load": True}
-    )
+    config = MysqlConnectorAsyncConfig(connection_config={"allow_local_infile": True})
     assert config.driver_features["enable_local_infile_bulk_load"] is True

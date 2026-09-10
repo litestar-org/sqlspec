@@ -80,12 +80,35 @@ def test_acquire_sync_connection_lazily_creates_pool_once(monkeypatch: "pytest.M
 
 
 @pytest.mark.parametrize("config_cls", [MysqlConnectorSyncConfig, MysqlConnectorAsyncConfig])
-def test_local_infile_uses_connector_python_security_gate(config_cls: type[Any]) -> None:
-    """LOAD DATA LOCAL INFILE should use mysql-connector's native consent gate."""
-    config = config_cls(connection_config={"allow_local_infile": True})
-
-    assert config.connection_config["allow_local_infile"] is True
+@pytest.mark.parametrize(
+    ("connection_config", "enabled"),
+    [
+        ({}, False),
+        ({"local_infile": False}, False),
+        ({"allow_local_infile": False}, False),
+        ({"local_infile": False, "allow_local_infile": False}, False),
+        ({"local_infile": True}, True),
+        ({"allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": False}, True),
+        ({"local_infile": False, "allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": True}, True),
+    ],
+)
+def test_local_infile_aliases_enable_native_bulk(
+    config_cls: type[Any], connection_config: dict[str, bool], enabled: bool
+) -> None:
+    config = config_cls(connection_config=connection_config)
+    assert config.connection_config["allow_local_infile"] is enabled
     assert "local_infile" not in config.connection_config
+    assert config.driver_features["enable_local_infile_bulk_load"] is enabled
+
+
+@pytest.mark.parametrize("config_cls", [MysqlConnectorSyncConfig, MysqlConnectorAsyncConfig])
+@pytest.mark.parametrize("flag", ["local_infile", "allow_local_infile"])
+def test_local_infile_explicit_bulk_disable(config_cls: type[Any], flag: str) -> None:
+    config = config_cls(connection_config={flag: True}, driver_features={"enable_local_infile_bulk_load": False})
+    assert config.connection_config["allow_local_infile"] is True
+    assert config.driver_features["enable_local_infile_bulk_load"] is False
 
 
 def test_sync_connection_params_type_accepts_modern_connector_options() -> None:

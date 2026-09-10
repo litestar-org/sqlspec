@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlDriverFeatures", "AiomysqlPoolParams")
 
 _POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
-_AIOMYSQL_LOCAL_INFILE_GATE = "allow_local_infile"
 aiomysql: "AiomysqlModule" = cast("AiomysqlModule", AiomysqlModule)
 
 
@@ -84,28 +83,19 @@ class AiomysqlPoolParams(AiomysqlConnectionParams):
     pool_recycle: NotRequired[int]
 
 
-def _normalize_local_infile(connection_config: "Mapping[str, Any]", *, strip_consent_gate: bool) -> "dict[str, Any]":
-    """Normalize aiomysql local-infile settings and SQLSpec's consent gate."""
+def _normalize_local_infile(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Normalize aiomysql local-infile aliases to the native connection flag."""
     config = dict(connection_config)
 
     config.pop("enable_local_infile", None)
-    allow_local_infile = bool(config.get(_AIOMYSQL_LOCAL_INFILE_GATE, False))
-    local_infile = bool(config.get("local_infile", False))
-    if local_infile and not allow_local_infile:
-        msg = (
-            "Aiomysql local_infile=True requires allow_local_infile=True because "
-            "LOAD DATA LOCAL INFILE can read client files."
-        )
-        raise ImproperConfigurationError(msg)
-    config["local_infile"] = bool(local_infile and allow_local_infile)
-    if strip_consent_gate:
-        config.pop(_AIOMYSQL_LOCAL_INFILE_GATE, None)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
     return config
 
 
 def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build aiomysql.connect-compatible kwargs from SQLSpec connection config."""
-    config = _normalize_local_infile(connection_config, strip_consent_gate=True)
+    config = _normalize_local_infile(connection_config)
 
     for key in _POOL_ONLY_CONFIG_KEYS:
         config.pop(key, None)
@@ -253,9 +243,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = _normalize_local_infile(
-            normalize_connection_config(connection_config), strip_consent_gate=False
-        )
+        connection_config = _normalize_local_infile(normalize_connection_config(connection_config))
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
@@ -271,11 +259,9 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
+        features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
-            msg = (
-                "enable_local_infile_bulk_load requires local_infile=True and "
-                "allow_local_infile=True in connection_config."
-            )
+            msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
         super().__init__(

@@ -77,8 +77,8 @@ Capability matrix
    * - MySQL family (pymysql, asyncmy, aiomysql, mysql-connector)
      - ``executemany`` (default); ``LOAD DATA LOCAL INFILE`` (opt-in)
      - Server-managed
-     - ``enable_local_infile_bulk_load`` + connection ``local_infile`` /
-       ``allow_local_infile``
+     - Connection ``local_infile=True`` or ``allow_local_infile=True``;
+       ``enable_local_infile_bulk_load=False`` forces fallback
    * - bigquery
      - Parquet load job (default); Arrow Storage Write API (opt-in)
      - All-or-nothing load job / PENDING write stream
@@ -101,25 +101,28 @@ Security and opt-in paths
 
 Some fast paths are opt-in because they read local files or change semantics:
 
-- **MySQL ``LOAD DATA LOCAL INFILE``** requires both the adapter feature
-  ``enable_local_infile_bulk_load`` and the connection's local-infile setting
-  (``local_infile=True`` for pymysql/aiomysql/asyncmy, ``allow_local_infile=True``
-  for mysql-connector). SQLSpec additionally requires explicit
-  ``allow_local_infile=True`` consent for pymysql, aiomysql and asyncmy.
-  Enabling the feature without the connection gate raises
-  :class:`~sqlspec.exceptions.ImproperConfigurationError` at config construction.
+- **MySQL ``LOAD DATA LOCAL INFILE``** is enabled by either
+  ``local_infile=True`` or ``allow_local_infile=True`` in the connection
+  configuration. Both names work for each MySQL adapter. If both are set,
+  either true value enables loading. If neither is true, loading stays off.
+  SQLSpec sends only the driver's native flag.
+
+  This one flag also turns on bulk loads for supported data. Set
+  ``driver_features={"enable_local_infile_bulk_load": False}`` to keep using
+  ``executemany``. Setting that feature to true with no connection opt-in raises
+  :class:`~sqlspec.exceptions.ImproperConfigurationError` when you create the config.
   The MySQL server must also have ``local_infile`` enabled. mysql-connector
   additionally honors ``allow_local_infile_in_path`` -- the staged temp file must
   live under that directory when it is set.
-  For asyncmy, set both ``local_infile=True`` and ``allow_local_infile=True``
-  in the connection configuration. This explicitly trusts the configured MySQL
-  server to request client files. During a SQLSpec bulk load, the requested
-  filename must match that operation's payload; this is not a connection-wide
-  file restriction for other queries. SQLSpec uses asyncmy's native sender
+  Connection opt-in trusts the configured MySQL server to request client files.
+
+  For asyncmy bulk loads, the requested filename must match that operation's
+  payload; this is not a connection-wide file restriction for other queries.
+  SQLSpec uses asyncmy's native sender
   (version 0.2.13 or newer), removes its private UTF-8 payload after each attempt,
-  and closes the connection if native loading fails or is cancelled. Without the bulk-load
-  feature, and for nested, binary or duration values, asyncmy uses
-  ``executemany``. As with the other MySQL adapters, ``overwrite=True`` first
+  and closes the connection if native loading fails or is cancelled.
+  When bulk loading is disabled, and for nested, binary or duration values,
+  asyncmy uses ``executemany``. As with the other MySQL adapters, ``overwrite=True`` first
   truncates the table; a later load failure does not restore those rows.
 - **Oracle direct path load** is the default bulk-ingest transport in Thin mode.
   Set ``enable_direct_path_load=False`` to force ``executemany``. Connections
@@ -145,8 +148,7 @@ MySQL ``LOAD DATA LOCAL INFILE``:
     from sqlspec.adapters.pymysql import PyMysqlConfig
 
     config = PyMysqlConfig(
-        connection_config={"host": "localhost", "local_infile": True, "allow_local_infile": True},
-        driver_features={"enable_local_infile_bulk_load": True},
+        connection_config={"host": "localhost", "local_infile": True},
     )
     with config.provide_session() as driver:
         driver.load_from_arrow("orders", arrow_table)
@@ -160,10 +162,8 @@ Asyncmy with explicit LOCAL INFILE consent:
     config = AsyncmyConfig(
         connection_config={
             "host": "localhost",
-            "local_infile": True,
             "allow_local_infile": True,
         },
-        driver_features={"enable_local_infile_bulk_load": True},
     )
     async with config.provide_session() as driver:
         await driver.load_from_arrow("orders", arrow_table)

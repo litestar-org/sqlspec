@@ -120,7 +120,8 @@ class PyMysqlDriverFeatures(TypedDict):
     enable_events: Enable database event channel support.
     events_backend: Event channel backend selection.
     enable_local_infile_bulk_load: Route load_from_arrow through LOAD DATA LOCAL INFILE.
-     Requires local_infile=True in connection_config.
+     Defaults to the connection's local_infile or allow_local_infile opt-in.
+     Set False to force executemany on an opted-in connection.
     enable_cloud_sql: Enable Google Cloud SQL connector integration.
      Requires cloud-sql-python-connector package.
      Defaults to False (explicit opt-in required).
@@ -159,17 +160,10 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
 
 
 def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize PyMySQL local-infile configuration and SQLSpec's consent gate."""
+    """Normalize PyMySQL local-infile aliases to the native connection flag."""
     config = dict(connection_config)
     allow_local_infile = bool(config.pop("allow_local_infile", False))
-    local_infile = bool(config.get("local_infile", False))
-    if local_infile and not allow_local_infile:
-        msg = (
-            "PyMySQL local_infile=True requires allow_local_infile=True because "
-            "LOAD DATA LOCAL INFILE can read client files."
-        )
-        raise ImproperConfigurationError(msg)
-    config["local_infile"] = bool(local_infile and allow_local_infile)
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
     return config
 
 
@@ -266,8 +260,9 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
             "on_connection_create", None
         )
 
+        features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
-            msg = "enable_local_infile_bulk_load requires local_infile=True in connection_config."
+            msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
         super().__init__(

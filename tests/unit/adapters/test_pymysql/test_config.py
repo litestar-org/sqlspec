@@ -8,7 +8,6 @@ import pytest
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams
-from sqlspec.exceptions import ImproperConfigurationError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -80,28 +79,35 @@ def test_create_pool_defaults_local_infile_off() -> None:
     assert pool._connection_parameters["local_infile"] is False
 
 
-def test_create_pool_preserves_local_infile_opt_in_with_security_gate() -> None:
-    """Explicit local infile opt-in should still pass through to PyMySQL after consent."""
-    config = PyMysqlConfig(connection_config={"allow_local_infile": True, "local_infile": True})
+@pytest.mark.parametrize(
+    ("connection_config", "enabled"),
+    [
+        ({}, False),
+        ({"local_infile": False}, False),
+        ({"allow_local_infile": False}, False),
+        ({"local_infile": False, "allow_local_infile": False}, False),
+        ({"local_infile": True}, True),
+        ({"allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": False}, True),
+        ({"local_infile": False, "allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": True}, True),
+    ],
+)
+def test_local_infile_aliases_enable_native_bulk(connection_config: dict[str, bool], enabled: bool) -> None:
+    config = PyMysqlConfig(connection_config=connection_config)
+    assert config.connection_config["local_infile"] is enabled
+    assert "allow_local_infile" not in config.connection_config
+    assert config.driver_features["enable_local_infile_bulk_load"] is enabled
     pool = config._create_pool()
-
-    assert pool._connection_parameters["local_infile"] is True
+    assert pool._connection_parameters["local_infile"] is enabled
     assert "allow_local_infile" not in pool._connection_parameters
 
 
-def test_create_pool_rejects_local_infile_without_security_gate() -> None:
-    """PyMySQL should match asyncmy's separate local-infile consent gate."""
-    with pytest.raises(ImproperConfigurationError, match="allow_local_infile=True"):
-        PyMysqlConfig(connection_config={"local_infile": True})
-
-
-def test_create_pool_does_not_enable_local_infile_for_gate_only() -> None:
-    """The consent gate alone should not enable client-file reads."""
-    config = PyMysqlConfig(connection_config={"allow_local_infile": True})
-    pool = config._create_pool()
-
-    assert pool._connection_parameters["local_infile"] is False
-    assert "allow_local_infile" not in pool._connection_parameters
+@pytest.mark.parametrize("flag", ["local_infile", "allow_local_infile"])
+def test_local_infile_explicit_bulk_disable(flag: str) -> None:
+    config = PyMysqlConfig(connection_config={flag: True}, driver_features={"enable_local_infile_bulk_load": False})
+    assert config.connection_config["local_infile"] is True
+    assert config.driver_features["enable_local_infile_bulk_load"] is False
 
 
 def test_create_pool_preserves_ssl_context_and_flat_tls_options() -> None:

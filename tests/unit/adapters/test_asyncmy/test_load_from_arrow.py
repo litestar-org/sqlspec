@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
 _CAPS: dict[str, Any] = {
@@ -63,9 +64,15 @@ def _make_driver(connection: _FakeConnection) -> AsyncmyDriver:
     return AsyncmyDriver(connection=cast("Any", connection), driver_features={"storage_capabilities": _CAPS})
 
 
-async def test_load_from_arrow_uses_executemany() -> None:
+@pytest.mark.parametrize("connection_opt_in", [False, True])
+async def test_load_from_arrow_explicit_bulk_disable_uses_executemany(connection_opt_in: bool) -> None:
     conn = _FakeConnection()
-    driver = _make_driver(conn)
+    config = AsyncmyConfig(
+        connection_config={"local_infile": connection_opt_in}, driver_features={"enable_local_infile_bulk_load": False}
+    )
+    driver = AsyncmyDriver(
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
+    )
 
     job = await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
 
@@ -102,9 +109,9 @@ async def test_load_from_storage_reads_parquet_and_delegates(tmp_path: Path) -> 
 
 async def test_local_infile_payload_roundtrip_and_cleanup() -> None:
     conn = _FakeConnection()
+    config = AsyncmyConfig(connection_config={"allow_local_infile": True})
     driver = AsyncmyDriver(
-        connection=cast("Any", conn),
-        driver_features={"storage_capabilities": _CAPS, "enable_local_infile_bulk_load": True},
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
     )
     job = await driver.load_from_arrow(
         "order%`table", pa.table({"id": [1, 2], "text.with%tick`": ["é\t\n\r\\\x00\x1a", None], "flag": [True, False]})
