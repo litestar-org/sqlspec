@@ -90,13 +90,19 @@ def test_asyncmy_local_infile_requires_explicit_security_gate() -> None:
     assert "allow_local_infile" not in config.connection_config
 
 
-def test_asyncmy_rejects_local_infile_bulk_load_feature() -> None:
-    """Asyncmy exposes local_infile, but its LOAD DATA LOCAL INFILE protocol path is not usable."""
-    with pytest.raises(ImproperConfigurationError, match="asyncmy does not currently support"):
-        AsyncmyConfig(
-            connection_config={"local_infile": True, "allow_local_infile": True},
-            driver_features={"enable_local_infile_bulk_load": True},
-        )
+def test_asyncmy_local_infile_bulk_load_accepts_explicit_consent() -> None:
+    config = AsyncmyConfig(
+        connection_config={"local_infile": True, "allow_local_infile": True},
+        driver_features={"enable_local_infile_bulk_load": True},
+    )
+    assert config.driver_features["enable_local_infile_bulk_load"] is True
+    assert config.connection_config["local_infile"] is True
+
+
+@pytest.mark.parametrize("connection_config", [{}, {"allow_local_infile": True}, {"local_infile": True}])
+def test_asyncmy_bulk_load_requires_both_consent_flags(connection_config: "dict[str, Any]") -> None:
+    with pytest.raises(ImproperConfigurationError, match="local_infile=True"):
+        AsyncmyConfig(connection_config=connection_config, driver_features={"enable_local_infile_bulk_load": True})
 
 
 async def test_asyncmy_create_pool_normalizes_connection_and_pool_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:

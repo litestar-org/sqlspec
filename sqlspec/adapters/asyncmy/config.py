@@ -159,6 +159,8 @@ class AsyncmyDriverFeatures(TypedDict):
     MySQL/MariaDB handle JSON natively, but custom serializers can be provided
     for specialized use cases.
 
+    enable_local_infile_bulk_load: Use native LOCAL INFILE for eligible Arrow rows.
+     Requires local_infile=True and allow_local_infile=True; defaults to executemany.
     json_serializer: Custom JSON serializer function.
      Defaults to sqlspec.utils.serializers.to_json.
      Use for performance (orjson) or custom encoding.
@@ -178,6 +180,7 @@ class AsyncmyDriverFeatures(TypedDict):
      Defaults to "poll_queue".
     """
 
+    enable_local_infile_bulk_load: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
@@ -296,12 +299,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
-        if features_dict.get("enable_local_infile_bulk_load"):
-            msg = (
-                "asyncmy does not currently support SQLSpec's LOAD DATA LOCAL INFILE bulk path reliably. "
-                "Use aiomysql, mysql-connector, or pymysql for LOCAL INFILE bulk loads, or omit "
-                "enable_local_infile_bulk_load to use asyncmy batched executemany."
-            )
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
+            msg = "enable_local_infile_bulk_load requires local_infile=True and allow_local_infile=True."
             raise ImproperConfigurationError(msg)
 
         super().__init__(

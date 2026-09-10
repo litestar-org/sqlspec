@@ -104,11 +104,23 @@ Some fast paths are opt-in because they read local files or change semantics:
 - **MySQL ``LOAD DATA LOCAL INFILE``** requires both the adapter feature
   ``enable_local_infile_bulk_load`` and the connection's local-infile setting
   (``local_infile=True`` for pymysql/aiomysql/asyncmy, ``allow_local_infile=True``
-  for mysql-connector). Enabling the feature without the connection gate raises
+  for mysql-connector). SQLSpec additionally requires explicit
+  ``allow_local_infile=True`` consent for pymysql, aiomysql and asyncmy.
+  Enabling the feature without the connection gate raises
   :class:`~sqlspec.exceptions.ImproperConfigurationError` at config construction.
   The MySQL server must also have ``local_infile`` enabled. mysql-connector
   additionally honors ``allow_local_infile_in_path`` -- the staged temp file must
   live under that directory when it is set.
+  For asyncmy, set both ``local_infile=True`` and ``allow_local_infile=True``
+  in the connection configuration. This explicitly trusts the configured MySQL
+  server to request client files. During a SQLSpec bulk load, the requested
+  filename must match that operation's payload; this is not a connection-wide
+  file restriction for other queries. SQLSpec uses asyncmy's native sender
+  (version 0.2.13 or newer), removes its private UTF-8 payload after each attempt,
+  and closes the connection if native loading fails or is cancelled. Without the bulk-load
+  feature, and for nested, binary or duration values, asyncmy uses
+  ``executemany``. As with the other MySQL adapters, ``overwrite=True`` first
+  truncates the table; a later load failure does not restore those rows.
 - **Oracle direct path load** is the default bulk-ingest transport in Thin mode.
   Set ``enable_direct_path_load=False`` to force ``executemany``. Connections
   that do not expose the Direct Path Load API, including Thick-mode connections,
@@ -133,11 +145,28 @@ MySQL ``LOAD DATA LOCAL INFILE``:
     from sqlspec.adapters.pymysql import PyMysqlConfig
 
     config = PyMysqlConfig(
-        connection_config={"host": "localhost", "local_infile": True},
+        connection_config={"host": "localhost", "local_infile": True, "allow_local_infile": True},
         driver_features={"enable_local_infile_bulk_load": True},
     )
     with config.provide_session() as driver:
         driver.load_from_arrow("orders", arrow_table)
+
+Asyncmy with explicit LOCAL INFILE consent:
+
+.. code-block:: python
+
+    from sqlspec.adapters.asyncmy import AsyncmyConfig
+
+    config = AsyncmyConfig(
+        connection_config={
+            "host": "localhost",
+            "local_infile": True,
+            "allow_local_infile": True,
+        },
+        driver_features={"enable_local_infile_bulk_load": True},
+    )
+    async with config.provide_session() as driver:
+        await driver.load_from_arrow("orders", arrow_table)
 
 Oracle per-call batch error and array-DML row-count reporting:
 
