@@ -19,7 +19,12 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import is_file_destination, resolve_storage_path
+from sqlspec.storage._paths import (
+    ensure_path_within_root,
+    is_file_destination,
+    reject_parent_traversal,
+    resolve_storage_path,
+)
 from sqlspec.storage._utils import _log_storage_event, import_pyarrow, import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 
@@ -229,18 +234,23 @@ class ObStoreBackend:
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
     def _local_store_path(self, path: "str | Path") -> str:
-        """Resolve path for LocalStore which expects relative paths from its root."""
+        """Resolve path for LocalStore, which expects relative paths from its root.
 
-        path_obj = Path(str(path))
+        Args:
+            path: Caller-supplied storage path.
 
-        if path_obj.is_absolute() and self._local_store_root:
-            try:
-                rel = path_obj.relative_to(self._local_store_root)
-                return "" if str(rel) == "." else str(rel)
-            except ValueError:
-                return str(path).lstrip("/")
+        Returns:
+            The path relative to the store root.
 
-        return str(path)
+        Raises:
+            StoragePathTraversalError: If the path resolves outside the store root.
+        """
+
+        if not self._local_store_root:
+            reject_parent_traversal(path)
+            return str(path)
+
+        return ensure_path_within_root(path, self._local_store_root)
 
     def _read_bytes_resolved_sync(self, resolved_path: str) -> bytes:
         result = execute_sync_storage_operation(

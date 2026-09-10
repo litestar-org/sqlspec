@@ -15,7 +15,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import FileNotFoundInStorageError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import strip_windows_drive_prefix
+from sqlspec.storage._paths import ensure_path_within_root, strip_windows_drive_prefix
 from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_sync_storage_operation
@@ -88,16 +88,19 @@ class LocalStore:
         return str(self._resolve_path(path).resolve())
 
     def _resolve_path(self, path: "str | Path") -> Path:
-        """Resolve path relative to base_path.
+        """Resolve path relative to base_path, refusing anything outside it.
 
         Args:
             path: Path to resolve (absolute or relative).
 
         Returns:
-            Resolved Path object.
+            Resolved Path object inside ``base_path``.
+
+        Raises:
+            StoragePathTraversalError: If the path resolves outside ``base_path``.
         """
-        p = Path(path)
-        return p if p.is_absolute() else self.base_path / p
+        relative = ensure_path_within_root(path, self.base_path)
+        return self.base_path if not relative else self.base_path / relative
 
     def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file synchronously."""
