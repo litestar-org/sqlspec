@@ -10,6 +10,7 @@ __all__ = (
     "FILE_PROTOCOL",
     "FILE_SCHEME_PREFIX",
     "ensure_path_within_root",
+    "extract_glob_static_prefix",
     "glob_to_regex",
     "is_file_destination",
     "reject_parent_traversal",
@@ -73,6 +74,9 @@ def ensure_path_within_root(path: "str | Path", root: "str | Path") -> str:
     return resolved.relative_to(root_obj).as_posix()
 
 
+_GLOB_MAGIC: Final = re.compile(r"[*?\[]")
+
+
 def _glob_segment_regex(segment: str) -> str:
     """Translate one glob path segment to regex source that never crosses ``/``."""
     out: list[str] = []
@@ -104,6 +108,28 @@ def _glob_segment_regex(segment: str) -> str:
             out.append(re.escape(char))
             index += 1
     return "".join(out)
+
+
+def extract_glob_static_prefix(pattern: str) -> str:
+    """Return the literal directory prefix of a glob pattern.
+
+    The result is either ``""`` or a string ending in ``/`` made of whole path
+    segments that contain no glob metacharacters. A pattern with no wildcards
+    yields its directory portion, never the full key.
+
+    Args:
+        pattern: Glob pattern in POSIX form.
+
+    Returns:
+        Static directory prefix suitable for a listing API.
+    """
+    segments = pattern.lstrip("/").split("/")
+    static: list[str] = []
+    for segment in segments[:-1]:
+        if not segment or _GLOB_MAGIC.search(segment):
+            break
+        static.append(segment)
+    return "/".join(static) + "/" if static else ""
 
 
 def glob_to_regex(pattern: str) -> "re.Pattern[str]":

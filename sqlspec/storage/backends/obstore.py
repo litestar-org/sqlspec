@@ -20,6 +20,7 @@ from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
     ensure_path_within_root,
+    extract_glob_static_prefix,
     glob_to_regex,
     is_file_destination,
     reject_parent_traversal,
@@ -95,6 +96,40 @@ class _ObStoreFileProxy:
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
+class _ObstoreSink:
+    """Adapt an obstore writer to the file-like surface ``pyarrow.PythonFile`` expects.
+
+    obstore exposes ``closed`` as a method; pyarrow reads it as an attribute.
+    """
+
+    __slots__ = ("_writer",)
+
+    def __init__(self, writer: Any) -> None:
+        self._writer = writer
+
+    @property
+    def closed(self) -> bool:
+        return bool(self._writer.closed())
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return False
+
+    def write(self, data: Any) -> int:
+        return int(self._writer.write(data))
+
+    def flush(self) -> None:
+        self._writer.flush()
+
+    def close(self) -> None:
+        self._writer.close()
+
+
 class ObStoreBackend:
     """Object storage backend using obstore.
 
@@ -321,14 +356,25 @@ class ObStoreBackend:
         """Write text using obstore synchronously."""
         self.write_bytes_sync(path, data.encode(encoding), **kwargs)
 
+    def _list_resolved_sync(self, resolved_prefix: str, recursive: bool) -> "list[str]":
+        """List object keys under a prefix that is already store-relative.
+
+        Args:
+            resolved_prefix: Prefix as the store expects it; ``""`` lists everything.
+            recursive: Whether to descend into nested prefixes.
+
+        Returns:
+            Sorted object keys.
+        """
+        if not recursive:
+            result = self.store.list_with_delimiter(resolved_prefix)
+            return sorted(item["path"] for item in result["objects"])
+        return sorted(item["path"] for batch in self.store.list(resolved_prefix) for item in batch)
+
     def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore synchronously."""
         resolved_prefix = self._resolve_list_prefix(prefix)
-        if not recursive:
-            result = self.store.list_with_delimiter(resolved_prefix)
-            paths = sorted(item["path"] for item in result["objects"])
-        else:
-            paths = sorted(item["path"] for batch in self.store.list(resolved_prefix) for item in batch)
+        paths = self._list_resolved_sync(resolved_prefix, recursive)
         _log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
@@ -425,7 +471,8 @@ class ObStoreBackend:
     def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching pattern synchronously.
 
-        Lists all objects and filters them client-side. ``*`` and ``?`` match
+        Lists objects under the pattern's static directory prefix and filters
+        them client-side. ``*`` and ``?`` match
         within one path segment and ``**`` spans zero or more segments, matching
         the local and fsspec backends.
         """
@@ -435,7 +482,7 @@ class ObStoreBackend:
             if self._is_local_store
             else resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         )
-        all_objects = self.list_objects_sync(recursive=True, **kwargs)
+        all_objects = self._list_resolved_sync(extract_glob_static_prefix(resolved_pattern), recursive=True)
         matcher = glob_to_regex(resolved_pattern)
         results = [obj for obj in all_objects if matcher.match(obj)]
         _log_storage_event(
@@ -516,7 +563,7 @@ class ObStoreBackend:
     def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table using obstore synchronously."""
         pa = import_pyarrow()
-        pq = import_pyarrow_parquet()
+        import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
 
         schema = table.schema
@@ -534,15 +581,12 @@ class ObStoreBackend:
                     new_fields.append(field)
             table = table.cast(pa.schema(new_fields))
 
-        buffer = io.BytesIO()
         execute_sync_storage_operation(
-            partial(pq.write_table, table, buffer, **kwargs),
+            partial(self._stream_parquet_sync, resolved_path, table, **kwargs),
             backend=self.backend_type,
             operation="write_arrow",
             path=resolved_path,
         )
-        buffer.seek(0)
-        self._write_bytes_resolved_sync(resolved_path, buffer.read())
         _log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
@@ -551,6 +595,30 @@ class ObStoreBackend:
             mode="sync",
             path=resolved_path,
         )
+
+    def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
+        """Serialize a table batch by batch into an obstore multipart writer.
+
+        Peak memory is bounded by one record batch plus the writer's upload
+        buffer rather than the serialized size of the whole table. The writer
+        is closed in ``finally`` so a failed write aborts the multipart upload.
+
+        Args:
+            resolved_path: Store-relative destination key.
+            table: Table to serialize.
+            **kwargs: Options forwarded to ``pyarrow.parquet.ParquetWriter``.
+        """
+        pa = import_pyarrow()
+        pq = import_pyarrow_parquet()
+        from obstore import open_writer
+
+        sink = open_writer(self.store, resolved_path)
+        try:
+            with pq.ParquetWriter(pa.PythonFile(_ObstoreSink(sink), mode="w"), table.schema, **kwargs) as writer:
+                for batch in table.to_batches():
+                    writer.write_batch(batch)
+        finally:
+            sink.close()
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes using obstore's native streaming synchronously.
@@ -899,17 +967,9 @@ class ObStoreBackend:
         Uses async_() with storage limiter to offload blocking PyArrow serialization
         to thread pool, preventing event loop blocking.
         """
-        pq = import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
 
-        def _serialize() -> bytes:
-            buffer = io.BytesIO()
-            pq.write_table(table, buffer, **kwargs)
-            buffer.seek(0)
-            return buffer.read()
-
-        data = await async_(_serialize)()
-        await self._write_bytes_resolved_async(resolved_path, data)
+        await async_(self._stream_parquet_sync)(resolved_path, table, **kwargs)
 
         _log_storage_event(
             "storage.write",
