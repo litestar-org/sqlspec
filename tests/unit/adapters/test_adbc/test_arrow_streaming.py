@@ -15,8 +15,6 @@ _STORAGE_CAPABILITIES = {
     "arrow_import_enabled": True,
     "parquet_export_enabled": False,
     "parquet_import_enabled": False,
-    "requires_staging_for_load": False,
-    "staging_protocols": [],
     "partition_strategies": [],
 }
 

@@ -943,8 +943,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_migration_schemas: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
-    requires_staging_for_load: "ClassVar[bool]" = False
-    staging_protocols: "ClassVar[tuple[str, ...]]" = ()
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     bind_key: "str | None"
@@ -1349,8 +1347,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             "arrow_import_enabled": bool(self.supports_native_arrow_import and arrow_dependency_ready),
             "parquet_export_enabled": bool(self.supports_native_parquet_export and parquet_dependency_ready),
             "parquet_import_enabled": bool(self.supports_native_parquet_import and parquet_dependency_ready),
-            "requires_staging_for_load": self.requires_staging_for_load,
-            "staging_protocols": list(self.staging_protocols),
             "partition_strategies": list(self.storage_partition_strategies),
         }
         if self.default_storage_profile is not None:

@@ -14,8 +14,6 @@ CAPABILITIES = {
     "arrow_import_enabled": True,
     "parquet_export_enabled": True,
     "parquet_import_enabled": True,
-    "requires_staging_for_load": False,
-    "staging_protocols": [],
     "partition_strategies": ["fixed"],
 }
 

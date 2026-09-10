@@ -55,8 +55,6 @@ class StorageCapabilities(TypedDict):
     arrow_import_enabled: bool
     parquet_export_enabled: bool
     parquet_import_enabled: bool
-    requires_staging_for_load: bool
-    staging_protocols: "list[str]"
     partition_strategies: "list[str]"
     default_storage_profile: NotRequired[str | None]
 
