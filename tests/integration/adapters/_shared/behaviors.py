@@ -16,7 +16,7 @@ import pytest
 from sqlspec import SQL, SQLResult, StackExecutionError, StatementConfig, StatementStack, sql
 from sqlspec.builder import Explain
 from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
-from sqlspec.data_dictionary import VersionInfo
+from sqlspec.data_dictionary import TableStatisticsMetadata, VersionInfo
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -43,6 +43,7 @@ from tests.integration.adapters._shared._schema import (
 )
 
 if TYPE_CHECKING:
+    from sqlspec.protocols import AsyncDataDictionaryProtocol, SyncDataDictionaryProtocol
     from sqlspec.typing import ArrowRecordBatch
 
 SyncExtraAssertion = Callable[[object, DriverCase], None]
@@ -118,10 +119,21 @@ register_sync_extra_assertion(DRIVER_BASICS_PROOF_KEY, DRIVER_BASICS_SCOPE, _dri
 register_async_extra_assertion(DRIVER_BASICS_PROOF_KEY, DRIVER_BASICS_SCOPE, _driver_basics_noop_proof_async)
 
 
+class SupportsStatistics(Protocol):
+    """Optional data dictionary surface for adapters exposing native table statistics."""
+
+    def get_statistics(
+        self, driver: Any, table: str, schema: "str | None" = None, *, approximate: bool = True
+    ) -> "list[TableStatisticsMetadata]": ...
+
+
 class SyncContractDriver(Protocol):
     """Sync driver surface used by adapter contract helpers."""
 
     statement_config: StatementConfig
+
+    @property
+    def data_dictionary(self) -> "SyncDataDictionaryProtocol": ...
 
     def begin(self) -> None: ...
 
@@ -168,6 +180,9 @@ class AsyncContractDriver(Protocol):
     """Async driver surface used by adapter contract helpers."""
 
     statement_config: StatementConfig
+
+    @property
+    def data_dictionary(self) -> "AsyncDataDictionaryProtocol": ...
 
     async def begin(self) -> None: ...
 
@@ -6859,7 +6874,7 @@ def assert_sync_native_metadata_contract(driver: object, case: DriverCase) -> No
     if not case.supports_native_metadata:
         pytest.skip(f"{case.adapter} has no native metadata support")
     sync_driver = cast("SyncContractDriver", driver)
-    data_dictionary = cast("Any", sync_driver).data_dictionary
+    data_dictionary = sync_driver.data_dictionary
     tables = data_dictionary.get_tables(sync_driver)
     table_names = {entry.get("table_name") for entry in tables}
     assert case.table.name in table_names
@@ -6885,14 +6900,15 @@ def assert_sync_native_statistics_contract(driver: object, case: DriverCase) -> 
     if not case.supports_native_metadata:
         pytest.skip(f"{case.adapter} has no native metadata support")
     sync_driver = cast("SyncContractDriver", driver)
-    data_dictionary = cast("Any", sync_driver).data_dictionary
+    data_dictionary = sync_driver.data_dictionary
     if not hasattr(data_dictionary, "get_statistics"):
         pytest.skip(f"{case.adapter} data dictionary exposes no get_statistics")
+    statistics_dictionary = cast("SupportsStatistics", data_dictionary)
     if not case.supports_native_statistics:
         with pytest.raises(OperationalError):
-            data_dictionary.get_statistics(sync_driver, case.table.name)
+            statistics_dictionary.get_statistics(sync_driver, case.table.name)
         return
-    statistics = data_dictionary.get_statistics(sync_driver, case.table.name)
+    statistics = statistics_dictionary.get_statistics(sync_driver, case.table.name)
     assert isinstance(statistics, list)
     for entry in statistics:
         assert entry["table_name"] == case.table.name
@@ -7040,7 +7056,7 @@ def assert_sync_data_dictionary_contract(driver: object, case: DriverCase) -> No
     if not case.supports_data_dictionary:
         pytest.skip(f"{case.adapter} has no verified data-dictionary support")
     sync_driver = cast("SyncContractDriver", driver)
-    data_dictionary = cast("Any", sync_driver).data_dictionary
+    data_dictionary = sync_driver.data_dictionary
 
     _assert_data_dictionary_dialect(sync_driver, case)
     _assert_data_dictionary_version_cache(
@@ -7063,7 +7079,7 @@ async def assert_async_data_dictionary_contract(driver: object, case: DriverCase
     if not case.supports_data_dictionary:
         pytest.skip(f"{case.adapter} has no verified data-dictionary support")
     async_driver = cast("AsyncContractDriver", driver)
-    data_dictionary = cast("Any", async_driver).data_dictionary
+    data_dictionary = async_driver.data_dictionary
 
     _assert_data_dictionary_dialect(async_driver, case)
     _assert_data_dictionary_version_cache(
@@ -7086,7 +7102,7 @@ def assert_sync_data_dictionary_schema_contract(driver: object, case: DriverCase
     if not case.supports_schema_qualified_data_dictionary:
         pytest.skip(f"{case.adapter} has no schema-qualified data-dictionary support")
     sync_driver = cast("SyncContractDriver", driver)
-    data_dictionary = cast("Any", sync_driver).data_dictionary
+    data_dictionary = sync_driver.data_dictionary
     schema_name = _data_dictionary_schema_for_case(case)
     _assert_data_dictionary_columns(
         data_dictionary.get_columns(sync_driver, table=case.table.name, schema=schema_name), case
@@ -7098,7 +7114,7 @@ async def assert_async_data_dictionary_schema_contract(driver: object, case: Dri
     if not case.supports_schema_qualified_data_dictionary:
         pytest.skip(f"{case.adapter} has no schema-qualified data-dictionary support")
     async_driver = cast("AsyncContractDriver", driver)
-    data_dictionary = cast("Any", async_driver).data_dictionary
+    data_dictionary = async_driver.data_dictionary
     schema_name = _data_dictionary_schema_for_case(case)
     columns = await data_dictionary.get_columns(async_driver, table=case.table.name, schema=schema_name)
     _assert_data_dictionary_columns(columns, case)
@@ -7109,7 +7125,7 @@ def assert_sync_data_dictionary_topology_contract(driver: object, case: DriverCa
     if not case.supports_data_dictionary_topology:
         pytest.skip(f"{case.adapter} has no data-dictionary topology support")
     sync_driver = cast("SyncContractDriver", driver)
-    data_dictionary = cast("Any", sync_driver).data_dictionary
+    data_dictionary = sync_driver.data_dictionary
     suffix = uuid4().hex[:8]
     users = f"dd_users_{suffix}"
     orders = f"dd_orders_{suffix}"
@@ -7138,7 +7154,7 @@ async def assert_async_data_dictionary_topology_contract(driver: object, case: D
     if not case.supports_data_dictionary_topology:
         pytest.skip(f"{case.adapter} has no data-dictionary topology support")
     async_driver = cast("AsyncContractDriver", driver)
-    data_dictionary = cast("Any", async_driver).data_dictionary
+    data_dictionary = async_driver.data_dictionary
     suffix = uuid4().hex[:8]
     users = f"dd_users_{suffix}"
     orders = f"dd_orders_{suffix}"
