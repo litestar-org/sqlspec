@@ -1,5 +1,3 @@
-from collections.abc import Generator
-from contextlib import contextmanager
 from typing import Any, Final
 
 __all__ = (
@@ -465,30 +463,3 @@ def _classify_timeout_or_cancellation(message: str) -> "type[OperationalError] |
     if any(marker in error_msg for marker in cancellation_markers):
         return OperationCancelledError
     return None
-
-
-@contextmanager
-def wrap_exceptions(
-    wrap_exceptions: bool = True, suppress: "type[Exception] | tuple[type[Exception], ...] | None" = None
-) -> Generator[None, None, None]:
-    """Context manager for exception handling with optional suppression.
-
-    Args:
-        wrap_exceptions: If True, wrap exceptions in RepositoryError. If False, let them pass through.
-        suppress: Exception type(s) to suppress completely (like contextlib.suppress).
-            If provided, these exceptions are caught and ignored.
-    """
-    try:
-        yield
-
-    except Exception as exc:
-        if suppress is not None and isinstance(exc, suppress):
-            return
-
-        if isinstance(exc, SQLSpecError):
-            raise
-
-        if wrap_exceptions is False:
-            raise
-        msg = "An error occurred during the operation."
-        raise RepositoryError(detail=msg) from exc
