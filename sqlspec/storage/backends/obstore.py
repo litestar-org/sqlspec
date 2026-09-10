@@ -233,6 +233,24 @@ class ObStoreBackend:
             return self._local_store_path(path)
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=True)
 
+    def _resolve_list_prefix(self, prefix: str) -> str:
+        """Resolve a caller-supplied listing prefix to a store-relative one.
+
+        A local store's root already contains ``base_path``, so resolving the
+        prefix against ``base_path`` again would look for that segment twice and
+        match nothing.
+
+        Args:
+            prefix: Caller-supplied listing prefix, possibly empty.
+
+        Returns:
+            The prefix as the store expects it, or ``""`` to list everything.
+        """
+        if not prefix:
+            return "" if self._is_local_store else (self.base_path or "")
+        base = "" if self._is_local_store else self.base_path
+        return resolve_storage_path(prefix, base, self.protocol, strip_file_scheme=True)
+
     def _local_store_path(self, path: "str | Path") -> str:
         """Resolve path for LocalStore, which expects relative paths from its root.
 
@@ -305,12 +323,7 @@ class ObStoreBackend:
 
     def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore synchronously."""
-        if prefix:
-            resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
-        elif self._is_local_store:
-            resolved_prefix = ""
-        else:
-            resolved_prefix = self.base_path or ""
+        resolved_prefix = self._resolve_list_prefix(prefix)
         if not recursive:
             result = self.store.list_with_delimiter(resolved_prefix)
             paths = sorted(item["path"] for item in result["objects"])
@@ -712,12 +725,7 @@ class ObStoreBackend:
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":  # pyright: ignore[reportUnusedParameter]
         """List objects in storage asynchronously."""
-        if prefix:
-            resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
-        elif self._is_local_store:
-            resolved_prefix = ""
-        else:
-            resolved_prefix = self.base_path or ""
+        resolved_prefix = self._resolve_list_prefix(prefix)
 
         objects: list[str] = []
         async for batch in self.store.list_async(resolved_prefix):  # pyright: ignore[reportAttributeAccessIssue]
