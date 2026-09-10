@@ -1648,17 +1648,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         arrow_table = self._records_to_arrow_table(prepared_records, columns)
         return await self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
-    def get_storage_job(self, job_id: str) -> "StorageBridgeJob | None":
-        """Fetch a previously created job handle.
-
-        Args:
-            job_id: Job identifier.
-
-        Returns:
-            StorageBridgeJob if found, None otherwise.
-        """
-        return None
-
     # ─────────────────────────────────────────────────────────────────────────────
     # UTILITY METHODS
     # ─────────────────────────────────────────────────────────────────────────────
