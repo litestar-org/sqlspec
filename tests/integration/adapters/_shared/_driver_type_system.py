@@ -127,7 +127,14 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "on_connection_create",
     ),
-    "asyncmy": ("json_serializer", "json_deserializer", "on_connection_create", "enable_events", "events_backend"),
+    "asyncmy": (
+        "json_serializer",
+        "json_deserializer",
+        "on_connection_create",
+        "enable_events",
+        "events_backend",
+        "enable_local_infile_bulk_load",
+    ),
     "bigquery": (
         "connection_instance",
         "on_connection_create",
