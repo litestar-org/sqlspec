@@ -901,7 +901,7 @@ class HasMigrationConfigProtocol(Protocol):
 class SyncDataDictionaryProtocol(Protocol):
     """Protocol for sync data dictionary implementations."""
 
-    dialect: str
+    dialect: "ClassVar[str]"
 
     def get_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
@@ -999,7 +999,7 @@ class SyncDataDictionaryProtocol(Protocol):
 class AsyncDataDictionaryProtocol(Protocol):
     """Protocol for async data dictionary implementations."""
 
-    dialect: str
+    dialect: "ClassVar[str]"
 
     async def get_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None

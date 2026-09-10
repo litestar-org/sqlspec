@@ -102,7 +102,6 @@ __all__ = (
     "Struct",
     "StructStub",
     "T",
-    "T_co",
     "Tracer",
     "TypeAdapter",
     "TypeAdapterStub",
@@ -139,7 +138,6 @@ class DataclassProtocol(Protocol):
 
 
 T = TypeVar("T")
-T_co = TypeVar("T_co", covariant=True)
 
 # Always define stub types for type checking
 
