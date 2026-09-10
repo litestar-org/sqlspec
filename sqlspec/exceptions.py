@@ -39,6 +39,7 @@ __all__ = (
     "StackExecutionError",
     "StorageCapabilityError",
     "StorageOperationFailedError",
+    "StoragePathTraversalError",
     "TransactionError",
     "TransactionRetryError",
     "UniqueViolationError",
@@ -296,6 +297,18 @@ class StorageCapabilityError(SQLSpecError):
 
 class FileNotFoundInStorageError(StorageOperationFailedError):
     """Raised when a file or object is not found in the storage backend."""
+
+
+class StoragePathTraversalError(StorageOperationFailedError):
+    """Raised when a storage path would resolve outside its backend root."""
+
+    def __init__(self, path: str, root: str | None = None) -> None:
+        detail = f"Storage path {path!r} resolves outside the backend root"
+        if root:
+            detail = f"{detail} {root!r}"
+        super().__init__(detail)
+        self.path = path
+        self.root = root
 
 
 class SQLFileNotFoundError(SQLSpecError):

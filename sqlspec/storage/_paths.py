@@ -1,12 +1,16 @@
 """Pure storage path helpers safe for mypyc compilation."""
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
+
+from sqlspec.exceptions import StoragePathTraversalError
 
 __all__ = (
     "FILE_PROTOCOL",
     "FILE_SCHEME_PREFIX",
+    "ensure_path_within_root",
     "is_file_destination",
+    "reject_parent_traversal",
     "resolve_storage_path",
     "strip_windows_drive_prefix",
 )
@@ -14,6 +18,57 @@ __all__ = (
 
 FILE_PROTOCOL: Final[str] = "file"
 FILE_SCHEME_PREFIX: Final[str] = "file://"
+
+
+def reject_parent_traversal(path: "str | Path") -> None:
+    """Raise if any segment of ``path`` is a parent reference.
+
+    Both separators are considered, so a Windows-style key cannot smuggle a
+    parent reference past a POSIX-only split.
+
+    Args:
+        path: Caller-supplied storage path.
+
+    Raises:
+        StoragePathTraversalError: If a ``..`` segment is present.
+    """
+    path_str = str(path)
+    posix_parts = PurePosixPath(path_str).parts
+    windows_parts = PureWindowsPath(path_str).parts
+    if ".." in posix_parts or ".." in windows_parts:
+        raise StoragePathTraversalError(path_str)
+
+
+def ensure_path_within_root(path: "str | Path", root: "str | Path") -> str:
+    """Return ``path`` as a ``root``-relative POSIX path, refusing anything outside ``root``.
+
+    A relative path is joined to ``root``; an absolute path must already be inside
+    it. Parent references are rejected before any filesystem call, and the
+    resolved result is re-checked so a symlink cannot escape.
+
+    Args:
+        path: Caller-supplied storage path.
+        root: Directory the path must stay within.
+
+    Returns:
+        The path relative to ``root``, or ``""`` when it is ``root`` itself.
+
+    Raises:
+        StoragePathTraversalError: If the path escapes ``root``.
+    """
+    reject_parent_traversal(path)
+
+    root_obj = Path(str(root)).resolve()
+    path_obj = Path(str(path))
+    candidate = path_obj if path_obj.is_absolute() else root_obj / path_obj
+    resolved = candidate.resolve()
+
+    if resolved != root_obj and root_obj not in resolved.parents:
+        raise StoragePathTraversalError(str(path), str(root_obj))
+
+    if resolved == root_obj:
+        return ""
+    return resolved.relative_to(root_obj).as_posix()
 
 
 def strip_windows_drive_prefix(path: str) -> str:
@@ -52,7 +107,12 @@ def resolve_storage_path(
 
     Returns:
         Resolved path string suitable for the storage backend.
+
+    Raises:
+        StoragePathTraversalError: If the path contains a parent reference.
     """
+
+    reject_parent_traversal(path)
 
     path_str = str(path)
 
