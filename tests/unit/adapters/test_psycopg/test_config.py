@@ -367,7 +367,7 @@ def test_psycopg_sync_session_context_resolves_callable_statement_config() -> No
     expected_config = StatementConfig(dialect="pgvector")
     context = PsycopgSyncSessionContext(
         acquire_connection=lambda: object(),
-        release_connection=lambda _conn: None,
+        release_connection=lambda _conn, **_kwargs: None,
         statement_config=lambda: expected_config,
         driver_features={},
         prepare_driver=lambda driver: driver,
@@ -398,7 +398,7 @@ def test_psycopg_sync_session_context_preserves_explicit_statement_config() -> N
     explicit_config = StatementConfig(dialect="postgres")
     context = PsycopgSyncSessionContext(
         acquire_connection=lambda: object(),
-        release_connection=lambda _conn: None,
+        release_connection=lambda _conn, **_kwargs: None,
         statement_config=explicit_config,
         driver_features={},
         prepare_driver=lambda driver: driver,
