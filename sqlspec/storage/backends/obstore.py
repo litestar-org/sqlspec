@@ -593,10 +593,11 @@ class ObStoreBackend:
     def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
         """Serialize a table row group by row group into an obstore multipart writer.
 
-        Peak memory is bounded by the upload buffer rather than the serialized
-        size of the whole table. The writer is completed only after every row
-        group is written; on failure it is dropped unclosed, which aborts the
-        multipart upload so no partial object is published.
+        Peak memory is bounded by one serialized row group plus the upload
+        buffer rather than the serialized size of the whole table. The writer
+        and the sink are closed only after every row group is written; a
+        failure leaves the multipart upload unfinished, and it is discarded
+        when the writer is released, so no partial object is published.
 
         Args:
             resolved_path: Store-relative destination key.
@@ -611,12 +612,8 @@ class ObStoreBackend:
         row_group_size = kwargs.pop("row_group_size", None)
         sink = open_writer(self.store, resolved_path)
         writer = pq.ParquetWriter(pa.PythonFile(_ObstoreSink(sink), mode="w"), table.schema, **kwargs)
-        try:
-            writer.write_table(table, row_group_size=row_group_size)
-            writer.close()
-        except BaseException:
-            del writer, sink
-            raise
+        writer.write_table(table, row_group_size=row_group_size)
+        writer.close()
         sink.close()
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:

@@ -1034,32 +1034,18 @@ def test_write_arrow_sync_forwards_row_group_size() -> None:
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
-def test_write_arrow_sync_failure_publishes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_arrow_sync_failure_publishes_nothing() -> None:
     import pyarrow as pa
-    import pyarrow.parquet as pq
 
     from sqlspec.exceptions import StorageOperationFailedError
-    from sqlspec.storage.backends import obstore as obstore_module
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
-    class _FailingWriter:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            self._writer = pq.ParquetWriter(*args, **kwargs)
-
-        def write_table(self, *args: Any, **kwargs: Any) -> None:
-            self._writer.write_table(*args, **kwargs)
-            raise RuntimeError("upload interrupted")
-
-        def close(self) -> None:
-            self._writer.close()
-
-    class _FailingParquet:
-        ParquetWriter = _FailingWriter
-
-    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FailingParquet())
     store = ObStoreBackend("memory://")
+    unwritable = pa.table({
+        "u": pa.UnionArray.from_sparse(pa.array([0, 1], pa.int8()), [pa.array([1, 2]), pa.array(["a", "b"])])
+    })
 
     with pytest.raises(StorageOperationFailedError):
-        store.write_arrow_sync("partial", pa.table({"id": [1, 2, 3]}))
+        store.write_arrow_sync("partial", unwritable)
 
     assert store.list_objects_sync() == []
