@@ -9,6 +9,20 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+----------
+
+**Fixed:**
+
+* ``sqlspec.extensions.litestar.LitestarConfig`` now exposes the complete plugin
+  configuration, including ``session_table=True``, through the same type as
+  ``sqlspec.config.LitestarConfig``.
+
+**Removed:**
+
+* Removed the undocumented ``sqlspec.exceptions.wrap_exceptions`` helper,
+  superseded by the typed per-adapter exception handlers.
+
 v0.62.2 - Litestar config lookup diagnostics
 ---------------------------------------------
 

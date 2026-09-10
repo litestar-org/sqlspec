@@ -1,5 +1,3 @@
-import pytest
-
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -9,14 +7,12 @@ from sqlspec.exceptions import (
     NotFoundError,
     NotNullViolationError,
     OperationalError,
-    RepositoryError,
     SQLFileNotFoundError,
     SQLSpecError,
     SQLStatementNotFoundError,
     StackExecutionError,
     TransactionError,
     UniqueViolationError,
-    wrap_exceptions,
 )
 
 
@@ -172,31 +168,3 @@ def test_stack_execution_error_preserves_args() -> None:
     assert len(exc.args) == 1
     assert "operation 2" in exc.args[0]
     assert exc.args[0] == exc.detail
-
-
-def test_wrap_exceptions_wrap_exceptions_suppresses_single_type() -> None:
-    """suppress=<type> silently swallows matching exceptions."""
-    with wrap_exceptions(suppress=ValueError):
-        raise ValueError("suppressed")
-
-
-def test_wrap_exceptions_wrap_exceptions_suppresses_tuple_of_types() -> None:
-    """suppress=(<type>, ...) silently swallows matching exceptions."""
-    with wrap_exceptions(suppress=(ValueError, TypeError)):
-        raise TypeError("suppressed")
-
-
-def test_wrap_exceptions_wrap_exceptions_wraps_unmatched_suppressed_type() -> None:
-    """Non-matching exceptions are still wrapped."""
-    with pytest.raises(RepositoryError):
-        with wrap_exceptions(suppress=ValueError):
-            raise RuntimeError("not suppressed")
-
-
-def test_wrap_exceptions_wrap_exceptions_sqlspec_error_passes_through() -> None:
-    """SQLSpecError is reraised when it is not explicitly suppressed."""
-    original = SQLSpecError("already mapped")
-    with pytest.raises(SQLSpecError) as exc_info:
-        with wrap_exceptions():
-            raise original
-    assert exc_info.value is original
