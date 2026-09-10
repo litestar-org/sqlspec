@@ -1016,3 +1016,50 @@ async def test_stream_read_async_respects_chunk_size(tmp_path: Path) -> None:
 
     # Total data should match
     assert b"".join(chunks) == test_data
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+def test_write_arrow_sync_forwards_row_group_size() -> None:
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    store = ObStoreBackend("memory://")
+    store.write_arrow_sync("key", pa.table({"id": list(range(20))}), row_group_size=5)
+
+    assert pq.ParquetFile(io.BytesIO(store.read_bytes_sync("key"))).num_row_groups == 4
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+def test_write_arrow_sync_failure_publishes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from sqlspec.exceptions import StorageOperationFailedError
+    from sqlspec.storage.backends import obstore as obstore_module
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    class _FailingWriter:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._writer = pq.ParquetWriter(*args, **kwargs)
+
+        def write_table(self, *args: Any, **kwargs: Any) -> None:
+            self._writer.write_table(*args, **kwargs)
+            raise RuntimeError("upload interrupted")
+
+        def close(self) -> None:
+            self._writer.close()
+
+    class _FailingParquet:
+        ParquetWriter = _FailingWriter
+
+    monkeypatch.setattr(obstore_module, "import_pyarrow_parquet", lambda: _FailingParquet())
+    store = ObStoreBackend("memory://")
+
+    with pytest.raises(StorageOperationFailedError):
+        store.write_arrow_sync("partial", pa.table({"id": [1, 2, 3]}))
+
+    assert store.list_objects_sync() == []

@@ -468,6 +468,9 @@ class ObStoreBackend:
         the local and fsspec backends.
         """
 
+        if not pattern:
+            return []
+        reject_parent_traversal(pattern)
         resolved_pattern = (
             pattern
             if self._is_local_store
@@ -588,28 +591,33 @@ class ObStoreBackend:
         )
 
     def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
-        """Serialize a table batch by batch into an obstore multipart writer.
+        """Serialize a table row group by row group into an obstore multipart writer.
 
-        Peak memory is bounded by one record batch plus the writer's upload
-        buffer rather than the serialized size of the whole table. The writer
-        is closed in ``finally`` so a failed write aborts the multipart upload.
+        Peak memory is bounded by the upload buffer rather than the serialized
+        size of the whole table. The writer is completed only after every row
+        group is written; on failure it is dropped unclosed, which aborts the
+        multipart upload so no partial object is published.
 
         Args:
             resolved_path: Store-relative destination key.
             table: Table to serialize.
-            **kwargs: Options forwarded to ``pyarrow.parquet.ParquetWriter``.
+            **kwargs: Options forwarded to ``pyarrow.parquet.ParquetWriter``;
+                ``row_group_size`` is forwarded to ``write_table``.
         """
-        pa = import_pyarrow()
-        pq = import_pyarrow_parquet()
         from obstore import open_writer
 
+        pa = import_pyarrow()
+        pq = import_pyarrow_parquet()
+        row_group_size = kwargs.pop("row_group_size", None)
         sink = open_writer(self.store, resolved_path)
+        writer = pq.ParquetWriter(pa.PythonFile(_ObstoreSink(sink), mode="w"), table.schema, **kwargs)
         try:
-            with pq.ParquetWriter(pa.PythonFile(_ObstoreSink(sink), mode="w"), table.schema, **kwargs) as writer:
-                for batch in table.to_batches():
-                    writer.write_batch(batch)
-        finally:
-            sink.close()
+            writer.write_table(table, row_group_size=row_group_size)
+            writer.close()
+        except BaseException:
+            del writer, sink
+            raise
+        sink.close()
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes using obstore's native streaming synchronously.
