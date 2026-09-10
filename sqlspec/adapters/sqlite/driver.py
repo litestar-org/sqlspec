@@ -447,10 +447,8 @@ class SqliteDriver(SyncDriverAdapterBase):
                 cached.processed_state.parsed_expression,
                 self._rowid_target_cache,
             )
-            column_names = cached.column_names
-            if column_names is None:
-                description = cursor.description
-                column_names = [col[0] for col in description] if description else []
+            description = cursor.description
+            column_names = [col[0] for col in description] if description else []
             row_format = resolve_row_format(fetched_data)
             execution_result = self.create_execution_result(
                 cursor,

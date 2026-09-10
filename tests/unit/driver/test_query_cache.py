@@ -28,7 +28,6 @@ def _make_cached(
     compiled_sql: str = "SELECT 1",
     param_count: int = 0,
     operation_type: OperationType = "SELECT",
-    column_names: list[str] | None = None,
     operation_profile: OperationProfile | None = None,
     parameter_profile: ParameterProfile | None = None,
     processed_state: ProcessedState | None = None,
@@ -50,7 +49,6 @@ def _make_cached(
         operation_profile=operation_profile,
         param_count=param_count,
         processed_state=processed_state,
-        column_names=column_names,
     )
 
 
