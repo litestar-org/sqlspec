@@ -216,7 +216,7 @@ async def test_local_infile_native_handoff_and_hook_restoration(
     import sqlspec.adapters.asyncmy._typing as native
     from sqlspec.exceptions import SQLSpecError
 
-    connection: Any = Connection(local_infile=True)
+    connection: Any = Connection(local_infile=True)  # type: ignore[no-untyped-call]
     connection._connected = True
     original_reader = AsyncMock()
     if existing_hook:
