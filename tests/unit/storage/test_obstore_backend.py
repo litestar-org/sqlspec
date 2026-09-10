@@ -28,21 +28,14 @@ class _FakeGetResult:
 class _FakeStore:
     def __init__(self) -> None:
         self.get_paths: list[str] = []
-        self.put_paths: list[str] = []
 
     def get(self, path: str) -> _FakeGetResult:
         self.get_paths.append(path)
         return _FakeGetResult()
 
-    def put(self, path: str, data: bytes) -> None:
-        self.put_paths.append(path)
-
     async def get_async(self, path: str) -> _FakeGetResult:
         self.get_paths.append(path)
         return _FakeGetResult()
-
-    async def put_async(self, path: str, data: bytes) -> None:
-        self.put_paths.append(path)
 
 
 def _new_obstore_for_signing(protocol: str = "s3", base_path: str = "prefix") -> "ObStoreBackend":
@@ -160,10 +153,6 @@ class _FakeParquet:
 
     def write_table(self, table: Any, sink: Any, **kwargs: Any) -> None:
         sink.write(b"parquet")
-
-
-class _FakeArrowTable:
-    schema: tuple[Any, ...] = ()
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")

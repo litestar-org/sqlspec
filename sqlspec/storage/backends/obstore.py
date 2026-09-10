@@ -95,7 +95,6 @@ class _ObStoreFileProxy:
         self.close()
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
 class _ObstoreSink:
     """Adapt an obstore writer to the file-like surface ``pyarrow.PythonFile`` expects.
 
@@ -111,15 +110,6 @@ class _ObstoreSink:
     def closed(self) -> bool:
         return bool(self._writer.closed())
 
-    def writable(self) -> bool:
-        return True
-
-    def readable(self) -> bool:
-        return False
-
-    def seekable(self) -> bool:
-        return False
-
     def write(self, data: Any) -> int:
         return int(self._writer.write(data))
 
@@ -130,6 +120,7 @@ class _ObstoreSink:
         self._writer.close()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ObStoreBackend:
     """Object storage backend using obstore.
 
