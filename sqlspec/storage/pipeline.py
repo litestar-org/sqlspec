@@ -3,7 +3,7 @@
 from collections import deque
 from functools import partial
 from pathlib import Path
-from time import perf_counter, time
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
@@ -15,7 +15,7 @@ from sqlspec.storage.errors import execute_async_storage_operation, execute_sync
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import supports_async_delete, supports_async_read_bytes, supports_async_write_bytes
+from sqlspec.utils.type_guards import supports_async_read_bytes, supports_async_write_bytes
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -28,13 +28,11 @@ if TYPE_CHECKING:
 __all__ = (
     "AsyncStoragePipeline",
     "PartitionStrategyConfig",
-    "StagedArtifact",
     "StorageBridgeJob",
     "StorageCapabilities",
     "StorageDestination",
     "StorageDiagnostics",
     "StorageFormat",
-    "StorageLoadRequest",
     "StorageTelemetry",
     "SyncStoragePipeline",
     "create_storage_bridge_job",
@@ -72,27 +70,6 @@ class PartitionStrategyConfig(TypedDict, total=False):
     manifest_path: str
 
 
-class StorageLoadRequest(TypedDict):
-    """Request describing a staging allocation."""
-
-    partition_id: str
-    destination_uri: str
-    ttl_seconds: int
-    correlation_id: str
-    source_uri: NotRequired[str]
-
-
-class StagedArtifact(TypedDict):
-    """Metadata describing a staged artifact managed by the pipeline."""
-
-    partition_id: str
-    uri: str
-    cleanup_token: str
-    ttl_seconds: int
-    expires_at: float
-    correlation_id: str
-
-
 class StorageTelemetry(TypedDict, total=False):
     """Telemetry payload for storage bridge operations."""
 
@@ -118,27 +95,19 @@ class StorageBridgeJob(NamedTuple):
 
 
 class _StorageBridgeMetrics:
-    __slots__ = ("bytes_written", "partitions_created")
+    __slots__ = ("bytes_written",)
 
     def __init__(self) -> None:
         self.bytes_written = 0
-        self.partitions_created = 0
 
     def record_bytes(self, count: int) -> None:
         self.bytes_written += max(count, 0)
 
-    def record_partitions(self, count: int) -> None:
-        self.partitions_created += max(count, 0)
-
     def snapshot(self) -> "dict[str, int]":
-        return {
-            "storage_bridge.bytes_written": self.bytes_written,
-            "storage_bridge.partitions_created": self.partitions_created,
-        }
+        return {"storage_bridge.bytes_written": self.bytes_written}
 
     def reset(self) -> None:
         self.bytes_written = 0
-        self.partitions_created = 0
 
 
 _METRICS = _StorageBridgeMetrics()
@@ -267,12 +236,6 @@ def _encode_arrow_payload(
     write_options: "dict[str, Any] | None" = None,
 ) -> bytes:
     return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
-
-
-def _delete_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> None:
-    execute_sync_storage_operation(
-        partial(backend.delete_sync, path), backend=backend_name, operation="delete", path=path
-    )
 
 
 def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
@@ -449,38 +412,6 @@ class SyncStoragePipeline(_StoragePipelineBase):
         backend, path, _backend_name = self._backend(source, storage_options)
         return backend.stream_read_sync(path, chunk_size=chunk_size)
 
-    def allocate_staging_artifacts(self, requests: "list[StorageLoadRequest]") -> "list[StagedArtifact]":
-        """Allocate staging metadata for upcoming loads."""
-
-        artifacts: list[StagedArtifact] = []
-        now = time()
-
-        for request in requests:
-            ttl = max(request["ttl_seconds"], 0)
-            cleanup_token = f"{request['correlation_id']}::{request['partition_id']}"
-            artifacts.append({
-                "partition_id": request["partition_id"],
-                "uri": request["destination_uri"],
-                "cleanup_token": cleanup_token,
-                "ttl_seconds": ttl,
-                "expires_at": now + ttl if ttl else now,
-                "correlation_id": request["correlation_id"],
-            })
-        if artifacts:
-            _METRICS.record_partitions(len(artifacts))
-        return artifacts
-
-    def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
-        """Delete staged artifacts best-effort."""
-
-        for artifact in artifacts:
-            backend, path, backend_name = self._backend(artifact["uri"], None)
-            try:
-                _delete_backend_sync(backend, path, backend_name=backend_name)
-            except Exception:
-                if not ignore_errors:
-                    raise
-
     def _write_bytes(
         self,
         payload: bytes,
@@ -551,25 +482,6 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         return await self._write_bytes_async(
             payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
-
-    async def cleanup_staging_artifacts(self, artifacts: "list[StagedArtifact]", *, ignore_errors: bool = True) -> None:
-        for artifact in artifacts:
-            backend, path, backend_name = self._backend(artifact["uri"], None)
-            if supports_async_delete(backend):
-                try:
-                    await execute_async_storage_operation(
-                        partial(backend.delete_async, path), backend=backend_name, operation="delete", path=path
-                    )
-                except Exception:
-                    if not ignore_errors:
-                        raise
-                continue
-
-            try:
-                await async_(_delete_backend_sync)(backend=backend, path=path, backend_name=backend_name)
-            except Exception:
-                if not ignore_errors:
-                    raise
 
     async def _write_bytes_async(
         self,

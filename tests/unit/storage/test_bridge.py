@@ -30,13 +30,7 @@ from sqlspec.adapters.pymysql import default_statement_config as pymysql_stateme
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
-from sqlspec.storage.pipeline import (
-    AsyncStoragePipeline,
-    StagedArtifact,
-    StorageDestination,
-    _encode_row_payload,
-    _StoragePipelineBase,
-)
+from sqlspec.storage.pipeline import AsyncStoragePipeline, StorageDestination, _encode_row_payload, _StoragePipelineBase
 from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 
@@ -169,13 +163,10 @@ class _CountingStorageBackend:
     backend_type = "counting"
 
     def __init__(self) -> None:
-        self.deleted_paths: list[str] = []
+        self.written_paths: list[str] = []
 
-    def delete_sync(self, path: str) -> None:
-        self.deleted_paths.append(path)
-
-    async def delete_async(self, path: str) -> None:
-        self.deleted_paths.append(path)
+    async def write_bytes_async(self, path: str, payload: bytes) -> None:
+        self.written_paths.append(path)
 
 
 class _CountingStorageRegistry:
@@ -235,36 +226,20 @@ def test_sync_pipeline_bypasses_resolution_cache_for_storage_options() -> None:
     ]
 
 
-async def test_async_pipeline_cleanup_reuses_cached_backend_resolution() -> None:
+async def test_async_pipeline_write_reuses_cached_backend_resolution() -> None:
     registry = _CountingStorageRegistry()
     pipeline = AsyncStoragePipeline(registry=cast(Any, registry))
-    artifacts: list[StagedArtifact] = [
-        {
-            "partition_id": "0",
-            "uri": "file://tmp/payload.jsonl",
-            "cleanup_token": "cleanup::0",
-            "ttl_seconds": 0,
-            "expires_at": 0.0,
-            "correlation_id": "cleanup",
-        },
-        {
-            "partition_id": "1",
-            "uri": "file://tmp/payload.jsonl",
-            "cleanup_token": "cleanup::1",
-            "ttl_seconds": 0,
-            "expires_at": 0.0,
-            "correlation_id": "cleanup",
-        },
-    ]
+    table = pa.table({"id": [1]})
 
-    await pipeline.cleanup_staging_artifacts(artifacts)
+    await pipeline.write_arrow(table, "file://tmp/payload.parquet")
+    await pipeline.write_arrow(table, "file://tmp/payload.parquet")
 
-    assert registry.calls == [("file://tmp/payload.jsonl", {})]
-    assert registry.backend.deleted_paths == ["tmp/payload.jsonl", "tmp/payload.jsonl"]
+    assert registry.calls == [("file://tmp/payload.parquet", {})]
+    assert registry.backend.written_paths == ["tmp/payload.parquet", "tmp/payload.parquet"]
 
     pipeline.clear_cache()
-    await pipeline.cleanup_staging_artifacts(artifacts[:1])
-    assert registry.calls == [("file://tmp/payload.jsonl", {}), ("file://tmp/payload.jsonl", {})]
+    await pipeline.write_arrow(table, "file://tmp/payload.parquet")
+    assert registry.calls == [("file://tmp/payload.parquet", {}), ("file://tmp/payload.parquet", {})]
 
 
 async def test_asyncpg_load_from_storage(monkeypatch: pytest.MonkeyPatch) -> None:
