@@ -10,7 +10,7 @@ SQLSpec.
 Optional dependency exports
 ===========================
 
-The :mod:`sqlspec.typing` and :mod:`sqlspec._typing` modules resolve heavy
+The :mod:`sqlspec.typing` module and its private ``sqlspec._typing`` backing module resolve heavy
 optional-dependency symbols lazily. Importing :mod:`sqlspec` does not import
 Pydantic, Litestar, PyArrow, pandas, Polars, OpenTelemetry, or Prometheus.
 Accessing one of their exported symbols imports its dependency on first use and
@@ -32,6 +32,8 @@ the deferred integrations.
 
 Metadata Types
 ==============
+
+.. currentmodule:: sqlspec.data_dictionary
 
 .. autoclass:: ForeignKeyMetadata
    :members:
@@ -56,6 +58,8 @@ Metadata Types
 Protocols
 =========
 
+.. currentmodule:: sqlspec.typing
+
 .. autoclass:: DictLike
    :members:
    :show-inheritance:
@@ -70,22 +74,5 @@ Feature Flags
    :show-inheritance:
 
 .. autoclass:: FeatureVersions
-   :members:
-   :show-inheritance:
-
-Driver Protocols
-================
-
-.. currentmodule:: sqlspec.protocols
-
-.. autoclass:: DriverProtocol
-   :members:
-   :show-inheritance:
-
-.. autoclass:: AsyncDriverProtocol
-   :members:
-   :show-inheritance:
-
-.. autoclass:: SessionProtocol
    :members:
    :show-inheritance:

@@ -131,23 +131,3 @@ Feature Flag Types
    :undoc-members:
    :show-inheritance:
    :no-index:
-
-Driver Protocols
-================
-
-.. currentmodule:: sqlspec.protocols
-
-.. autoclass:: DriverProtocol
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: AsyncDriverProtocol
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: SessionProtocol
-   :members:
-   :undoc-members:
-   :show-inheritance:

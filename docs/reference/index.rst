@@ -79,6 +79,12 @@ Core Infrastructure
 
       Load and cache SQL files with named statement support.
 
+   .. grid-item-card:: Service
+      :link: service
+      :link-type: doc
+
+      Base service classes adding pagination, single-row fetching, and transactions to a driver.
+
    .. grid-item-card:: Exceptions
       :link: exceptions
       :link-type: doc
@@ -123,7 +129,7 @@ Integrations
       :link: typing
       :link-type: doc
 
-      Type aliases, metadata types, feature flags, and driver protocols.
+      Type aliases, metadata types, and feature flags.
 
    .. grid-item-card:: Utility Functions
       :link: utils
@@ -143,6 +149,7 @@ Integrations
    dialects
    core/index
    loader
+   service
    exceptions
    migrations
    storage
