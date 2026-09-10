@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
+from asyncmy.cursors import Cursor, SSCursor, SSDictCursor
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig
@@ -14,8 +15,10 @@ from sqlspec.exceptions import SQLSpecError
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql, pytest.mark.asyncmy]
 
 
-@pytest.fixture
-async def asyncmy_infile_config(mysql_service: MySQLService) -> AsyncGenerator[AsyncmyConfig, None]:
+@pytest.fixture(params=[Cursor, SSCursor, SSDictCursor], ids=["buffered", "unbuffered", "unbuffered_dict"])
+async def asyncmy_infile_config(
+    mysql_service: MySQLService, request: pytest.FixtureRequest
+) -> AsyncGenerator[AsyncmyConfig, None]:
     config = AsyncmyConfig(
         connection_config={
             "host": mysql_service.host,
@@ -24,6 +27,7 @@ async def asyncmy_infile_config(mysql_service: MySQLService) -> AsyncGenerator[A
             "password": mysql_service.password,
             "db": mysql_service.db,
             "autocommit": True,
+            "cursor_cls": request.param,
             "local_infile": True,
             "allow_local_infile": True,
         },

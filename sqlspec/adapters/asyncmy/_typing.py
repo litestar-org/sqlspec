@@ -193,15 +193,19 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
     raw: Any = connection
     missing = object()
     previous = raw.__dict__.get("_read_query_result", missing)
-    original_reader = raw._read_query_result
 
     async def read_result(unbuffered: bool = False) -> None:
-        if unbuffered:
-            await original_reader(unbuffered=True)
-            return
         raw._result = None
         result = _AsyncmyLocalInfileResult(raw, filename)
-        await result.read()  # type: ignore[no-untyped-call]
+        if unbuffered:
+            try:
+                await result.init_unbuffered_query()  # type: ignore[no-untyped-call]
+            except BaseException:
+                result.unbuffered_active = False
+                result.connection = None
+                raise
+        else:
+            await result.read()  # type: ignore[no-untyped-call]
         raw._result = result
         raw._affected_rows = result.affected_rows
         if result.server_status:

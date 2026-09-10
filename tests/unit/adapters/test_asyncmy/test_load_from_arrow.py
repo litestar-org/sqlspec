@@ -201,10 +201,11 @@ async def test_local_infile_preparation_failure_removes_private_directory(
     assert not conn.closed
 
 
+@pytest.mark.parametrize("unbuffered", [False, True])
 @pytest.mark.parametrize("existing_hook", [False, True])
 @pytest.mark.parametrize("outcome", ["success", "unexpected_filename", "invalid_ack", "sender_error", "cancelled"])
 async def test_local_infile_native_handoff_and_hook_restoration(
-    outcome: str, existing_hook: bool, monkeypatch: pytest.MonkeyPatch
+    outcome: str, existing_hook: bool, unbuffered: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
@@ -227,9 +228,18 @@ async def test_local_infile_native_handoff_and_hook_restoration(
     send = AsyncMock(side_effect=failure if outcome in {"sender_error", "cancelled"} else None)
     sender = Mock(return_value=SimpleNamespace(send_data=send))
     monkeypatch.setattr(native, "_LoadLocalFile", sender)
+    result_type = native._AsyncmyLocalInfileResult
+    results: list[Any] = []
+
+    def capture_result(raw: Any, filename: str) -> Any:
+        result = result_type(raw, filename)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(native, "_AsyncmyLocalInfileResult", capture_result)
     if outcome == "success":
         with native.asyncmy_local_infile(connection, "/tmp/payload"):
-            await connection._read_query_result()
+            await connection._read_query_result(unbuffered=unbuffered)
         assert connection._affected_rows == 1
         assert connection.server_status == 2
         assert connection.connected
@@ -239,8 +249,12 @@ async def test_local_infile_native_handoff_and_hook_restoration(
         error_type = type(failure) if outcome in {"sender_error", "cancelled"} else SQLSpecError
         with pytest.raises(error_type):
             with native.asyncmy_local_infile(connection, "/tmp/payload"):
-                await connection._read_query_result()
+                await connection._read_query_result(unbuffered=unbuffered)
         assert not connection.connected
+        if unbuffered:
+            assert len(results) == 1
+            assert not results[0].unbuffered_active
+            assert results[0].connection is None
         if outcome == "unexpected_filename":
             sender.assert_not_called()
     if existing_hook:
@@ -248,17 +262,3 @@ async def test_local_infile_native_handoff_and_hook_restoration(
     else:
         assert "_read_query_result" not in connection.__dict__
     original_reader.assert_not_called()
-
-
-async def test_local_infile_hook_preserves_unbuffered_reader() -> None:
-    from unittest.mock import AsyncMock
-
-    from sqlspec.adapters.asyncmy._typing import asyncmy_local_infile
-
-    connection = _FakeConnection()
-    original = AsyncMock()
-    connection._read_query_result = original
-    with asyncmy_local_infile(cast("Any", connection), "/tmp/payload"):
-        await connection._read_query_result(unbuffered=True)
-    original.assert_awaited_once_with(unbuffered=True)
-    assert connection._read_query_result is original
