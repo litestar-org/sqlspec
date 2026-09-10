@@ -314,7 +314,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
     ) -> "StorageBridgeJob":
-        """Execute a query and persist results to storage once native COPY is available."""
+        """Execute a query and write the results to storage through the storage pipeline.
+
+        Results are encoded client-side and uploaded. PostgreSQL offers no native
+        object-store destination for ``COPY``, and asyncpg's COPY helpers use the
+        ``STDIN``/``STDOUT`` stream form.
+        """
 
         self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)

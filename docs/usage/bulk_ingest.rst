@@ -59,7 +59,7 @@ Capability matrix
      - Always on
    * - adbc
      - ``adbc_ingest`` (append/replace)
-     - Driver-dependent; FlightSQL falls back to per-row
+     - Driver-dependent; ``adbc_ingest`` is always attempted and unsupported drivers raise
      - Always on
    * - duckdb
      - ``register`` + ``INSERT ... SELECT``

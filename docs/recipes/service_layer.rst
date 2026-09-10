@@ -2,13 +2,47 @@
 Service Layer Pattern
 =====================
 
-A common pattern in production sqlspec applications is a base service class that wraps
-a driver and provides convenience methods for pagination, error handling, and transactions.
-Parameters and filters passed as ``*parameters`` are forwarded directly to the driver,
-which applies filters to the statement and binds parameters automatically.
+SQLSpec ships a base service class that wraps a driver and provides pagination,
+single-row fetching, existence checks, and transaction helpers. Import it and
+subclass it — you do not need to write your own.
+
+Parameters and filters passed as ``*parameters`` are forwarded directly to the
+driver, which applies filters to the statement and binds parameters automatically.
 
 Base Service
 ============
+
+``SQLSpecAsyncService`` and ``SQLSpecSyncService`` live in :mod:`sqlspec.service`.
+The five web-framework extensions — ``litestar``, ``fastapi``, ``flask``,
+``starlette``, and ``sanic`` — each re-export the same two objects, so
+``from sqlspec.extensions.litestar import SQLSpecAsyncService`` gives you the
+identical class::
+
+   from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+
+Each takes a driver session in its constructor and exposes it as both
+``.session`` and ``.driver``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Member
+     - Purpose
+   * - ``paginate(statement, *parameters, schema_type=None, count_with_window=False)``
+     - Runs the query and returns an ``OffsetPagination`` with a total count.
+   * - ``get_one(statement, *parameters, schema_type=None, error_message=None)``
+     - Returns exactly one row, raising if there is not exactly one.
+   * - ``exists(statement, *parameters)``
+     - Returns ``True`` when the query matches at least one row.
+   * - ``begin_transaction()``
+     - Context manager that commits on success and rolls back on error.
+   * - ``begin()`` / ``commit()`` / ``rollback()``
+     - Pass straight through to the driver for manual control.
+   * - ``session`` / ``driver``
+     - The wrapped driver session.
+
+Subclass whichever matches your driver and add your own query methods:
 
 .. tab-set::
 
@@ -16,243 +50,25 @@ Base Service
 
       .. code-block:: python
 
-         from __future__ import annotations
-
-         from contextlib import asynccontextmanager
-         from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
-
-         from sqlspec import AsyncDriverAdapterBase
-         from sqlspec.core.filters import (
-             FilterTypes,
-             LimitOffsetFilter,
-             OffsetPagination,
-             StatementFilter,
-         )
-         from sqlspec.typing import SchemaT, StatementParameters
-
-         AsyncDriverT = TypeVar("AsyncDriverT", bound=AsyncDriverAdapterBase)
-
-         if TYPE_CHECKING:
-             from collections.abc import AsyncIterator
-
-             from sqlspec import QueryBuilder, Statement, StatementConfig
+         from sqlspec.adapters.asyncpg import AsyncpgDriver
+         from sqlspec.service import SQLSpecAsyncService
 
 
-         class SQLSpecAsyncService(Generic[AsyncDriverT]):
-             """Base async service with pagination, get-one, and transactions."""
-
-             def __init__(self, driver: AsyncDriverT) -> None:
-                 self.driver = driver
-
-             @overload
-             async def paginate(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters | StatementFilter,
-                 schema_type: type[SchemaT],
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> OffsetPagination[SchemaT]: ...
-
-             @overload
-             async def paginate(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters | StatementFilter,
-                 schema_type: None = None,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> OffsetPagination[dict[str, Any]]: ...
-
-             async def paginate(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters | StatementFilter,
-                 schema_type: type[SchemaT] | None = None,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]:
-                 """Execute a paginated query using filters from ``*parameters``."""
-                 results, total = await self.driver.select_with_total(
-                     statement, *parameters, schema_type=schema_type,
-                     statement_config=statement_config, **kwargs,
-                 )
-                 limit_offset = self.driver.find_filter(LimitOffsetFilter, parameters)
-                 return OffsetPagination(
-                     items=cast("list[Any]", results),
-                     limit=limit_offset.limit if limit_offset else 10,
-                     offset=limit_offset.offset if limit_offset else 0,
-                     total=total,
-                 )
-
-             async def get_one(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters,
-                 schema_type: type[SchemaT] | None = None,
-                 error_message: str | None = None,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> SchemaT | dict[str, Any]:
-                 """Fetch one row or raise an application-level not-found error."""
-                 result = await self.driver.select_one_or_none(
-                     statement, *parameters, schema_type=schema_type,
-                     statement_config=statement_config, **kwargs,
-                 )
-                 if result is None:
-                     raise ValueError(error_message or "Record not found")
-                 return result
-
-             async def exists(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> bool:
-                 """Return True if the query matches at least one row."""
-                 result = await self.driver.select_one_or_none(
-                     statement, *parameters, statement_config=statement_config, **kwargs,
-                 )
-                 return result is not None
-
-             @asynccontextmanager
-             async def begin_transaction(self) -> AsyncIterator[None]:
-                 """Context manager that commits on success, rolls back on error."""
-                 await self.driver.begin()
-                 try:
-                     yield
-                 except Exception:
-                     await self.driver.rollback()
-                     raise
-                 else:
-                     await self.driver.commit()
+         class UserService(SQLSpecAsyncService[AsyncpgDriver]):
+             """Async service for the users table."""
 
    .. tab-item:: Sync
 
       .. code-block:: python
 
-         from __future__ import annotations
-
-         from contextlib import contextmanager
-         from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
-
-         from sqlspec import SyncDriverAdapterBase
-         from sqlspec.core.filters import (
-             FilterTypes,
-             LimitOffsetFilter,
-             OffsetPagination,
-             StatementFilter,
-         )
-         from sqlspec.typing import SchemaT, StatementParameters
-
-         SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase)
-
-         if TYPE_CHECKING:
-             from collections.abc import Iterator
-
-             from sqlspec import QueryBuilder, Statement, StatementConfig
+         from sqlspec.adapters.sqlite import SqliteDriver
+         from sqlspec.service import SQLSpecSyncService
 
 
-         class SQLSpecSyncService(Generic[SyncDriverT]):
-             """Base sync service with pagination, get-one, and transactions."""
+         class UserService(SQLSpecSyncService[SqliteDriver]):
+             """Sync service for the users table."""
 
-             def __init__(self, driver: SyncDriverT) -> None:
-                 self.driver = driver
-
-             @overload
-             def paginate(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters | StatementFilter,
-                 schema_type: type[SchemaT],
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> OffsetPagination[SchemaT]: ...
-
-             @overload
-             def paginate(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters | StatementFilter,
-                 schema_type: None = None,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> OffsetPagination[dict[str, Any]]: ...
-
-             def paginate(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters | StatementFilter,
-                 schema_type: type[SchemaT] | None = None,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]:
-                 """Execute a paginated query using filters from ``*parameters``."""
-                 results, total = self.driver.select_with_total(
-                     statement, *parameters, schema_type=schema_type,
-                     statement_config=statement_config, **kwargs,
-                 )
-                 limit_offset = self.driver.find_filter(LimitOffsetFilter, parameters)
-                 return OffsetPagination(
-                     items=cast("list[Any]", results),
-                     limit=limit_offset.limit if limit_offset else 10,
-                     offset=limit_offset.offset if limit_offset else 0,
-                     total=total,
-                 )
-
-             def get_one(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters,
-                 schema_type: type[SchemaT] | None = None,
-                 error_message: str | None = None,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> SchemaT | dict[str, Any]:
-                 """Fetch one row or raise an application-level not-found error."""
-                 result = self.driver.select_one_or_none(
-                     statement, *parameters, schema_type=schema_type,
-                     statement_config=statement_config, **kwargs,
-                 )
-                 if result is None:
-                     raise ValueError(error_message or "Record not found")
-                 return result
-
-             def exists(
-                 self,
-                 statement: Statement | QueryBuilder,
-                 /,
-                 *parameters: StatementParameters,
-                 statement_config: StatementConfig | None = None,
-                 **kwargs: Any,
-             ) -> bool:
-                 """Return True if the query matches at least one row."""
-                 result = self.driver.select_one_or_none(
-                     statement, *parameters, statement_config=statement_config, **kwargs,
-                 )
-                 return result is not None
-
-             @contextmanager
-             def begin_transaction(self) -> Iterator[None]:
-                 """Context manager that commits on success, rolls back on error."""
-                 self.driver.begin()
-                 try:
-                     yield
-                 except Exception:
-                     self.driver.rollback()
-                     raise
-                 else:
-                     self.driver.commit()
+See :doc:`/reference/service` for the full signatures.
 
 Domain Services
 ===============
@@ -266,13 +82,13 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
 
       .. code-block:: python
 
-         from __future__ import annotations
-
          from typing import TYPE_CHECKING
 
          from pydantic import BaseModel
          from sqlspec import sql
+         from sqlspec.adapters.asyncpg import AsyncpgDriver
          from sqlspec.core.filters import OffsetPagination, StatementFilter
+         from sqlspec.service import SQLSpecAsyncService
 
          if TYPE_CHECKING:
              from uuid import UUID
@@ -284,7 +100,7 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
              name: str
 
 
-         class UserService(SQLSpecAsyncService[AsyncDriverT]):
+         class UserService(SQLSpecAsyncService[AsyncpgDriver]):
 
              async def list_with_count(self, *filters: StatementFilter) -> OffsetPagination[User]:
                  return await self.paginate(
@@ -293,7 +109,7 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
                      schema_type=User,
                  )
 
-             async def get_user(self, user_id: UUID) -> User:
+             async def get_user(self, user_id: "UUID") -> User:
                  return await self.get_one(
                      sql.select("id", "email", "name").from_("users").where_eq("id", user_id),
                      schema_type=User,
@@ -310,13 +126,13 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
 
       .. code-block:: python
 
-         from __future__ import annotations
-
          from typing import TYPE_CHECKING
 
          from pydantic import BaseModel
          from sqlspec import sql
+         from sqlspec.adapters.sqlite import SqliteDriver
          from sqlspec.core.filters import OffsetPagination, StatementFilter
+         from sqlspec.service import SQLSpecSyncService
 
          if TYPE_CHECKING:
              from uuid import UUID
@@ -328,7 +144,7 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
              name: str
 
 
-         class UserService(SQLSpecSyncService[SyncDriverT]):
+         class UserService(SQLSpecSyncService[SqliteDriver]):
 
              def list_with_count(self, *filters: StatementFilter) -> OffsetPagination[User]:
                  return self.paginate(
@@ -337,7 +153,7 @@ Filters from Litestar dependencies flow straight through ``*filters`` to the dri
                      schema_type=User,
                  )
 
-             def get_user(self, user_id: UUID) -> User:
+             def get_user(self, user_id: "UUID") -> User:
                  return self.get_one(
                      sql.select("id", "email", "name").from_("users").where_eq("id", user_id),
                      schema_type=User,
@@ -354,26 +170,39 @@ Using with Litestar
 ===================
 
 With ``create_filter_dependencies``, filters are injected from query parameters and
-forwarded through the service to the driver:
+forwarded through the service to the driver.
+
+This continues the ``UserService`` and ``User`` from the previous section, and
+provides the service itself alongside the filter dependencies:
 
 .. code-block:: python
 
    from litestar import Controller, get
-   from litestar.di import NamedDependency
+   from litestar.di import NamedDependency, Provide
    from litestar.params import SkipValidation
+   from sqlspec.adapters.asyncpg import AsyncpgDriver
    from sqlspec.core.filters import FilterTypes, OffsetPagination
    from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
 
+   async def provide_users_service(db_session: AsyncpgDriver) -> UserService:
+       return UserService(db_session)
+
+
    class UserController(Controller):
        path = "/api/users"
-       dependencies = create_filter_dependencies({
-           "pagination_type": "limit_offset",
-           "pagination_size": 20,
-           "sort_field": ["created_at", "uploaded_collections", "name"],
-           "sort_order": "desc",
-           "search": "name,email",
-       })
+       dependencies = {
+           "users_service": Provide(provide_users_service),
+           **create_filter_dependencies(
+               {
+                   "pagination_type": "limit_offset",
+                   "pagination_size": 20,
+                   "sort_field": ["created_at", "uploaded_collections", "name"],
+                   "sort_order": "desc",
+                   "search": "name,email",
+               }
+           ),
+       }
 
        @get()
        async def list_users(

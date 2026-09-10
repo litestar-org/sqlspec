@@ -125,14 +125,8 @@ autodoc_member_order = "bysource"
 autodoc_typehints_format = "short"
 autodoc_warningiserror = False  # Don't treat autodoc warnings as errors
 autodoc_type_aliases = {
-    "SQLConfig": "sqlspec.base.SQLConfig",
-    "SessionProtocol": "sqlspec.protocols.SessionProtocol",
-    "DriverProtocol": "sqlspec.protocols.DriverProtocol",
     "StatementProtocol": "sqlspec.protocols.StatementProtocol",
-    "ResultProtocol": "sqlspec.protocols.ResultProtocol",
-    "ModelT": "sqlspec.typing.ModelT",
-    "FilterTypeT": "sqlspec.typing.FilterTypeT",
-    "StatementTypeT": "sqlspec.typing.StatementTypeT",
+    "FilterTypeT": "sqlspec.core.filters.FilterTypeT",
     "ParameterMapping": "sqlspec.core.parameters.ParameterMapping",
     "ParameterSequence": "sqlspec.core.parameters.ParameterSequence",
     "ParameterPayload": "sqlspec.core.parameters.ParameterPayload",

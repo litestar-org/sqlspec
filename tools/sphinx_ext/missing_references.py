@@ -130,29 +130,27 @@ def _resolve_sqlspec_reference(target: str, module: str) -> bool:
         bool: True if reference exists, False otherwise
     """
     # Handle base module references
-    base_classes = {"SQLConfig", "SQLSpec", "SessionProtocol", "DriverProtocol", "StatementProtocol", "ResultProtocol"}
-
-    # Handle config module references
-    config_classes = {"AsyncDriverConfig", "SyncDriverConfig", "ConnectionConfig", "GenericSessionConfig"}
+    base_classes = {"SQLSpec", "StatementProtocol"}
 
     # Handle core module references
-    core_classes = {"Statement", "Result", "Parameters", "Compiler", "SQLCache"}
-
-    func_references = {"driver.AsyncDriver.execute", "driver.SyncDriver.execute"}
+    core_classes = {"Statement"}
 
     # Handle type module references
-    type_classes = {"ModelT", "FilterTypeT", "StatementTypeT"}
+    type_classes = {"FilterTypeT"}
 
-    if target in base_classes or target in config_classes or target in core_classes or target in type_classes:
+    if target in base_classes or target in core_classes or target in type_classes:
         return True
 
     # Handle fully qualified references
     if target.startswith("sqlspec."):
         parts = target.split(".")
-        if parts[-1] in base_classes | config_classes | core_classes | type_classes | func_references:
+        if parts[-1] in base_classes | core_classes | type_classes:
             return True
 
-    # Handle module-relative references
+    # Handle module-relative references.
+    # Note: this returns True for every xref raised from a sqlspec module context, so the name
+    # sets above do not narrow anything. They are kept only as documentation of the references
+    # that were once ambiguous. Removing a name from them changes no build behaviour.
     return bool(module.startswith("sqlspec."))
 
 

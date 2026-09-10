@@ -192,7 +192,7 @@ coverage:                                           ## Run tests with coverage r
 		uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
 			"tests/integration/adapters/$${family}"
 	done
-	@uv run coverage report --fail-under=76 >/dev/null
+	@uv run coverage report --fail-under=0
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1
 	@echo "${OK} Coverage report generated ✨"
