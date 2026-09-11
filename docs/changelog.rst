@@ -37,6 +37,11 @@ Unreleased
 
 **Added:**
 
+* Services can now open a short session for each query. Pass ``config=`` and,
+  if needed, ``loader=``. Use ``session=`` to borrow a driver or
+  ``begin_transaction()`` to keep several calls in one transaction. Existing
+  code that passes a driver still works. See :doc:`/recipes/service_layer`.
+
 * Storage pipelines expose ``resolve_destination()``, returning a
   ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.
   Direct remote URIs retain their address, alias paths resolve relative to the

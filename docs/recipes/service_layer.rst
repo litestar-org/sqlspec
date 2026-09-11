@@ -2,9 +2,12 @@
 Service Layer Pattern
 =====================
 
-SQLSpec ships a base service class that wraps a driver and provides pagination,
-single-row fetching, existence checks, and transaction helpers. Import it and
-subclass it — you do not need to write your own.
+Build a service from a database config to fetch rows and run transactions.
+Each query helper opens a short session and releases it before it returns,
+even when the query raises.
+
+The service can then outlive a single session. You can still pass a session
+as the first argument when the caller should own its lifetime.
 
 Parameters and filters passed as ``*parameters`` are forwarded directly to the
 driver, which applies filters to the statement and binds parameters automatically.
@@ -20,8 +23,9 @@ identical class::
 
    from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
-Each takes a driver session in its constructor and exposes it as both
-``.session`` and ``.driver``:
+Pass exactly one of ``Service(config=cfg)`` or ``Service(session)``. An optional
+``loader=SQLFileLoader()`` is available through ``service.loader``; the service
+does not resolve named SQL for you.
 
 .. list-table::
    :header-rows: 1
@@ -29,18 +33,20 @@ Each takes a driver session in its constructor and exposes it as both
 
    * - Member
      - Purpose
-   * - ``paginate(statement, *parameters, schema_type=None, count_with_window=False)``
+   * - ``paginate(statement, *parameters, schema_type=None, count_with_window=False, session=None)``
      - Runs the query and returns an ``OffsetPagination`` with a total count.
-   * - ``get_one(statement, *parameters, schema_type=None, error_message=None)``
-     - Returns exactly one row, raising if there is not exactly one.
-   * - ``exists(statement, *parameters)``
+   * - ``get_one(statement, *parameters, schema_type=None, error_message=None, session=None)``
+     - Returns a row or raises ``NotFoundError`` when no row matches.
+   * - ``exists(statement, *parameters, session=None)``
      - Returns ``True`` when the query matches at least one row.
    * - ``begin_transaction()``
-     - Context manager that commits on success and rolls back on error.
-   * - ``begin()`` / ``commit()`` / ``rollback()``
-     - Pass straight through to the driver for manual control.
+     - Holds one session across helpers, commits on success, and rolls back on error.
+   * - ``provide_session(session=None)``
+     - Yields a session for explicit reuse. Acquired sessions are released on exit.
+   * - ``begin(session=None)`` / ``commit(session=None)`` / ``rollback(session=None)``
+     - Control an available session; they never acquire a disposable session.
    * - ``session`` / ``driver``
-     - The wrapped driver session.
+     - The caller's session or the active transaction's driver.
 
 Subclass whichever matches your driver and add your own query methods:
 
@@ -70,11 +76,69 @@ Subclass whichever matches your driver and add your own query methods:
 
 See :doc:`/reference/service` for the full signatures.
 
-Domain Services
-===============
+Use a Config for Short Sessions
+==============================
+
+The examples below use a local SQLite file. Install ``sqlspec`` for the sync
+example or ``sqlspec[aiosqlite]`` for the async example. ``tmp_path`` is a pytest
+temporary directory; use your application's database path outside a test.
+
+Bare helpers each acquire their own session. To share one session without
+starting a transaction, use ``provide_session()`` and pass the yielded driver
+as ``session=``. Merely entering ``provide_session()`` does not bind later helpers
+to that session.
+
+.. tab-set::
+
+   .. tab-item:: Sync
+
+      .. literalinclude:: /examples/drivers/service_config.py
+         :language: python
+         :dedent: 4
+         :start-after: # start-sync-example
+         :end-before: # end-sync-example
+         :no-upgrade:
+
+   .. tab-item:: Async
+
+      .. literalinclude:: /examples/drivers/service_config.py
+         :language: python
+         :dedent: 4
+         :start-after: # start-async-example
+         :end-before: # end-async-example
+         :no-upgrade:
+
+Both examples leave Ada and Grace in the table. The last transaction rolls back
+its insert when the block raises. Query helpers do not add commits between calls;
+``begin_transaction()`` commits once when its block succeeds.
+
+Session Ownership
+=================
+
+A passed ``session=`` wins over the active transaction. The service borrows it;
+the caller decides when to commit and release it.
+Without an override, helpers use the active transaction, then the constructor
+session, or acquire a new session from the config.
+
+Outside a config service's transaction, ``session`` and ``driver`` raise
+``ImproperConfigurationError``. Manual ``begin()``, ``commit()``, and
+``rollback()`` also require an available session. Use ``begin_transaction()``
+or pass a driver explicitly with ``session=`` for manual control.
+
+Config services do not allow nested transaction blocks. Tasks and threads can
+use the same service, within the adapter's concurrency limits. A child
+task cannot implicitly reuse its parent's transaction, even after that
+transaction exits. Start independent work outside the parent's transaction
+context, or pass a session whose use you control.
+
+Domain Services with a Caller-Owned Session
+==========================================
 
 Inherit from the base and use the ``sql`` builder or SQL file loader for queries.
-Filters from Litestar dependencies flow straight through ``*filters`` to the driver:
+Filters from Litestar dependencies flow straight through ``*filters`` to the driver.
+These examples receive a caller-owned session, so direct ``self.driver`` calls
+remain available. For a config-built service, perform direct driver operations
+inside ``begin_transaction()`` or through an explicitly provided session.
 
 .. tab-set::
 
