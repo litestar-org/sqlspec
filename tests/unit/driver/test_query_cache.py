@@ -1,8 +1,11 @@
 # pyright: reportPrivateUsage = false
 """Tests for SQL query caching functionality."""
 
+from collections import UserDict
+from collections.abc import AsyncIterator, Generator
+from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlglot import parse_one
@@ -477,6 +480,172 @@ async def test_async_execute_cache_hit_uses_cursor_fast_path(aiosqlite_async_dri
 
     assert result.operation_type == "INSERT"
     assert result.rows_affected == 1
+
+
+@pytest.fixture
+def cached_async_cursor(
+    sqlite_sync_driver: Any, aiosqlite_async_driver: Any, monkeypatch: Any
+) -> Generator[tuple[Any, Any, list[str], AsyncMock], None, None]:
+    raw_cursor = sqlite_sync_driver.connection.cursor()
+    cursor = Mock(spec=["execute", "fetchall", "rowcount", "description"])
+    cursor.rowcount = 0
+
+    def execute(sql: str, params: Any) -> None:
+        raw_cursor.execute(sql, params)
+        cursor.description = raw_cursor.description
+        cursor.rowcount = raw_cursor.rowcount
+
+    cursor.execute = Mock(side_effect=execute)
+    cursor.fetchall = raw_cursor.fetchall
+
+    @asynccontextmanager
+    async def with_cursor(_connection: Any) -> AsyncIterator[Any]:
+        yield cursor
+
+    async def dispatch(_cursor: Any, statement: SQL) -> Any:
+        return sqlite_sync_driver.dispatch_execute(raw_cursor, statement)
+
+    fallback = AsyncMock(side_effect=dispatch)
+    monkeypatch.setattr(aiosqlite_async_driver, "with_cursor", with_cursor)
+    monkeypatch.setattr(aiosqlite_async_driver, "dispatch_execute", fallback)
+    statements: list[str] = []
+    sqlite_sync_driver.connection.set_trace_callback(statements.append)
+    try:
+        yield aiosqlite_async_driver, cursor, statements, fallback
+    finally:
+        sqlite_sync_driver.connection.set_trace_callback(None)
+        raw_cursor.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("returns_rows", [True, False], ids=["select", "insert"])
+@pytest.mark.parametrize("awaitable_result", [False, True], ids=["sync", "awaitable-wrapper"])
+async def test_async_cache_hit_executes_once(
+    cached_async_cursor: Any, returns_rows: bool, awaitable_result: bool
+) -> None:
+    driver, cursor, statements, fallback = cached_async_cursor
+    if awaitable_result:
+        execute = cursor.execute
+
+        async def execute_async(sql: str, params: Any) -> None:
+            execute(sql, params)
+
+        cursor.execute = lambda sql, params: execute_async(sql, params)
+        if returns_rows:
+            fetchall = cursor.fetchall
+
+            async def fetchall_async() -> Any:
+                return fetchall()
+
+            cursor.fetchall = fetchall_async
+
+    sql = "SELECT ? AS value" if returns_rows else "INSERT INTO users (name) VALUES (?)"
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type="SELECT" if returns_rows else "INSERT",
+        operation_profile=OperationProfile(returns_rows=returns_rows, modifies_rows=not returns_rows),
+    )
+    result = await driver._execute_cache_hit_with_cursor(sql, ("once",), cached)
+
+    executed = [statement for statement in statements if statement.startswith(("SELECT", "INSERT"))]
+    assert len(executed) == 1
+    fallback.assert_not_called()
+    if returns_rows:
+        assert result.get_data() == [{"value": "once"}]
+    else:
+        assert result.rows_affected == 1
+        if awaitable_result:
+            await cursor.execute("SELECT COUNT(*) FROM users WHERE name = ?", ("once",))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM users WHERE name = ?", ("once",))
+        assert cursor.fetchall() == [(1,)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error_type", [AttributeError, NotImplementedError])
+@pytest.mark.parametrize("stage", ["execute", "fetchall", "collect_rows", "resolve_rowcount", "build_statement_result"])
+async def test_async_cache_hit_does_not_retry_after_execute(
+    cached_async_cursor: Any, monkeypatch: Any, error_type: type[Exception], stage: str
+) -> None:
+    driver, cursor, statements, fallback = cached_async_cursor
+    error = error_type("failure after SQL execution")
+    execute = cursor.execute
+
+    async def execute_async(sql: str, params: Any) -> None:
+        execute(sql, params)
+        if stage == "execute":
+            raise error
+
+    cursor.execute = execute_async
+    if stage == "fetchall":
+        cursor.fetchall = Mock(side_effect=error)
+    elif stage != "execute":
+        monkeypatch.setattr(driver, stage, Mock(side_effect=error))
+
+    returns_rows = stage not in {"execute", "resolve_rowcount"}
+    sql = "SELECT ? AS value" if returns_rows else "INSERT INTO users (name) VALUES (?)"
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type="SELECT" if returns_rows else "INSERT",
+        operation_profile=OperationProfile(returns_rows=returns_rows, modifies_rows=not returns_rows),
+    )
+    with pytest.raises(error_type) as exc_info:
+        await driver._execute_cache_hit_with_cursor(sql, ("once",), cached)
+
+    assert exc_info.value is error
+    assert len([statement for statement in statements if statement.startswith(("SELECT", "INSERT"))]) == 1
+    fallback.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("row_format", ["tuple", "dict", "record"])
+async def test_async_cache_hit_preserves_row_format(cached_async_cursor: Any, row_format: str) -> None:
+    driver, cursor, statements, fallback = cached_async_cursor
+    fetchall = cursor.fetchall
+
+    def fetch_rows() -> list[Any]:
+        rows = fetchall()
+        if row_format == "tuple":
+            return rows
+        mappings = [{"name": row[1], "id": row[0]} for row in rows]
+        return [UserDict(row) for row in mappings] if row_format == "record" else mappings
+
+    cursor.fetchall = Mock(side_effect=fetch_rows)
+    sql = "SELECT id, name FROM users ORDER BY id"
+    result = await driver._execute_cache_hit_with_cursor(sql, (), _make_cached(compiled_sql=sql))
+
+    assert result.get_data() == [{"id": 1, "name": "test"}, {"id": 2, "name": "example"}]
+    assert result.column_names == ["id", "name"]
+    assert statements == [sql]
+    cursor.fetchall.assert_called_once_with()
+    fallback.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("returns_rows", [True, False], ids=["select", "insert"])
+async def test_async_cache_hit_missing_cursor_capability_dispatches_once(
+    cached_async_cursor: Any, returns_rows: bool
+) -> None:
+    driver, cursor, statements, fallback = cached_async_cursor
+    delattr(cursor, "fetchall" if returns_rows else "rowcount")
+    sql = "SELECT ? AS value" if returns_rows else "INSERT INTO users (name) VALUES (?)"
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type="SELECT" if returns_rows else "INSERT",
+        operation_profile=OperationProfile(returns_rows=returns_rows, modifies_rows=not returns_rows),
+    )
+    result = await driver._execute_cache_hit_with_cursor(sql, ("once",), cached)
+
+    assert len([statement for statement in statements if statement.startswith(("SELECT", "INSERT"))]) == 1
+    fallback.assert_awaited_once()
+    cursor.execute.assert_not_called()
+    if returns_rows:
+        assert result.get_data() == [{"value": "once"}]
+    else:
+        assert result.rows_affected == 1
 
 
 @pytest.mark.anyio
