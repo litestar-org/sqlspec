@@ -90,7 +90,7 @@ def test_native_failure_never_redispatches(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_native_api_failure_keeps_exception_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = _RecordingConnection()
-    query = Mock(side_effect=Forbidden("denied"))
+    query = Mock(side_effect=Forbidden("denied"))  # type: ignore[no-untyped-call]
     monkeypatch.setattr(connection, "query", query)
     arrow = Mock()
     monkeypatch.setattr(BigQueryDriver, "select_to_arrow", arrow)
