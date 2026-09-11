@@ -141,6 +141,7 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
 
     assert all(result["imported"] or result["skipped"] for result in results)
     assert {result["name"] for result in results} == {
+        "adapter_config_construction",
         "aiosqlite_ambient_exception",
         "aiosqlite_exception_mapping",
         "fastapi_filter_construction",
@@ -151,6 +152,40 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
     }
     sqlspec_result = next(result for result in results if result["name"] == "sqlspec_construction")
     assert sqlspec_result["error"] is None
+    adapter_result = next(result for result in results if result["name"] == "adapter_config_construction")
+    assert adapter_result["error"] is None
+
+
+def test_adapter_config_construction_check_covers_every_database_config() -> None:
+    module = _load_mypyc_smoke_module()
+
+    discovered = {qualified_name for qualified_name, _ in module._discover_adapter_config_classes()}
+
+    assert discovered == {
+        "sqlspec.adapters.adbc.config.AdbcConfig",
+        "sqlspec.adapters.aiomysql.config.AiomysqlConfig",
+        "sqlspec.adapters.aiosqlite.config.AiosqliteConfig",
+        "sqlspec.adapters.arrow_odbc.config.ArrowOdbcConfig",
+        "sqlspec.adapters.asyncmy.config.AsyncmyConfig",
+        "sqlspec.adapters.asyncpg.config.AsyncpgConfig",
+        "sqlspec.adapters.bigquery.config.BigQueryConfig",
+        "sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgConfig",
+        "sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgAsyncConfig",
+        "sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgSyncConfig",
+        "sqlspec.adapters.duckdb.config.DuckDBConfig",
+        "sqlspec.adapters.mssql_python.config.MssqlPythonConfig",
+        "sqlspec.adapters.mysqlconnector.config.MysqlConnectorAsyncConfig",
+        "sqlspec.adapters.mysqlconnector.config.MysqlConnectorSyncConfig",
+        "sqlspec.adapters.oracledb.config.OracleAsyncConfig",
+        "sqlspec.adapters.oracledb.config.OracleSyncConfig",
+        "sqlspec.adapters.psqlpy.config.PsqlpyConfig",
+        "sqlspec.adapters.psycopg.config.PsycopgAsyncConfig",
+        "sqlspec.adapters.psycopg.config.PsycopgSyncConfig",
+        "sqlspec.adapters.pymssql.config.PymssqlConfig",
+        "sqlspec.adapters.pymysql.config.PyMysqlConfig",
+        "sqlspec.adapters.spanner.config.SpannerSyncConfig",
+        "sqlspec.adapters.sqlite.config.SqliteConfig",
+    }
 
 
 def test_statement_construction_checks_pass_without_requiring_compilation() -> None:
