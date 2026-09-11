@@ -1791,6 +1791,23 @@ def test_sql_factory_copy_helpers() -> None:
     assert parsed.args["kind"] is False
 
 
+@pytest.mark.parametrize(
+    ("method_name", "function_name"), [("row_number", "ROW_NUMBER"), ("rank", "RANK"), ("dense_rank", "DENSE_RANK")]
+)
+def test_ranking_method_partition_order_and_composition(method_name: str, function_name: str) -> None:
+    """Test ranking method forms render OVER clauses, compose in SELECT, and match the property forms."""
+    expression = getattr(sql, method_name)(partition_by="department", order_by="salary")
+    assert str(expression) == f"{function_name}() OVER (PARTITION BY department ORDER BY salary)"
+    query = sql.select(expression.as_("position")).from_("employees")
+    property_form = getattr(sql, f"{method_name}_")
+    property_expression = property_form.partition_by("department").order_by("salary").as_("position")
+    assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
+    assert " ".join(query.to_sql().split()) == (
+        f'SELECT {function_name}() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
+        'AS "position" FROM "employees" AS "employees"'
+    )
+
+
 def test_count_over_method_basic() -> None:
     """Test count_over() method generates COUNT(*) OVER()."""
     count_expr = sql.count_over()
