@@ -3,12 +3,13 @@
 from collections.abc import Generator
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcDriver
+from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection
 from sqlspec.adapters.pymssql import PymssqlConfig
 from tests.integration.adapters._shared import install_shared_tests
 
@@ -57,7 +58,9 @@ def test_arrow_odbc_cached_select_executes_once(case: Any, request: pytest.Fixtu
         proxy = SimpleNamespace(
             execute=Mock(wraps=connection.execute), read_arrow_batches=Mock(wraps=connection.read_arrow_batches)
         )
-        driver = ArrowOdbcDriver(connection=proxy, driver_features={"dbms_name": "Microsoft SQL Server"})
+        driver = ArrowOdbcDriver(
+            connection=cast("ArrowOdbcConnection", proxy), driver_features={"dbms_name": "Microsoft SQL Server"}
+        )
         for count in range(1, 4):
             result = driver.execute("SELECT 1 AS x", ())
             assert result.get_data() == [{"x": 1}]

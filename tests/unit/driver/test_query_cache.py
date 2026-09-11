@@ -571,7 +571,7 @@ def test_sync_cache_hit_preserves_row_format(cached_sync_cursor: Any, row_format
     fetchall = cursor.fetchall
 
     def fetch_rows() -> list[Any]:
-        rows = fetchall()
+        rows: list[Any] = fetchall()
         if row_format == "tuple":
             return rows
         mappings = [{"name": row[1], "id": row[0]} for row in rows]
@@ -737,7 +737,7 @@ async def test_async_cache_hit_preserves_row_format(cached_async_cursor: Any, ro
     fetchall = cursor.fetchall
 
     def fetch_rows() -> list[Any]:
-        rows = fetchall()
+        rows: list[Any] = fetchall()
         if row_format == "tuple":
             return rows
         mappings = [{"name": row[1], "id": row[0]} for row in rows]
