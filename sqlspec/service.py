@@ -108,7 +108,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             msg = "Provide exactly one of session or config."
             raise ImproperConfigurationError(msg)
         if config is not None and not config.is_async:
-            msg = "SQLSpecAsyncService requires an async database config."
+            msg = f"{type(self).__name__} requires an async database config."
             raise ImproperConfigurationError(msg)
         self._session = session
         self._config = config
@@ -117,7 +117,11 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
 
     @property
     def session(self) -> AsyncDriverT:
-        """Return the driver session."""
+        """Return the active transaction driver or the constructor session.
+
+        Raises:
+            ImproperConfigurationError: If a config-built service has no active transaction.
+        """
         active = _transaction_session(self._transaction_key)
         if active is not None:
             return cast("AsyncDriverT", active)
@@ -377,7 +381,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             msg = "Provide exactly one of session or config."
             raise ImproperConfigurationError(msg)
         if config is not None and config.is_async:
-            msg = "SQLSpecSyncService requires a sync database config."
+            msg = f"{type(self).__name__} requires a sync database config."
             raise ImproperConfigurationError(msg)
         self._session = session
         self._config = config
@@ -386,7 +390,11 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
 
     @property
     def session(self) -> SyncDriverT:
-        """Return the driver session."""
+        """Return the active transaction driver or the constructor session.
+
+        Raises:
+            ImproperConfigurationError: If a config-built service has no active transaction.
+        """
         active = _transaction_session(self._transaction_key)
         if active is not None:
             return cast("SyncDriverT", active)

@@ -469,7 +469,7 @@ async def test_async_independent_transactions_do_not_share_sessions(
     ready = [asyncio.Event(), asyncio.Event()]
 
     async def begin_read_transaction(self: AiosqliteDriver) -> None:
-        # The adapter's BEGIN IMMEDIATE serializes writers; overlap two real read transactions.
+        """Start a deferred read transaction so two transactions can overlap."""
         await self.connection.execute("BEGIN")
 
     monkeypatch.setattr(AiosqliteDriver, "begin", begin_read_transaction)
@@ -508,7 +508,7 @@ async def test_async_inherited_transaction_refuses_implicit_reuse(
     async with service.begin_transaction():
         task = asyncio.create_task(child())
         await released.wait()
-        assert len(events) == 3  # Parent acquire and the explicit child's acquire/release only.
+        assert [event for event, _ in events] == ["enter", "enter", "exit"]
     finished.set()
     await task
     assert await service.exists(sql.select("value").from_("service_values"))
@@ -593,8 +593,9 @@ def test_sync_session_service_preserves_subclass_transaction_hooks(
     config, _ = sync_config
     calls: list[str] = []
 
-    # Legacy overrides intentionally predate the additive session keyword.
     class CustomService(SQLSpecSyncService[SqliteDriver]):
+        """Subclass whose transaction hooks predate the session keyword."""
+
         def begin(self) -> None:  # type: ignore[override]
             calls.append("begin")
             super().begin()
@@ -628,8 +629,9 @@ async def test_async_session_service_preserves_subclass_transaction_hooks(
     config, _ = async_config
     calls: list[str] = []
 
-    # Legacy overrides intentionally predate the additive session keyword.
     class CustomService(SQLSpecAsyncService[AiosqliteDriver]):
+        """Subclass whose transaction hooks predate the session keyword."""
+
         async def begin(self) -> None:  # type: ignore[override]
             calls.append("begin")
             await super().begin()
