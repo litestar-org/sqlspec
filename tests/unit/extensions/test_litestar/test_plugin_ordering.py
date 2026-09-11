@@ -124,25 +124,25 @@ def _middleware_types(app_config: AppConfig) -> list[type[object]]:
     ]
 
 
-def test_on_app_init_middleware_on_app_init_appends_both_middlewares_when_enabled() -> None:
+def test_on_app_init_middleware_on_app_init_installs_both_middlewares_when_enabled() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
-    assert _middleware_types(app_config)[-2:] == [CorrelationMiddleware, SQLCommenterMiddleware]
+    assert _middleware_types(app_config)[:2] == [CorrelationMiddleware, SQLCommenterMiddleware]
 
 
-def test_on_app_init_middleware_on_app_init_appends_only_correlation_middleware() -> None:
+def test_on_app_init_middleware_on_app_init_installs_only_correlation_middleware() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
     assert _middleware_types(app_config) == [CorrelationMiddleware]
 
 
-def test_on_app_init_middleware_on_app_init_appends_only_sqlcommenter_middleware() -> None:
+def test_on_app_init_middleware_on_app_init_installs_only_sqlcommenter_middleware() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=False, sqlcommenter=True).on_app_init(app_config)
     assert _middleware_types(app_config) == [SQLCommenterMiddleware]
 
 
-def test_on_app_init_middleware_on_app_init_appends_no_observability_middlewares_when_disabled() -> None:
+def test_on_app_init_middleware_on_app_init_installs_no_observability_middlewares_when_disabled() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=False, sqlcommenter=False).on_app_init(app_config)
     assert app_config.middleware == []
@@ -152,5 +152,5 @@ def test_on_app_init_middleware_on_app_init_preserves_existing_middlewares() -> 
     existing = DefineMiddleware(_ExistingMiddleware)
     app_config = AppConfig(middleware=[existing])
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
-    assert app_config.middleware[0] is existing
-    assert _middleware_types(app_config)[1:] == [CorrelationMiddleware, SQLCommenterMiddleware]
+    assert _middleware_types(app_config)[:2] == [CorrelationMiddleware, SQLCommenterMiddleware]
+    assert app_config.middleware[-1] is existing
