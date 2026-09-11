@@ -198,22 +198,23 @@ large distributed workloads.
      - Client import
      - Native import
    * - 100
-     - 5.64 (5.44–5.65)
-     - 13.71 (13.43–15.61)
-     - 8.65 (8.53–9.54)
-     - 108.38 (107.40–112.24)
+     - 5.34 (4.89–5.36)
+     - 12.78 (12.11–13.06)
+     - 8.61 (7.83–9.08)
+     - 107.03 (103.43–108.72)
    * - 1,000
-     - 6.54 (6.36–6.68)
-     - 15.39 (14.56–15.54)
-     - 20.15 (17.49–33.71)
-     - 113.81 (108.55–115.33)
+     - 6.59 (6.24–6.73)
+     - 13.55 (13.25–13.73)
+     - 18.92 (18.75–21.98)
+     - 112.92 (110.56–119.71)
    * - 10,000
-     - 17.62 (15.51–54.69)
-     - 22.38 (20.88–26.84)
-     - 77.37 (74.92–90.20)
-     - 125.41 (124.19–129.62)
+     - 16.62 (16.50–17.99)
+     - 23.18 (20.85–28.36)
+     - 76.41 (75.57–92.64)
+     - 129.86 (122.95–139.74)
 
-Native imports produced two or three failed availability probes per sample;
-observed spans ranged from 21.4 to 42.3 ms. Client imports produced none.
-Polling was every 20 ms with a 250 ms query timeout. These spans are sampled
-observations, not exact table-offline durations.
+Native imports produced two to four failed availability probes per sample, with
+observed spans between 21.3 and 63.2 ms. Client imports produced none. Polling
+was every 20 ms with a 250 ms query timeout. These spans are sampled
+observations of one run, not exact table-offline durations, and repeated runs
+move both the probe counts and the spans.
