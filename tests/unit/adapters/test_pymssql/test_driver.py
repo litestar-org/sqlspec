@@ -4,9 +4,10 @@ from typing import cast
 
 import pytest
 
+from sqlspec import StatementStack
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
 from sqlspec.core import SQL
-from sqlspec.exceptions import SQLSpecError, TransactionError, UniqueViolationError
+from sqlspec.exceptions import SQLSpecError, StackExecutionError, TransactionError, UniqueViolationError
 from tests.unit.adapters.test_pymssql._fakes import (
     FakeConnection,
     FakeCursor,
@@ -189,8 +190,71 @@ def test_select_stream_uses_fetchmany_chunks() -> None:
     assert cursor.closed is True
 
 
-def test_connection_in_transaction_is_false_without_supported_state() -> None:
-    """pymssql does not expose a reliable transaction-state flag."""
+@pytest.mark.parametrize("finish", ["commit", "rollback"])
+def test_connection_in_transaction_tracks_successful_boundaries(finish: str) -> None:
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
-    assert PymssqlDriver(cast("PymssqlConnection", FakeConnection()))._connection_in_transaction() is False
+    driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection()))
+    assert driver._connection_in_transaction() is False
+    driver.begin()
+    assert driver._connection_in_transaction() is True
+    getattr(driver, finish)()
+    assert driver._connection_in_transaction() is False
+
+
+@pytest.mark.parametrize("operation", ["begin", "commit", "rollback"])
+def test_failed_transaction_boundary_preserves_state(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sqlspec.adapters.pymssql.driver as driver_module
+
+    connection = FakeConnection()
+    driver = driver_module.PymssqlDriver(cast("PymssqlConnection", connection))
+    if operation != "begin":
+        driver.begin()
+    failure = FakePymssqlIntegrityError("boundary failed")
+
+    def fail(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(driver_module, "pymssql", FakePymssqlModule())
+    monkeypatch.setattr(
+        connection.cursor_obj if operation == "begin" else connection,
+        "execute" if operation == "begin" else operation,
+        fail,
+    )
+    with pytest.raises(SQLSpecError) as caught:
+        getattr(driver, operation)()
+    assert caught.value.__cause__ is failure
+    assert driver._connection_in_transaction() is (operation != "begin")
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_execute_stack_preserves_caller_transaction(fails: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    connection = FakeConnection(FakeCursor(rowcount=1))
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+    driver.begin()
+    stack = StatementStack().push_execute("INSERT INTO users (id) VALUES (1)")
+    if fails:
+        failure = RuntimeError("statement failed")
+        execute = connection.cursor_obj.execute
+
+        def fail(sql: str, parameters: object = None) -> None:
+            execute(sql, parameters)
+            if sql.startswith("INSERT"):
+                raise failure
+
+        monkeypatch.setattr(connection.cursor_obj, "execute", fail)
+        with pytest.raises(StackExecutionError) as caught:
+            driver.execute_stack(stack)
+        assert caught.value.__cause__ is failure
+    else:
+        result = driver.execute_stack(stack)
+        assert len(result) == 1
+        assert result[0].rows_affected == 1
+    assert connection.commits == 0
+    assert connection.rollbacks == 0
+    assert driver._connection_in_transaction() is True
+    assert sum(sql == "BEGIN TRANSACTION" for sql, _ in connection.cursor_obj.calls) == 1
+    driver.rollback()
+    assert connection.rollbacks == 1

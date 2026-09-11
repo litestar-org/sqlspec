@@ -117,7 +117,7 @@ class PymssqlStreamSource:
 class PymssqlDriver(SyncDriverAdapterBase):
     """SQL Server database driver using pymssql."""
 
-    __slots__ = ("_column_name_cache", "_data_dictionary")
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_transaction_active")
     dialect = "tsql"
 
     def __init__(
@@ -134,6 +134,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._transaction_active = False
 
     def dispatch_execute(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -180,6 +181,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         try:
             with PymssqlCursor(self.connection) as cursor:
                 cursor.execute("BEGIN TRANSACTION")
+            self._transaction_active = True
         except _pymssql_error_type() as exc:
             msg = f"Failed to begin SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
@@ -187,6 +189,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         try:
             self.connection.commit()
+            self._transaction_active = False
         except _pymssql_error_type() as exc:
             msg = f"Failed to commit SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
@@ -194,6 +197,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def rollback(self) -> None:
         try:
             self.connection.rollback()
+            self._transaction_active = False
         except _pymssql_error_type() as exc:
             msg = f"Failed to rollback SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
@@ -234,7 +238,8 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        return False
+        """Return whether a transaction opened by this driver remains active."""
+        return self._transaction_active
 
 
 class _UnavailablePymssqlError(Exception):
