@@ -1791,38 +1791,19 @@ def test_sql_factory_copy_helpers() -> None:
     assert parsed.args["kind"] is False
 
 
-def test_row_number_method_partition_order_and_composition() -> None:
-    expression = sql.row_number(partition_by="department", order_by="salary")
-    assert str(expression) == "ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary)"
+@pytest.mark.parametrize(
+    ("method_name", "function_name"), [("row_number", "ROW_NUMBER"), ("rank", "RANK"), ("dense_rank", "DENSE_RANK")]
+)
+def test_ranking_method_partition_order_and_composition(method_name: str, function_name: str) -> None:
+    """Test ranking method forms render OVER clauses, compose in SELECT, and match the property forms."""
+    expression = getattr(sql, method_name)(partition_by="department", order_by="salary")
+    assert str(expression) == f"{function_name}() OVER (PARTITION BY department ORDER BY salary)"
     query = sql.select(expression.as_("position")).from_("employees")
-    property_expression = sql.row_number_.partition_by("department").order_by("salary").as_("position")
+    property_form = getattr(sql, f"{method_name}_")
+    property_expression = property_form.partition_by("department").order_by("salary").as_("position")
     assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
     assert " ".join(query.to_sql().split()) == (
-        'SELECT ROW_NUMBER() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
-        'AS "position" FROM "employees" AS "employees"'
-    )
-
-
-def test_rank_method_partition_order_and_composition() -> None:
-    expression = sql.rank(partition_by="department", order_by="salary")
-    assert str(expression) == "RANK() OVER (PARTITION BY department ORDER BY salary)"
-    query = sql.select(expression.as_("position")).from_("employees")
-    property_expression = sql.rank_.partition_by("department").order_by("salary").as_("position")
-    assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
-    assert " ".join(query.to_sql().split()) == (
-        'SELECT RANK() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
-        'AS "position" FROM "employees" AS "employees"'
-    )
-
-
-def test_dense_rank_method_partition_order_and_composition() -> None:
-    expression = sql.dense_rank(partition_by="department", order_by="salary")
-    assert str(expression) == "DENSE_RANK() OVER (PARTITION BY department ORDER BY salary)"
-    query = sql.select(expression.as_("position")).from_("employees")
-    property_expression = sql.dense_rank_.partition_by("department").order_by("salary").as_("position")
-    assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
-    assert " ".join(query.to_sql().split()) == (
-        'SELECT DENSE_RANK() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
+        f'SELECT {function_name}() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
         'AS "position" FROM "employees" AS "employees"'
     )
 

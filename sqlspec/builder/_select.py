@@ -18,10 +18,10 @@ from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import JoinClauseMixin, _attach_as_of_version
 from sqlspec.builder._parsing_utils import (
     _PARAMETER_VALIDATOR,
-    _build_cube,
-    _build_grouping_sets,
-    _build_rollup,
     _coerce_column,
+    _cube_expression,
+    _grouping_sets_expression,
+    _rollup_expression,
     extract_column_name,
     extract_expression,
     extract_sql_object_expression,
@@ -356,7 +356,7 @@ class SelectClauseMixin:
         builder.set_expression(select_expr.from_(from_expr, copy=False))
         return cast("Self", builder)
 
-    def group_by(self, *columns: Union[str, exp.Expr, "ExpressionWrapper"]) -> Self:
+    def group_by(self, *columns: Union[str, exp.Expr, "Column", "ExpressionWrapper"]) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = builder.get_expression()
         if select_expr is None or not isinstance(select_expr, exp.Select):
@@ -369,13 +369,13 @@ class SelectClauseMixin:
         return cast("Self", builder)
 
     def group_by_rollup(self, *columns: str | exp.Expr) -> Self:
-        return self.group_by(_build_rollup(*columns))
+        return self.group_by(_rollup_expression(*columns))
 
     def group_by_cube(self, *columns: str | exp.Expr) -> Self:
-        return self.group_by(_build_cube(*columns))
+        return self.group_by(_cube_expression(*columns))
 
     def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
-        return self.group_by(_build_grouping_sets(*column_sets))
+        return self.group_by(_grouping_sets_expression(*column_sets))
 
 
 @trait

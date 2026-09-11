@@ -44,13 +44,13 @@ from sqlspec.builder._insert import Insert
 from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import (
-    _build_cube,
-    _build_grouping_sets,
-    _build_rollup,
     _coerce_column,
+    _cube_expression,
+    _grouping_sets_expression,
     _normalize_order_by,
     _normalize_partition_by,
     _resolve_dialect,
+    _rollup_expression,
     extract_expression,
     to_expression,
 )
@@ -1158,7 +1158,7 @@ class SQLFactory:
         Returns:
             ROLLUP expression.
         """
-        return FunctionExpression(_build_rollup(*columns))
+        return FunctionExpression(_rollup_expression(*columns))
 
     @staticmethod
     def cube(*columns: str | exp.Expr) -> FunctionExpression:
@@ -1170,7 +1170,7 @@ class SQLFactory:
         Returns:
             CUBE expression.
         """
-        return FunctionExpression(_build_cube(*columns))
+        return FunctionExpression(_cube_expression(*columns))
 
     @staticmethod
     def grouping_sets(*column_sets: tuple[str, ...] | list[str]) -> FunctionExpression:
@@ -1185,7 +1185,7 @@ class SQLFactory:
         Raises:
             SQLBuilderError: If a grouping set is not a tuple or list.
         """
-        return FunctionExpression(_build_grouping_sets(*column_sets))
+        return FunctionExpression(_grouping_sets_expression(*column_sets))
 
     @staticmethod
     def any(values: list[Any] | exp.Expr | str) -> FunctionExpression:

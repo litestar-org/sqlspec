@@ -415,15 +415,15 @@ def _coerce_column(value: str | exp.Expr) -> exp.Expr:
     return exp.column(value) if isinstance(value, str) else value
 
 
-def _build_rollup(*columns: str | exp.Expr) -> exp.Rollup:
+def _rollup_expression(*columns: str | exp.Expr) -> exp.Rollup:
     return exp.Rollup(expressions=[_coerce_column(column) for column in columns])
 
 
-def _build_cube(*columns: str | exp.Expr) -> exp.Cube:
+def _cube_expression(*columns: str | exp.Expr) -> exp.Cube:
     return exp.Cube(expressions=[_coerce_column(column) for column in columns])
 
 
-def _build_grouping_sets(*column_sets: tuple[str, ...] | list[str]) -> exp.GroupingSets:
+def _grouping_sets_expression(*column_sets: tuple[str, ...] | list[str]) -> exp.GroupingSets:
     sets: list[exp.Tuple] = []
     for column_set in column_sets:
         if not isinstance(column_set, (tuple, list)):

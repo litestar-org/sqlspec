@@ -14,6 +14,13 @@ Unreleased
 
 **Fixed:**
 
+* ``Select.group_by()`` accepts the ``sql.rollup()``, ``sql.cube()``, and
+  ``sql.grouping_sets()`` factory expressions directly. The factory helpers and
+  the ``group_by_rollup()``, ``group_by_cube()``, and
+  ``group_by_grouping_sets()`` methods now build the same expressions, and each
+  grouping set must be a tuple or list of columns; a bare string raises
+  ``SQLBuilderError`` instead of producing incorrect SQL.
+
 * MySQL adapters accept either ``local_infile=True`` or
   ``allow_local_infile=True`` to enable eligible native bulk loads. A separate
   bulk-load opt-in is no longer required; set
