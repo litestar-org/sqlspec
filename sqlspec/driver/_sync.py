@@ -33,6 +33,7 @@ from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat,
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
+from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -445,38 +446,40 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             with exc_handler, self.with_cursor(self.connection) as cursor:
-                if hasattr(cursor, "execute"):
-                    try:
-                        cursor.execute(cached.compiled_sql, params)
-                        if cached.operation_profile.returns_rows:
-                            fetched_data = cursor.fetchall()
-                            data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-                            execution_result = self.create_execution_result(
-                                cursor,
-                                selected_data=data,
-                                column_names=column_names,
-                                data_row_count=row_count,
-                                is_select_result=True,
-                                row_format="tuple",
-                            )
-                            direct_statement = self._cached_statement(
-                                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                            )
-                            result = self.build_statement_result(direct_statement, execution_result)
-                        else:
-                            affected_rows = self.resolve_rowcount(cursor)
-                            result = DMLResult(cached.operation_type, affected_rows)
-                    except (AttributeError, NotImplementedError):
-                        # Cursor is not DB-API compatible for direct execution.
-                        # Fall back to adapter dispatch path.
-                        pass
-
-                if result is None:
+                execute = getattr(cursor, "execute", None)
+                fetchall = getattr(cursor, "fetchall", None)
+                returns_rows = cached.operation_profile.returns_rows
+                can_use_cursor_fast_path = execute is not None and (
+                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
+                )
+                if can_use_cursor_fast_path:
+                    assert execute is not None
+                    execute(cached.compiled_sql, params)
+                    if returns_rows:
+                        assert fetchall is not None
+                        fetched_data = fetchall()
+                        data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                        execution_result = self.create_execution_result(
+                            cursor,
+                            selected_data=data,
+                            column_names=column_names,
+                            data_row_count=row_count,
+                            is_select_result=True,
+                            row_format=resolve_row_format(data),
+                        )
+                        direct_statement = self._cached_statement(
+                            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                        )
+                        result = self.build_statement_result(direct_statement, execution_result)
+                    else:
+                        affected_rows = self.resolve_rowcount(cursor)
+                        result = DMLResult(cached.operation_type, affected_rows)
+                else:
                     direct_statement = self._cached_statement(
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = (

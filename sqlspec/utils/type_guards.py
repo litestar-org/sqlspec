@@ -473,6 +473,8 @@ def resolve_row_format(
         return default
 
     first_row = rows[0]
+    if type(first_row) is tuple:
+        return default
     if is_dict_row(first_row):
         return "dict"
     if is_mapping_like(first_row):
