@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 from click.testing import CliRunner
 
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.cli import add_migration_commands
 
 MODULE_PREFIX = "cli_test_config_"
@@ -763,3 +764,54 @@ def get_multi_configs():
     mock_commands.upgrade.assert_called_once_with(
         revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
     )
+
+
+@pytest.mark.parametrize("version_range", ["1:7", "1..7", "1-7"])
+def test_squash_version_range_formats(version_range: str) -> None:
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with (
+        patch("sqlspec.cli.resolve_config_sync", return_value=config),
+        patch("sqlspec.migrations.commands.create_migration_commands") as create_commands,
+    ):
+        result = CliRunner().invoke(
+            add_migration_commands(),
+            ["--config", "test.config", "squash", version_range, "-m", "consolidated", "--yes", "--no-database"],
+        )
+
+    assert result.exit_code == 0, result.output
+    create_commands.return_value.squash.assert_called_once_with(
+        start_version="0001",
+        end_version="0007",
+        description="consolidated",
+        dry_run=False,
+        update_database=False,
+        yes=True,
+        allow_gaps=False,
+        output_format="sql",
+    )
+
+
+@pytest.mark.parametrize("version_range", ["1to7", "[bold]"])
+def test_squash_invalid_version_range(version_range: str) -> None:
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with (
+        patch("sqlspec.cli.resolve_config_sync", return_value=config),
+        patch("sqlspec.migrations.commands.create_migration_commands") as create_commands,
+    ):
+        result = CliRunner().invoke(
+            add_migration_commands(), ["--config", "test.config", "squash", version_range, "-m", "consolidated"]
+        )
+
+    assert result.exit_code == 1
+    assert f"Invalid VERSION_RANGE format: '{version_range}'. Use START:END, START..END, or START-END" in " ".join(
+        result.output.split()
+    )
+    create_commands.assert_not_called()
+
+
+def test_squash_help_version_range_formats() -> None:
+    result = CliRunner().invoke(add_migration_commands().commands["squash"], ["--help"])
+
+    assert result.exit_code == 0
+    for value in ("START:END", "START..END", "START-END", "1:7"):
+        assert value in result.output

@@ -13,6 +13,7 @@ from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.migrations.squash import parse_version_range
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import run_
@@ -830,7 +831,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
         _dispatch_migration_call(sqlspec_config, "fix", dry_run=dry_run, update_database=not no_database, yes=yes)
 
-    @database_group.command(name="squash", help="Squash multiple migrations into a single file.")
+    @database_group.command(name="squash")
     @bind_key_option
     @click.argument("version_range", required=True)
     @click.option("-m", "--message", required=True, help="Description for squashed migration")
@@ -856,17 +857,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     ) -> None:
         """Squash multiple sequential migrations into a single file.
 
-        VERSION_RANGE should be in START:END format:0004".
+        VERSION_RANGE accepts START:END, START..END, or START-END, for example 1:7.
         """
         ctx = _ensure_click_context()
 
-        if ":" not in version_range:
-            console.print("[red]Error: VERSION_RANGE must be in START:END format[/]")
-            raise SystemExit(1)
-
-        start_version, end_version = version_range.split(":", 1)
-        start_version = start_version.strip().zfill(4)
-        end_version = end_version.strip().zfill(4)
+        try:
+            start_version, end_version = parse_version_range(version_range)
+        except ValueError as exc:
+            console.print(f"[red]Error: {escape(str(exc))}[/]")
+            raise SystemExit(1) from None
 
         console.rule("[yellow]Migration Squash Command[/]", align="left")
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
