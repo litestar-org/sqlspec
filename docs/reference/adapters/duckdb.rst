@@ -6,6 +6,147 @@ Sync DuckDB adapter with full Arrow integration, extension management, and
 secret configuration. DuckDB excels at analytical workloads and can query
 Parquet, CSV, and JSON files directly.
 
+Native object-store transfers
+=============================
+
+``select_to_storage()`` can write a remote Parquet or CSV object with DuckDB
+``COPY``. ``load_from_storage()`` can append a remote Parquet object with
+``INSERT ... SELECT ... FROM read_parquet()``. Each successful native transfer
+executes one statement on the driver's existing connection and avoids
+materializing the data through Python Arrow buffers.
+
+Configure the required extension and secret through ``driver_features`` before
+opening a session. Native routing uses the settings successfully applied to that
+connection. A failed optional extension or secret does not enable the route.
+Pool recreation resets this record. A custom ``on_connection_create`` callback
+keeps storage transfers on the Arrow path because its settings are opaque.
+
+.. code-block:: python
+
+    import os
+
+    from sqlspec.adapters.duckdb import DuckDBConfig
+
+    config = DuckDBConfig(
+        driver_features={
+            "extensions": [{"name": "httpfs", "required": True}],
+            "secrets": [{
+                "name": "reports",
+                "secret_type": "s3",
+                "provider": "config",
+                "required": True,
+                "value": {
+                    "key_id": os.environ["AWS_ACCESS_KEY_ID"],
+                    "secret": os.environ["AWS_SECRET_ACCESS_KEY"],
+                    "region": "us-east-1",
+                },
+            }],
+        },
+    )
+    try:
+        with config.provide_session() as session:
+            session.select_to_storage(
+                "SELECT :day AS report_day",
+                "s3://example-bucket/reports/daily.parquet",
+                day="2026-01-01",
+            )
+            session.execute("CREATE TABLE reports (report_day VARCHAR)")
+            session.load_from_storage(
+                "reports", "s3://example-bucket/reports/daily.parquet",
+                file_format="parquet",
+            )
+    finally:
+        config.close_pool()
+
+Query values and object addresses remain bound parameters. Native import accepts
+one table identifier, optionally schema-qualified or quoted; SQL fragments are
+rejected. Parquet import disables automatic Hive partition columns. The API
+handles one object and does not expose reader projection or filter pushdown.
+
+Providers and aliases
+---------------------
+
+.. list-table:: Native provider prerequisites
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - URI schemes
+     - Extension
+     - Secret settings
+   * - ``s3``
+     - ``httpfs``
+     - ``secret_type="s3"`` with static credentials or a configured credential chain.
+   * - ``gs``, ``gcs``
+     - ``httpfs``
+     - ``secret_type="gcs"`` with HMAC ``key_id`` and ``secret``. GCS OAuth and
+       service-account backend options are not interchangeable with HMAC keys.
+   * - ``r2``
+     - ``httpfs``
+     - ``secret_type="r2"`` with ``key_id``, ``secret`` and ``account_id`` or
+       the matching R2 endpoint.
+   * - ``az``, ``azure``, ``abfss``
+     - ``azure``
+     - ``secret_type="azure"`` with a configured ``connection_string`` or
+       supported identity provider. Direct URI resolution also needs an account
+       name in the successful secret configuration.
+   * - ``http``, ``https``
+     - ``httpfs``
+     - Parquet reads only, with default backend options.
+
+Existing ``alias://name/path`` destinations use the storage registry. Native
+routing requires a known backend whose credentials, endpoint, region and access
+options match the configured DuckDB secret. Unknown options and credential
+mismatches keep the Arrow route. Alias names are not provider names: an alias
+named ``gcs`` can still refer to S3. Custom storage backend classes and custom
+``storage_pipeline_factory`` implementations retain their existing behavior.
+
+Fallbacks and failures
+----------------------
+
+Local paths, unsupported formats, explicit Arrow conversion options such as
+``arrow_schema``, and options that cannot be represented faithfully use Arrow.
+Import with ``overwrite=True`` also uses the existing Arrow truncate-and-insert
+path. CSV imports always use Arrow: DuckDB's CSV inference differs for values
+such as leading-zero strings, quoted empty strings and null markers.
+
+Names containing ``?`` or ``#`` retain the storage backend's interpretation
+instead of becoming DuckDB URL settings. Parquet reader names containing glob
+characters also use the single-object Arrow path. Repeated native exports replace
+the same object; they do not add a new overwrite argument or produce partitioned
+files. The ``partitioner`` argument continues to attach telemetry metadata.
+
+Routing is decided before the transfer statement. Once native execution starts,
+authentication, missing-object and database failures propagate through the
+adapter's exception mapping; they are never retried through Arrow.
+
+Native jobs report row counts, duration, format and ``backend="duckdb"``.
+``bytes_processed`` is omitted when DuckDB does not provide it; no extra object
+request is made solely to fill that field.
+
+Verification and performance
+----------------------------
+
+S3-compatible CSV/Parquet export and Parquet append are tested against local
+RustFS. Configured GCS, R2 and Azure routing is tested offline; transfers against
+those cloud services are not verified by the local tests. Extension installation
+may require access to DuckDB's official extension repository.
+
+``tools/scripts/bench_duckdb_storage.py`` compares native and Arrow Parquet
+export/import against the same local service. It verifies equal values and
+records object sizes, median and spread, connection/extension setup time,
+versions and source revision. Run the opt-in fixture-backed benchmark with:
+
+.. code-block:: console
+
+    SQLSPEC_DUCKDB_STORAGE_BENCHMARK=/tmp/duckdb-storage.json uv run pytest \
+      tests/integration/adapters/duckdb/duckdb/test_native_storage.py \
+      -k native_storage_benchmark
+
+The benchmark uses 100, 1,000 and 10,000 rows with four warmups and eight measured
+iterations. Results depend on object size, network and service configuration;
+native transfer is not a universal speedup. CSV import is excluded from native
+benchmarks because it retains Arrow inference.
+
 Configuration
 =============
 

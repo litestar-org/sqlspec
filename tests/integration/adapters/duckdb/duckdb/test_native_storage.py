@@ -1,6 +1,12 @@
 """Local extension and S3-compatible behavior behind native storage eligibility."""
 
+import json
+import os
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from typing import Any, cast
 from uuid import uuid4
 
 import duckdb
@@ -11,8 +17,56 @@ from pytest_databases.docker.rustfs import RustfsService
 
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.duckdb.core import _native_storage_eligible
-from sqlspec.storage import StorageRegistry, SyncStoragePipeline
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.storage import StorageFormat, StorageRegistry, SyncStoragePipeline
+from sqlspec.storage.registry import storage_registry
 from tests.fixtures.rustfs import ensure_rustfs_bucket, rustfs_filesystem, rustfs_obstore_kwargs
+
+
+def test_native_http_parquet_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pq.write_table(pa.table({"id": [1, 2], "name": ["001", None]}), tmp_path / "data.parquet")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    config = DuckDBConfig(
+        connection_config={"database": f":memory:http_{uuid4().hex}"},
+        driver_features={"extensions": [{"name": "httpfs", "required": True}]},
+    )
+
+    def reject_arrow(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("HTTP Parquet import unexpectedly materialized Arrow")
+
+    monkeypatch.setattr(DuckDBDriver, "load_from_arrow", reject_arrow)
+    try:
+        with config.provide_session() as session:
+            session.connection.execute("CREATE TABLE target(id INTEGER, name VARCHAR)")
+            job = session.load_from_storage(
+                "target", f"http://127.0.0.1:{server.server_port}/data.parquet", file_format="parquet"
+            )
+            assert job.telemetry["backend"] == "duckdb"
+            assert job.telemetry["rows_processed"] == 2
+            assert session.connection.execute("SELECT * FROM target").fetchall() == [(1, "001"), (2, None)]
+    finally:
+        config.close_pool()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.skipif(not os.getenv("SQLSPEC_DUCKDB_STORAGE_BENCHMARK"), reason="Opt-in local storage benchmark")
+def test_native_storage_benchmark(
+    rustfs_service: RustfsService, rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tools.scripts.bench_duckdb_storage import run_benchmark
+
+    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    monkeypatch.setenv("SQLSPEC_STORAGE_ENDPOINT", f"http://{rustfs_service.endpoint}")
+    monkeypatch.setenv("SQLSPEC_STORAGE_BUCKET", bucket)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", rustfs_service.access_key)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", rustfs_service.secret_key)
+    results = run_benchmark()
+    Path(os.environ["SQLSPEC_DUCKDB_STORAGE_BENCHMARK"]).write_text(json.dumps(results, indent=2) + "\n")
+    assert len(results["results"]) == 3
 
 
 @pytest.mark.parametrize("autoload", [False, True])
@@ -126,3 +180,120 @@ def test_local_object_success_missing_and_auth_errors(
         good.close_pool()
         wrong.close_pool()
         fs.rm(f"{bucket}/{key}")
+
+
+@pytest.mark.parametrize("file_format", ["parquet", "csv"])
+def test_arrow_and_native_copy_replace_single_local_object(
+    rustfs_service: RustfsService, rustfs_bucket_name: str, file_format: str
+) -> None:
+    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    alias = f"duckdb_copy_{uuid4().hex}"
+    key = f"duckdb-copy-probe/{uuid4().hex}.{file_format}"
+    options = rustfs_obstore_kwargs(rustfs_service)
+    storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **options)
+    config = _local_config(rustfs_service)
+    uri = f"s3://{bucket}/{key}"
+    fs = rustfs_filesystem(rustfs_service)
+    try:
+        with config.provide_session() as session:
+            for value in [1, 2]:
+                job = session.select_to_storage(
+                    "SELECT ? AS value",
+                    f"alias://{alias}/{key}",
+                    value,
+                    format_hint=cast("StorageFormat", file_format),
+                    arrow_schema=pa.schema([("value", pa.int32())]),
+                )
+                assert job.telemetry["rows_processed"] == 1
+                assert job.telemetry["bytes_processed"] > 0
+                assert job.telemetry["destination"] == key
+            copy_sql = (
+                "COPY (SELECT ? AS value) TO ? (FORMAT PARQUET)"
+                if file_format == "parquet"
+                else "COPY (SELECT ? AS value) TO ? (FORMAT CSV, HEADER TRUE)"
+            )
+            read_sql = "SELECT * FROM read_parquet(?)" if file_format == "parquet" else "SELECT * FROM read_csv(?)"
+            for value in [3, 4]:
+                assert session.connection.execute(copy_sql, [uri, value]).fetchone() == (1,)
+                assert session.connection.execute(read_sql, [uri]).fetchall() == [(value,)]
+    finally:
+        config.close_pool()
+        fs.rm(f"{bucket}/{key}")
+        storage_registry.clear_cache(alias)
+
+
+def test_native_parquet_append_and_overwrite_fallback(
+    rustfs_service: RustfsService, rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    alias = f"duckdb_import_{uuid4().hex}"
+    key = f"duckdb-native-import/{uuid4().hex}.parquet"
+    destination = f"alias://{alias}/{key}"
+    storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service))
+    config = _local_config(rustfs_service)
+    fs = rustfs_filesystem(rustfs_service)
+
+    def reject_arrow(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("native append must not materialize Arrow")
+
+    try:
+        with config.provide_session() as session:
+            session.select_to_storage("SELECT 1 AS id, NULL::VARCHAR AS name", destination)
+            session.connection.execute('CREATE TABLE "target space" (id INTEGER, name VARCHAR)')
+            with monkeypatch.context() as patch:
+                patch.setattr(DuckDBDriver, "load_from_arrow", reject_arrow)
+                for _ in range(2):
+                    job = session.load_from_storage('"target space"', destination, file_format="parquet")
+                    assert job.telemetry["rows_processed"] == 1
+                    assert job.telemetry["backend"] == "duckdb"
+                    assert "bytes_processed" not in job.telemetry
+            assert session.connection.execute('SELECT * FROM "target space"').fetchall() == [(1, None), (1, None)]
+            job = session.load_from_storage('"target space"', destination, file_format="parquet", overwrite=True)
+            assert job.telemetry["rows_processed"] == 1
+            assert session.connection.execute('SELECT * FROM "target space"').fetchall() == [(1, None)]
+    finally:
+        config.close_pool()
+        if fs.exists(f"{bucket}/{key}"):
+            fs.rm(f"{bucket}/{key}")
+        storage_registry.clear_cache(alias)
+
+
+@pytest.mark.parametrize("file_format", ["parquet", "csv"])
+def test_native_export_does_not_materialize_arrow(
+    rustfs_service: RustfsService, rustfs_bucket_name: str, file_format: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    alias = f"duckdb_export_{uuid4().hex}"
+    key = f"duckdb-native-export/{uuid4().hex}-quote'.{file_format}"
+    storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service))
+    config = _local_config(rustfs_service)
+    fs = rustfs_filesystem(rustfs_service)
+
+    def reject_arrow(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("native export must not materialize Arrow")
+
+    monkeypatch.setattr(DuckDBDriver, "select_to_arrow", reject_arrow)
+    try:
+        with config.provide_session() as session:
+            job = session.select_to_storage(
+                "SELECT :first AS first, :second AS second, :first AS repeated",
+                f"alias://{alias}/{key}",
+                {"first": "quote' and ?", "second": 42},
+                format_hint=cast("StorageFormat", file_format),
+                telemetry={"extra": {"marker": "retained"}},
+            )
+            assert job.telemetry["rows_processed"] == 1
+            assert "bytes_processed" not in job.telemetry
+            assert job.telemetry["duration_s"] >= 0
+            assert job.telemetry["backend"] == "duckdb"
+            source_telemetry = cast("dict[str, Any]", job.telemetry["extra"]["source"])
+            assert source_telemetry["extra"]["marker"] == "retained"
+            read_sql = "SELECT * FROM read_parquet(?)" if file_format == "parquet" else "SELECT * FROM read_csv(?)"
+            assert session.connection.execute(read_sql, [f"s3://{bucket}/{key}"]).fetchall() == [
+                ("quote' and ?", 42, "quote' and ?")
+            ]
+    finally:
+        config.close_pool()
+        if fs.exists(f"{bucket}/{key}"):
+            fs.rm(f"{bucket}/{key}")
+        storage_registry.clear_cache(alias)

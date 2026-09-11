@@ -6,6 +6,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlsplit
 
+from sqlglot import Dialect, exp, parse
+from sqlglot.errors import ParseError
+
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -29,6 +32,8 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from sqlspec.storage import ResolvedStorageTarget, StorageDestination, SyncStoragePipeline
+
 
 __all__ = (
     "apply_driver_features",
@@ -46,6 +51,116 @@ __all__ = (
 
 _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+
+
+def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:
+    """Wrap one compiled query in COPY with a separately bound filename."""
+    if file_format not in {"parquet", "csv"}:
+        return None
+    try:
+        statements = parse(sql, read="duckdb")
+    except ParseError:
+        return None
+    if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+        return None
+    options = [exp.CopyParameter(this=exp.Var(this="FORMAT"), expression=exp.Var(this=file_format.upper()))]
+    if file_format == "csv":
+        options.append(exp.CopyParameter(this=exp.Var(this="HEADER"), expression=exp.Boolean(this=True)))
+    return exp.Copy(this=exp.Subquery(this=statements[0]), kind=False, files=[exp.Placeholder()], params=options).sql(
+        dialect="duckdb"
+    )
+
+
+def _build_storage_read_sql(table: str, uri: str, file_format: str) -> str | None:
+    """Build a single-object reader with a validated, quoted target identifier."""
+    if file_format != "parquet" or any(char in uri for char in "*?[]"):
+        return None
+    try:
+        targets = Dialect.get_or_raise("duckdb").parse_into(exp.Table, table)
+    except ParseError as exc:
+        msg = "Native storage import requires one qualified table identifier."
+        raise ValueError(msg) from exc
+    if (
+        len(targets) != 1
+        or not isinstance(targets[0], exp.Table)
+        or any(key not in {"this", "db", "catalog"} and value for key, value in targets[0].args.items())
+        or any(not isinstance(part, exp.Identifier) for part in targets[0].parts)
+    ):
+        msg = "Native storage import requires one qualified table identifier."
+        raise ValueError(msg)
+    target = targets[0]
+    for part in target.parts:
+        part.set("quoted", True)
+    reader = exp.Anonymous(
+        this="read_parquet",
+        expressions=[
+            exp.Placeholder(),
+            exp.Kwarg(this=exp.Var(this="hive_partitioning"), expression=exp.Boolean(this=False)),
+        ],
+    )
+    return exp.Insert(this=target, expression=exp.select("*").from_(reader)).sql(dialect="duckdb")
+
+
+def _resolve_native_storage_target(
+    pipeline: "SyncStoragePipeline",
+    destination: "StorageDestination",
+    driver_features: "Mapping[str, Any]",
+    *,
+    write: bool,
+) -> "ResolvedStorageTarget | None":
+    """Resolve explicit provider aliases without changing the native address."""
+    from sqlspec.storage import ResolvedStorageTarget
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    if not driver_features.get("_duckdb_storage_extensions"):
+        return None
+    original = str(destination)
+    if "?" in original or "#" in original:
+        return None
+    scheme, separator, suffix = original.partition("://")
+    if not separator or scheme not in {"alias", "s3", "gs", "gcs", "r2", "az", "azure", "abfss", "http", "https"}:
+        return None
+    normalized = {"gcs": "gs", "r2": "s3"}.get(scheme)
+    resolved_input = f"{normalized}://{suffix}" if normalized else original
+    resolver_options: dict[str, Any] = {}
+    if scheme in {"az", "azure", "abfss"}:
+        for secret in driver_features.get("_duckdb_storage_secrets", ()):
+            if secret.get("secret_type", "").lower() != "azure" or (
+                secret.get("scope") and not original.startswith(secret["scope"])
+            ):
+                continue
+            values = {key.lower(): value for key, value in secret.get("value", {}).items()}
+            account = values.get("account_name")
+            if not account:
+                connection_parts = dict(
+                    item.split("=", 1) for item in str(values.get("connection_string", "")).split(";") if "=" in item
+                )
+                account = connection_parts.get("AccountName")
+            if account:
+                resolver_options["account_name"] = account
+                break
+        if not resolver_options:
+            return None
+    target = pipeline.resolve_destination(resolved_input, storage_options=resolver_options or None)
+    backend_key = suffix.partition("/")[0].strip() if scheme == "alias" else resolved_input
+    backend = pipeline.registry.get(backend_key, **resolver_options)
+    options: Mapping[str, Any] | None = None
+    if type(backend) is ObStoreBackend:
+        options = backend.store_options
+    elif type(backend) is FSSpecBackend:
+        options = backend.fs.storage_options
+    if resolver_options:
+        # These options only let the resolver construct the Azure URI backend;
+        # the already provisioned native secret remains the credential owner.
+        options = {}
+    if normalized:
+        target = ResolvedStorageTarget(original, scheme)
+    if "?" in target.uri or "#" in target.uri:
+        return None
+    if not _native_storage_eligible(target.uri, target.protocol, options, driver_features, write=write):
+        return None
+    return target
 
 
 def _native_storage_eligible(

@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from sqlspec.adapters.duckdb.core import _native_storage_eligible
+from sqlspec.adapters.duckdb.core import _native_storage_eligible, _resolve_native_storage_target
+from sqlspec.storage import StorageRegistry, SyncStoragePipeline
 
 
 @pytest.fixture
@@ -47,6 +48,54 @@ def test_matching_local_provider_is_eligible(
 ) -> None:
     assert _native_storage_eligible(
         "s3://bucket/prefix/file.parquet", "s3", backend_options, storage_settings, write=write
+    )
+
+
+@pytest.mark.parametrize("scheme", ["s3", "gs", "gcs", "r2", "az", "azure", "abfss"])
+def test_configured_cloud_uri_resolves_offline_without_changing_spelling(scheme: str) -> None:
+    provider = {"gs": "gcs", "gcs": "gcs", "az": "azure", "abfss": "azure"}.get(scheme, scheme)
+    settings = {
+        "_duckdb_storage_extensions": frozenset({"httpfs", "azure"}),
+        "_duckdb_storage_secrets": (
+            {
+                "secret_type": provider,
+                "value": {"connection_string": "DefaultEndpointsProtocol=https;AccountName=example;AccountKey=ZmFrZQ=="}
+                if provider == "azure"
+                else {},
+            },
+        ),
+    }
+    uri = f"{scheme}://bucket/prefix/file.parquet"
+    target = _resolve_native_storage_target(SyncStoragePipeline(registry=StorageRegistry()), uri, settings, write=True)
+    assert target is not None
+    assert target.uri == uri
+    assert target.protocol == scheme
+
+
+def test_alias_named_gcs_retains_its_actual_backend(
+    storage_settings: dict[str, Any], backend_options: dict[str, Any]
+) -> None:
+    registry = StorageRegistry()
+    options = {key: value for key, value in backend_options.items() if key != "allow_http"}
+    options["client_options"] = {"allow_http": True}
+    registry.register_alias("gcs", "s3://bucket/prefix", **options)
+    target = _resolve_native_storage_target(
+        SyncStoragePipeline(registry=registry), "alias://gcs/file.parquet", storage_settings, write=True
+    )
+    assert target is not None
+    assert target.uri == "s3://bucket/prefix/file.parquet"
+    assert target.protocol == "s3"
+
+
+@pytest.mark.parametrize("destination", ["s3://bucket/a?b", "s3://bucket/a#b", "file:///tmp/a", "local.parquet"])
+def test_unrepresentable_object_names_and_local_paths_fall_back(
+    storage_settings: dict[str, Any], destination: str
+) -> None:
+    assert (
+        _resolve_native_storage_target(
+            SyncStoragePipeline(registry=StorageRegistry()), destination, storage_settings, write=True
+        )
+        is None
     )
 
 

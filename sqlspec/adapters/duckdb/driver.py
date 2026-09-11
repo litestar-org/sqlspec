@@ -1,14 +1,18 @@
 """DuckDB driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, cast
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import duckdb
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb.core import (
+    _build_storage_copy_sql,
+    _build_storage_read_sql,
     _DuckDBStreamSource,
+    _resolve_native_storage_target,
     _restore_uuid_columns,
     collect_rows,
     create_mapped_exception,
@@ -20,6 +24,7 @@ from sqlspec.adapters.duckdb.core import (
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.core import (
     SQL,
+    ParameterStyle,
     StatementConfig,
     build_arrow_result_from_reader,
     build_arrow_result_from_table,
@@ -380,12 +385,38 @@ class DuckDBDriver(SyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
     ) -> "StorageBridgeJob":
-        """Persist DuckDB query output to a storage backend using Arrow fast paths."""
+        """Persist a query with native object-store COPY when settings are compatible."""
 
-        _ = kwargs
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
+        format_choice = format_hint or "parquet"
+        if (
+            self.storage_pipeline_factory is None
+            and format_choice in {"parquet", "csv"}
+            and not {"arrow_schema", "return_format", "batch_size", "native_only"}.intersection(kwargs)
+        ):
+            target = _resolve_native_storage_target(sync_pipeline, destination, self.driver_features, write=True)
+            if target is not None:
+                config = statement_config or self.statement_config
+                config = config.replace(
+                    parameter_config=config.parameter_config.replace(
+                        default_execution_parameter_style=ParameterStyle.QMARK
+                    )
+                )
+                prepared = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+                sql, driver_params = self._compiled_sql(prepared, config)
+                copy_sql = _build_storage_copy_sql(sql, format_choice)
+                if copy_sql is not None:
+                    return self._native_storage_job(
+                        copy_sql,
+                        [target.uri, *cast("Sequence[Any]", driver_params or ())],
+                        destination=str(destination),
+                        format_choice=format_choice,
+                        operation="write",
+                        partitioner=partitioner,
+                        telemetry=telemetry,
+                    )
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )
@@ -453,6 +484,21 @@ class DuckDBDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and load it into DuckDB."""
 
+        self._require_capability("arrow_import_enabled")
+        if not overwrite and file_format == "parquet" and self.storage_pipeline_factory is None:
+            pipeline = self._storage_pipeline()
+            target = _resolve_native_storage_target(pipeline, source, self.driver_features, write=False)
+            if target is not None:
+                read_sql = _build_storage_read_sql(table, target.uri, file_format)
+                if read_sql is not None:
+                    return self._native_storage_job(
+                        read_sql,
+                        [target.uri],
+                        destination=table,
+                        format_choice=file_format,
+                        operation="read",
+                        partitioner=partitioner,
+                    )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
@@ -474,6 +520,54 @@ class DuckDBDriver(SyncDriverAdapterBase):
     # ─────────────────────────────────────────────────────────────────────────────
     # PRIVATE / INTERNAL METHODS
     # ─────────────────────────────────────────────────────────────────────────────
+
+    def _native_storage_job(
+        self,
+        sql: str,
+        parameters: "list[Any]",
+        *,
+        destination: str,
+        format_choice: "StorageFormat",
+        operation: "Literal['read', 'write']",
+        partitioner: "dict[str, object] | None",
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        runtime = self.observability
+        span = runtime.start_storage_span(operation, destination=destination, format_label=format_choice)
+        start = perf_counter()
+        try:
+            rows = self._execute_storage_sql(sql, parameters)
+            path = destination
+            if operation == "write":
+                path = destination.partition("://")[2]
+                if destination.startswith("alias://"):
+                    path = path.partition("/")[2].strip().lstrip("/")
+            payload: StorageTelemetry = {
+                "destination": path,
+                "rows_processed": rows,
+                "duration_s": perf_counter() - start,
+                "format": format_choice,
+                "backend": "duckdb",
+            }
+            payload = runtime.annotate_storage_telemetry(payload)
+        except Exception as exc:
+            runtime.end_storage_span(span, error=exc)
+            raise
+        runtime.end_storage_span(span, telemetry=payload)
+        self._attach_partition_telemetry(payload, partitioner)
+        return self._storage_job(payload, telemetry)
+
+    def _execute_storage_sql(self, sql: str, parameters: "list[Any]") -> int:
+        handler = self.handle_database_exceptions()
+        result = None
+        with self.with_cursor(self.connection) as cursor, handler:
+            cursor.execute(sql, parameters)
+            result = cursor.fetchone()
+        self._check_pending_exception(handler)
+        if result is None:
+            msg = "DuckDB storage transfer did not report its row count."
+            raise SQLSpecError(msg)
+        return int(result[0])
 
     def collect_rows(self, cursor: "DuckDBConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect DuckDB rows for the direct execution path."""
