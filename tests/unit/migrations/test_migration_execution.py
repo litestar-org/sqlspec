@@ -600,3 +600,62 @@ CREATE TABLE second (id INTEGER);
 
     versions = [version for version, _ in files]
     assert versions.count("0001") == 2
+
+
+def test_upgrade_records_migration_returning_no_statements(temp_workspace_with_migrations: Path) -> None:
+    """A migration whose up() returns no statements is recorded and never re-applied."""
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    migrations_dir = temp_workspace_with_migrations / "migrations"
+    (migrations_dir / "0001_create_table.py").write_text(
+        '''"""Create the example table."""
+
+
+def up() -> list[str]:
+    return ["CREATE TABLE example (id INTEGER)"]
+
+
+def down() -> list[str]:
+    return ["DROP TABLE example"]
+'''
+    )
+    (migrations_dir / "0002_conditional_noop.py").write_text(
+        '''"""Conditional migration with nothing to do."""
+
+
+def up() -> list[str]:
+    return []
+
+
+def down() -> list[str]:
+    return []
+'''
+    )
+
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(migrations_dir)}
+    )
+    commands = SyncMigrationCommands(config)
+    commands.tracker = MockMigrationTracker()
+
+    commands.upgrade()
+
+    with config.provide_session() as driver:
+        applied = {record["version_num"] for record in commands.tracker.get_applied_migrations(driver)}
+    assert applied == {"0001", "0002"}
+
+    commands.upgrade()
+
+    with config.provide_session() as driver:
+        all_migrations = commands.runner.get_migration_files()
+        applied_after = {record["version_num"] for record in commands.tracker.get_applied_migrations(driver)}
+        pending = commands._collect_pending_migrations(all_migrations, applied_after, "head")
+    assert applied_after == {"0001", "0002"}
+    assert pending == []
+
+    commands.downgrade("0001")
+
+    with config.provide_session() as driver:
+        remaining = {record["version_num"] for record in commands.tracker.get_applied_migrations(driver)}
+    assert remaining == {"0001"}

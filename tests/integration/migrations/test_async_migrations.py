@@ -63,6 +63,7 @@ async def down(context):
         assert "CREATE TABLE users" in up_sql[0]
 
         down_sql = await loader.get_down_sql(migration_file)
+        assert down_sql is not None
         assert len(down_sql) == 1
         assert "DROP TABLE users" in down_sql[0]
 
