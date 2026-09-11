@@ -1,12 +1,13 @@
 """Local harness contracts; fake timings do not measure provider performance."""
 
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
-from tools.scripts.bench_bigquery_storage import QUERY, run_benchmark
+from tools.scripts.bench_bigquery_storage import QUERY, characterize_ingest, run_benchmark
 
 
 def test_benchmark_controls_sizes_accounting_and_closes_resources() -> None:
@@ -74,3 +75,33 @@ def test_benchmark_reports_failure_or_unsupported_without_successful_native_timi
     assert all(record["status"] == ("unsupported" if mode == "fallback" else "failed") for record in native_records)
     if mode == "fallback":
         assert all("total_s" not in record for record in native_records)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_ingest_characterization_counts_upload_payloads_and_cleans_landing(fail: bool) -> None:
+    paths: list[Path] = []
+    uploads: list[tuple[str, int]] = []
+
+    def consume(route: str, source: bytes | Path) -> None:
+        if isinstance(source, Path):
+            paths.append(source)
+            uploads.append((route, len(source.read_bytes())))
+            if fail:
+                raise RuntimeError("simulated URI load failure")
+        else:
+            uploads.append((route, len(source)))
+
+    if fail:
+        with pytest.raises(RuntimeError, match="simulated URI load failure"):
+            characterize_ingest(consume=consume)
+    else:
+        records = characterize_ingest(consume=consume)
+        assert [record["input_rows"] for record in records] == [100, 1000, 10000]
+        assert len(uploads) == 6
+        for index, record in enumerate(records):
+            assert record["encoded_bytes"] == uploads[index * 2][1] == uploads[index * 2 + 1][1]
+            assert record["direct_client_upload_bytes"] == record["landing_client_upload_bytes"]
+            assert record["encoding_s"] >= 0
+            assert record["cloud_performance_verified"] is False
+    assert paths
+    assert all(not path.exists() and not path.parent.exists() for path in paths)
