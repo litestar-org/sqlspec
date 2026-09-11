@@ -331,6 +331,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if self.connection_instance:
             self.connection_instance.close()
 
+    def _prepare_driver(self, driver: DuckDBDriver) -> DuckDBDriver:
+        driver = super()._prepare_driver(driver)
+        if self.connection_instance is not None:
+            driver.driver_features.update(self.connection_instance._storage_settings(driver.connection))
+        return driver
+
     def create_connection(self) -> DuckDBConnection:
         """Get a DuckDB connection from the pool.
 
