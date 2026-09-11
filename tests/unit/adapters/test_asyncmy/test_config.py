@@ -79,24 +79,38 @@ def test_asyncmy_cursor_cls_and_cursor_class_conflict_raises() -> None:
         AsyncmyConfig(connection_config={"cursor_cls": object, "cursor_class": AsyncmyDictCursor})
 
 
-def test_asyncmy_local_infile_requires_explicit_security_gate() -> None:
-    """LOAD DATA LOCAL INFILE should stay disabled unless separately gated."""
-    with pytest.raises(ImproperConfigurationError, match="allow_local_infile=True"):
-        AsyncmyConfig(connection_config={"local_infile": True})
-
-    config = AsyncmyConfig(connection_config={"allow_local_infile": True, "local_infile": True})
-
-    assert config.connection_config["local_infile"] is True
+@pytest.mark.parametrize(
+    ("connection_config", "enabled"),
+    [
+        ({}, False),
+        ({"local_infile": False}, False),
+        ({"allow_local_infile": False}, False),
+        ({"local_infile": False, "allow_local_infile": False}, False),
+        ({"local_infile": True}, True),
+        ({"allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": False}, True),
+        ({"local_infile": False, "allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": True}, True),
+    ],
+)
+def test_local_infile_aliases_enable_native_bulk(connection_config: dict[str, bool], enabled: bool) -> None:
+    config = AsyncmyConfig(connection_config=connection_config)
+    assert config.connection_config["local_infile"] is enabled
     assert "allow_local_infile" not in config.connection_config
+    assert config.driver_features["enable_local_infile_bulk_load"] is enabled
 
 
-def test_asyncmy_rejects_local_infile_bulk_load_feature() -> None:
-    """Asyncmy exposes local_infile, but its LOAD DATA LOCAL INFILE protocol path is not usable."""
-    with pytest.raises(ImproperConfigurationError, match="asyncmy does not currently support"):
-        AsyncmyConfig(
-            connection_config={"local_infile": True, "allow_local_infile": True},
-            driver_features={"enable_local_infile_bulk_load": True},
-        )
+@pytest.mark.parametrize("flag", ["local_infile", "allow_local_infile"])
+def test_local_infile_explicit_bulk_disable(flag: str) -> None:
+    config = AsyncmyConfig(connection_config={flag: True}, driver_features={"enable_local_infile_bulk_load": False})
+    assert config.connection_config["local_infile"] is True
+    assert config.driver_features["enable_local_infile_bulk_load"] is False
+
+
+@pytest.mark.parametrize("connection_config", [{}, {"local_infile": False}, {"allow_local_infile": False}])
+def test_bulk_load_requires_connection_opt_in(connection_config: dict[str, bool]) -> None:
+    with pytest.raises(ImproperConfigurationError, match="local_infile=True"):
+        AsyncmyConfig(connection_config=connection_config, driver_features={"enable_local_infile_bulk_load": True})
 
 
 async def test_asyncmy_create_pool_normalizes_connection_and_pool_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:

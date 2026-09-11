@@ -9,7 +9,7 @@ Output conversion handles:
     - JSON detection and deserialization
 
 Input conversion handles:
-    - UUID → base64-encoded bytes
+    - UUID → 36-character strings (when automatic conversion is enabled)
     - bytes → base64-encoded bytes
     - datetime timezone awareness
     - dict/list → JsonObject wrapping

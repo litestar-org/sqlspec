@@ -5,18 +5,24 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import os
 from typing import TYPE_CHECKING, Any
 
 import asyncmy as _asyncmy  # pyright: ignore
 from asyncmy import Connection  # pyright: ignore
 from asyncmy import errors as _asyncmy_errors  # pyright: ignore
+from asyncmy.connection import LoadLocalFile as _LoadLocalFile  # pyright: ignore
+from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
 from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
+from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper  # pyright: ignore
+
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
     from types import TracebackType
     from typing import Protocol, TypeAlias
 
@@ -30,7 +36,7 @@ if TYPE_CHECKING:
 
         async def rollback(self) -> object: ...
 
-        async def close(self) -> object: ...
+        def close(self) -> None: ...
 
     class AsyncmyModuleProtocol(Protocol):
         def connect(self, *args: Any, **kwargs: Any) -> "AsyncmyConnection": ...
@@ -70,6 +76,7 @@ __all__ = (
     "AsyncmyPool",
     "AsyncmyRawCursor",
     "AsyncmySessionContext",
+    "asyncmy_local_infile",
 )
 
 
@@ -148,3 +155,72 @@ class AsyncmySessionContext:
             await self._release_connection(self._connection)
             self._connection = None
         return None
+
+
+class _AsyncmyLocalInfileResult(_AsyncmyResult):
+    """Normalize the upstream filename handoff while retaining its native sender."""
+
+    __slots__ = ("_filename",)
+
+    def __init__(self, connection: Any, filename: str) -> None:
+        super().__init__(connection)
+        self._filename = filename
+
+    async def _read_load_local_packet(self, first_packet: Any) -> None:
+        request = _LoadLocalPacketWrapper(first_packet).filename
+        if not self.connection._local_infile or os.fsdecode(request) != self._filename:
+            msg = "MySQL requested an unexpected LOCAL INFILE payload."
+            raise SQLSpecError(msg)
+        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
+        packet = await self.connection.read_packet()
+        if not packet.is_ok_packet():
+            msg = "MySQL did not acknowledge the LOCAL INFILE payload."
+            raise SQLSpecError(msg)
+        self._read_ok_packet(packet)  # type: ignore[attr-defined]
+
+
+@contextlib.contextmanager
+def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Iterator[None]":
+    """Scope the asyncmy 0.2.13/0.2.14 filename handoff fix to one native load.
+
+    Args:
+        connection: Physical connection exclusively held by this operation.
+        filename: Owned payload path expected in the server's file request.
+
+    Yields:
+        Control while native result reading uses the filename adapter.
+    """
+    raw: Any = connection
+    missing = object()
+    previous = raw.__dict__.get("_read_query_result", missing)
+
+    async def read_result(unbuffered: bool = False) -> None:
+        raw._result = None
+        result = _AsyncmyLocalInfileResult(raw, filename)
+        if unbuffered:
+            try:
+                await result.init_unbuffered_query()  # type: ignore[no-untyped-call]
+            except BaseException:
+                result.unbuffered_active = False
+                result.connection = None
+                raise
+        else:
+            await result.read()  # type: ignore[no-untyped-call]
+        raw._result = result
+        raw._affected_rows = result.affected_rows
+        if result.server_status:
+            raw.server_status = result.server_status
+
+    raw._read_query_result = read_result
+    try:
+        yield
+    except BaseException:
+        with contextlib.suppress(Exception):
+            raw.close()
+        raw._connected = False
+        raise
+    finally:
+        if previous is missing:
+            del raw._read_query_result
+        else:
+            raw._read_query_result = previous

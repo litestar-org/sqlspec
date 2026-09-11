@@ -38,7 +38,6 @@ __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", 
 
 _ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
 _ASYNCMY_POOL_KEYS = _ASYNCMY_POOL_ONLY_KEYS | {"echo"}
-_ASYNCMY_LOCAL_INFILE_GATE = "allow_local_infile"
 asyncmy: "AsyncmyModule" = cast("AsyncmyModule", AsyncmyModule)
 
 
@@ -120,12 +119,8 @@ def _normalize_connection_config(connection_config: "Mapping[str, Any] | None") 
             raise ImproperConfigurationError(msg)
         config["cursor_cls"] = cursor_class
 
-    allow_local_infile = bool(config.pop(_ASYNCMY_LOCAL_INFILE_GATE, False))
-    local_infile = bool(config.get("local_infile", False))
-    if local_infile and not allow_local_infile:
-        msg = "Asyncmy local_infile=True requires allow_local_infile=True because LOAD DATA LOCAL INFILE can read client files."
-        raise ImproperConfigurationError(msg)
-    config["local_infile"] = bool(local_infile and allow_local_infile)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
 
     return config
 
@@ -159,6 +154,9 @@ class AsyncmyDriverFeatures(TypedDict):
     MySQL/MariaDB handle JSON natively, but custom serializers can be provided
     for specialized use cases.
 
+    enable_local_infile_bulk_load: Use native LOCAL INFILE for eligible Arrow rows.
+     Defaults to the connection's local_infile or allow_local_infile opt-in.
+     Set False to force executemany on an opted-in connection.
     json_serializer: Custom JSON serializer function.
      Defaults to sqlspec.utils.serializers.to_json.
      Use for performance (orjson) or custom encoding.
@@ -178,6 +176,7 @@ class AsyncmyDriverFeatures(TypedDict):
      Defaults to "poll_queue".
     """
 
+    enable_local_infile_bulk_load: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
@@ -296,12 +295,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
-        if features_dict.get("enable_local_infile_bulk_load"):
-            msg = (
-                "asyncmy does not currently support SQLSpec's LOAD DATA LOCAL INFILE bulk path reliably. "
-                "Use aiomysql, mysql-connector, or pymysql for LOCAL INFILE bulk loads, or omit "
-                "enable_local_infile_bulk_load to use asyncmy batched executemany."
-            )
+        features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
+            msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
         super().__init__(

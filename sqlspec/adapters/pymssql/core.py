@@ -197,10 +197,12 @@ def collect_rows(
     description: "Sequence[Any] | None",
     column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None,
 ) -> "tuple[list[Any], list[str], Literal['dict', 'tuple', 'record']]":
-    """Collect pymssql rows, preserving tuple row shape."""
+    """Collect pymssql rows, preserving dictionary or tuple row shape."""
     column_names = resolve_column_names(description, column_name_cache)
     if not fetched_data:
         return [], column_names, "tuple"
+    if isinstance(fetched_data[0], dict):
+        return list(fetched_data), column_names, "dict"
     return list(fetched_data), column_names, "tuple"
 
 

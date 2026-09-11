@@ -34,6 +34,7 @@ __all__ = (
     "AsyncmyStreamSource",
     "apply_driver_features",
     "build_insert_statement",
+    "build_load_data_statement",
     "build_profile",
     "build_statement_config",
     "collect_rows",
@@ -43,6 +44,7 @@ __all__ = (
     "detect_json_columns",
     "detect_json_columns_from_description",
     "driver_profile",
+    "encode_records_for_local_infile",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -133,6 +135,58 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
+    """Encode rows as escaped UTF-8 TSV for MySQL LOCAL INFILE.
+
+    Args:
+        records: Scalar rows without nested values requiring preparation.
+
+    Returns:
+        Encoded payload with MySQL NULL and field escaping.
+    """
+    lines: list[str] = []
+    for record in records:
+        fields: list[str] = []
+        for value in record:
+            if value is None:
+                fields.append("\\N")
+                continue
+            if isinstance(value, bool):
+                value = int(value)
+            text = str(value)
+            text = (
+                text
+                .replace("\\", "\\\\")
+                .replace("\x00", "\\0")
+                .replace("\t", "\\t")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\x1a", "\\Z")
+            )
+            fields.append(text)
+        lines.append("\t".join(fields))
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def build_load_data_statement(table: str, columns: "list[str]") -> str:
+    """Build native LOAD DATA SQL with a bound filename.
+
+    Args:
+        table: Destination table identifier.
+        columns: Destination column names.
+
+    Returns:
+        SQL with one positional filename placeholder.
+    """
+    table_sql = format_identifier(table).replace("%", "%%")
+    column_sql = ", ".join(quote_backtick_identifier(column).replace("%", "%%") for column in columns)
+    return (
+        f"LOAD DATA LOCAL INFILE %s INTO TABLE {table_sql} "
+        "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
+        f"LINES TERMINATED BY '\\n' ({column_sql})"
+    )
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:

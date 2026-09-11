@@ -1,16 +1,81 @@
 """Unit tests for psycopg driver transaction behavior."""
 
+from asyncio import CancelledError
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import psycopg
 import pytest
 
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+
+
+@pytest.mark.parametrize("error", [None, ValueError("session failed"), CancelledError("session cancelled")])
+def test_psycopg_sync_session_forwards_pool_exit_exception(error: BaseException | None) -> None:
+    pool = MagicMock()
+    pool_context = pool.connection.return_value
+    pool_context.__exit__.return_value = False
+    config = PsycopgSyncConfig(connection_instance=pool)
+
+    with pytest.raises(type(error)) if error is not None else nullcontext():
+        with config.provide_session():
+            if error is not None:
+                raise error
+
+    pool_context.__exit__.assert_called_once_with(
+        type(error) if error is not None else None, error, error.__traceback__ if error is not None else None
+    )
+
+
+@pytest.mark.parametrize("error", [None, ValueError("session failed"), CancelledError("session cancelled")])
+async def test_psycopg_async_session_forwards_pool_exit_exception(error: BaseException | None) -> None:
+    pool = MagicMock()
+    pool_context = pool.connection.return_value
+    pool_context.__aenter__ = AsyncMock(return_value=MagicMock())
+    pool_context.__aexit__ = AsyncMock(return_value=False)
+    config = PsycopgAsyncConfig(connection_instance=pool)
+
+    with pytest.raises(type(error)) if error is not None else nullcontext():
+        async with config.provide_session():
+            if error is not None:
+                raise error
+
+    pool_context.__aexit__.assert_awaited_once_with(
+        type(error) if error is not None else None, error, error.__traceback__ if error is not None else None
+    )
+
+
+def test_psycopg_sync_session_in_except_handler_exits_successfully() -> None:
+    pool = MagicMock()
+    config = PsycopgSyncConfig(connection_instance=pool)
+
+    try:
+        raise ValueError("previous operation failed")
+    except ValueError:
+        with config.provide_session():
+            pass
+
+    pool.connection.return_value.__exit__.assert_called_once_with(None, None, None)
+
+
+async def test_psycopg_async_session_in_except_handler_exits_successfully() -> None:
+    pool = MagicMock()
+    config = PsycopgAsyncConfig(connection_instance=pool)
+
+    try:
+        raise ValueError("previous operation failed")
+    except ValueError:
+        async with config.provide_session():
+            pass
+
+    pool.connection.return_value.__aexit__.assert_awaited_once_with(None, None, None)
 
 
 class _SyncTransactionConnection:

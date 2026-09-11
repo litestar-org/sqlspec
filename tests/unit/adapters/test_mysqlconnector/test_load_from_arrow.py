@@ -7,6 +7,7 @@ import anyio
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
 from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
 
 _CAPS: dict[str, Any] = {
@@ -74,9 +75,9 @@ class _FakeAsyncConnection:
 
 def test_sync_load_from_arrow_local_infile_writes_tsv_and_loads() -> None:
     conn = _FakeSyncConnection()
+    config = MysqlConnectorSyncConfig(connection_config={"local_infile": True})
     driver = MysqlConnectorSyncDriver(
-        connection=cast("Any", conn),
-        driver_features={"storage_capabilities": _CAPS, "enable_local_infile_bulk_load": True},
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
     )
 
     job = driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
@@ -86,9 +87,14 @@ def test_sync_load_from_arrow_local_infile_writes_tsv_and_loads() -> None:
     assert conn._cursor.execute_calls[0].startswith("LOAD DATA LOCAL INFILE")
 
 
-def test_sync_load_from_arrow_without_feature_uses_executemany() -> None:
+def test_sync_load_from_arrow_explicit_bulk_disable_uses_executemany() -> None:
     conn = _FakeSyncConnection()
-    driver = MysqlConnectorSyncDriver(connection=cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    config = MysqlConnectorSyncConfig(
+        connection_config={"allow_local_infile": True}, driver_features={"enable_local_infile_bulk_load": False}
+    )
+    driver = MysqlConnectorSyncDriver(
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
+    )
 
     driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
 
@@ -111,9 +117,9 @@ def test_sync_load_from_arrow_overwrite_truncates_first() -> None:
 
 async def test_async_load_from_arrow_local_infile_writes_tsv_and_loads() -> None:
     conn = _FakeAsyncConnection()
+    config = MysqlConnectorAsyncConfig(connection_config={"local_infile": True})
     driver = MysqlConnectorAsyncDriver(
-        connection=cast("Any", conn),
-        driver_features={"storage_capabilities": _CAPS, "enable_local_infile_bulk_load": True},
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
     )
 
     job = await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
@@ -123,9 +129,14 @@ async def test_async_load_from_arrow_local_infile_writes_tsv_and_loads() -> None
     assert conn._cursor.execute_calls[0].startswith("LOAD DATA LOCAL INFILE")
 
 
-async def test_async_load_from_arrow_without_feature_uses_executemany() -> None:
+async def test_async_load_from_arrow_explicit_bulk_disable_uses_executemany() -> None:
     conn = _FakeAsyncConnection()
-    driver = MysqlConnectorAsyncDriver(connection=cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"allow_local_infile": True}, driver_features={"enable_local_infile_bulk_load": False}
+    )
+    driver = MysqlConnectorAsyncDriver(
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
+    )
 
     await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
 

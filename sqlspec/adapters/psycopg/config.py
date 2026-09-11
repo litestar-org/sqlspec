@@ -245,7 +245,7 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
     def release_connection(self, _conn: "PsycopgSyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            self._ctx.__exit__(None, None, None)
+            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
             return
         if self._conn is not None:
@@ -597,7 +597,7 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     async def release_connection(self, _conn: "PsycopgAsyncConnection", **kwargs: Any) -> None:
         if self._ctx is None:
             return
-        await self._ctx.__aexit__(None, None, None)
+        await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
         self._ctx = None
 
 

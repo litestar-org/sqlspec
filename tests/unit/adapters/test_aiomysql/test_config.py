@@ -9,7 +9,6 @@ import pytest
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlDictCursor, AiomysqlRawCursor
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 from sqlspec.adapters.aiomysql.core import build_statement_config
-from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -79,16 +78,35 @@ def test_aiomysql_connection_kwargs_normalize_cursor_alias_and_omit_pool_only_ke
     assert "allow_local_infile" not in connect_kwargs
 
 
-def test_aiomysql_local_infile_requires_explicit_security_gate() -> None:
-    """LOAD DATA LOCAL INFILE should require a separate consent gate."""
-    with pytest.raises(ImproperConfigurationError, match="allow_local_infile=True"):
-        AiomysqlConfig(connection_config={"local_infile": True})
+@pytest.mark.parametrize(
+    ("connection_config", "enabled"),
+    [
+        ({}, False),
+        ({"local_infile": False}, False),
+        ({"allow_local_infile": False}, False),
+        ({"local_infile": False, "allow_local_infile": False}, False),
+        ({"local_infile": True}, True),
+        ({"allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": False}, True),
+        ({"local_infile": False, "allow_local_infile": True}, True),
+        ({"local_infile": True, "allow_local_infile": True}, True),
+    ],
+)
+def test_local_infile_aliases_enable_native_bulk(connection_config: dict[str, bool], enabled: bool) -> None:
+    config = AiomysqlConfig(connection_config=connection_config)
+    assert config.connection_config["local_infile"] is enabled
+    assert "allow_local_infile" not in config.connection_config
+    assert config.driver_features["enable_local_infile_bulk_load"] is enabled
+    kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
+    assert kwargs["local_infile"] is enabled
+    assert "allow_local_infile" not in kwargs
 
-    config = AiomysqlConfig(connection_config={"allow_local_infile": True, "local_infile": True})
-    connect_kwargs = config._connection_kwargs()  # pyright: ignore[reportPrivateUsage]
 
-    assert connect_kwargs["local_infile"] is True
-    assert "allow_local_infile" not in connect_kwargs
+@pytest.mark.parametrize("flag", ["local_infile", "allow_local_infile"])
+def test_local_infile_explicit_bulk_disable(flag: str) -> None:
+    config = AiomysqlConfig(connection_config={flag: True}, driver_features={"enable_local_infile_bulk_load": False})
+    assert config.connection_config["local_infile"] is True
+    assert config.driver_features["enable_local_infile_bulk_load"] is False
 
 
 def test_aiomysql_connection_kwargs_default_local_infile_disabled() -> None:

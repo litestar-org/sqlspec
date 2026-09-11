@@ -7,6 +7,7 @@ import anyio
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
 
 _CAPS: dict[str, Any] = {
@@ -47,9 +48,12 @@ class _FakeConnection:
 
 
 def _make_driver(connection: _FakeConnection, *, enable_local_infile: bool) -> AiomysqlDriver:
+    config = AiomysqlConfig(
+        connection_config={"local_infile": True},
+        driver_features={} if enable_local_infile else {"enable_local_infile_bulk_load": False},
+    )
     return AiomysqlDriver(
-        connection=cast("Any", connection),
-        driver_features={"storage_capabilities": _CAPS, "enable_local_infile_bulk_load": enable_local_infile},
+        connection=cast("Any", connection), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
     )
 
 
@@ -65,7 +69,7 @@ async def test_load_from_arrow_local_infile_writes_tsv_and_loads() -> None:
     assert conn._cursor.executemany_calls == []
 
 
-async def test_load_from_arrow_without_feature_uses_executemany() -> None:
+async def test_load_from_arrow_explicit_bulk_disable_uses_executemany() -> None:
     conn = _FakeConnection()
     driver = _make_driver(conn, enable_local_infile=False)
 

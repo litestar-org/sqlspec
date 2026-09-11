@@ -4,7 +4,9 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+import tempfile
 from collections.abc import Sized
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.asyncmy._typing import (
@@ -13,14 +15,17 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyFieldType,
     AsyncmyMySQLError,
     AsyncmySessionContext,
+    asyncmy_local_infile,
 )
 from sqlspec.adapters.asyncmy.core import (
     AsyncmyStreamSource,
     build_insert_statement,
+    build_load_data_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    encode_records_for_local_infile,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -336,7 +341,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data into MySQL using batched inserts."""
+        """Load Arrow data using batched inserts or opt-in native LOCAL INFILE."""
 
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
@@ -351,22 +356,47 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
-            insert_sql = build_insert_statement(table, columns)
-            prepared_records = (
-                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                if needs_preparation
-                else records
+            use_infile = (
+                self.driver_features.get("enable_local_infile_bulk_load")
+                and not needs_preparation
+                and not any(
+                    isinstance(value, (bytes, bytearray, memoryview, timedelta)) for row in records for value in row
+                )
             )
-            exc_handler = self.handle_database_exceptions()
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                await cursor.executemany(insert_sql, prepared_records)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            if use_infile:
+                await self._load_from_arrow_via_local_infile(table, columns, records)
+            else:
+                insert_sql = build_insert_statement(table, columns)
+                prepared_records = (
+                    self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                    if needs_preparation
+                    else records
+                )
+                exc_handler = self.handle_database_exceptions()
+                async with exc_handler, self.with_cursor(self.connection) as cursor:
+                    await cursor.executemany(insert_sql, prepared_records)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
+
+    async def _load_from_arrow_via_local_infile(
+        self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="sqlspec-asyncmy-") as directory:
+            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
+                payload.write(encode_records_for_local_infile(records))
+                filename = payload.name
+            statement = build_load_data_statement(table, columns)
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                with asyncmy_local_infile(self.connection, filename):
+                    await cursor.execute(statement, (filename,))
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from exc_handler.pending_exception.__cause__
 
     async def load_from_storage(
         self,

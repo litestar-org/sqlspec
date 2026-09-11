@@ -7195,7 +7195,7 @@ requires-dist = [
     { name = "aiomysql", marker = "extra == 'aiomysql'" },
     { name = "aiosqlite", marker = "extra == 'aiosqlite'" },
     { name = "arrow-odbc", marker = "extra == 'arrow-odbc'", specifier = ">=10.4" },
-    { name = "asyncmy", marker = "extra == 'asyncmy'" },
+    { name = "asyncmy", marker = "extra == 'asyncmy'", specifier = ">=0.2.13" },
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
     { name = "asyncpg", marker = "extra == 'cockroachdb'" },
     { name = "attrs", marker = "extra == 'attrs'" },
