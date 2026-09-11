@@ -22,6 +22,7 @@ from sqlspec.core import (
 )
 from sqlspec.exceptions import (
     DataError,
+    ImproperConfigurationError,
     NotFoundError,
     OperationalError,
     OperationCancelledError,
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
     from sqlspec.driver._common import SyncExceptionHandler
-    from sqlspec.storage import StorageTelemetry
+    from sqlspec.storage import StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
     BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
@@ -85,6 +86,85 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
+_CONNECTION_NAME_PARTS = 3
+
+
+def _resolve_export_format(format_hint: "StorageFormat | None") -> str | None:
+    """Map the Arrow writer's format default to a native export format."""
+    if format_hint is None or format_hint == "parquet":
+        return "PARQUET"
+    if format_hint == "csv":
+        return "CSV"
+    if format_hint in {"json", "jsonl"}:
+        return "JSON"
+    return None
+
+
+def _build_export_statement(sql: str, uri: str, export_format: str, connection: str | None) -> str:
+    """Wrap compiled SQL without changing its bound query parameters."""
+    connection_clause = ""
+    if connection is not None:
+        parts = connection.split(".")
+        if len(parts) != _CONNECTION_NAME_PARTS or any(
+            not part or not all(char.isascii() and (char.isalnum() or char in "-_") for char in part) for part in parts
+        ):
+            msg = "native_export_connection must be a project.location.connection identifier"
+            raise ImproperConfigurationError(msg)
+        connection_clause = f" WITH CONNECTION `{connection}`"
+    options = f"uri='{uri}', format='{export_format}', overwrite=true"
+    if export_format == "CSV":
+        options += ", header=true"
+    return f"EXPORT DATA{connection_clause} OPTIONS ({options}) AS {sql}"
+
+
+def _build_export_uri(uri: str, format_hint: "StorageFormat | None" = None) -> str:
+    """Build a single-leaf-wildcard URI from a resolved storage destination.
+
+    The filename suffix is preserved independently of the selected encoding.
+    Directory destinations receive a filename matching the actual format.
+    """
+    format_name = _resolve_export_format(format_hint)
+    if format_name is None:
+        msg = "Unsupported native BigQuery export format."
+        raise ImproperConfigurationError(msg)
+    if not uri.isprintable() or any(character in uri for character in ("'", '"', "\\", "?", "#")):
+        msg = "BigQuery export URI contains unsafe characters."
+        raise ImproperConfigurationError(msg)
+
+    parsed = urlparse(uri)
+    scheme = "gs" if parsed.scheme == "gcs" else parsed.scheme
+    authority = parsed.netloc
+    if (
+        scheme not in {"gs", "s3", "azure"}
+        or not authority
+        or any(not (character.isalnum() or character in ".-_") for character in authority)
+    ):
+        msg = "BigQuery export requires a supported URI with a valid storage authority."
+        raise ImproperConfigurationError(msg)
+
+    path = parsed.path
+    if scheme == "azure":
+        account = authority.removesuffix(".blob.core.windows.net")
+        container = path.lstrip("/").split("/", 1)[0]
+        if account == authority or not account or not container or "*" in container:
+            msg = "BigQuery Azure export requires an account-qualified Blob Storage URI and container."
+            raise ImproperConfigurationError(msg)
+        if path.count("/") == 1:
+            path += "/"
+
+    parent, _, leaf = path.rpartition("/")
+    if "*" in parent or path.count("*") > 1:
+        msg = "BigQuery export URI must contain at most one wildcard, in the leaf object name."
+        raise ImproperConfigurationError(msg)
+    if "*" not in leaf:
+        if not leaf:
+            extension = "jsonl" if format_name == "JSON" else format_name.lower()
+            leaf = f"part-*.{extension}"
+        else:
+            stem, separator, suffix = leaf.rpartition(".")
+            leaf = f"{stem}-*.{suffix}" if stem and separator and suffix else f"{leaf}-*"
+    return f"{scheme}://{authority}{parent}/{leaf}"
+
 
 DEFAULT_REQUEST_TIMEOUT = 120.0
 """Fallback per-request HTTP timeout (seconds) for job API calls.

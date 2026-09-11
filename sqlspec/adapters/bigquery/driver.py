@@ -22,6 +22,9 @@ from sqlspec.adapters.bigquery._typing import (
 from sqlspec.adapters.bigquery.core import (
     DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
+    _build_export_statement,
+    _build_export_uri,
+    _resolve_export_format,
     _run_query_and_wait,
     _uses_local_bigquery_endpoint,
     build_arrow_write_stream_payload,
@@ -495,9 +498,55 @@ class BigQueryDriver(SyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
     ) -> "StorageBridgeJob":
-        """Execute a query and persist Arrow results to a storage backend."""
+        """Export eligible remote queries natively, or persist client Arrow results.
+
+        Native exports overwrite matching shards but do not remove stale shards.
+        Set ``enable_native_storage=False`` to force the client storage writer.
+        """
 
         self._require_capability("arrow_export_enabled")
+        export_format = _resolve_export_format(format_hint)
+        native_uri = str(destination)
+        if (
+            self.driver_features.get("enable_native_storage", True)
+            and export_format is not None
+            and self.storage_pipeline_factory is None
+            and not _uses_local_bigquery_endpoint(self.connection)
+        ):
+            if native_uri.startswith("alias://"):
+                native_uri = self._storage_pipeline().resolve_destination(destination).uri
+            scheme = native_uri.partition("://")[0]
+            connection = self.driver_features.get("native_export_connection")
+            if scheme in {"gs", "gcs"} or (scheme in {"s3", "azure"} and connection is not None):
+                native_uri = _build_export_uri(native_uri, format_hint)
+                config = statement_config or self.statement_config
+                prepared = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+                sql, driver_params = self._compiled_sql(prepared, config)
+                export_sql = _build_export_statement(sql, native_uri, export_format, connection)
+                handler = self.handle_database_exceptions()
+                native_telemetry: StorageTelemetry = {
+                    "destination": native_uri,
+                    "format": format_hint or "parquet",
+                    "extra": {"native_export": True},
+                }
+                span = self.observability.start_storage_span("write", destination=native_uri, format_label=format_hint)
+                try:
+                    with handler:
+                        job = self._run_query_job(self.connection, export_sql, driver_params)
+                        job.result(
+                            job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
+                        )
+                        native_telemetry["extra"]["job_id"] = job.job_id
+                except Exception as exc:
+                    self.observability.end_storage_span(span, error=exc)
+                    raise
+                if handler.pending_exception is not None:
+                    self.observability.end_storage_span(span, error=handler.pending_exception)
+                    raise handler.pending_exception from None
+                native_telemetry = self.observability.annotate_storage_telemetry(native_telemetry)
+                self.observability.end_storage_span(span, telemetry=native_telemetry)
+                self._attach_partition_telemetry(native_telemetry, partitioner)
+                return self._storage_job(native_telemetry, telemetry)
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(

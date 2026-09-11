@@ -149,6 +149,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "query_page_size",
         "query_max_results",
         "enable_storage_write_api",
+        "enable_native_storage",
+        "native_export_connection",
     ),
     "duckdb": (
         "extensions",
