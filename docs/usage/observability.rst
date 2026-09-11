@@ -123,7 +123,11 @@ The ``db_driver`` attribute is set automatically from the adapter's dialect (e.g
 
 All framework extensions automatically register SQLCommenter middleware that populates
 request-scoped attributes (``route``, ``action``, ``framework``, and ``controller`` for
-Litestar). To include these in the SQL comments, enable ``sqlcommenter_enable_context``:
+Litestar). The Litestar plugin installs its SQLCommenter and correlation middleware at the
+outermost position of the middleware stack, ahead of any middleware the application itself
+registers, so a correlation ID is available even for requests that authentication or
+session middleware rejects. To include these in the SQL comments, enable
+``sqlcommenter_enable_context``:
 
 .. code-block:: python
 
