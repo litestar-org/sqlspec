@@ -97,6 +97,7 @@ to that session.
          :dedent: 4
          :start-after: # start-sync-example
          :end-before: # end-sync-example
+         :no-upgrade:
 
    .. tab-item:: Async
 
@@ -105,6 +106,7 @@ to that session.
          :dedent: 4
          :start-after: # start-async-example
          :end-before: # end-async-example
+         :no-upgrade:
 
 Both examples leave Ada and Grace in the table. The last transaction rolls back
 its insert when the block raises. Query helpers do not add commits between calls;
