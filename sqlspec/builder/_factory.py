@@ -44,6 +44,9 @@ from sqlspec.builder._insert import Insert
 from sqlspec.builder._join import JoinBuilder, create_join_builder
 from sqlspec.builder._merge import Merge
 from sqlspec.builder._parsing_utils import (
+    _build_cube,
+    _build_grouping_sets,
+    _build_rollup,
     _coerce_column,
     _normalize_order_by,
     _normalize_partition_by,
@@ -1155,8 +1158,7 @@ class SQLFactory:
         Returns:
             ROLLUP expression.
         """
-        column_exprs = [_coerce_column(col) for col in columns]
-        return FunctionExpression(exp.Rollup(expressions=column_exprs))
+        return FunctionExpression(_build_rollup(*columns))
 
     @staticmethod
     def cube(*columns: str | exp.Expr) -> FunctionExpression:
@@ -1168,8 +1170,7 @@ class SQLFactory:
         Returns:
             CUBE expression.
         """
-        column_exprs = [_coerce_column(col) for col in columns]
-        return FunctionExpression(exp.Cube(expressions=column_exprs))
+        return FunctionExpression(_build_cube(*columns))
 
     @staticmethod
     def grouping_sets(*column_sets: tuple[str, ...] | list[str]) -> FunctionExpression:
@@ -1180,19 +1181,11 @@ class SQLFactory:
 
         Returns:
             GROUPING SETS expression.
-        """
-        set_expressions = []
-        for column_set in column_sets:
-            if isinstance(column_set, (tuple, list)):
-                if len(column_set) == 0:
-                    set_expressions.append(exp.Tuple(expressions=[]))
-                else:
-                    columns = [exp.column(col) for col in column_set]
-                    set_expressions.append(exp.Tuple(expressions=columns))
-            else:
-                set_expressions.append(exp.column(column_set))
 
-        return FunctionExpression(exp.GroupingSets(expressions=set_expressions))
+        Raises:
+            SQLBuilderError: If a grouping set is not a tuple or list.
+        """
+        return FunctionExpression(_build_grouping_sets(*column_sets))
 
     @staticmethod
     def any(values: list[Any] | exp.Expr | str) -> FunctionExpression:

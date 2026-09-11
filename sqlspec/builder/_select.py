@@ -18,6 +18,9 @@ from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import JoinClauseMixin, _attach_as_of_version
 from sqlspec.builder._parsing_utils import (
     _PARAMETER_VALIDATOR,
+    _build_cube,
+    _build_grouping_sets,
+    _build_rollup,
     _coerce_column,
     extract_column_name,
     extract_expression,
@@ -353,34 +356,26 @@ class SelectClauseMixin:
         builder.set_expression(select_expr.from_(from_expr, copy=False))
         return cast("Self", builder)
 
-    def group_by(self, *columns: str | exp.Expr) -> Self:
+    def group_by(self, *columns: Union[str, exp.Expr, "ExpressionWrapper"]) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = builder.get_expression()
         if select_expr is None or not isinstance(select_expr, exp.Select):
             return cast("Self", builder)
 
         for column in columns:
-            column_expr = _coerce_column(column)
+            column_expr = extract_expression(column)
             select_expr = select_expr.group_by(column_expr, copy=False)
         builder.set_expression(select_expr)
         return cast("Self", builder)
 
     def group_by_rollup(self, *columns: str | exp.Expr) -> Self:
-        column_exprs = [_coerce_column(column) for column in columns]
-        rollup_expr = exp.Rollup(expressions=column_exprs)
-        return self.group_by(rollup_expr)
+        return self.group_by(_build_rollup(*columns))
 
     def group_by_cube(self, *columns: str | exp.Expr) -> Self:
-        column_exprs = [_coerce_column(column) for column in columns]
-        cube_expr = exp.Cube(expressions=column_exprs)
-        return self.group_by(cube_expr)
+        return self.group_by(_build_cube(*columns))
 
     def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
-        grouping_sets = [
-            exp.Tuple(expressions=[_coerce_column(col) for col in column_set]) for column_set in column_sets
-        ]
-        grouping_expr = exp.GroupingSets(expressions=grouping_sets)
-        return self.group_by(grouping_expr)
+        return self.group_by(_build_grouping_sets(*column_sets))
 
 
 @trait

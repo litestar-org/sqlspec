@@ -14,6 +14,7 @@ from sqlglot import exp, maybe_parse
 from sqlspec.builder._column import Column
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import ParameterStyle, ParameterValidator
+from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
     has_expression_and_sql,
@@ -412,6 +413,24 @@ def _normalize_order_by(order_by: str | list[str] | exp.Expr | None) -> exp.Orde
 
 def _coerce_column(value: str | exp.Expr) -> exp.Expr:
     return exp.column(value) if isinstance(value, str) else value
+
+
+def _build_rollup(*columns: str | exp.Expr) -> exp.Rollup:
+    return exp.Rollup(expressions=[_coerce_column(column) for column in columns])
+
+
+def _build_cube(*columns: str | exp.Expr) -> exp.Cube:
+    return exp.Cube(expressions=[_coerce_column(column) for column in columns])
+
+
+def _build_grouping_sets(*column_sets: tuple[str, ...] | list[str]) -> exp.GroupingSets:
+    sets: list[exp.Tuple] = []
+    for column_set in column_sets:
+        if not isinstance(column_set, (tuple, list)):
+            msg = "Each grouping set must be a tuple or list of columns."
+            raise SQLBuilderError(msg)
+        sets.append(exp.Tuple(expressions=[_coerce_column(column) for column in column_set]))
+    return exp.GroupingSets(expressions=sets)
 
 
 def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None") -> "DialectType | None":
