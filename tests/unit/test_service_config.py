@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager, closing, contextmanager
 from contextvars import copy_context
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -170,15 +169,18 @@ async def test_async_service_borrows_explicit_session(
 
 
 @pytest.mark.parametrize("config", [SqliteConfig(), AdbcConfig()])
-def test_sync_service_constructor_and_loader(config: Any) -> None:
+def test_sync_service_constructor_and_loader(
+    config: Any, sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]]
+) -> None:
     loader = SQLFileLoader()
     service = SQLSpecSyncService(config=config, loader=loader)
     assert service.loader is loader
-    assert SQLSpecSyncService(MagicMock()).loader is None
     with pytest.raises(ImproperConfigurationError, match="exactly one"):
         SQLSpecSyncService()
-    with pytest.raises(ImproperConfigurationError, match="exactly one"):
-        SQLSpecSyncService(MagicMock(), config=config)
+    with sync_config[0].provide_session() as session:
+        assert SQLSpecSyncService(session).loader is None
+        with pytest.raises(ImproperConfigurationError, match="exactly one"):
+            SQLSpecSyncService(session, config=config)
     with pytest.raises(ImproperConfigurationError, match="sync"):
         SQLSpecSyncService(config=AiosqliteConfig())  # type: ignore[arg-type]
 
@@ -190,68 +192,105 @@ def test_service_uses_local_no_pool_config() -> None:
         _ = service.driver
 
 
-def test_session_built_service_borrows_and_forwards_kwargs() -> None:
-    original = MagicMock()
-    explicit = MagicMock()
-    explicit.select_one_or_none.return_value = {"value": 1}
-    service: SQLSpecSyncService = SQLSpecSyncService(original)
+def test_session_built_service_borrows_and_forwards_kwargs(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = sync_config
     statement = sql.select("1 AS value")
-    with service.provide_session() as borrowed:
-        assert borrowed is original
-    assert service.session is service.driver is original
-    assert service.get_one(statement, session=explicit, value=1) == {"value": 1}
-    explicit.select_one_or_none.assert_called_once_with(statement, schema_type=None, value=1)
-    original.select_one_or_none.assert_not_called()
-    original.close.assert_not_called()
+    calls: list[tuple[SqliteDriver, object, dict[str, Any]]] = []
+
+    def select(self: SqliteDriver, query: object, **kwargs: Any) -> dict[str, int]:
+        calls.append((self, query, kwargs))
+        return {"value": 1}
+
+    monkeypatch.setattr(SqliteDriver, "select_one_or_none", select)
+    with config.provide_session() as original, config.provide_session() as explicit:
+        service = SQLSpecSyncService(original)
+        with service.provide_session() as borrowed:
+            assert borrowed is original
+        assert service.session is service.driver is original
+        assert service.get_one(statement, session=explicit, value=1) == {"value": 1}
+        assert calls == [(explicit, statement, {"schema_type": None, "value": 1})]
+        original.execute("SELECT 1")
 
 
-async def test_async_session_built_service_borrows_and_forwards_kwargs() -> None:
-    original = AsyncMock()
-    explicit = AsyncMock()
-    explicit.select_one_or_none.return_value = {"value": 1}
-    service: SQLSpecAsyncService = SQLSpecAsyncService(original)
+async def test_async_session_built_service_borrows_and_forwards_kwargs(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = async_config
     statement = sql.select("1 AS value")
-    async with service.provide_session() as borrowed:
-        assert borrowed is original
-    assert service.session is service.driver is original
-    assert await service.get_one(statement, session=explicit, value=1) == {"value": 1}
-    explicit.select_one_or_none.assert_awaited_once_with(statement, schema_type=None, value=1)
-    original.select_one_or_none.assert_not_awaited()
-    original.close.assert_not_awaited()
+    calls: list[tuple[AiosqliteDriver, object, dict[str, Any]]] = []
+
+    async def select(self: AiosqliteDriver, query: object, **kwargs: Any) -> dict[str, int]:
+        calls.append((self, query, kwargs))
+        return {"value": 1}
+
+    monkeypatch.setattr(AiosqliteDriver, "select_one_or_none", select)
+    async with config.provide_session() as original, config.provide_session() as explicit:
+        service = SQLSpecAsyncService(original)
+        async with service.provide_session() as borrowed:
+            assert borrowed is original
+        assert service.session is service.driver is original
+        assert await service.get_one(statement, session=explicit, value=1) == {"value": 1}
+        assert calls == [(explicit, statement, {"schema_type": None, "value": 1})]
+        await original.execute("SELECT 1")
 
 
 @pytest.mark.parametrize("config", [AiosqliteConfig(), MysqlConnectorAsyncConfig()])
-def test_async_service_constructor_and_loader(config: Any) -> None:
+async def test_async_service_constructor_and_loader(
+    config: Any, async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]]
+) -> None:
     loader = SQLFileLoader()
     service = SQLSpecAsyncService(config=config, loader=loader)
     assert service.loader is loader
-    assert SQLSpecAsyncService(AsyncMock()).loader is None
     with pytest.raises(ImproperConfigurationError, match="exactly one"):
         SQLSpecAsyncService()
-    with pytest.raises(ImproperConfigurationError, match="exactly one"):
-        SQLSpecAsyncService(AsyncMock(), config=config)
+    async with async_config[0].provide_session() as session:
+        assert SQLSpecAsyncService(session).loader is None
+        with pytest.raises(ImproperConfigurationError, match="exactly one"):
+            SQLSpecAsyncService(session, config=config)
     with pytest.raises(ImproperConfigurationError, match="async"):
         SQLSpecAsyncService(config=SqliteConfig())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("method", ["begin", "commit", "rollback"])
-def test_sync_service_manual_control_requires_session(method: str) -> None:
-    service = SQLSpecSyncService(config=SqliteConfig())
+def test_sync_service_manual_control_requires_session(
+    method: str, sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = sync_config
+    service = SQLSpecSyncService(config=config)
     with pytest.raises(ImproperConfigurationError, match=r"begin_transaction\(\).*session="):
         getattr(service, method)()
-    session = MagicMock()
-    getattr(service, method)(session=session)
-    getattr(session, method).assert_called_once_with()
+    calls: list[SqliteDriver] = []
+
+    def control(self: SqliteDriver) -> None:
+        calls.append(self)
+
+    monkeypatch.setattr(SqliteDriver, method, control)
+    with config.provide_session() as session:
+        getattr(service, method)(session=session)
+    assert calls == [session]
 
 
 @pytest.mark.parametrize("method", ["begin", "commit", "rollback"])
-async def test_async_service_manual_control_requires_session(method: str) -> None:
-    service = SQLSpecAsyncService(config=AiosqliteConfig())
+async def test_async_service_manual_control_requires_session(
+    method: str,
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _ = async_config
+    service = SQLSpecAsyncService(config=config)
     with pytest.raises(ImproperConfigurationError, match=r"begin_transaction\(\).*session="):
         await getattr(service, method)()
-    session = AsyncMock()
-    await getattr(service, method)(session=session)
-    getattr(session, method).assert_awaited_once_with()
+    calls: list[AiosqliteDriver] = []
+
+    async def control(self: AiosqliteDriver) -> None:
+        calls.append(self)
+
+    monkeypatch.setattr(AiosqliteDriver, method, control)
+    async with config.provide_session() as session:
+        await getattr(service, method)(session=session)
+    assert calls == [session]
 
 
 @pytest.mark.parametrize("fail", [False, True])
