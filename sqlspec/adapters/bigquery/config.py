@@ -107,6 +107,12 @@ class BigQueryDriverFeatures(TypedDict):
         enable_storage_write_api: Route ``load_from_arrow`` (append, ``overwrite=False``) through the
             BigQuery Storage Write API using native Arrow instead of a Parquet load job. Falls back to
             the Parquet path on any ``bigquery_storage`` import/availability failure. Defaults to False.
+        enable_native_storage: Export eligible remote destinations through EXPORT DATA.
+            Defaults to True. False retains the client Arrow writer. Local emulator endpoints,
+            custom storage pipelines, and unsupported destinations/formats use the client path.
+        native_export_connection: Existing project.location.connection identifier required for
+            S3 and account-qualified Azure exports. Google Cloud Storage needs no connection.
+            The caller supplies the provider permissions and existing cross-cloud resources.
     """
 
     connection_instance: NotRequired["BigQueryConnection"]
@@ -122,6 +128,8 @@ class BigQueryDriverFeatures(TypedDict):
     query_page_size: NotRequired[int]
     query_max_results: NotRequired[int]
     enable_storage_write_api: NotRequired[bool]
+    enable_native_storage: NotRequired[bool]
+    native_export_connection: NotRequired[str]
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):

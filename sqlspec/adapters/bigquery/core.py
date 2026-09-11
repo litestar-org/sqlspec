@@ -86,6 +86,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
+_CONNECTION_NAME_PARTS = 3
 
 
 def _resolve_export_format(format_hint: "StorageFormat | None") -> str | None:
@@ -97,6 +98,23 @@ def _resolve_export_format(format_hint: "StorageFormat | None") -> str | None:
     if format_hint in {"json", "jsonl"}:
         return "JSON"
     return None
+
+
+def _build_export_statement(sql: str, uri: str, export_format: str, connection: str | None) -> str:
+    """Wrap compiled SQL without changing its bound query parameters."""
+    connection_clause = ""
+    if connection is not None:
+        parts = connection.split(".")
+        if len(parts) != _CONNECTION_NAME_PARTS or any(
+            not part or not all(char.isascii() and (char.isalnum() or char in "-_") for char in part) for part in parts
+        ):
+            msg = "native_export_connection must be a project.location.connection identifier"
+            raise ImproperConfigurationError(msg)
+        connection_clause = f" WITH CONNECTION `{connection}`"
+    options = f"uri='{uri}', format='{export_format}', overwrite=true"
+    if export_format == "CSV":
+        options += ", header=true"
+    return f"EXPORT DATA{connection_clause} OPTIONS ({options}) AS {sql}"
 
 
 def _build_export_uri(uri: str, format_hint: "StorageFormat | None" = None) -> str:
