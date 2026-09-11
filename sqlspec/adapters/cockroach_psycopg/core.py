@@ -4,20 +4,30 @@ import secrets
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
+from sqlglot import tokenize
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from sqlspec.storage import StorageTelemetry
+
 __all__ = (
     "CockroachPsycopgRetryConfig",
     "apply_driver_features",
+    "build_native_export",
+    "build_native_import",
     "build_statement_config",
     "calculate_backoff_seconds",
     "driver_profile",
     "is_retryable_error",
+    "native_export_telemetry",
+    "native_import_telemetry",
+    "normalize_native_export_query",
 )
 
 # Retry configuration defaults (module-level for mypyc compatibility)
@@ -72,3 +82,84 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachPsycopgRetryConfig
     jitter: float = secrets.randbelow(max_jitter + 1) / scale if max_jitter else 0.0
     delay_ms: float = min(base + jitter, config.max_delay_ms)
     return delay_ms / 1000.0
+
+
+def build_native_export(
+    query: str, parameters: "list[Any]", uri: str, file_format: str, options: "dict[str, Any]"
+) -> "tuple[str, list[Any]]":
+    """Wrap compiled query SQL without embedding destination or CSV values."""
+    format_sql = {"csv": "CSV", "parquet": "PARQUET"}[file_format]
+    if not parameters:
+        query = query.replace("%", "%%")
+    values: list[Any] = [uri]
+    command = "EXPORT INTO " + format_sql + " " + "%s"
+    if file_format == "csv" and "nullas" in options:
+        values.append(options["nullas"])
+        command += " WITH nullas = " + "%s"
+    return command + " FROM (" + query.rstrip().removesuffix(";") + "\n)", [*values, *parameters]
+
+
+def build_native_import(table: str, uri: str, file_format: str, options: "dict[str, Any]") -> "tuple[str, list[Any]]":
+    """Quote the target identifier and bind explicit CSV conventions."""
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise ValueError(msg)
+    target = ".".join(quote_identifier(part) for part in parts).replace("%", "%%")
+    format_sql = {"csv": "CSV", "parquet": "PARQUET"}[file_format]
+    values: list[Any] = [uri]
+    command = "IMPORT INTO " + target + " " + format_sql + " DATA (" + "%s" + ")"
+    clauses = []
+    if file_format == "csv":
+        for key in ("skip", "nullif"):
+            if key in options:
+                values.append(str(options[key]))
+                clauses.append(key + " = " + "%s")
+    if clauses:
+        command += " WITH " + ", ".join(clauses)
+    return command, values
+
+
+def native_export_telemetry(
+    rows: "list[dict[str, Any]]", destination: str, backend: str, file_format: str
+) -> "StorageTelemetry":
+    """Retain measured export metadata and generated relative filenames."""
+    return {
+        "destination": destination,
+        "backend": backend,
+        "format": file_format,
+        "rows_processed": sum(int(row["rows"]) for row in rows),
+        "bytes_processed": sum(int(row["bytes"]) for row in rows),
+        "extra": {"files": [str(row["filename"]) for row in rows]},
+    }
+
+
+def native_import_telemetry(
+    rows: "list[dict[str, Any]]", table: str, backend: str, file_format: str
+) -> "StorageTelemetry":
+    """Expose import job metadata without treating logical bytes as file size."""
+    row = rows[0]
+    if row["status"] != "succeeded":
+        msg = "Native storage import did not succeed"
+        raise ValueError(msg)
+    return {
+        "destination": table,
+        "backend": backend,
+        "format": file_format,
+        "rows_processed": int(row["rows"]),
+        "extra": {"job_id": row["job_id"], "status": row["status"]},
+    }
+
+
+def normalize_native_export_query(query: str) -> str | None:
+    """Remove a terminal delimiter, preserving comments; refuse raw scripts."""
+    if ";" not in query:
+        return query
+    tokens = tokenize(query, read="postgres")
+    delimiters = [token for token in tokens if token.token_type == TokenType.SEMICOLON]
+    if not delimiters:
+        return query
+    if len(delimiters) != 1 or delimiters[0] is not tokens[-1]:
+        return None
+    delimiter = delimiters[0]
+    return query[: delimiter.start] + query[delimiter.end + 1 :]
