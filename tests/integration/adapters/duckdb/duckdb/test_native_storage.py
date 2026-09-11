@@ -292,6 +292,16 @@ def test_native_export_does_not_materialize_arrow(
             assert session.connection.execute(read_sql, [f"s3://{bucket}/{key}"]).fetchall() == [
                 ("quote' and ?", 42, "quote' and ?")
             ]
+            replacement = session.select_to_storage(
+                "SELECT :first AS first, :second AS second, :first AS repeated",
+                f"alias://{alias}/{key}",
+                {"first": "replaced", "second": 7},
+                format_hint=cast("StorageFormat", file_format),
+            )
+            assert replacement.telemetry["rows_processed"] == 1
+            assert session.connection.execute(read_sql, [f"s3://{bucket}/{key}"]).fetchall() == [
+                ("replaced", 7, "replaced")
+            ]
     finally:
         config.close_pool()
         if fs.exists(f"{bucket}/{key}"):

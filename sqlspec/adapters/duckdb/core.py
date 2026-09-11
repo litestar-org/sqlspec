@@ -108,7 +108,12 @@ def _resolve_native_storage_target(
     *,
     write: bool,
 ) -> "ResolvedStorageTarget | None":
-    """Resolve explicit provider aliases without changing the native address."""
+    """Resolve explicit provider aliases without changing the native address.
+
+    Azure destinations resolve with the account name taken from the successful
+    native secret, and that account name is not treated as a backend option
+    because the provisioned secret owns the credentials.
+    """
     from sqlspec.storage import ResolvedStorageTarget
     from sqlspec.storage.backends.fsspec import FSSpecBackend
     from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -151,8 +156,6 @@ def _resolve_native_storage_target(
     elif type(backend) is FSSpecBackend:
         options = backend.fs.storage_options
     if resolver_options:
-        # These options only let the resolver construct the Azure URI backend;
-        # the already provisioned native secret remains the credential owner.
         options = {}
     if normalized:
         target = ResolvedStorageTarget(original, scheme)
