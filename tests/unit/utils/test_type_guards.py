@@ -5,6 +5,7 @@ Uses function-based pytest approach as per AGENTS.md requirements.
 """
 
 import typing
+from collections import UserDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -70,10 +71,33 @@ from sqlspec.utils.type_guards import (
     is_schema_without_field,
     is_string_literal,
     is_typed_dict,
+    resolve_row_format,
     supports_arrow_results,
 )
 
 _UNSET = object()
+
+
+@pytest.mark.parametrize("default", ["dict", "tuple", "record"])
+@pytest.mark.parametrize("rows", [None, [], [(1,)]], ids=["none", "empty", "tuple"])
+def test_resolve_row_format_preserves_default(rows: Any, default: Any) -> None:
+    assert resolve_row_format(rows, default=default) == default
+
+
+@pytest.mark.parametrize("default", ["dict", "tuple", "record"])
+@pytest.mark.parametrize("row, expected", [({"x": 1}, "dict"), (UserDict({"x": 1}), "record")])
+def test_resolve_row_format_detects_mappings(row: Any, expected: str, default: Any) -> None:
+    assert resolve_row_format([row], default=default) == expected
+
+
+def test_resolve_row_format_preserves_tuple_subclass_detection() -> None:
+    class TupleRecord(tuple[int, ...]):
+        __slots__ = ()
+
+        def keys(self) -> tuple[str, ...]:
+            return ("x",)
+
+    assert resolve_row_format([TupleRecord((1,))], default="dict") == "record"
 
 
 @dataclass

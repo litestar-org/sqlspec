@@ -448,14 +448,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             with exc_handler, self.with_cursor(self.connection) as cursor:
                 execute = getattr(cursor, "execute", None)
                 fetchall = getattr(cursor, "fetchall", None)
+                returns_rows = cached.operation_profile.returns_rows
                 can_use_cursor_fast_path = execute is not None and (
-                    (cached.operation_profile.returns_rows and fetchall is not None)
-                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
+                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
                 )
                 if can_use_cursor_fast_path:
                     assert execute is not None
                     execute(cached.compiled_sql, params)
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         assert fetchall is not None
                         fetched_data = fetchall()
                         data, column_names, row_count = self.collect_rows(cursor, fetched_data)
@@ -479,7 +479,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = (
