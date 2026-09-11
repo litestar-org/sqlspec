@@ -1791,6 +1791,42 @@ def test_sql_factory_copy_helpers() -> None:
     assert parsed.args["kind"] is False
 
 
+def test_row_number_method_partition_order_and_composition() -> None:
+    expression = sql.row_number(partition_by="department", order_by="salary")
+    assert str(expression) == "ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary)"
+    query = sql.select(expression.as_("position")).from_("employees")
+    property_expression = sql.row_number_.partition_by("department").order_by("salary").as_("position")
+    assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
+    assert " ".join(query.to_sql().split()) == (
+        'SELECT ROW_NUMBER() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
+        'AS "position" FROM "employees" AS "employees"'
+    )
+
+
+def test_rank_method_partition_order_and_composition() -> None:
+    expression = sql.rank(partition_by="department", order_by="salary")
+    assert str(expression) == "RANK() OVER (PARTITION BY department ORDER BY salary)"
+    query = sql.select(expression.as_("position")).from_("employees")
+    property_expression = sql.rank_.partition_by("department").order_by("salary").as_("position")
+    assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
+    assert " ".join(query.to_sql().split()) == (
+        'SELECT RANK() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
+        'AS "position" FROM "employees" AS "employees"'
+    )
+
+
+def test_dense_rank_method_partition_order_and_composition() -> None:
+    expression = sql.dense_rank(partition_by="department", order_by="salary")
+    assert str(expression) == "DENSE_RANK() OVER (PARTITION BY department ORDER BY salary)"
+    query = sql.select(expression.as_("position")).from_("employees")
+    property_expression = sql.dense_rank_.partition_by("department").order_by("salary").as_("position")
+    assert query.to_sql() == sql.select(property_expression).from_("employees").to_sql()
+    assert " ".join(query.to_sql().split()) == (
+        'SELECT DENSE_RANK() OVER (PARTITION BY "employees"."department" ORDER BY "employees"."salary") '
+        'AS "position" FROM "employees" AS "employees"'
+    )
+
+
 def test_count_over_method_basic() -> None:
     """Test count_over() method generates COUNT(*) OVER()."""
     count_expr = sql.count_over()
