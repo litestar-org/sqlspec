@@ -675,6 +675,9 @@ class QueryBuilder:
     def _optimize_expression(self, expression: exp.Expr, *, force: bool = False) -> exp.Expr:
         """Apply SQLGlot optimizations to the expression.
 
+        The ``ON CONFLICT`` / ``ON DUPLICATE KEY UPDATE`` clause of an INSERT is kept out of
+        optimization, so each ``SET`` assignment keeps its target column on the left.
+
         Args:
             expression: The expression to optimize
             force: Optimize even when the builder-level toggle is disabled.
@@ -687,6 +690,14 @@ class QueryBuilder:
 
         if not self.optimize_joins and not self.optimize_predicates and not self.simplify_expressions:
             return expression
+
+        conflict = expression.args.get("conflict") if isinstance(expression, exp.Insert) else None
+        if isinstance(conflict, exp.OnConflict):
+            insert_without_conflict = expression.copy()
+            insert_without_conflict.set("conflict", None)
+            optimized_insert = self._optimize_expression(insert_without_conflict, force=force)
+            optimized_insert.set("conflict", conflict.copy())
+            return optimized_insert
 
         optimizer_settings = {
             "optimize_joins": self.optimize_joins,

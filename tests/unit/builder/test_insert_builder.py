@@ -1,6 +1,7 @@
 """Unit tests for INSERT builder functionality including ON CONFLICT operations."""
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
@@ -200,6 +201,38 @@ def test_on_conflict_do_update_basic() -> None:
     assert "SET" in stmt.sql
     assert "name_1" in stmt.parameters
     assert stmt.parameters["name_1"] == "Updated"
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite", "duckdb"])
+def test_on_conflict_do_update_keeps_excluded_assignment_order(dialect: str) -> None:
+    """Optimized builds keep the target column on the left of each conflict SET assignment."""
+    query = (
+        sql
+        .insert("users", dialect=dialect)
+        .values(id=1, name="John")
+        .on_conflict("id")
+        .do_update(name=exp.column("name", table="excluded"))
+    )
+
+    built_sql = " ".join(query.build().sql.split())
+    statement_sql = " ".join(query.to_statement().sql.split())
+
+    assert 'SET "name" = "excluded"."name"' in built_sql
+    assert "SET name = excluded.name" in statement_sql
+
+
+def test_on_duplicate_key_update_keeps_assignment_order() -> None:
+    """Optimized builds keep the target column on the left of each duplicate-key assignment."""
+    query = (
+        sql
+        .insert("users", dialect="mysql")
+        .values(id=1, name="John")
+        .on_duplicate_key_update(name=exp.column("name", table="excluded"))
+    )
+
+    built_sql = " ".join(query.build().sql.split())
+
+    assert "UPDATE `name` = `excluded`.`name`" in built_sql
 
 
 def test_on_conflict_multiple_columns() -> None:
