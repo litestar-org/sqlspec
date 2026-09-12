@@ -1325,14 +1325,16 @@ class SQLFileLoader:
             fills[slot.name] = fill_text
             body_fills[slot.name] = " " if is_statement else fill_text
             for parameter_name, parameter_value in fill_parameters.items():
-                if parameter_name in merged_parameters:
+                if parameter_name in merged_parameters and not _same_parameter_value(
+                    merged_parameters[parameter_name], parameter_value
+                ):
                     raise SQLSlotError(
                         safe_name,
                         f"parameter '{parameter_name}' is supplied by both slot "
-                        f"'{parameter_sources[parameter_name]}' and slot '{slot.name}'",
+                        f"'{parameter_sources[parameter_name]}' and slot '{slot.name}' with different values",
                     )
                 merged_parameters[parameter_name] = parameter_value
-                parameter_sources[parameter_name] = slot.name
+                parameter_sources.setdefault(parameter_name, slot.name)
 
         if merged_parameters:
             body_text = _substitute_slot_markers(resolved_text, body_fills)
@@ -1363,7 +1365,7 @@ class SQLFileLoader:
             was a ``SQL`` object.
 
         Raises:
-            SQLSlotError: If a ``SQL`` value carries positional parameters.
+            SQLSlotError: If a ``SQL`` value carries positional parameters or statement filters.
             TypeError: If the value has an unsupported type.
         """
         if isinstance(value, str):
@@ -1372,6 +1374,12 @@ class SQLFileLoader:
             if value.positional_parameters:
                 raise SQLSlotError(
                     safe_name, f"slot '{slot_name}' value uses positional parameters; use named parameters instead"
+                )
+            if len(value.get_filters_view()) > 0:
+                raise SQLSlotError(
+                    safe_name,
+                    f"slot '{slot_name}' value carries statement filters, which cannot be spliced into a slot; "
+                    "apply filters to the statement returned by get_sql() instead",
                 )
             return value.sql, dict(value.named_parameters), True
         if isinstance(value, exp.Expr):
@@ -1633,3 +1641,13 @@ def _find_markers(text: str, pattern: "re.Pattern[str]", keyword: str) -> "list[
             if marker is not None:
                 markers.append(marker)
     return markers
+
+
+def _same_parameter_value(first: Any, second: Any) -> bool:
+    """Return whether two parameter values bound to the same name are interchangeable."""
+    if first is second:
+        return True
+    try:
+        return bool(first == second)
+    except Exception:
+        return False

@@ -7,7 +7,7 @@ from sqlglot import exp
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.core import SQL, ParameterDeclaration
+from sqlspec.core import SQL, LimitOffsetFilter, ParameterDeclaration
 from sqlspec.exceptions import SQLFileParseError, SQLSlotError
 from sqlspec.loader import SlotDeclaration, SQLFileLoader
 
@@ -204,3 +204,26 @@ def test_fill_ending_in_line_comment_keeps_following_sql(tmp_path: Path) -> None
 
     assert [row["id"] for row in default_rows] == [3, 2, 1]
     assert [row["id"] for row in filled_rows] == [2, 1]
+
+
+def test_sql_value_with_filters_raises(loader: SQLFileLoader) -> None:
+    filtered = SQL("e.journey = :journey", LimitOffsetFilter(10, 0), journey="modernize")
+
+    with pytest.raises(SQLSlotError, match="filters"):
+        loader.get_sql("count_efforts", predicates=filtered)
+
+
+def test_repeated_parameter_with_equal_value_is_not_a_collision(tmp_path: Path, loader: SQLFileLoader) -> None:
+    path = tmp_path / "repeated.sql"
+    path.write_text("-- name: repeated\nSELECT id FROM t WHERE /* slot: first */ OR /* slot: second */\n")
+    loader.load_sql(path)
+    shared = SQL("kind = :kind", kind="a")
+
+    same_object = loader.get_sql("repeated", first=shared, second=shared)
+    equal_values = loader.get_sql("repeated", first=shared, second=SQL("alt_kind = :kind", kind="a"))
+
+    assert same_object.named_parameters == {"kind": "a"}
+    assert _normalize(same_object.sql) == "SELECT id FROM t WHERE kind = :kind OR kind = :kind"
+    assert equal_values.named_parameters == {"kind": "a"}
+    with pytest.raises(SQLSlotError, match="'kind'"):
+        loader.get_sql("repeated", first=shared, second=SQL("alt_kind = :kind", kind="b"))
