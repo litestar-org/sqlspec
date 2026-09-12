@@ -294,3 +294,49 @@ def test_duckdb_columns_report_generated_columns(tmp_path: Path) -> None:
         column["column_name"]: bool(column["is_generated"]) for column in by_schema if column["table_name"] == "Gen"
     } == expected
     config.close_pool()
+
+
+def test_duckdb_columns_ignore_generated_text_in_string_literals(tmp_path: Path) -> None:
+    """DuckDB generated-column detection ignores DDL text inside string literals and quoted identifiers."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "literals.duckdb")})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE t1(id INTEGER, g VARCHAR DEFAULT ', h INTEGER GENERATED ALWAYS AS(', h INTEGER)")
+        driver.execute(
+            'CREATE TABLE t2("it\'s" VARCHAR DEFAULT \'x\', "a""b\nc" INTEGER AS (1), '
+            "e VARCHAR DEFAULT 'it''s, z INTEGER GENERATED ALWAYS AS(', z INTEGER, "
+            'w VARCHAR DEFAULT \'"\', "(""q"" INTEGER GENERATED ALWAYS AS(" INTEGER, '
+            '"v, q INTEGER GENERATED ALWAYS AS(" INTEGER, q INTEGER, "MixedCase" INTEGER GENERATED ALWAYS AS (2), u AS (3))'
+        )
+
+        t1_columns = driver.data_dictionary.get_columns(driver, table="t1")
+        t2_columns = driver.data_dictionary.get_columns(driver, table="t2")
+        by_schema = driver.data_dictionary.get_columns(driver)
+
+    assert {column["column_name"]: bool(column["is_generated"]) for column in t1_columns} == {
+        "id": False,
+        "g": False,
+        "h": False,
+    }
+    t2_expected = {
+        "it's": False,
+        'a"b\nc': True,
+        "e": False,
+        "z": False,
+        "w": False,
+        '("q" INTEGER GENERATED ALWAYS AS(': False,
+        "v, q INTEGER GENERATED ALWAYS AS(": False,
+        "q": False,
+        "MixedCase": True,
+        "u": True,
+    }
+    assert {column["column_name"]: bool(column["is_generated"]) for column in t2_columns} == t2_expected
+    assert {
+        (column["table_name"], column["column_name"]): bool(column["is_generated"])
+        for column in by_schema
+        if column["table_name"] in {"t1", "t2"}
+    } == {("t1", "id"): False, ("t1", "g"): False, ("t1", "h"): False} | {
+        ("t2", name): flag for name, flag in t2_expected.items()
+    }
+    config.close_pool()
