@@ -9,6 +9,7 @@ import gzip
 import importlib
 import json
 import logging
+import os
 import sys
 import zipfile
 from decimal import Decimal
@@ -938,6 +939,7 @@ def test_conflict_keys_rejected_for_unsupported_dialect(tmp_path: Path) -> None:
 
     driver.execute_many.assert_not_called()
     driver.select.assert_not_called()
+    driver.data_dictionary.get_columns.assert_not_called()
 
 
 def test_conflict_keys_render_duplicate_key_update_for_mysql(tmp_path: Path) -> None:
@@ -945,9 +947,12 @@ def test_conflict_keys_render_duplicate_key_update_for_mysql(tmp_path: Path) -> 
     (tmp_path / "order.json").write_text(json.dumps([{"id": 1, "userName": "Ann"}]), encoding="utf-8")
     driver = MagicMock()
     driver.statement_config.dialect = "mysql"
-    driver.select.return_value = []
+    driver.data_dictionary.get_columns.return_value = []
 
     load_table_fixtures_sync(driver, tmp_path, conflict_keys={"order": ["id"]})
+
+    driver.data_dictionary.get_columns.assert_called_once_with(driver, table="order", schema=None)
+    driver.select.assert_not_called()
 
     statement = driver.execute_many.call_args.args[0]
     rendered = " ".join(statement.to_statement().sql.split())
@@ -973,3 +978,128 @@ def test_export_keeps_existing_files_when_write_fails(tmp_path: Path, monkeypatc
 
     assert [path.name for path in tmp_path.iterdir()] == ["users.json"]
     config.close_pool()
+
+
+def _postgres_mock_driver(columns: "list[dict[str, Any]]") -> MagicMock:
+    driver = MagicMock()
+    driver.statement_config.dialect = "postgres"
+    driver.data_dictionary.get_columns.return_value = columns
+    return driver
+
+
+ALWAYS_IDENTITY_COLUMNS: "list[dict[str, Any]]" = [
+    {
+        "column_name": "id",
+        "data_type": "integer",
+        "is_primary": True,
+        "identity_generation": "a",
+        "sequence_name": 'app."Users_id_seq"',
+    },
+    {
+        "column_name": "email",
+        "data_type": "text",
+        "is_primary": False,
+        "identity_generation": "",
+        "sequence_name": None,
+    },
+    {"column_name": "name", "data_type": "text", "is_primary": False, "identity_generation": "", "sequence_name": None},
+]
+
+
+def test_postgres_always_identity_columns_use_overriding_and_are_not_updated(tmp_path: Path) -> None:
+    """Explicit identity values use OVERRIDING SYSTEM VALUE and never appear in the upsert SET list."""
+    rows = [{"id": 1, "email": "a@example.com", "name": "Ann"}]
+    (tmp_path / "app.Users.json").write_text(json.dumps(rows), encoding="utf-8")
+    driver = _postgres_mock_driver(ALWAYS_IDENTITY_COLUMNS)
+
+    load_table_fixtures_sync(driver, tmp_path, conflict_keys={"app.Users": ["email"]}, resync_sequences=True)
+
+    driver.data_dictionary.get_columns.assert_called_once_with(driver, table='"Users"', schema='"app"')
+    statement = driver.execute_many.call_args.args[0]
+    assert statement == (
+        'INSERT INTO "app"."Users" ("id", "email", "name") OVERRIDING SYSTEM VALUE '
+        "VALUES (%(id)s, %(email)s, %(name)s) "
+        'ON CONFLICT("email") DO UPDATE SET "name" = "excluded"."name"'
+    )
+    resync_statement, resync_parameters = driver.execute.call_args.args
+    assert 'max("id")' in resync_statement
+    assert resync_parameters == {"sequence_name": 'app."Users_id_seq"'}
+
+
+def test_postgres_upsert_with_only_identity_and_key_columns_does_nothing_on_conflict(tmp_path: Path) -> None:
+    """An upsert whose only non-key column is an always-identity column skips updates on conflict."""
+    (tmp_path / "users.json").write_text(json.dumps([{"id": 1, "email": "a@example.com"}]), encoding="utf-8")
+    driver = _postgres_mock_driver(ALWAYS_IDENTITY_COLUMNS)
+
+    load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": ["email"]})
+
+    statement = driver.execute_many.call_args.args[0]
+    assert statement.endswith('ON CONFLICT("email") DO NOTHING')
+
+
+def test_conflict_keys_for_tables_not_loaded_raise(tmp_path: Path) -> None:
+    """Conflict keys must name tables that are being loaded, spelled exactly."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    driver = _postgres_mock_driver([])
+
+    with pytest.raises(ValueError, match=r"not loaded: 'Users', 'posts'"):
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"Users": ["id"], "posts": ["id"]})
+
+    driver.execute_many.assert_not_called()
+
+
+def test_export_without_primary_key_orders_by_every_column(tmp_path: Path) -> None:
+    """Tables without a primary key export rows ordered by all columns."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE pairs (a INTEGER, b TEXT)")
+        driver.execute("INSERT INTO pairs VALUES (2, 'x'), (1, 'y'), (1, 'a')")
+
+        export_table_fixtures_sync(driver, tmp_path, ["pairs"], compress=False)
+
+    assert json.loads((tmp_path / "pairs.json").read_text()) == [
+        {"a": 1, "b": "a"},
+        {"a": 1, "b": "y"},
+        {"a": 2, "b": "x"},
+    ]
+    config.close_pool()
+
+
+def test_discovery_logs_schema_qualified_table_names(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Dotted fixture file names are treated as schema-qualified tables and logged."""
+    (tmp_path / "users.backup.json").write_text("[]", encoding="utf-8")
+    caplog.set_level(logging.DEBUG, logger="sqlspec.utils.fixtures")
+    driver = MagicMock()
+    driver.statement_config.dialect = "tsql"
+
+    assert load_table_fixtures_sync(driver, tmp_path) == {"users.backup": 0}
+    assert any("'users.backup'" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(("umask", "expected_mode"), [(0o022, 0o644), (0o077, 0o600)])
+def test_export_file_mode_follows_umask(tmp_path: Path, umask: int, expected_mode: int) -> None:
+    """Exported files get the default permissions allowed by the process umask."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    previous = os.umask(umask)
+    try:
+        with config.provide_session() as driver:
+            driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            export_table_fixtures_sync(driver, tmp_path, ["users"], compress=False)
+    finally:
+        os.umask(previous)
+        config.close_pool()
+
+    assert (tmp_path / "users.json").stat().st_mode & 0o777 == expected_mode
+
+
+def test_values_of_unlisted_types_pass_through_unchanged(tmp_path: Path) -> None:
+    """Only known binary type names decode base64; other column types keep their JSON values."""
+    (tmp_path / "users.json").write_text(json.dumps([{"id": 1, "name": "AAE="}]), encoding="utf-8")
+    driver = _postgres_mock_driver([
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "name", "data_type": "blobfish", "is_primary": False},
+    ])
+
+    load_table_fixtures_sync(driver, tmp_path)
+
+    assert driver.execute_many.call_args.args[1] == [{"id": 1, "name": "AAE="}]

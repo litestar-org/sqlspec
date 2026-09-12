@@ -76,10 +76,11 @@ Unreleased
   one ``<table>.json`` or ``<table>.jsonl`` file, optionally gzipped. Loading
   supports a table subset, an explicit load order, batched inserts, upserts on
   conflict key columns (PostgreSQL-family, SQLite, DuckDB, and MySQL), conversion
-  of JSON values to the target column types, and, on PostgreSQL, resetting serial
-  and identity sequences past the loaded ids. Table and column names are matched
-  exactly. The loader does not commit. Exporting orders rows by primary key, writes
-  files atomically, and replaces the table's other fixture files in the directory.
+  of JSON values to the target column types read from the data dictionary, and, on
+  PostgreSQL, resetting serial and identity sequences past the loaded ids. Table and
+  column names are matched exactly. The loader does not commit. Exporting orders rows
+  by primary key (or by every column), writes files atomically, and replaces the
+  table's other fixture files in the directory.
   See :doc:`/usage/testing`.
 
 * Services can now open a short session for each query. Pass ``config=`` and,

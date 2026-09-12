@@ -82,29 +82,49 @@ arguments with an async driver.
 - **Which tables load:** every table fixture file in the directory, or only the
   names passed as ``tables``. Files whose names are not table identifiers are
   skipped, and a table with more than one fixture file (for example
-  ``users.json`` and ``users.jsonl.gz``) raises ``ValueError``. Tables named in
-  ``table_order`` load first in that order, and the rest follow alphabetically.
-  The return value maps each table to its row count.
+  ``users.json`` and ``users.jsonl.gz``) raises ``ValueError``. A dot in a file
+  name marks a schema-qualified table, so a copy such as ``users.backup.json``
+  in the directory is loaded as table ``backup`` in schema ``users``; keep
+  backups elsewhere or pass ``tables``. Discovered schema-qualified names are
+  logged at debug level. Tables named in ``table_order`` load first in that
+  order, and the rest follow alphabetically. The return value maps each table to
+  its row count.
 - **Exact names:** table and column names are quoted in every statement, so they
   must match the database spelling exactly, including case. Reserved words such
-  as ``order`` work as table or column names. On PostgreSQL, unqualified tables resolve through
-  the session's search path. The query builder renders Oracle names unquoted.
-- **Column types:** before inserting, the loader reads the table's column types on
-  PostgreSQL-family, MySQL, DuckDB, and SQLite drivers and converts JSON values to
-  match: ISO 8601 strings to dates, times, and datetimes, numeric strings to
-  ``Decimal``, UUID strings to ``UUID``, base64 strings to bytes for binary
-  columns, and JSON column values to JSON text. SQLite only needs the binary
-  conversion. On other databases values are passed as decoded from JSON, so only
-  JSON-native values (strings, numbers, booleans, null, and, where the driver
-  accepts them, lists and objects) load reliably. Interval values and MySQL
-  ``TIME`` columns are not converted.
+  as ``order`` work as table or column names. On PostgreSQL, unqualified tables
+  resolve through the session's search path. The query builder renders Oracle
+  names unquoted.
+- **Column types:** before inserting, the loader reads the table's columns from
+  the driver's data dictionary on PostgreSQL-family, MySQL, DuckDB, and SQLite
+  drivers and converts these JSON values:
+
+  - ISO 8601 strings in ``timestamp``/``timestamptz``/``datetime`` columns to
+    ``datetime``, in ``date`` columns to ``date``, and in ``time`` columns
+    without a time zone to ``time`` (not on MySQL);
+  - strings and numbers in ``numeric``/``decimal`` columns to ``Decimal``;
+  - strings in ``uuid`` columns to ``UUID``;
+  - base64 strings in ``bytea``, ``blob``, ``tinyblob``, ``mediumblob``,
+    ``longblob``, ``binary``, and ``varbinary`` columns to bytes (the only
+    conversion on SQLite);
+  - values of PostgreSQL and MySQL ``json``/``jsonb`` columns to JSON text.
+
+  Every other value is passed to the driver as decoded from JSON. That includes
+  ``time with time zone``, intervals, ``BIT`` columns (including MySQL ``BIT``),
+  MySQL ``TIME``, DuckDB ``MAP``, and the elements of arrays, so arrays of dates,
+  timestamps, or UUIDs are not converted. On other databases no column types are
+  read, and only values the driver accepts as JSON-decoded strings, numbers,
+  booleans, nulls, lists, and objects load.
 - **Upserts:** ``conflict_keys`` maps a table to the columns of a unique
-  constraint. Rows for that table update the non-key columns of existing rows
-  instead of failing. PostgreSQL-family, SQLite, and DuckDB drivers use
-  ``ON CONFLICT``; MySQL uses ``ON DUPLICATE KEY UPDATE``, which matches any
-  unique key of the table. Other dialects raise ``ValueError`` before any
-  statement runs. Without conflict keys, a duplicate row raises the database's
-  integrity error.
+  constraint; every entry must name a table being loaded, spelled exactly. Rows
+  for that table update the non-key columns of existing rows instead of failing;
+  PostgreSQL ``GENERATED ALWAYS`` identity columns are never updated, and a table
+  with nothing left to update skips the conflicting row. PostgreSQL-family,
+  SQLite, and DuckDB drivers use ``ON CONFLICT``; MySQL uses
+  ``ON DUPLICATE KEY UPDATE col = VALUES(col)``, which matches any unique key of
+  the table. ``VALUES()`` is deprecated since MySQL 8.0.20 but kept because
+  MariaDB does not support the row-alias form. Other dialects raise
+  ``ValueError`` before any statement runs. Without conflict keys, a duplicate
+  row raises the database's integrity error.
 - **Identity columns:** on PostgreSQL, values for ``GENERATED ALWAYS`` identity
   columns are inserted with ``OVERRIDING SYSTEM VALUE``. CockroachDB does not
   accept explicit values for ``GENERATED ALWAYS`` columns; use
@@ -122,15 +142,17 @@ arguments with an async driver.
   unchanged.
 - **Exporting:** every row of each table is written to ``<table>.json``, or
   ``<table>.jsonl`` with ``jsonl=True``, gzipped by default (``compress=True``).
-  Rows are ordered by the primary key, or by the first column when there is none,
-  so repeated exports of unchanged data produce identical files. Dates and times
-  are written as ISO 8601 strings, ``Decimal`` and ``UUID`` values as strings,
-  and bytes as base64 strings. Each file is written to a temporary file and moved
-  into place; the table's other fixture files in the directory, such as an older
-  ``users.json`` next to a new ``users.json.gz``, are then removed so the next
-  load reads the exported file. The directory is created when missing. On the
-  databases whose column types the loader reads, exported files load back with
-  the same values.
+  Rows are ordered by the primary key, or by every column when there is none
+  (PostgreSQL ``json``, ``xml``, and geometric columns are left out of the
+  ordering), so repeated exports of unchanged data produce identical files.
+  Dates and times are written as ISO 8601 strings, ``Decimal`` and ``UUID``
+  values as strings, and bytes as base64 strings. Each file is written to a
+  temporary file created with the process umask and moved into place; the
+  table's other fixture files in the directory, such as an older ``users.json``
+  next to a new ``users.json.gz``, are then removed so the next load reads the
+  exported file. The directory is created when missing. Values of the column
+  types listed above, and JSON-native values in other columns, load back
+  unchanged.
 
 Related Guides
 --------------

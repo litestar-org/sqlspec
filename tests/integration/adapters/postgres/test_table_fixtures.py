@@ -31,6 +31,9 @@ CREATE TABLE fixture_resync.min_items (
 );
 CREATE TABLE fixture_resync.always_items (id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE fixture_resync."MixedItems" (id SERIAL PRIMARY KEY, "userName" TEXT NOT NULL);
+CREATE TABLE fixture_resync.always_upsert (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL
+);
 CREATE TABLE fixture_resync."user" (id INTEGER PRIMARY KEY, "order" INTEGER NOT NULL, "group" TEXT NOT NULL);
 CREATE TABLE fixture_resync.typed_items (
     id INTEGER PRIMARY KEY,
@@ -213,3 +216,22 @@ def test_export_load_roundtrip_typed_columns_psycopg(
             assert driver.select(SELECT_TYPED_SQL) == before
         finally:
             driver.execute_script(TEARDOWN_SQL)
+
+
+async def test_upsert_on_non_identity_key_skips_always_identity_columns(
+    asyncpg_async_driver: "AsyncpgDriver", tmp_path: Path
+) -> None:
+    """Upserting on a unique non-identity key updates other columns and leaves GENERATED ALWAYS ids alone."""
+    driver = asyncpg_async_driver
+    await driver.execute_script(SETUP_SQL)
+    try:
+        _write_rows(tmp_path, "fixture_resync.always_upsert", [{"id": 10, "email": "a@example.com", "name": "Ann"}])
+        await load_table_fixtures_async(driver, tmp_path)
+        _write_rows(tmp_path, "fixture_resync.always_upsert", [{"id": 10, "email": "a@example.com", "name": "Bea"}])
+
+        await load_table_fixtures_async(driver, tmp_path, conflict_keys={"fixture_resync.always_upsert": ["email"]})
+
+        rows = await driver.select("SELECT id, email, name FROM fixture_resync.always_upsert")
+        assert rows == [{"id": 10, "email": "a@example.com", "name": "Bea"}]
+    finally:
+        await driver.execute_script(TEARDOWN_SQL)
