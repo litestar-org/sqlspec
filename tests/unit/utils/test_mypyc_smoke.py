@@ -253,22 +253,25 @@ def test_smoke_runner_skips_missing_optional_parent_package(monkeypatch: MonkeyP
     assert module._failed_results(results) == []
 
 
-def test_adapter_discovery_reports_missing_optional_driver(monkeypatch: MonkeyPatch) -> None:
+@pytest.mark.parametrize("adapter, dependency", [("adbc", "adbc_driver_manager"), ("aiosqlite", "aiosqlite")])
+def test_adapter_discovery_reports_missing_optional_driver(
+    monkeypatch: MonkeyPatch, adapter: str, dependency: str
+) -> None:
     module = _load_mypyc_smoke_module()
     original_import = importlib.import_module
 
-    def import_without_adbc(name: str) -> ModuleType:
-        if name == "sqlspec.adapters.adbc.config":
-            raise ModuleNotFoundError("No module named 'adbc_driver_manager'", name="adbc_driver_manager")
+    def import_without_driver(name: str) -> ModuleType:
+        if name == f"sqlspec.adapters.{adapter}.config":
+            raise ModuleNotFoundError(f"No module named {dependency!r}", name=dependency)
         return original_import(name)
 
-    monkeypatch.setattr(module.importlib, "import_module", import_without_adbc)
+    monkeypatch.setattr(module.importlib, "import_module", import_without_driver)
     result = module._check_adapter_config_construction()
     assert result["error"] is None
     assert result["skipped_adapters"] == [
-        "sqlspec.adapters.adbc.config: optional dependency missing: adbc_driver_manager"
+        f"sqlspec.adapters.{adapter}.config: optional dependency missing: {dependency}"
     ]
-    assert "- SKIP sqlspec.adapters.adbc.config" in module._format_text([result])
+    assert f"- SKIP sqlspec.adapters.{adapter}.config" in module._format_text([result])
 
 
 def test_adapter_discovery_does_not_hide_internal_import_errors(monkeypatch: MonkeyPatch) -> None:

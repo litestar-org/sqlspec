@@ -568,6 +568,7 @@ def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "
             if skipped is None or (exc.name or "").split(".")[0] not in {
                 "adbc_driver_manager",
                 "aiomysql",
+                "aiosqlite",
                 "arrow_odbc",
                 "asyncmy",
                 "asyncpg",
