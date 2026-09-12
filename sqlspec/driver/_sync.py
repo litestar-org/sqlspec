@@ -3,9 +3,10 @@
 import logging
 from abc import abstractmethod
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast, final, overload
 
 from mypy_extensions import mypyc_attr
+from typing_extensions import Self
 
 from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
@@ -37,6 +38,7 @@ from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from types import TracebackType
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -61,6 +63,7 @@ __all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectio
 
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
+_SyncDriverT = TypeVar("_SyncDriverT", bound="SyncDriverAdapterBase")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -542,6 +545,24 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     def rollback_to_savepoint(self, name: str) -> None:
         """Roll back the current transaction to a previously created savepoint."""
         self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
+
+    def transaction(self) -> "_SyncDriverTransaction[Self]":
+        """Return a context manager that wraps a block in a transaction.
+
+        Entering the block calls ``begin()`` and yields this driver. A normal exit
+        calls ``commit()``; an exception calls ``rollback()`` and propagates.
+        Isolation settings are applied with ``execute_script`` inside the block.
+
+        Example:
+            .. code-block:: python
+
+                with session.transaction():
+                    session.execute("INSERT INTO items (id) VALUES (?)", 1)
+
+        Returns:
+            A context manager yielding this driver.
+        """
+        return _SyncDriverTransaction(self)
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
@@ -2057,3 +2078,25 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect),
             warnings=(f"{self.dialect} DDL extraction is not implemented",),
         )
+
+
+class _SyncDriverTransaction(Generic[_SyncDriverT]):
+    """Context manager that commits on success and rolls back on error."""
+
+    __slots__ = ("_driver",)
+
+    def __init__(self, driver: "_SyncDriverT") -> None:
+        self._driver = driver
+
+    def __enter__(self) -> "_SyncDriverT":
+        self._driver.begin()
+        return self._driver
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"
+    ) -> "Literal[False]":
+        if exc_type is None:
+            self._driver.commit()
+        else:
+            self._driver.rollback()
+        return False

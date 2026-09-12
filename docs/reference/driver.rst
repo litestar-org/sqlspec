@@ -18,6 +18,38 @@ Example
    :dedent: 4
    :no-upgrade:
 
+Transaction Blocks
+==================
+
+``transaction()`` wraps a block in a transaction on the driver's connection.
+Entering the block calls ``begin()`` and yields the same driver. A normal exit
+commits; an exception rolls back and propagates to the caller. The block works
+the same way on every adapter.
+
+.. code-block:: python
+
+    async with config.provide_session() as session:
+        async with session.transaction():
+            await session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+            await session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+
+.. code-block:: python
+
+    with config.provide_session() as session:
+        with session.transaction():
+            session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+            session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+
+``transaction()`` takes no isolation-level argument. Apply isolation or other
+transaction settings with ``execute_script`` as the first statement inside the
+block, using the syntax your database supports:
+
+.. code-block:: python
+
+    async with session.transaction():
+        await session.execute_script("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        await session.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", 10, 1)
+
 Base Driver Classes
 ===================
 
