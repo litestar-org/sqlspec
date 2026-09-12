@@ -154,7 +154,11 @@ may hit a unique constraint run without aborting the surrounding transaction:
 The outer block commits everything that was not rolled back; if the outer block
 raises, work from inner blocks that succeeded is rolled back with it. Nesting works
 the same way for services built from a session, including a block entered inside
-the session's own ``transaction()`` block. If the outer commit fails, the block
+the session's own ``transaction()`` block. When a service built from a session enters
+its outermost block while that session already has an open transaction, for example
+after an earlier statement, the block joins that transaction instead of calling
+``begin()``, and exiting the block commits or rolls back all of it, including the
+earlier work. If the outer commit fails, the block
 attempts a rollback before raising the commit error. Adapters without savepoint
 support raise ``ImproperConfigurationError`` when a nested block is entered.
 
