@@ -204,3 +204,49 @@ def test_duckdb_dependencies_from_duckdb_dependencies() -> None:
         assert any(isinstance(item, DependencyMetadata) and "deptype" in item.attributes for item in result.items)
     finally:
         connection.close()
+
+
+def test_sqlite_columns_report_primary_key_columns() -> None:
+    """SQLite column metadata flags primary-key columns with their key position."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute(
+            'CREATE TABLE "Orders" ("tenant" TEXT, "orderId" INTEGER, note TEXT, PRIMARY KEY ("tenant", "orderId"))'
+        )
+
+        columns = driver.data_dictionary.get_columns(driver, table="Orders")
+
+    assert [(column["column_name"], column["is_primary"]) for column in columns] == [
+        ("tenant", 1),
+        ("orderId", 2),
+        ("note", 0),
+    ]
+    config.close_pool()
+
+
+def test_duckdb_columns_report_primary_key_columns() -> None:
+    """DuckDB column metadata flags primary-key columns for exact-case table names."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute(
+            'CREATE TABLE "Orders" ("tenant" VARCHAR, "orderId" INTEGER, note VARCHAR, PRIMARY KEY ("tenant", "orderId"))'
+        )
+
+        by_table = driver.data_dictionary.get_columns(driver, table="Orders")
+        by_schema = driver.data_dictionary.get_columns(driver)
+
+    assert [(column["column_name"], bool(column["is_primary"])) for column in by_table] == [
+        ("tenant", True),
+        ("orderId", True),
+        ("note", False),
+    ]
+    assert {column["column_name"]: bool(column["is_primary"]) for column in by_schema} == {
+        "tenant": True,
+        "orderId": True,
+        "note": False,
+    }
+    config.close_pool()

@@ -188,3 +188,16 @@ def test_mysql_system_metadata_returns_rows_when_opted_in() -> None:
     assert result.capability.support == MetadataSupport.SUPPORTED
     assert result.rows == ({"table_schema": "shop", "table_name": "orders", "rows_fetched": 5},)
     assert "sys.schema_table_statistics" in driver.statements[-1]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "query_name"), [("mysql", "by_schema"), ("mysql", "by_table"), ("mariadb", "by_schema")]
+)
+def test_mysql_family_columns_report_primary_key_flag(dialect: str, query_name: str) -> None:
+    """MySQL-family column metadata reports the column type, key, and primary-key flag."""
+    columns = DataDictionaryLoader().get_domain_query_text(dialect, "columns", query_name)
+
+    assert columns is not None
+    assert "column_type" in columns
+    assert "column_key = 'PRI' AS" in columns
+    assert "is_primary" in columns

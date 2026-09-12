@@ -13,8 +13,17 @@ SELECT
     numeric_precision,
     numeric_scale,
     comment,
-    internal
-FROM duckdb_columns()
+    internal,
+    EXISTS (
+        SELECT 1
+        FROM duckdb_constraints() AS k
+        WHERE k.database_name = c.database_name
+          AND k.schema_name = c.schema_name
+          AND k.table_name = c.table_name
+          AND k.constraint_type = 'PRIMARY KEY'
+          AND list_contains(k.constraint_column_names, c.column_name)
+    ) AS is_primary
+FROM duckdb_columns() AS c
 WHERE schema_name = COALESCE(:schema_name, current_schema())
   AND NOT internal
 ORDER BY table_name, column_index;
@@ -34,8 +43,17 @@ SELECT
     numeric_precision,
     numeric_scale,
     comment,
-    internal
-FROM duckdb_columns()
+    internal,
+    EXISTS (
+        SELECT 1
+        FROM duckdb_constraints() AS k
+        WHERE k.database_name = c.database_name
+          AND k.schema_name = c.schema_name
+          AND k.table_name = c.table_name
+          AND k.constraint_type = 'PRIMARY KEY'
+          AND list_contains(k.constraint_column_names, c.column_name)
+    ) AS is_primary
+FROM duckdb_columns() AS c
 WHERE schema_name = COALESCE(:schema_name, current_schema())
   AND table_name = :table_name
   AND NOT internal

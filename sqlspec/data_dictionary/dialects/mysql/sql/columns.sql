@@ -15,6 +15,7 @@ SELECT
     character_set_name,
     collation_name,
     column_key,
+    column_key = 'PRI' AS is_primary,
     extra,
     generation_expression,
     column_comment
@@ -27,8 +28,11 @@ ORDER BY table_schema, table_name, ordinal_position;
 SELECT
     column_name AS `column_name`,
     data_type AS `data_type`,
+    column_type AS `column_type`,
     is_nullable AS `is_nullable`,
-    column_default AS `column_default`
+    column_default AS `column_default`,
+    column_key AS `column_key`,
+    column_key = 'PRI' AS `is_primary`
 FROM information_schema.columns
 WHERE table_name = :table_name
   AND table_schema = COALESCE(:schema_name, DATABASE())
