@@ -106,6 +106,11 @@ class DuckDBConnectionPool:
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a new DuckDB connection with extensions and secrets."""
+        self._thread_local.storage_extensions = frozenset()
+        self._thread_local.storage_secrets = ()
+        self._thread_local.storage_protocols = frozenset()
+        loaded_extensions: set[str] = set()
+        storage_protocols: set[str] = set()
         connect_parameters = {}
         config_dict = {}
 
@@ -169,6 +174,10 @@ class DuckDBConnectionPool:
                         error=str(exc),
                     )
             else:
+                loaded_extensions.add(ext_name)
+                storage_protocols.update(ext_config.get("storage_protocols", ()))
+                if ext_name == "gcs":
+                    storage_protocols.add("gcss")
                 if install_error is not None:
                     log_with_context(
                         logger,
@@ -181,13 +190,31 @@ class DuckDBConnectionPool:
                         error=install_error,
                     )
 
-        for secret_config in self._secrets:
-            _create_secret(connection, secret_config)
+        created_secrets: list[dict[str, Any]] = [
+            {**secret_config, "value": dict(secret_config.get("value") or {})}
+            for secret_config in self._secrets
+            if _create_secret(connection, secret_config)
+        ]
 
         if self._on_connection_create:
             self._on_connection_create(connection)
-
+        else:
+            self._thread_local.storage_extensions = frozenset(loaded_extensions)
+            self._thread_local.storage_secrets = tuple(created_secrets)
+        storage_protocols.update(connection.list_filesystems())
+        self._thread_local.storage_protocols = frozenset(storage_protocols)
         return connection
+
+    def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":
+        """Return storage setup completed for this thread's current connection."""
+        state = self._thread_local.__dict__
+        if state.get("connection") is not connection:
+            return {}
+        return {
+            "_duckdb_storage_extensions": state.get("storage_extensions", frozenset()),
+            "_duckdb_storage_secrets": state.get("storage_secrets", ()),
+            "_duckdb_storage_protocols": state.get("storage_protocols", frozenset()),
+        }
 
     def _install_extension_once(
         self,
@@ -306,6 +333,9 @@ class DuckDBConnectionPool:
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""
         thread_state = self._thread_local.__dict__
+        thread_state.pop("storage_extensions", None)
+        thread_state.pop("storage_secrets", None)
+        thread_state.pop("storage_protocols", None)
         if "connection" in thread_state:
             with suppress(Exception):
                 self._thread_local.connection.close()
@@ -399,11 +429,11 @@ def _validate_sql_identifier(value: str, field_name: str) -> None:
         raise ValueError(msg)
 
 
-def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) -> None:
+def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) -> bool:
     secret_name = secret_config.get("name")
     secret_type = secret_config.get("secret_type")
     if not (secret_name and secret_type):
-        return
+        return False
 
     required = bool(secret_config.get("required", False))
     try:
@@ -417,6 +447,8 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
         if required:
             raise
         logger.warning("DuckDB secret %r creation failed (best-effort)", secret_name)
+        return False
+    return True
 
 
 def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:

@@ -118,6 +118,14 @@ class DuckDBExtensionConfig(TypedDict):
     required: NotRequired[bool]
     """When True, install/load failure raises instead of best-effort WARNING."""
 
+    storage_protocols: NotRequired[Sequence[str]]
+    """Additional URI schemes handled by this extension's configured filesystem.
+
+    Addresses using these schemes are passed unchanged to DuckDB after the
+    extension loads. DuckDB owns credential selection and reports transfer
+    errors. Registered Python filesystems are discovered automatically.
+    """
+
 
 class DuckDBSecretConfig(TypedDict):
     """DuckDB secret configuration for AI/API integrations."""
@@ -330,6 +338,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Close the connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
+
+    def _prepare_driver(self, driver: DuckDBDriver) -> DuckDBDriver:
+        driver = super()._prepare_driver(driver)
+        if self.connection_instance is not None:
+            driver.driver_features.update(self.connection_instance._storage_settings(driver.connection))
+        return driver
 
     def create_connection(self) -> DuckDBConnection:
         """Get a DuckDB connection from the pool.

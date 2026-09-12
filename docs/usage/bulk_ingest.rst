@@ -62,9 +62,11 @@ Capability matrix
      - Driver-dependent; ``adbc_ingest`` is always attempted and unsupported drivers raise
      - Always on
    * - duckdb
-     - ``register`` + ``INSERT ... SELECT``
+     - ``register`` + ``INSERT ... SELECT``; ``load_from_storage`` appends
+       remote Parquet through ``INSERT ... SELECT read_parquet``
      - Single connection transaction
-     - Always on
+     - Native remote reads use a configured DuckDB filesystem, through a loaded
+       extension or registered filesystem; CSV imports and overwrite retain Arrow
    * - sqlite / aiosqlite
      - ``executemany`` inside one ``BEGIN IMMEDIATE``
      - Atomic when the driver owns the transaction; rolls back on error

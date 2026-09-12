@@ -28,6 +28,7 @@ EXP_MODULE_ALIASES = frozenset({"exp", "expressions", "sge"})
 
 KNOWN_SET_SITES: frozenset[tuple[str, str, str]] = frozenset({
     ("sqlspec/adapters/bigquery/core.py", "statement_values", "expressions"),
+    ("sqlspec/adapters/duckdb/core.py", "part", "quoted"),
     ("sqlspec/builder/_base.py", "final_expression", "with_"),
     ("sqlspec/builder/_base.py", "node", "quoted"),
     ("sqlspec/builder/_dml.py", "current_expr", "expression"),
