@@ -120,7 +120,9 @@ async def _create_async_savepoint(state: _TransactionState) -> str:
         await driver.create_savepoint(name)
     except NotImplementedError as exc:
         state.depth -= 1
-        raise _unsupported_savepoint_error(driver) from exc
+        error = _unsupported_savepoint_error(driver)
+        error.__cause__ = exc
+        raise error from exc
     except BaseException:
         state.depth -= 1
         raise
@@ -145,7 +147,9 @@ def _create_sync_savepoint(state: _TransactionState) -> str:
         driver.create_savepoint(name)
     except NotImplementedError as exc:
         state.depth -= 1
-        raise _unsupported_savepoint_error(driver) from exc
+        error = _unsupported_savepoint_error(driver)
+        error.__cause__ = exc
+        raise error from exc
     except BaseException:
         state.depth -= 1
         raise
