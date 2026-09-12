@@ -3,9 +3,10 @@ Utility Functions
 =================
 
 SQLSpec exposes small, reusable helpers for runtime type narrowing, configuration,
-identifier generation, optional dependency loading, sync/async interoperation,
-deprecation, and fixture files. These modules are supported public APIs; import
-helpers from their defining ``sqlspec.utils`` module.
+identifier generation, text and identifier formatting, serialization, schema
+conversion, correlation tracking, optional dependency loading, sync/async
+interoperation, deprecation, and fixture files. These modules are supported
+public APIs; import helpers from their defining ``sqlspec.utils`` module.
 
 Type Guards
 ===========
@@ -26,6 +27,33 @@ UUIDs and Compact Identifiers
 =============================
 
 .. automodule:: sqlspec.utils.uuids
+   :members:
+
+The most common generators, ``uuid4``, ``uuid6``, ``uuid7``, and ``nanoid``, are
+also importable from the top-level ``sqlspec`` package.
+
+Text and Identifiers
+====================
+
+.. automodule:: sqlspec.utils.text
+   :members:
+
+Serialization
+=============
+
+.. automodule:: sqlspec.utils.serializers
+   :members:
+
+Schema Conversion
+=================
+
+.. automodule:: sqlspec.utils.schema
+   :members: to_schema, to_value_type, transform_dict_keys
+
+Correlation Tracking
+====================
+
+.. automodule:: sqlspec.utils.correlation
    :members:
 
 Module and Optional Dependency Loading

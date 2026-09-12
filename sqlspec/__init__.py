@@ -85,6 +85,7 @@ from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
 
 if TYPE_CHECKING:
     from sqlspec import dialects
+    from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 
 __all__ = (
     "SQL",
@@ -159,20 +160,28 @@ __all__ = (
     "loader",
     "matches_param_type",
     "migrations",
+    "nanoid",
     "register_param_type",
     "resolve_param_type",
     "sql",
     "typing",
     "utils",
+    "uuid4",
+    "uuid6",
+    "uuid7",
 )
+
+_LAZY_UUID_NAMES = frozenset(("nanoid", "uuid4", "uuid6", "uuid7"))
 
 suppress_erroneous_sqlglot_log_messages()
 
 
 def __getattr__(name: str) -> "Any":
-    if name == "dialects":
-        import importlib
+    import importlib
 
+    if name == "dialects":
         return importlib.import_module("sqlspec.dialects")
+    if name in _LAZY_UUID_NAMES:
+        return getattr(importlib.import_module("sqlspec.utils.uuids"), name)
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

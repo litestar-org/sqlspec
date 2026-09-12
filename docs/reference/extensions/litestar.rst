@@ -19,6 +19,35 @@ Configuration
    :members:
    :show-inheritance:
 
+Correlation Middleware
+======================
+
+``SQLSpecPlugin`` installs ``CorrelationMiddleware`` while
+``enable_correlation_middleware`` is enabled, which is the default. Add it
+yourself only when you build the middleware stack without the plugin.
+
+.. code-block:: python
+
+   from litestar.middleware import DefineMiddleware
+
+   from sqlspec.extensions.litestar import TRACE_CONTEXT_FALLBACK_HEADERS, CorrelationMiddleware
+
+   middleware = [DefineMiddleware(CorrelationMiddleware, headers=TRACE_CONTEXT_FALLBACK_HEADERS)]
+
+.. autoclass:: sqlspec.extensions.litestar.CorrelationMiddleware
+   :members:
+   :show-inheritance:
+
+.. py:data:: sqlspec.extensions.litestar.TRACE_CONTEXT_FALLBACK_HEADERS
+
+   Trace-context headers the plugin checks after ``correlation_header`` and
+   ``correlation_headers`` while ``auto_trace_headers`` is enabled, which is the
+   default. In order: ``x-request-id``, ``x-correlation-id``, ``traceparent``,
+   ``x-cloud-trace-context``, ``grpc-trace-bin``, ``x-amzn-trace-id``,
+   ``x-b3-traceid``, and ``x-client-trace-id``.
+
+   :type: tuple[str, ...]
+
 Channels Backend
 ================
 

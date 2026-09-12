@@ -104,13 +104,13 @@ def correlation_context(correlation_id: "str | None" = None) -> "Generator[str, 
         The active correlation ID
 
     Example:
-        ```python
-        with correlation_context() as correlation_id:
-            logger.info(
-                "Processing request",
-                extra={"correlation_id": correlation_id},
-            )
-        ```
+        .. code-block:: python
+
+            with correlation_context() as correlation_id:
+                logger.info(
+                    "Processing request",
+                    extra={"correlation_id": correlation_id},
+                )
     """
     with CorrelationContext.context(correlation_id) as cid:
         yield cid

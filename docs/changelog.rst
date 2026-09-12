@@ -59,6 +59,13 @@ Unreleased
   ``begin_transaction()`` to keep several calls in one transaction. Existing
   code that passes a driver still works. See :doc:`/recipes/service_layer`.
 
+* ``uuid4``, ``uuid6``, ``uuid7``, and ``nanoid`` can be imported from the
+  top-level ``sqlspec`` package. ``sqlspec.extensions.litestar`` exports
+  ``CorrelationMiddleware`` and ``TRACE_CONTEXT_FALLBACK_HEADERS``. The
+  :doc:`/reference/utils` reference now covers ``sqlspec.utils.text``,
+  ``sqlspec.utils.serializers``, ``sqlspec.utils.schema``, and
+  ``sqlspec.utils.correlation`` as supported modules.
+
 * Storage pipelines expose ``resolve_destination()``, returning a
   ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.
   Direct remote URIs retain their address, alias paths resolve relative to the
