@@ -1311,6 +1311,23 @@ class CommonDriverAttributesMixin:
     ) -> "SQL":
         declared = sql_statement.declared_parameters
         if data_parameters or kwargs:
+            bound_named = sql_statement.named_parameters
+            extra_mapping = data_parameters[0] if len(data_parameters) == 1 else None
+            if (
+                bound_named
+                and not sql_statement.positional_parameters
+                and (not data_parameters or isinstance(extra_mapping, dict))
+            ):
+                merged_named = dict(bound_named)
+                if isinstance(extra_mapping, dict):
+                    merged_named.update(extra_mapping)
+                return SQL(
+                    sql_statement.raw_expression or sql_statement.raw_sql,
+                    merged_named,
+                    statement_config=statement_config,
+                    declared_parameters=declared,
+                    **kwargs,
+                )
             merged_parameters = (
                 (*sql_statement.positional_parameters, *tuple(data_parameters))
                 if data_parameters

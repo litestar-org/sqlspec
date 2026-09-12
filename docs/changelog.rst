@@ -14,6 +14,12 @@ Unreleased
 
 **Fixed:**
 
+* Executing a ``SQL`` object that already carries named parameters with more
+  named parameters, as keyword arguments or a single mapping, now binds both
+  sets. Previously the statement's own parameters were dropped, so
+  ``session.select(SQL("... :a ... :b", a=1), b=2)`` failed with a parameter
+  count mismatch. A value passed at execute time replaces a bound value of the
+  same name.
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
