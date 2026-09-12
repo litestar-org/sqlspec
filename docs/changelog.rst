@@ -56,10 +56,11 @@ Unreleased
 
 * ``SQLSpecChannelsBackend`` can check a payload against the PostgreSQL
   ``NOTIFY`` limit before publishing. ``measure(data)`` returns the encoded
-  envelope size, ``fits(data)`` reports whether it is within ``notify_budget``,
+  ``notify`` envelope size, ``fits(data)`` reports whether it is within ``notify_budget``,
   and ``notify_budget`` is ``None`` for backends without a payload limit.
-  ``metrics_snapshot()`` returns event metrics together with the backend's
-  output queue depth and dropped message count. ``AsyncEventChannel`` and
+  ``metrics_snapshot()`` returns all observability metrics for the event
+  channel's database configuration together with the backend instance's output
+  queue depth and dropped message count. ``AsyncEventChannel`` and
   ``SyncEventChannel`` also expose ``backend_name`` and ``metrics_snapshot()``.
 
 * Services can now open a short session for each query. Pass ``config=`` and,

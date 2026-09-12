@@ -256,17 +256,21 @@ Channels
 
 Both channel classes expose ``backend_name``, the resolved backend kind
 (``notify``, ``notify_queue``, ``poll_queue``, ``aq``, or ``txeventq``), and
-``metrics_snapshot()``, which returns the event metrics recorded for the
-channel's configuration as floats keyed under its diagnostics prefix:
+``metrics_snapshot()``. The snapshot holds every observability metric recorded
+for the channel's database configuration, including loader, migration, storage,
+and other event channels on that configuration, as floats keyed under the
+configuration's diagnostics prefix. Counter names depend on the backend: the
+``poll_queue`` backend records ``events.publish``, while the native
+``notify``, ``notify_queue``, ``aq``, and ``txeventq`` backends record
+``events.publish.native``.
 
 .. code-block:: python
 
     channel = spec.event_channel(config)
     await channel.publish("notifications", {"action": "refresh"})
 
-    if channel.backend_name == "notify":
-        ...
-    published = channel.metrics_snapshot().get("AsyncpgConfig.events.publish", 0.0)
+    metric = "events.publish" if channel.backend_name == "poll_queue" else "events.publish.native"
+    published = channel.metrics_snapshot().get(f"AsyncpgConfig.{metric}", 0.0)
 
 .. autoclass:: sqlspec.extensions.events.AsyncEventChannel
    :members:

@@ -95,13 +95,13 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         return MAX_NOTIFY_BYTES if self._event_channel.backend_name == "notify" else None
 
     def measure(self, data: bytes) -> int:
-        """Return the encoded envelope size that ``publish()`` sends for ``data``.
+        """Return the encoded size of the PostgreSQL ``notify`` envelope that wraps ``data``.
 
         Args:
             data: Channel payload to measure.
 
         Returns:
-            The UTF-8 byte size of the notification envelope wrapping ``data``.
+            The UTF-8 byte size of the ``notify`` envelope carrying the base64-wrapped ``data``.
         """
         return measure_notify_payload({"data_b64": base64.b64encode(data).decode("ascii")}, None)
 
@@ -118,10 +118,11 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         return budget is None or self.measure(data) <= budget
 
     def metrics_snapshot(self) -> "dict[str, float]":
-        """Return event channel metrics merged with this backend's queue counters.
+        """Return configuration metrics merged with this backend instance's queue counters.
 
         Returns:
-            The event channel's metrics plus ``channels.output_queue_depth`` and
+            Every observability metric recorded for the event channel's database
+            configuration, plus this backend's ``channels.output_queue_depth`` and
             ``channels.dropped_messages``.
         """
         snapshot = dict(self._event_channel.metrics_snapshot())

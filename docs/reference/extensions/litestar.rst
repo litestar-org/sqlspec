@@ -32,18 +32,21 @@ instance. Malformed payloads are acknowledged and logged without increasing the
 overflow count. Shutdown clears pending output while preserving the cumulative
 drop diagnostic for lifecycle reuse.
 
-``metrics_snapshot()`` returns the event channel's metrics merged with
-``channels.output_queue_depth`` and ``channels.dropped_messages``, all as
-floats.
+``metrics_snapshot()`` returns every observability metric recorded for the
+event channel's database configuration, including loader, migration, storage,
+and other event channels on that configuration, merged with
+``channels.output_queue_depth`` and ``channels.dropped_messages``. The two
+``channels.*`` counters belong to this backend instance. All values are floats.
 
 Payload budget
 --------------
 
-Each published payload is base64-wrapped inside a notification envelope. With
-the PostgreSQL ``notify`` event backend, an envelope larger than
-:data:`~sqlspec.extensions.events.MAX_NOTIFY_BYTES` is rejected.
-``measure(data)`` returns the encoded envelope size that ``publish()`` sends for
-``data``, and ``fits(data)`` reports whether it is within ``notify_budget``.
+Each published payload is base64-wrapped as ``{"data_b64": ...}``. The
+PostgreSQL ``notify`` event backend sends that payload inside a notification
+envelope and rejects an envelope larger than
+:data:`~sqlspec.extensions.events.MAX_NOTIFY_BYTES`. ``measure(data)`` returns
+the encoded size of the ``notify`` envelope that wraps ``data``, and
+``fits(data)`` reports whether it is within ``notify_budget``.
 ``notify_budget`` is ``None`` for every other backend kind (``notify_queue``,
 ``poll_queue``, ``aq``, ``txeventq``), so ``fits()`` always returns ``True``
 there. Check a payload before publishing and send oversized data as smaller

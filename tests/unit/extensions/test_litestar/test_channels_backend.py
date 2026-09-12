@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import MAX_NOTIFY_BYTES, encode_notify_payload, measure_notify_payload
 from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 
@@ -60,6 +61,36 @@ def test_fits_boundary() -> None:
     assert backend.measure(b"x" * (size - 1)) <= MAX_NOTIFY_BYTES
     assert backend.fits(b"x" * (size - 1)) is True
     assert backend.fits(b"x" * size) is False
+
+
+async def test_measure_matches_published_event_envelope() -> None:
+    """measure() matches the notify envelope encoded from the event publish() hands to the channel."""
+    stub = _StubEventChannel("notify")
+    backend = SQLSpecChannelsBackend(cast("AsyncEventChannel", stub))
+    data = b"payload bytes" * 40
+
+    await backend.publish(data, ["c"])
+
+    _, payload, metadata = stub.published[0]
+    assert len(encode_notify_payload(uuid4().hex, payload, metadata).encode("utf-8")) == backend.measure(data)
+
+
+async def test_fits_agrees_with_notify_encoding_at_boundary() -> None:
+    """Encoding the published event raises exactly when fits() is False."""
+    stub = _StubEventChannel("notify")
+    backend = SQLSpecChannelsBackend(cast("AsyncEventChannel", stub))
+    size = next(n for n in range(MAX_NOTIFY_BYTES) if backend.measure(b"x" * n) > MAX_NOTIFY_BYTES)
+
+    await backend.publish(b"x" * (size - 1), ["c"])
+    await backend.publish(b"x" * size, ["c"])
+
+    _, fitting_payload, fitting_metadata = stub.published[0]
+    _, oversized_payload, oversized_metadata = stub.published[1]
+    assert backend.fits(b"x" * (size - 1)) is True
+    encode_notify_payload(uuid4().hex, fitting_payload, fitting_metadata)
+    assert backend.fits(b"x" * size) is False
+    with pytest.raises(EventChannelError):
+        encode_notify_payload(uuid4().hex, oversized_payload, oversized_metadata)
 
 
 @pytest.mark.parametrize("backend_name", ["poll_queue", "notify_queue", "aq", "txeventq"])
