@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.pipeline import (
+from sqlspec.core._pipeline import (
     configure_statement_pipeline_cache,
     get_statement_pipeline_metrics,
     reset_statement_pipeline_cache,
