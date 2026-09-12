@@ -32,6 +32,8 @@ DEFAULT_MAX_POOL: Final[int] = 4
 POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
+SECRET_CONFLICT_ATTEMPTS: Final[int] = 5
+SECRET_CONFLICT_BACKOFF: Final[float] = 0.005
 
 
 @final
@@ -190,11 +192,12 @@ class DuckDBConnectionPool:
                         error=install_error,
                     )
 
-        created_secrets: list[dict[str, Any]] = [
-            {**secret_config, "value": dict(secret_config.get("value") or {})}
-            for secret_config in self._secrets
-            if _create_secret(connection, secret_config)
-        ]
+        with self._lock:
+            created_secrets: list[dict[str, Any]] = [
+                {**secret_config, "value": dict(secret_config.get("value") or {})}
+                for secret_config in self._secrets
+                if _create_secret(connection, secret_config)
+            ]
 
         if self._on_connection_create:
             self._on_connection_create(connection)
@@ -440,13 +443,33 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
         _validate_sql_identifier(secret_name, "secret_name")
         _validate_sql_identifier(secret_type, "secret_type")
         sql = _secret_sql(secret_config, secret_name, secret_type)
-        connection.execute(sql)
+        _execute_secret_sql(connection, sql)
         if required:
             _verify_secret(connection, secret_config, secret_name, secret_type)
     except Exception:
         if required:
             raise
         logger.warning("DuckDB secret %r creation failed (best-effort)", secret_name)
+        return False
+    return True
+
+
+def _execute_secret_sql(connection: DuckDBConnection, sql: str) -> None:
+    """Execute a secret statement, retrying catalog write-write conflicts with a short backoff."""
+    for attempt in range(1, SECRET_CONFLICT_ATTEMPTS):
+        if _try_execute_secret_sql(connection, sql):
+            return
+        time.sleep(SECRET_CONFLICT_BACKOFF * attempt)
+    connection.execute(sql)
+
+
+def _try_execute_secret_sql(connection: DuckDBConnection, sql: str) -> bool:
+    """Execute a secret statement, returning False when it hits a catalog write-write conflict."""
+    try:
+        connection.execute(sql)
+    except duckdb.TransactionException as exc:
+        if "write-write conflict" not in str(exc):
+            raise
         return False
     return True
 
