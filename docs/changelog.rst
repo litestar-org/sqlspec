@@ -14,13 +14,14 @@ Unreleased
 
 **Fixed:**
 
-* DuckDB secrets declared in ``driver_features["secrets"]`` are created with
-  ``CREATE OR REPLACE SECRET``. A pool sharing one database, such as the default shared
-  in-memory database, no longer fails with ``secret already exists`` when a second
-  thread opens its connection, connections opened concurrently no longer race on secret
-  creation, persistent secrets are recreated cleanly after a process restart, and
-  declaring an existing secret name again replaces its value. Secrets marked
-  ``required=True`` still raise on real creation or verification errors.
+* DuckDB secrets declared in ``driver_features["secrets"]`` are created only when
+  missing. An existing secret with the same name and type is reused, so a second
+  connection to a shared database, such as the default shared in-memory database, or a
+  process restart with a stored persistent secret no longer fails with ``secret already
+  exists``. A same-name secret whose type or scope does not match the declaration raises
+  for ``required=True`` secrets and logs a warning otherwise. Concurrent connection
+  setup no longer races on secret creation. Set ``replace=True`` on a secret to
+  overwrite an existing secret of the same name, for example after rotating credentials.
   (`#754 <https://github.com/litestar-org/sqlspec/issues/754>`_)
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests

@@ -1,5 +1,6 @@
 """Unit tests for DuckDB connection pool helpers."""
 
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -45,16 +46,31 @@ def test_validate_sql_identifier_rejects_unsafe_identifiers(identifier: str) -> 
         _validate_sql_identifier(identifier, "secret_name")
 
 
-def test_secret_sql_uses_create_or_replace() -> None:
+@pytest.mark.parametrize(
+    ("persistent", "replace", "prefix"),
+    [
+        (False, False, "CREATE SECRET IF NOT EXISTS s1 ("),
+        (True, False, "CREATE PERSISTENT SECRET IF NOT EXISTS s1 ("),
+        (False, True, "CREATE OR REPLACE SECRET s1 ("),
+        (True, True, "CREATE OR REPLACE PERSISTENT SECRET s1 ("),
+    ],
+)
+def test_secret_sql_statement_prefix(persistent: bool, replace: bool, prefix: str) -> None:
+    secret = {
+        "name": "s1",
+        "secret_type": "gcs",
+        "value": {"key_id": "k"},
+        "persistent": persistent,
+        "replace": replace,
+    }
+
+    assert _secret_sql(secret, "s1", "gcs").startswith(prefix)
+
+
+def test_secret_sql_creates_only_missing_secret_by_default() -> None:
     sql = _secret_sql({"name": "s1", "secret_type": "gcs", "value": {"key_id": "k"}}, "s1", "gcs")
 
-    assert sql.startswith("CREATE OR REPLACE SECRET s1 (")
-
-
-def test_secret_sql_persistent_uses_create_or_replace() -> None:
-    sql = _secret_sql({"name": "s1", "secret_type": "gcs", "persistent": True}, "s1", "gcs")
-
-    assert sql.startswith("CREATE OR REPLACE PERSISTENT SECRET s1 (")
+    assert sql.startswith("CREATE SECRET IF NOT EXISTS s1 (")
 
 
 def test_create_connection_raises_for_malicious_secret_name() -> None:
@@ -195,6 +211,49 @@ def test_create_connection_raises_when_secret_verification_fails(monkeypatch: py
 
     with pytest.raises(RuntimeError, match="DuckDB secret 'missing_secret' was not visible"):
         pool._create_connection()
+
+
+def _pool_with_fake_secret_row(
+    monkeypatch: pytest.MonkeyPatch, verification_row: "tuple[Any, ...]", required: bool
+) -> DuckDBConnectionPool:
+    monkeypatch.setattr(
+        "sqlspec.adapters.duckdb.pool.duckdb.connect",
+        lambda **_: _FakeDuckDBConnection(verification_row=verification_row),
+    )
+    return DuckDBConnectionPool(
+        {"database": ":memory:"},
+        secrets=[{"name": "reports", "secret_type": "s3", "required": required, "value": {"key_id": "abc"}}],
+    )
+
+
+def test_secret_with_different_existing_type_raises_when_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = _pool_with_fake_secret_row(monkeypatch, ("http", []), required=True)
+
+    with pytest.raises(RuntimeError, match=r"'reports' exists as a temporary secret of type 'http'.*type 's3'"):
+        pool._create_connection()
+
+
+def test_secret_with_different_existing_type_is_skipped_when_optional(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pool = _pool_with_fake_secret_row(monkeypatch, ("http", []), required=False)
+
+    with caplog.at_level(logging.WARNING):
+        connection = pool._create_connection()
+    pool._thread_local.connection = connection
+
+    assert pool._storage_settings(connection)["_duckdb_storage_secrets"] == ()
+    assert any("'reports' exists as a temporary secret of type 'http'" in record.message for record in caplog.records)
+
+
+def test_secret_with_matching_existing_type_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = _pool_with_fake_secret_row(monkeypatch, ("s3", []), required=False)
+
+    connection = pool._create_connection()
+    pool._thread_local.connection = connection
+
+    secrets = pool._storage_settings(connection)["_duckdb_storage_secrets"]
+    assert [secret["name"] for secret in secrets] == ["reports"]
 
 
 class _FailingSecretConnection(_FakeDuckDBConnection):

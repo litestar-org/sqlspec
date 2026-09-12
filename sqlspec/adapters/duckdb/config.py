@@ -134,10 +134,10 @@ class DuckDBSecretConfig(TypedDict):
     """Type of secret."""
 
     name: str
-    """Name of the secret."""
+    """Name of the secret. An existing secret with this name and type is reused unless ``replace`` is set."""
 
     value: NotRequired["dict[str, Any]"]
-    """Secret configuration values."""
+    """Secret configuration values, applied when the secret is created or replaced."""
 
     provider: NotRequired[str]
     """Secret provider, such as config or credential_chain."""
@@ -148,8 +148,11 @@ class DuckDBSecretConfig(TypedDict):
     persistent: NotRequired[bool]
     """Persist the secret to DuckDB's configured secret directory."""
 
+    replace: NotRequired[bool]
+    """When True, overwrite an existing secret of the same name, such as after rotating credentials. Default False."""
+
     required: NotRequired[bool]
-    """When True, secret-creation failure raises (and is verified). Default best-effort."""
+    """When True, a creation failure or a same-name secret of another type raises. Default best-effort."""
 
 
 class DuckDBDriverFeatures(TypedDict):

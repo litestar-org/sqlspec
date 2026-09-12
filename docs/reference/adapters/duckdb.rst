@@ -59,6 +59,13 @@ without requiring a cloud extension.
     finally:
         config.close_pool()
 
+Declared secrets are created only when missing. DuckDB secret names are shared by
+every connection to a database, and persistent secrets outlive the process, so an
+existing secret with the same name and type is reused as it is. A same-name secret
+whose type or scope does not match the declaration raises for ``required=True``
+secrets and logs a warning otherwise. Set ``replace=True`` on a secret to overwrite
+an existing secret of the same name, for example after rotating credentials.
+
 Query values and object addresses remain bound parameters. Native import accepts
 one table identifier, optionally schema-qualified or quoted; SQL fragments are
 rejected. Parquet import disables automatic Hive partition columns. The API

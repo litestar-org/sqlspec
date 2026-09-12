@@ -100,6 +100,7 @@ def test_secret_config_types_scope_provider_persistence_and_optional_values() ->
     assert hints["provider"] == NotRequired[str]
     assert hints["scope"] == NotRequired[str]
     assert hints["persistent"] == NotRequired[bool]
+    assert hints["replace"] == NotRequired[bool]
 
 
 def test_build_connection_config_preserves_nested_config_and_extra() -> None:
