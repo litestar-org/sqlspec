@@ -14,6 +14,9 @@ Unreleased
 
 **Fixed:**
 
+* The ``litestar`` extra now requires ``litestar>=2.23.0``. The Litestar
+  extension imports ``NamedDependency`` and ``SkipValidation``, which are not
+  available in 2.22, so installs resolved to 2.22 failed on import.
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
