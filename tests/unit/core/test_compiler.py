@@ -41,7 +41,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.pipeline import compile_with_pipeline, reset_statement_pipeline_cache
+from sqlspec.core._pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
 
@@ -1186,7 +1186,7 @@ def test_compile_with_pipeline_passes_expression() -> None:
     expression = exp.select("*").from_("users")
 
     reset_statement_pipeline_cache()
-    with patch("sqlspec.core.pipeline.SQLProcessor.compile") as mock_compile:
+    with patch("sqlspec.core._pipeline.SQLProcessor.compile") as mock_compile:
         mock_compile.return_value = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters=[],

@@ -3,10 +3,10 @@
 
 from unittest.mock import patch
 
-import sqlspec.core.pipeline as pipeline_module
+import sqlspec.core._pipeline as pipeline_module
 from sqlspec.core import SQL, get_pipeline_metrics, reset_pipeline_registry
 from sqlspec.core.parameters import ParameterConverter, ParameterValidator
-from sqlspec.core.pipeline import StatementPipelineRegistry
+from sqlspec.core._pipeline import StatementPipelineRegistry
 from sqlspec.core.statement import StatementConfig
 
 

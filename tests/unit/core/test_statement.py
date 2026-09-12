@@ -25,7 +25,7 @@ import pytest
 from sqlglot import expressions as exp
 from sqlglot.dialects.postgres import Postgres
 
-import sqlspec.core.pipeline as pipeline_module
+import sqlspec.core._pipeline as pipeline_module
 import sqlspec.core.statement as statement_module
 import sqlspec.typing as public_typing
 from sqlspec.core import (
@@ -50,7 +50,7 @@ from sqlspec.core.hashing import hash_filters
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor
 from sqlspec.core.parameters._processor import structural_fingerprint, value_fingerprint
-from sqlspec.core.pipeline import reset_statement_pipeline_cache
+from sqlspec.core._pipeline import reset_statement_pipeline_cache
 from sqlspec.core.result._base import SQLResult, StackResult
 from sqlspec.core.splitter import (
     BigQueryDialectConfig,
@@ -490,7 +490,7 @@ def test_sql_lazy_processing_not_triggered_initially() -> None:
 def test_raw_sql_access_does_not_trigger_processing() -> None:
     """Test accessing raw_sql returns raw SQL without processing."""
     stmt = SQL("SELECT * FROM users")
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters=[],
@@ -520,7 +520,7 @@ def test_sql_compilation_uses_raw_expression() -> None:
     """Ensure raw expressions are reused when provided."""
     expression = exp.select("*").from_("users")
     stmt = SQL(expression)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters=[], operation_type="SELECT", expression=expression
         )
@@ -542,7 +542,7 @@ def test_sql_compilation_uses_raw_expression() -> None:
 def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
     """Test accessing .parameters property returns original parameters."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -560,7 +560,7 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
 def test_sql_single_pass_processing_triggered_by_operation_type_property() -> None:
     """Test accessing .operation_type property returns COMMAND without processing."""
     stmt = SQL("INSERT INTO users (name) VALUES ('john')")
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="INSERT INTO users (name) VALUES ('john')",
             execution_parameters={},
@@ -578,7 +578,7 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
 def test_sql_processing_fallback_on_error() -> None:
     """Test SQL processing fallback when SQLProcessor fails."""
     stmt = SQL("INVALID SQL SYNTAX")
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compile.side_effect = Exception("Processing failed")
         sql_result = stmt.raw_sql
         assert sql_result == "INVALID SQL SYNTAX"
@@ -595,7 +595,7 @@ def test_sql_expression_caching_enabled() -> None:
     """Test SQL expression caching when enabled."""
     config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=True)
     stmt = SQL("SELECT * FROM users", statement_config=config)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         expr = exp.select("*").from_("users")
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
@@ -614,7 +614,7 @@ def test_sql_expression_caching_disabled() -> None:
     """Test SQL expression behavior when caching is disabled."""
     config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=False)
     stmt = SQL("SELECT * FROM users", statement_config=config)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         expr = exp.select("*").from_("users")
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
@@ -674,7 +674,7 @@ def test_sql_parameter_processing_execute_many_detection() -> None:
 def test_sql_parameters_property_returns_processed_parameters() -> None:
     """Test SQL.parameters property returns processed parameters."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -712,7 +712,7 @@ def test_sql_parameters_property_fallback_to_original() -> None:
 def test_sql_operation_type_detection(sql_statement: str, expected_operation_type: OperationType) -> None:
     """Test SQL operation type detection for various statement types."""
     stmt = SQL(sql_statement)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql=sql_statement,
             execution_parameters={},
@@ -835,7 +835,7 @@ def test_sql_copy_rebinds_parameters_on_compile() -> None:
     )
     original._processed_state = state
     copy_stmt = original.copy(parameters=[2])
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         (sql, params) = copy_stmt.compile()
     assert sql == "SELECT * FROM users WHERE id = ?"
     assert params == [2]
@@ -856,7 +856,7 @@ def test_sql_copy_recompiles_on_structure_change() -> None:
     )
     original._processed_state = state
     copy_stmt = original.copy(parameters=["x"])
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compile.return_value = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=["x"],
@@ -886,7 +886,7 @@ def test_sql_copy_recompiles_on_filter_change() -> None:
     original._processed_state = state
     copy_stmt = original.copy(parameters=[2])
     copy_stmt._filters = []
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compile.return_value = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[2],
@@ -915,7 +915,7 @@ def test_sql_copy_recompiles_on_is_many_change() -> None:
     original._processed_state = state
     copy_stmt = original.copy(parameters=[2])
     copy_stmt._is_many = True
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compile.return_value = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[2],
@@ -983,7 +983,7 @@ def test_sql_add_named_parameter_creates_new_instance() -> None:
 def test_sql_compile_method_compatibility() -> None:
     """Test SQL.compile() method returns same format as old API."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -1067,7 +1067,7 @@ def test_sql_filters_property_compatibility() -> None:
 def test_sql_validation_errors_property_compatibility() -> None:
     """Test SQL.validation_errors property compatibility."""
     stmt = SQL("SELECT * FROM users")
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
@@ -1143,7 +1143,7 @@ def test_handle_compile_failure_logs_at_debug(caplog: pytest.LogCaptureFixture) 
 def test_sql_single_parse_guarantee() -> None:
     """Test SQL guarantees single parse operation."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
@@ -1174,7 +1174,7 @@ def test_sql_lazy_evaluation_performance() -> None:
 def test_sql_processing_caching_performance() -> None:
     """Test SQL processing result caching for performance."""
     stmt = SQL("SELECT * FROM users")
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
@@ -1238,7 +1238,7 @@ def test_sql_invalid_syntax_handling() -> None:
     """Test SQL handles invalid syntax gracefully."""
     invalid_stmt = SQL("INVALID SQL SYNTAX !@#$%")
     assert "INVALID" in invalid_stmt._raw_sql
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compile.side_effect = Exception("Parse error")
         sql_result = invalid_stmt.raw_sql
         op_type = invalid_stmt.operation_type
@@ -1348,7 +1348,7 @@ def test_sql_immutable_after_creation() -> None:
 def test_sql_processing_state_stability() -> None:
     """Test SQL processing state remains stable after first access."""
     stmt = SQL("SELECT * FROM users")
-    with patch("sqlspec.core.pipeline.compile_with_pipeline") as mock_compile:
+    with patch("sqlspec.core._pipeline.compile_with_pipeline") as mock_compile:
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
