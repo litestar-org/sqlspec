@@ -14,6 +14,11 @@ Unreleased
 
 **Fixed:**
 
+* Optimized ``INSERT`` builds keep ``ON CONFLICT ... DO UPDATE`` and
+  ``ON DUPLICATE KEY UPDATE`` assignments in written order. An assignment such as
+  ``do_update(name=exp.column("name", table="excluded"))`` previously rendered as
+  ``SET excluded.name = name``, which databases reject.
+
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
@@ -59,9 +64,12 @@ Unreleased
   ``export_table_fixtures_sync``/``export_table_fixtures_async``. Each table uses
   one ``<table>.json`` or ``<table>.jsonl`` file, optionally gzipped. Loading
   supports a table subset, an explicit load order, batched inserts, upserts on
-  conflict key columns, and, on PostgreSQL, resetting serial and identity
-  sequences past the loaded ids. The loader does not commit. Exporting replaces the
-  table's other fixture files in the directory. See :doc:`/usage/testing`.
+  conflict key columns (PostgreSQL-family, SQLite, DuckDB, and MySQL), conversion
+  of JSON values to the target column types, and, on PostgreSQL, resetting serial
+  and identity sequences past the loaded ids. Table and column names are matched
+  exactly. The loader does not commit. Exporting orders rows by primary key, writes
+  files atomically, and replaces the table's other fixture files in the directory.
+  See :doc:`/usage/testing`.
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or

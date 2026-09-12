@@ -11,14 +11,17 @@ import json
 import logging
 import sys
 import zipfile
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from uuid import UUID
 
 import pytest
 
 import sqlspec.utils.fixtures as fixture_module
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.fixtures import (
     _async_compress,
@@ -747,7 +750,8 @@ def test_export_replaces_other_fixture_variants_of_the_table(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("file_name", "content", "tables", "match"),
     [
-        ("users;drop.json", "[]", None, "Invalid table name"),
+        ("users;drop.json", "[]", ["users;drop"], "Invalid table name"),
+        ("users.jsonl", "", None, "more than one fixture file"),
         ("users.json", '[{"id": 1, "name) VALUES (1); --": "x"}]', None, "Invalid column name"),
         ("users.json", '[{"id": 1}, {"id": 2, "name": "extra"}]', None, "do not match"),
         ("users.json", "[1, 2]", None, "must be an object"),
@@ -761,6 +765,8 @@ def test_load_table_fixtures_rejects_invalid_input(
 ) -> None:
     """Unsafe identifiers, malformed rows, and missing files raise before any insert."""
     (tmp_path / file_name).write_text(content, encoding="utf-8")
+    if file_name == "users.jsonl":
+        (tmp_path / "users.json.gz").write_bytes(gzip.compress(b"[]"))
     config = SqliteConfig(connection_config={"database": ":memory:"})
     with config.provide_session() as driver:
         driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
@@ -817,3 +823,153 @@ async def test_resync_noop_on_sqlite_async(tmp_path: Path, caplog: pytest.LogCap
         assert counts == {"users": 2}
     await config.close_pool()
     assert any("resync" in record.getMessage() and record.levelno == logging.DEBUG for record in caplog.records)
+
+
+def test_load_table_fixtures_discovery_skips_non_identifier_files(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Discovery ignores files whose names are not table identifiers and logs them."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    (tmp_path / "notes-draft.json").write_text("[]", encoding="utf-8")
+    caplog.set_level(logging.DEBUG, logger="sqlspec.utils.fixtures")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+        assert load_table_fixtures_sync(driver, tmp_path) == {"users": 2}
+    config.close_pool()
+    assert any("notes-draft.json" in record.getMessage() for record in caplog.records)
+
+
+def test_table_fixtures_quote_reserved_and_mixed_case_identifiers(tmp_path: Path) -> None:
+    """Reserved-word and mixed-case table and column names load, upsert, and export."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    rows = [{"id": 1, "group": "a", "userName": "Ann"}, {"id": 2, "group": "b", "userName": "Ben"}]
+    (tmp_path / "order.json").write_text(json.dumps(rows), encoding="utf-8")
+    with config.provide_session() as driver:
+        driver.execute('CREATE TABLE "order" ("id" INTEGER PRIMARY KEY, "group" TEXT, "userName" TEXT)')
+
+        load_table_fixtures_sync(driver, tmp_path)
+        (tmp_path / "order.json").write_text(json.dumps([{"id": 1, "group": "z", "userName": "Ann"}]), encoding="utf-8")
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"order": ["id"]})
+        written = export_table_fixtures_sync(driver, tmp_path / "out", ["order"], compress=False)
+
+    assert written == {"order": 2}
+    assert json.loads((tmp_path / "out" / "order.json").read_text()) == [
+        {"id": 1, "group": "z", "userName": "Ann"},
+        {"id": 2, "group": "b", "userName": "Ben"},
+    ]
+    config.close_pool()
+
+
+def test_export_orders_rows_by_primary_key(tmp_path: Path) -> None:
+    """Exported rows follow the primary key so repeated exports produce identical files."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE items (id INTEGER, code TEXT PRIMARY KEY)")
+        driver.execute_many(
+            "INSERT INTO items (id, code) VALUES (:id, :code)",
+            [{"id": 1, "code": "c"}, {"id": 2, "code": "a"}, {"id": 3, "code": "b"}],
+        )
+
+        export_table_fixtures_sync(driver, tmp_path, ["items"], compress=False, jsonl=True)
+
+    lines = (tmp_path / "items.jsonl").read_text().splitlines()
+    assert [json.loads(line)["code"] for line in lines] == ["a", "b", "c"]
+    config.close_pool()
+
+
+def test_export_load_roundtrip_sqlite_blob(tmp_path: Path) -> None:
+    """BLOB values are written as base64 text and decoded back to bytes on load."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE files (id INTEGER PRIMARY KEY, payload BLOB, amount NUMERIC)")
+        driver.execute("INSERT INTO files VALUES (1, x'00ff10', 1.5)")
+        before = driver.select("SELECT * FROM files")
+
+        export_table_fixtures_sync(driver, tmp_path, ["files"], compress=False)
+        driver.execute("DELETE FROM files")
+        load_table_fixtures_sync(driver, tmp_path)
+
+        assert json.loads((tmp_path / "files.json").read_text())[0]["payload"] == "AP8Q"
+        assert driver.select("SELECT * FROM files") == before
+        assert driver.select_value("SELECT typeof(payload) FROM files") == "blob"
+    config.close_pool()
+
+
+def test_export_load_roundtrip_duckdb_types(tmp_path: Path) -> None:
+    """DuckDB timestamp, date, decimal, uuid, and blob columns round-trip and upsert."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    ddl = (
+        'CREATE TABLE "Typed" (id INTEGER PRIMARY KEY, ts TIMESTAMP, tstz TIMESTAMPTZ, d DATE, t TIME, '
+        'amount DECIMAL(10, 2), u UUID, payload BLOB, "userName" VARCHAR)'
+    )
+    with config.provide_session() as driver:
+        driver.execute(ddl)
+        driver.execute(
+            "INSERT INTO \"Typed\" VALUES (1, TIMESTAMP '2024-01-02 03:04:05.123456', "
+            "TIMESTAMPTZ '2024-01-02 03:04:05+00', DATE '2024-01-02', TIME '03:04:05', 12.50, "
+            "'7f3c1d2e-9a4b-4c5d-8e6f-0a1b2c3d4e5f', '\\x00\\xFF'::BLOB, 'Ann')"
+        )
+        before = driver.select('SELECT * FROM "Typed"')
+
+        export_table_fixtures_sync(driver, tmp_path, ["Typed"])
+        driver.execute('DELETE FROM "Typed"')
+        load_table_fixtures_sync(driver, tmp_path)
+        after = driver.select('SELECT * FROM "Typed"')
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"Typed": ["id"]})
+
+        assert after == before
+        assert isinstance(after[0]["amount"], Decimal)
+        assert isinstance(after[0]["u"], UUID)
+        assert after[0]["payload"] == b"\x00\xff"
+        assert driver.select_value('SELECT count(*) FROM "Typed"') == 1
+    config.close_pool()
+
+
+def test_conflict_keys_rejected_for_unsupported_dialect(tmp_path: Path) -> None:
+    """Conflict keys on a dialect without an upsert form raise before any statement runs."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    driver = MagicMock()
+    driver.statement_config.dialect = "tsql"
+
+    with pytest.raises(ValueError, match="conflict_keys is not supported for dialect 'tsql'"):
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": ["id"]})
+
+    driver.execute_many.assert_not_called()
+    driver.select.assert_not_called()
+
+
+def test_conflict_keys_render_duplicate_key_update_for_mysql(tmp_path: Path) -> None:
+    """MySQL upserts use ON DUPLICATE KEY UPDATE with quoted identifiers."""
+    (tmp_path / "order.json").write_text(json.dumps([{"id": 1, "userName": "Ann"}]), encoding="utf-8")
+    driver = MagicMock()
+    driver.statement_config.dialect = "mysql"
+    driver.select.return_value = []
+
+    load_table_fixtures_sync(driver, tmp_path, conflict_keys={"order": ["id"]})
+
+    statement = driver.execute_many.call_args.args[0]
+    rendered = " ".join(statement.to_statement().sql.split())
+    assert rendered.startswith("INSERT INTO `order` (`id`, `userName`)")
+    assert rendered.endswith("ON DUPLICATE KEY UPDATE `userName` = VALUES(`userName`)")
+
+
+def test_export_keeps_existing_files_when_write_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed export leaves the previous fixture files in place and no temporary files."""
+    (tmp_path / "users.json").write_text(json.dumps([{"id": 99, "name": "Stale"}]), encoding="utf-8")
+
+    def _fail_replace(self: Path, target: Any) -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", _fail_replace)
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        driver.execute_many("INSERT INTO users (id, name) VALUES (:id, :name)", USER_ROWS)
+
+        with pytest.raises(OSError, match="disk full"):
+            export_table_fixtures_sync(driver, tmp_path, ["users"], compress=True)
+
+    assert [path.name for path in tmp_path.iterdir()] == ["users.json"]
+    config.close_pool()

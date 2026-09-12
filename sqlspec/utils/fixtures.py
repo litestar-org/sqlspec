@@ -5,15 +5,21 @@ used in testing and development, and for loading and exporting per-table
 fixture files against a database driver. Supports both sync and async operations.
 """
 
+import base64
 import gzip
+import os
 import re
+import tempfile
 import zipfile
+from datetime import time
+from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 from sqlglot import exp
 
 from sqlspec.builder import Insert, Select
+from sqlspec.core.type_converter import convert_iso_date, convert_iso_datetime, convert_uuid
 from sqlspec.storage import storage_registry
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json as decode_json
@@ -22,7 +28,7 @@ from sqlspec.utils.serializers import to_json as encode_json
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -40,22 +46,54 @@ __all__ = (
     "write_fixture_sync",
 )
 
-_JSON_FIXTURE_EXTENSIONS: Final["tuple[str, ...]"] = (".json", ".json.gz", ".json.zip")
 _TABLE_FIXTURE_EXTENSIONS: Final["tuple[str, ...]"] = (".json", ".json.gz", ".jsonl", ".jsonl.gz")
 _COLUMN_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TABLE_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
 _POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
-_SEQUENCE_COLUMNS_FILTER: Final[str] = (
-    "AND table_name = :table_name "
-    "AND (left(column_default, 8) = 'nextval(' OR is_identity = 'YES') "
-    "ORDER BY ordinal_position"
+_MYSQL_DIALECTS: Final["frozenset[str]"] = frozenset({"mariadb", "mysql"})
+_ON_CONFLICT_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "postgres", "sqlite"})
+_JSON_VALUE_FAMILIES: Final["frozenset[str]"] = frozenset({"mysql", "postgres"})
+_FIXTURE_FILE_MODE: Final[int] = 0o644
+_POSTGRES_COLUMNS_SQL: Final[str] = """
+SELECT
+    a.attname::text AS column_name,
+    pg_catalog.format_type(a.atttypid, a.atttypmod)::text AS data_type,
+    EXISTS (
+        SELECT 1 FROM pg_catalog.pg_index i
+        WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)
+    ) AS is_primary,
+    a.attidentity::text AS identity_kind,
+    pg_catalog.pg_get_serial_sequence(:table_name, a.attname)::text AS sequence_name
+FROM pg_catalog.pg_attribute a
+WHERE a.attrelid = to_regclass(:table_name) AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY a.attnum
+"""
+_SQLITE_COLUMNS_SQL: Final[str] = (
+    "SELECT name AS column_name, type AS data_type, pk > 0 AS is_primary FROM pragma_table_info(:table_name) ORDER BY cid"
 )
-_SEQUENCE_COLUMNS_SQL: Final[str] = (
-    f"SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() {_SEQUENCE_COLUMNS_FILTER}"
+_SQLITE_SCHEMA_COLUMNS_SQL: Final[str] = (
+    "SELECT name AS column_name, type AS data_type, pk > 0 AS is_primary "
+    "FROM pragma_table_info(:table_name, :schema_name) ORDER BY cid"
 )
-_SCHEMA_SEQUENCE_COLUMNS_SQL: Final[str] = (
-    f"SELECT column_name FROM information_schema.columns WHERE table_schema = :schema_name {_SEQUENCE_COLUMNS_FILTER}"
+_DUCKDB_COLUMNS_FILTER: Final[str] = """
+SELECT
+    c.column_name AS column_name,
+    c.data_type AS data_type,
+    EXISTS (
+        SELECT 1 FROM duckdb_constraints() k
+        WHERE k.database_name = c.table_catalog AND k.schema_name = c.table_schema AND k.table_name = c.table_name
+          AND k.constraint_type = 'PRIMARY KEY' AND list_contains(k.constraint_column_names, c.column_name)
+    ) AS is_primary
+FROM information_schema.columns c
+WHERE c.table_catalog = current_database() AND c.table_name = :table_name AND c.table_schema = """
+_DUCKDB_COLUMNS_SQL: Final[str] = f"{_DUCKDB_COLUMNS_FILTER}current_schema() ORDER BY c.ordinal_position"
+_DUCKDB_SCHEMA_COLUMNS_SQL: Final[str] = f"{_DUCKDB_COLUMNS_FILTER}:schema_name ORDER BY c.ordinal_position"
+_MYSQL_COLUMNS_FILTER: Final[str] = (
+    "SELECT column_name AS column_name, column_type AS data_type, column_key = 'PRI' AS is_primary "
+    "FROM information_schema.columns WHERE table_name = :table_name AND table_schema = "
 )
+_MYSQL_COLUMNS_SQL: Final[str] = f"{_MYSQL_COLUMNS_FILTER}DATABASE() ORDER BY ordinal_position"
+_MYSQL_SCHEMA_COLUMNS_SQL: Final[str] = f"{_MYSQL_COLUMNS_FILTER}:schema_name ORDER BY ordinal_position"
 
 logger = get_logger("sqlspec.utils.fixtures")
 
@@ -217,48 +255,68 @@ def load_table_fixtures_sync(
     Each table reads from one file named after it: ``<table>.json`` holding a JSON
     array of row objects, or ``<table>.jsonl`` holding one row object per line, either
     optionally gzipped (``.gz``). Every row in a file must have the same keys, which
-    become the inserted columns. Rows are inserted in batches with ``execute_many``.
-    Values are passed to the driver as decoded from JSON, so files written by
-    :func:`export_table_fixtures_sync` load back unchanged. Transaction control stays
-    with the caller.
+    become the inserted columns. Table and column names are quoted, so they must match
+    the database spelling exactly. Rows are inserted in batches with ``execute_many``;
+    each file is read into memory. Transaction control stays with the caller.
+
+    On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's column
+    types are read first and JSON values are converted to match them: ISO 8601 strings
+    to dates, times, and datetimes, numeric strings to ``Decimal``, UUID strings to
+    ``UUID``, base64 strings to bytes for binary columns, and JSON column values to JSON
+    text. Values of other columns, and all values on other dialects, are passed to the
+    driver as decoded from JSON. On PostgreSQL, ``GENERATED ALWAYS`` identity columns
+    receive the loaded values through ``OVERRIDING SYSTEM VALUE``.
 
     Args:
         driver: Sync driver that runs the inserts.
         fixtures_path: Directory containing the table fixture files.
-        tables: Tables to load. Defaults to every table fixture file in the directory.
+        tables: Tables to load. Defaults to every table fixture file in the directory;
+            files whose names are not table identifiers are skipped with a debug log.
         table_order: Tables to load first, in this order. Remaining tables load
             afterwards in alphabetical order; names not being loaded are ignored.
         conflict_keys: Mapping of table name to the key columns of a unique constraint.
             Rows for these tables are upserted, updating every non-key column when a row
-            with the same key already exists.
+            with the same key already exists. Supported on PostgreSQL-family, SQLite,
+            and DuckDB drivers (``ON CONFLICT``) and MySQL (``ON DUPLICATE KEY UPDATE``,
+            which matches any unique key of the table).
         batch_size: Maximum number of rows per ``execute_many`` call.
         resync_sequences: On PostgreSQL-family drivers, set the sequence behind each
-            serial or identity column of a loaded table to the column's maximum value
-            (or back to 1 for an empty table), so the next generated value follows the
-            loaded rows. On other dialects the option is skipped with a debug log.
+            serial or identity column of a loaded table to the column's maximum value,
+            or back to the sequence's minimum value for an empty table, so the next
+            generated value follows the loaded rows. On other dialects the option is
+            skipped with a debug log.
 
     Returns:
         Mapping of table name to the number of rows loaded, in load order.
 
     Raises:
-        ValueError: If ``batch_size`` is below 1, a table or column name is not a plain
-            SQL identifier, or the rows of a fixture file have differing columns.
+        ValueError: If ``batch_size`` is below 1, ``conflict_keys`` is given for an
+            unsupported dialect, a table or column name is not a plain SQL identifier,
+            a table has more than one fixture file, or the rows of a fixture file have
+            differing columns.
         TypeError: If a fixture file does not hold a list of row objects.
         FileNotFoundError: If a requested table has no fixture file.
     """
-    _validate_load_arguments(conflict_keys, batch_size)
-    table_files = _ordered_table_files(fixtures_path, tables, table_order)
     dialect = driver.statement_config.dialect
-    resync = _sequence_resync_enabled(resync_sequences, dialect)
+    dialect_name = _dialect_name(dialect)
+    family = _dialect_family(dialect_name)
+    _validate_load_arguments(conflict_keys, batch_size, dialect_name, family)
+    table_files = _ordered_table_files(fixtures_path, tables, table_order)
+    resync = _sequence_resync_enabled(resync_sequences, dialect_name, family)
     counts: dict[str, int] = {}
     for table, file_path in table_files:
         rows = _table_fixture_rows(file_path, _read_table_fixture_text(file_path))
+        columns = _table_columns_sync(driver, family, table) if rows or resync else []
         if rows:
-            statement = _table_insert_statement(dialect, table, list(rows[0]), _conflict_keys_for(conflict_keys, table))
+            _decode_row_values(rows, family, columns)
+            statement = _table_insert_statement(
+                dialect, family, table, list(rows[0]), _conflict_keys_for(conflict_keys, table), columns
+            )
             for start in range(0, len(rows), batch_size):
                 driver.execute_many(statement, rows[start : start + batch_size])
         if resync:
-            _resync_postgres_sequences_sync(driver, table)
+            for resync_statement, parameters in _sequence_resync_statements(table, columns):
+                driver.execute(resync_statement, parameters)
         counts[table] = len(rows)
     return counts
 
@@ -278,48 +336,69 @@ async def load_table_fixtures_async(
     Each table reads from one file named after it: ``<table>.json`` holding a JSON
     array of row objects, or ``<table>.jsonl`` holding one row object per line, either
     optionally gzipped (``.gz``). Every row in a file must have the same keys, which
-    become the inserted columns. Rows are inserted in batches with ``execute_many``.
-    Values are passed to the driver as decoded from JSON, so files written by
-    :func:`export_table_fixtures_async` load back unchanged. File reads run in a
-    worker thread. Transaction control stays with the caller.
+    become the inserted columns. Table and column names are quoted, so they must match
+    the database spelling exactly. Rows are inserted in batches with ``execute_many``;
+    each file is read into memory in a worker thread. Transaction control stays with
+    the caller.
+
+    On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's column
+    types are read first and JSON values are converted to match them: ISO 8601 strings
+    to dates, times, and datetimes, numeric strings to ``Decimal``, UUID strings to
+    ``UUID``, base64 strings to bytes for binary columns, and JSON column values to JSON
+    text. Values of other columns, and all values on other dialects, are passed to the
+    driver as decoded from JSON. On PostgreSQL, ``GENERATED ALWAYS`` identity columns
+    receive the loaded values through ``OVERRIDING SYSTEM VALUE``.
 
     Args:
         driver: Async driver that runs the inserts.
         fixtures_path: Directory containing the table fixture files.
-        tables: Tables to load. Defaults to every table fixture file in the directory.
+        tables: Tables to load. Defaults to every table fixture file in the directory;
+            files whose names are not table identifiers are skipped with a debug log.
         table_order: Tables to load first, in this order. Remaining tables load
             afterwards in alphabetical order; names not being loaded are ignored.
         conflict_keys: Mapping of table name to the key columns of a unique constraint.
             Rows for these tables are upserted, updating every non-key column when a row
-            with the same key already exists.
+            with the same key already exists. Supported on PostgreSQL-family, SQLite,
+            and DuckDB drivers (``ON CONFLICT``) and MySQL (``ON DUPLICATE KEY UPDATE``,
+            which matches any unique key of the table).
         batch_size: Maximum number of rows per ``execute_many`` call.
         resync_sequences: On PostgreSQL-family drivers, set the sequence behind each
-            serial or identity column of a loaded table to the column's maximum value
-            (or back to 1 for an empty table), so the next generated value follows the
-            loaded rows. On other dialects the option is skipped with a debug log.
+            serial or identity column of a loaded table to the column's maximum value,
+            or back to the sequence's minimum value for an empty table, so the next
+            generated value follows the loaded rows. On other dialects the option is
+            skipped with a debug log.
 
     Returns:
         Mapping of table name to the number of rows loaded, in load order.
 
     Raises:
-        ValueError: If ``batch_size`` is below 1, a table or column name is not a plain
-            SQL identifier, or the rows of a fixture file have differing columns.
+        ValueError: If ``batch_size`` is below 1, ``conflict_keys`` is given for an
+            unsupported dialect, a table or column name is not a plain SQL identifier,
+            a table has more than one fixture file, or the rows of a fixture file have
+            differing columns.
         TypeError: If a fixture file does not hold a list of row objects.
         FileNotFoundError: If a requested table has no fixture file.
     """
-    _validate_load_arguments(conflict_keys, batch_size)
-    table_files = await _async_ordered_table_files(fixtures_path, tables, table_order)
     dialect = driver.statement_config.dialect
-    resync = _sequence_resync_enabled(resync_sequences, dialect)
+    dialect_name = _dialect_name(dialect)
+    family = _dialect_family(dialect_name)
+    _validate_load_arguments(conflict_keys, batch_size, dialect_name, family)
+    table_files = await _async_ordered_table_files(fixtures_path, tables, table_order)
+    resync = _sequence_resync_enabled(resync_sequences, dialect_name, family)
     counts: dict[str, int] = {}
     for table, file_path in table_files:
         rows = _table_fixture_rows(file_path, await _async_read_table_fixture_text(file_path))
+        columns = await _table_columns_async(driver, family, table) if rows or resync else []
         if rows:
-            statement = _table_insert_statement(dialect, table, list(rows[0]), _conflict_keys_for(conflict_keys, table))
+            _decode_row_values(rows, family, columns)
+            statement = _table_insert_statement(
+                dialect, family, table, list(rows[0]), _conflict_keys_for(conflict_keys, table), columns
+            )
             for start in range(0, len(rows), batch_size):
                 await driver.execute_many(statement, rows[start : start + batch_size])
         if resync:
-            await _resync_postgres_sequences_async(driver, table)
+            for resync_statement, parameters in _sequence_resync_statements(table, columns):
+                await driver.execute(resync_statement, parameters)
         counts[table] = len(rows)
     return counts
 
@@ -336,9 +415,16 @@ def export_table_fixtures_sync(
 
     Writes every row of each table to ``<table>.json`` (a JSON array) or, with
     ``jsonl``, ``<table>.jsonl`` (one JSON object per line), gzipped with a ``.gz``
-    suffix when ``compress`` is set. Other table fixture files for the same table in
-    the directory are removed, so :func:`load_table_fixtures_sync` reads the exported
-    file. The directory is created when missing.
+    suffix when ``compress`` is set. Rows are ordered by the primary key, or by the
+    first column when the table has none, and each table is read into memory. Dates,
+    times, and datetimes are written as ISO 8601 strings, ``Decimal`` and ``UUID``
+    values as strings, and bytes as base64 strings, which
+    :func:`load_table_fixtures_sync` converts back for typed columns.
+
+    Each file is written to a temporary file in the directory and then moved into
+    place; after that, other table fixture files for the same table in the directory
+    are removed, so the next load reads the exported file. The directory is created
+    when missing. Table names are quoted and must match the database spelling exactly.
 
     Args:
         driver: Sync driver that reads the tables.
@@ -355,9 +441,11 @@ def export_table_fixtures_sync(
     """
     table_names = [_validated_table_name(table) for table in tables]
     dialect = driver.statement_config.dialect
+    family = _dialect_family(_dialect_name(dialect))
     counts: dict[str, int] = {}
     for table in table_names:
-        rows = driver.select(Select("*", dialect=dialect).from_(table))
+        columns = _table_columns_sync(driver, family, table)
+        rows = driver.select(_table_export_query(dialect, table, columns))
         _write_table_fixture(Path(fixtures_path), table, rows, compress, jsonl)
         counts[table] = len(rows)
     return counts
@@ -375,9 +463,17 @@ async def export_table_fixtures_async(
 
     Writes every row of each table to ``<table>.json`` (a JSON array) or, with
     ``jsonl``, ``<table>.jsonl`` (one JSON object per line), gzipped with a ``.gz``
-    suffix when ``compress`` is set. Other table fixture files for the same table in
-    the directory are removed, so :func:`load_table_fixtures_async` reads the exported
-    file. The directory is created when missing. File writes run in a worker thread.
+    suffix when ``compress`` is set. Rows are ordered by the primary key, or by the
+    first column when the table has none, and each table is read into memory. Dates,
+    times, and datetimes are written as ISO 8601 strings, ``Decimal`` and ``UUID``
+    values as strings, and bytes as base64 strings, which
+    :func:`load_table_fixtures_async` converts back for typed columns.
+
+    Each file is written to a temporary file in the directory and then moved into
+    place; after that, other table fixture files for the same table in the directory
+    are removed, so the next load reads the exported file. The directory is created
+    when missing, and file writes run in a worker thread. Table names are quoted and
+    must match the database spelling exactly.
 
     Args:
         driver: Async driver that reads the tables.
@@ -394,12 +490,24 @@ async def export_table_fixtures_async(
     """
     table_names = [_validated_table_name(table) for table in tables]
     dialect = driver.statement_config.dialect
+    family = _dialect_family(_dialect_name(dialect))
     counts: dict[str, int] = {}
     for table in table_names:
-        rows = await driver.select(Select("*", dialect=dialect).from_(table))
+        columns = await _table_columns_async(driver, family, table)
+        rows = await driver.select(_table_export_query(dialect, table, columns))
         await _async_write_table_fixture(Path(fixtures_path), table, rows, compress, jsonl)
         counts[table] = len(rows)
     return counts
+
+
+class _TableColumn(NamedTuple):
+    """Column metadata used to convert, insert, order, and resync table fixture rows."""
+
+    name: str
+    data_type: str
+    is_primary: bool
+    identity_kind: str
+    sequence_name: "str | None"
 
 
 def _read_text_sync(path: "Path") -> str:
@@ -446,15 +554,12 @@ def _read_compressed_file(file_path: Path) -> str:
         raise ValueError(msg)
 
 
-def _find_fixture_file(
-    fixtures_path: Any, fixture_name: str, extensions: "tuple[str, ...]" = _JSON_FIXTURE_EXTENSIONS
-) -> Path:
+def _find_fixture_file(fixtures_path: Any, fixture_name: str) -> Path:
     """Find a fixture file with various extensions.
 
     Args:
         fixtures_path: The path to look for fixtures
         fixture_name: The fixture name to load
-        extensions: File extensions to try, in priority order
 
     Returns:
         Path to the found fixture file
@@ -464,7 +569,7 @@ def _find_fixture_file(
     """
     base_path = Path(fixtures_path)
 
-    for extension in extensions:
+    for extension in [".json", ".json.gz", ".json.zip"]:
         fixture_path = base_path / f"{fixture_name}{extension}"
         if fixture_path.exists():
             return fixture_path
@@ -522,20 +627,50 @@ def _validated_column_name(name: str) -> str:
     return name
 
 
-def _validate_load_arguments(conflict_keys: "Mapping[str, Sequence[str]] | None", batch_size: int) -> None:
-    """Validate the batch size and conflict key identifiers of a table fixture load.
+def _dialect_name(dialect: "DialectType") -> str:
+    """Return the lower-case name of a dialect, or an empty string when unset."""
+    if dialect is None:
+        return ""
+    if isinstance(dialect, str):
+        return dialect.lower()
+    if isinstance(dialect, type):
+        return dialect.__name__.lower()
+    return type(dialect).__name__.lower()
+
+
+def _dialect_family(dialect_name: str) -> str:
+    """Return ``postgres`` or ``mysql`` for those dialect families, otherwise the dialect name."""
+    if dialect_name in _POSTGRES_DIALECTS:
+        return "postgres"
+    if dialect_name in _MYSQL_DIALECTS:
+        return "mysql"
+    return dialect_name
+
+
+def _validate_load_arguments(
+    conflict_keys: "Mapping[str, Sequence[str]] | None", batch_size: int, dialect_name: str, family: str
+) -> None:
+    """Validate the batch size and conflict keys of a table fixture load.
 
     Raises:
-        ValueError: If ``batch_size`` is below 1 or a conflict key name is unsafe.
+        ValueError: If ``batch_size`` is below 1, conflict keys are unsupported for the
+            dialect, or a conflict key name is unsafe.
     """
     if batch_size < 1:
         msg = f"batch_size must be at least 1, got {batch_size}"
         raise ValueError(msg)
-    if conflict_keys:
-        for table, keys in conflict_keys.items():
-            _validated_table_name(table)
-            for key in keys:
-                _validated_column_name(key)
+    if not conflict_keys:
+        return
+    if family not in _ON_CONFLICT_FAMILIES and family != "mysql":
+        msg = (
+            f"conflict_keys is not supported for dialect {dialect_name!r}; "
+            "supported dialects are PostgreSQL-family, SQLite, DuckDB, and MySQL"
+        )
+        raise ValueError(msg)
+    for table, keys in conflict_keys.items():
+        _validated_table_name(table)
+        for key in keys:
+            _validated_column_name(key)
 
 
 def _conflict_keys_for(conflict_keys: "Mapping[str, Sequence[str]] | None", table: str) -> "tuple[str, ...]":
@@ -545,25 +680,47 @@ def _conflict_keys_for(conflict_keys: "Mapping[str, Sequence[str]] | None", tabl
     return tuple(conflict_keys[table])
 
 
+def _table_name_for_file(file_name: str) -> "str | None":
+    """Return the table part of a table fixture file name, or None for other files."""
+    for extension in _TABLE_FIXTURE_EXTENSIONS:
+        if file_name.endswith(extension):
+            return file_name[: -len(extension)]
+    return None
+
+
+def _single_table_file(table: str, paths: "list[Path]") -> Path:
+    """Return the only fixture file of a table.
+
+    Raises:
+        FileNotFoundError: If the table has no fixture file.
+        ValueError: If the table has more than one fixture file.
+    """
+    if not paths:
+        msg = f"Could not find the {table} fixture"
+        raise FileNotFoundError(msg)
+    if len(paths) > 1:
+        names = ", ".join(path.name for path in paths)
+        msg = f"Table {table!r} has more than one fixture file: {names}"
+        raise ValueError(msg)
+    return paths[0]
+
+
 def _discover_table_files(fixtures_path: "str | Path") -> "dict[str, Path]":
     """Map each table with a fixture file in the directory to its file.
 
     Raises:
-        ValueError: If a fixture file name is not a safe table identifier.
+        ValueError: If a table has more than one fixture file.
     """
-    base_path = Path(fixtures_path)
-    table_names: set[str] = set()
-    for entry in base_path.iterdir():
-        if not entry.is_file():
+    table_paths: dict[str, list[Path]] = {}
+    for entry in sorted(Path(fixtures_path).iterdir()):
+        table = _table_name_for_file(entry.name)
+        if table is None or not entry.is_file():
             continue
-        for extension in _TABLE_FIXTURE_EXTENSIONS:
-            if entry.name.endswith(extension):
-                table_names.add(entry.name[: -len(extension)])
-                break
-    return {
-        table: _find_fixture_file(base_path, _validated_table_name(table), _TABLE_FIXTURE_EXTENSIONS)
-        for table in sorted(table_names)
-    }
+        if not _TABLE_NAME_PATTERN.fullmatch(table):
+            logger.debug("Skipping table fixture file %s: %r is not a table identifier", entry.name, table)
+            continue
+        table_paths.setdefault(table, []).append(entry)
+    return {table: _single_table_file(table, paths) for table, paths in table_paths.items()}
 
 
 def _ordered_table_files(
@@ -572,16 +729,18 @@ def _ordered_table_files(
     """Resolve the tables to load and their fixture files in load order.
 
     Raises:
-        ValueError: If a table name is not a safe identifier.
+        ValueError: If a table name is not a safe identifier or a table has more than one fixture file.
         FileNotFoundError: If a requested table has no fixture file.
     """
     if tables is None:
         table_files = _discover_table_files(fixtures_path)
     else:
-        table_files = {
-            table: _find_fixture_file(fixtures_path, _validated_table_name(table), _TABLE_FIXTURE_EXTENSIONS)
-            for table in tables
-        }
+        base_path = Path(fixtures_path)
+        table_files = {}
+        for table in tables:
+            _validated_table_name(table)
+            candidates = [base_path / f"{table}{extension}" for extension in _TABLE_FIXTURE_EXTENSIONS]
+            table_files[table] = _single_table_file(table, [path for path in candidates if path.is_file()])
     ordered = [table for table in dict.fromkeys(table_order or ()) if table in table_files]
     listed = set(ordered)
     ordered.extend(sorted(table for table in table_files if table not in listed))
@@ -628,106 +787,271 @@ def _table_fixture_rows(file_path: Path, content: str) -> "list[dict[str, Any]]"
     return rows
 
 
-def _table_insert_statement(
-    dialect: "DialectType", table: str, columns: "list[str]", conflict_keys: "tuple[str, ...]"
-) -> Insert:
-    """Return an INSERT with a named placeholder per column, upserting on conflict keys."""
-    statement = (
-        Insert(table, dialect=dialect, enable_optimization=False)
-        .columns(*columns)
-        .values({column: exp.Placeholder(this=column) for column in columns})
-    )
-    if not conflict_keys:
-        return statement
-    updates = {column: exp.column(column, table="excluded") for column in columns if column not in conflict_keys}
-    if not updates:
-        return statement.on_conflict(*conflict_keys).do_nothing()
-    return statement.on_conflict(*conflict_keys).do_update(**updates)
+def _quoted_identifier(name: str) -> exp.Identifier:
+    """Return a quoted identifier expression for a name."""
+    return exp.to_identifier(name, quoted=True)
 
 
-def _sequence_resync_enabled(resync_sequences: bool, dialect: "DialectType") -> bool:
-    """Return whether sequence resync applies, logging when it is skipped for the dialect."""
-    if not resync_sequences:
-        return False
-    if dialect is None:
-        dialect_name = ""
-    elif isinstance(dialect, str):
-        dialect_name = dialect
-    elif isinstance(dialect, type):
-        dialect_name = dialect.__name__
-    else:
-        dialect_name = type(dialect).__name__
-    if dialect_name.lower() in _POSTGRES_DIALECTS:
-        return True
-    logger.debug("Skipping table fixture sequence resync for non-PostgreSQL dialect %r", dialect_name or None)
-    return False
-
-
-def _quoted_identifier(name: str) -> str:
-    """Return the name as a double-quoted SQL identifier."""
+def _quoted_identifier_sql(name: str) -> str:
+    """Return the name as double-quoted SQL identifier text."""
     escaped = name.replace('"', '""')
     return f'"{escaped}"'
 
 
 def _quoted_table_name(table: str) -> str:
     """Return a validated plain or schema-qualified table name with each part double-quoted."""
-    return ".".join(_quoted_identifier(part) for part in table.split("."))
+    return ".".join(_quoted_identifier_sql(part) for part in table.split("."))
 
 
-def _sequence_columns_query(table: str) -> "tuple[str, dict[str, str]]":
-    """Return the query and parameters listing a table's serial and identity columns."""
+def _table_columns_query(family: str, table: str) -> "tuple[str, dict[str, str]] | None":
+    """Return the column metadata query and parameters for a table, or None when the dialect has none."""
     schema_name, _, table_name = table.rpartition(".")
-    if schema_name:
-        return _SCHEMA_SEQUENCE_COLUMNS_SQL, {"schema_name": schema_name, "table_name": table_name}
-    return _SEQUENCE_COLUMNS_SQL, {"table_name": table_name}
+    if family == "postgres":
+        return _POSTGRES_COLUMNS_SQL, {"table_name": _quoted_table_name(table)}
+    if family == "sqlite":
+        if schema_name:
+            return _SQLITE_SCHEMA_COLUMNS_SQL, {"table_name": table_name, "schema_name": schema_name}
+        return _SQLITE_COLUMNS_SQL, {"table_name": table_name}
+    if family == "duckdb":
+        if schema_name:
+            return _DUCKDB_SCHEMA_COLUMNS_SQL, {"table_name": table_name, "schema_name": schema_name}
+        return _DUCKDB_COLUMNS_SQL, {"table_name": table_name}
+    if family == "mysql":
+        if schema_name:
+            return _MYSQL_SCHEMA_COLUMNS_SQL, {"table_name": table_name, "schema_name": schema_name}
+        return _MYSQL_COLUMNS_SQL, {"table_name": table_name}
+    return None
 
 
-def _sequence_resync_statement(table: str, column: str) -> "tuple[str, dict[str, str]]":
-    """Return the statement and parameters that align a column's owned sequence with its maximum value."""
-    quoted_column = _quoted_identifier(column)
-    statement = (
-        f"SELECT setval(pg_get_serial_sequence(:table_name, :column_name), "
-        f"coalesce(max({quoted_column}), 1), max({quoted_column}) IS NOT NULL) "
-        f"FROM {_quoted_table_name(table)}"
+def _table_column(row: "dict[str, Any]") -> _TableColumn:
+    """Return column metadata from a metadata query row."""
+    sequence_name = row.get("sequence_name")
+    return _TableColumn(
+        name=str(row["column_name"]),
+        data_type=str(row.get("data_type") or "").lower(),
+        is_primary=bool(row.get("is_primary")),
+        identity_kind=str(row.get("identity_kind") or ""),
+        sequence_name=None if sequence_name is None else str(sequence_name),
     )
-    return statement, {"table_name": _quoted_table_name(table), "column_name": column}
 
 
-def _resync_postgres_sequences_sync(driver: "SyncDriverAdapterBase", table: str) -> None:
-    """Align the sequences behind a table's serial and identity columns with the loaded rows."""
-    query, parameters = _sequence_columns_query(table)
-    for row in driver.select(query, parameters):
-        statement, statement_parameters = _sequence_resync_statement(table, str(row["column_name"]))
-        driver.execute(statement, statement_parameters)
+def _table_columns_sync(driver: "SyncDriverAdapterBase", family: str, table: str) -> "list[_TableColumn]":
+    """Read the column metadata of a table."""
+    query = _table_columns_query(family, table)
+    if query is None:
+        return []
+    return [_table_column(row) for row in driver.select(query[0], query[1])]
 
 
-async def _resync_postgres_sequences_async(driver: "AsyncDriverAdapterBase", table: str) -> None:
-    """Align the sequences behind a table's serial and identity columns with the loaded rows."""
-    query, parameters = _sequence_columns_query(table)
-    for row in await driver.select(query, parameters):
-        statement, statement_parameters = _sequence_resync_statement(table, str(row["column_name"]))
-        await driver.execute(statement, statement_parameters)
+async def _table_columns_async(driver: "AsyncDriverAdapterBase", family: str, table: str) -> "list[_TableColumn]":
+    """Read the column metadata of a table."""
+    query = _table_columns_query(family, table)
+    if query is None:
+        return []
+    return [_table_column(row) for row in await driver.select(query[0], query[1])]
+
+
+def _decode_bytes(value: Any) -> Any:
+    """Decode a base64 string to bytes."""
+    return base64.b64decode(value, validate=True) if isinstance(value, str) else value
+
+
+def _decode_datetime(value: Any) -> Any:
+    """Decode an ISO 8601 string to a datetime."""
+    return convert_iso_datetime(value) if isinstance(value, str) else value
+
+
+def _decode_date(value: Any) -> Any:
+    """Decode an ISO 8601 string to a date."""
+    return convert_iso_date(value) if isinstance(value, str) else value
+
+
+def _decode_time(value: Any) -> Any:
+    """Decode an ISO 8601 string to a time."""
+    if not isinstance(value, str):
+        return value
+    return time.fromisoformat(f"{value[:-1]}+00:00" if value.endswith("Z") else value)
+
+
+def _decode_decimal(value: Any) -> Any:
+    """Decode a numeric string or JSON number to a Decimal."""
+    if isinstance(value, str):
+        return Decimal(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return Decimal(str(value))
+    return value
+
+
+def _decode_uuid(value: Any) -> Any:
+    """Decode a UUID string to a UUID."""
+    return convert_uuid(value) if isinstance(value, str) else value
+
+
+def _encode_json_value(value: Any) -> Any:
+    """Encode a JSON column value as JSON text."""
+    return encode_json(value)
+
+
+def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] | None":
+    """Return the converter from a JSON value to the driver value for a column type, if any."""
+    if data_type.endswith("]"):
+        return None
+    if data_type == "bytea" or "blob" in data_type or data_type.startswith(("binary", "varbinary")):
+        return _decode_bytes
+    if family == "sqlite":
+        return None
+    if data_type in {"json", "jsonb"}:
+        return _encode_json_value if family in _JSON_VALUE_FAMILIES else None
+    if data_type.startswith(("timestamp", "datetime")):
+        return _decode_datetime
+    if data_type == "date":
+        return _decode_date
+    if data_type.startswith("time"):
+        return None if family == "mysql" else _decode_time
+    if data_type.startswith(("numeric", "decimal")):
+        return _decode_decimal
+    if data_type == "uuid":
+        return _decode_uuid
+    return None
+
+
+def _decode_row_values(rows: "list[dict[str, Any]]", family: str, columns: "list[_TableColumn]") -> None:
+    """Convert the JSON values of typed columns in place."""
+    decoders: list[tuple[str, Callable[[Any], Any]]] = []
+    for column in columns:
+        decoder = _column_value_decoder(family, column.data_type)
+        if decoder is not None:
+            decoders.append((column.name, decoder))
+    if not decoders:
+        return
+    for row in rows:
+        for name, decoder in decoders:
+            value = row.get(name)
+            if value is not None:
+                row[name] = decoder(value)
+
+
+def _conflict_clause(family: str, columns: "list[str]", conflict_keys: "tuple[str, ...]") -> exp.OnConflict:
+    """Return the upsert clause that updates non-key columns on a key conflict."""
+    updates = [column for column in columns if column not in conflict_keys]
+    if family == "mysql":
+        assignments = [
+            exp.EQ(
+                this=exp.column(_quoted_identifier(column)),
+                expression=exp.Anonymous(this="VALUES", expressions=[exp.column(_quoted_identifier(column))]),
+            )
+            for column in updates or list(conflict_keys)
+        ]
+        return exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=assignments)
+    keys = [_quoted_identifier(key) for key in conflict_keys]
+    if not updates:
+        return exp.OnConflict(conflict_keys=keys, action=exp.var("DO NOTHING"))
+    assignments = [
+        exp.EQ(
+            this=exp.column(_quoted_identifier(column)),
+            expression=exp.column(_quoted_identifier(column), table=_quoted_identifier("excluded")),
+        )
+        for column in updates
+    ]
+    return exp.OnConflict(conflict_keys=keys, action=exp.var("DO UPDATE"), expressions=assignments)
+
+
+def _table_insert_statement(
+    dialect: "DialectType",
+    family: str,
+    table: str,
+    columns: "list[str]",
+    conflict_keys: "tuple[str, ...]",
+    table_columns: "list[_TableColumn]",
+) -> "Insert | str":
+    """Return an INSERT with a named placeholder per quoted column, upserting on conflict keys.
+
+    On PostgreSQL, an insert into ``GENERATED ALWAYS`` identity columns is returned as SQL
+    text with ``OVERRIDING SYSTEM VALUE``.
+    """
+    statement = (
+        Insert(dialect=dialect)
+        .into(_quoted_table_name(table))
+        .columns(*[_quoted_identifier(column) for column in columns])
+        .values({column: exp.Placeholder(this=column) for column in columns})
+    )
+    insert_expression = statement.get_insert_expression()
+    if conflict_keys:
+        insert_expression.set("conflict", _conflict_clause(family, columns, conflict_keys))
+    always_identity = {column.name for column in table_columns if column.identity_kind == "a"}
+    if family != "postgres" or always_identity.isdisjoint(columns):
+        return statement
+    return insert_expression.sql(dialect=dialect).replace(") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1)
+
+
+def _table_export_query(dialect: "DialectType", table: str, table_columns: "list[_TableColumn]") -> Select:
+    """Return a SELECT of every row ordered by the primary key, the first column, or position 1."""
+    order_columns = [column.name for column in table_columns if column.is_primary] or [
+        column.name for column in table_columns[:1]
+    ]
+    order_by = [_quoted_identifier_sql(name) for name in order_columns] or ["1"]
+    return Select("*", dialect=dialect).from_(_quoted_table_name(table)).order_by(*order_by)
+
+
+def _sequence_resync_enabled(resync_sequences: bool, dialect_name: str, family: str) -> bool:
+    """Return whether sequence resync applies, logging when it is skipped for the dialect."""
+    if not resync_sequences:
+        return False
+    if family == "postgres":
+        return True
+    logger.debug("Skipping table fixture sequence resync for non-PostgreSQL dialect %r", dialect_name or None)
+    return False
+
+
+def _sequence_resync_statements(table: str, table_columns: "list[_TableColumn]") -> "list[tuple[str, dict[str, str]]]":
+    """Return statements aligning each owned sequence of a table with its column's maximum value."""
+    statements: list[tuple[str, dict[str, str]]] = []
+    for column in table_columns:
+        if column.sequence_name is None:
+            continue
+        quoted_column = _quoted_identifier_sql(column.name)
+        statement = (
+            f"SELECT setval(to_regclass(:sequence_name), coalesce(max({quoted_column}), "
+            "(SELECT seqmin FROM pg_catalog.pg_sequence WHERE seqrelid = to_regclass(:sequence_name))), "
+            f"max({quoted_column}) IS NOT NULL) FROM {_quoted_table_name(table)}"
+        )
+        statements.append((statement, {"sequence_name": column.sequence_name}))
+    return statements
+
+
+def _exportable_value(value: Any) -> Any:
+    """Return a JSON-ready value, encoding bytes as base64 text."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return base64.b64encode(value).decode("ascii")
+    return value
 
 
 def _table_fixture_text(rows: "list[dict[str, Any]]", jsonl: bool) -> str:
-    """Serialize table rows as a JSON array or as JSON lines."""
+    """Serialize table rows as a JSON array or as JSON lines, encoding bytes as base64 text."""
+    exportable = [{key: _exportable_value(value) for key, value in row.items()} for row in rows]
     if not jsonl:
-        return _serialize_data(rows)
-    return "".join(f"{encode_json(schema_dump(row))}\n" for row in rows)
+        return encode_json(exportable)
+    return "".join(f"{encode_json(row)}\n" for row in exportable)
 
 
 def _write_table_fixture(
     base_path: Path, table: str, rows: "list[dict[str, Any]]", compress: bool, jsonl: bool
 ) -> None:
-    """Write table rows to their fixture file, replacing other fixture files of the table."""
+    """Atomically write table rows to their fixture file, then remove other fixture files of the table."""
     extension = (".jsonl" if jsonl else ".json") + (".gz" if compress else "")
     base_path.mkdir(parents=True, exist_ok=True)
     content = _table_fixture_text(rows, jsonl)
-    target = base_path / f"{table}{extension}"
-    if compress:
-        target.write_bytes(_compress_text(content))
-    else:
-        target.write_text(content, encoding="utf-8")
+    payload = _compress_text(content) if compress else content.encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(dir=base_path, prefix=f".{table}.", suffix=".tmp")
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+        temporary_path.chmod(_FIXTURE_FILE_MODE)
+        temporary_path.replace(base_path / f"{table}{extension}")
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
     for other_extension in _TABLE_FIXTURE_EXTENSIONS:
         if other_extension != extension:
             (base_path / f"{table}{other_extension}").unlink(missing_ok=True)

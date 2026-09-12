@@ -78,6 +78,7 @@ KNOWN_SET_SITES: frozenset[tuple[str, str, str]] = frozenset({
     ("sqlspec/driver/_common.py", "subquery_expr", "limit"),
     ("sqlspec/driver/_common.py", "subquery_expr", "offset"),
     ("sqlspec/driver/_common.py", "subquery_expr", "order"),
+    ("sqlspec/utils/fixtures.py", "insert_expression", "conflict"),
 })
 
 
