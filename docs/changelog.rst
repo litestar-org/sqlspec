@@ -24,11 +24,14 @@ Unreleased
   class or wrapped in ``DefineMiddleware``. The application's instance and its
   header settings are used, and correlation IDs are extracted once per request.
   The plugin logs a warning when this leaves ``correlation_header``,
-  ``correlation_headers``, or ``auto_trace_headers`` settings unapplied.
+  ``correlation_headers``, or ``auto_trace_headers`` settings unapplied, unless
+  the application's ``DefineMiddleware`` already passes the same headers.
 * The Litestar plugin's ``NotFoundError`` handler returns its 404 response
-  instead of raising a second exception. Routes without route-level middleware
-  previously returned a 500 response, ``after_exception`` hooks ran twice, and
-  headers added by application middleware were missing from the 404 response.
+  instead of raising a second exception. Routes with no middleware in their
+  stack previously returned a 500 response, ``after_exception`` hooks ran twice,
+  and headers added by application middleware were missing from the 404
+  response. The handler still takes precedence over handlers registered for
+  base classes of ``NotFoundError`` or for status 500.
 * A migration whose ``up()`` returns an empty list is now recorded in the
   tracking table instead of being reported as applied and then staying pending
   forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
@@ -81,10 +84,13 @@ Unreleased
   ``UniqueViolationError`` or ``ForeignKeyViolationError``, and no application,
   router, controller, or route layer registers a handler for that exception,
   one of its base classes (such as ``SQLSpecError`` or ``Exception``), or
-  status 500. Those handlers keep receiving the original exception. The
-  response detail is a generic ``Conflict`` so database error text is not sent
-  to clients, and a handler registered for status 409 or for the HTTP exception
-  type, such as the problem details plugin, renders it.
+  status 500. Those handlers keep receiving the original exception, unlike the
+  ``NotFoundError`` default, which takes precedence over such broader handlers.
+  The response detail is a generic ``Conflict`` so database error text is not
+  sent to clients. A handler registered for status 409 or for
+  ``HTTPException`` renders the response, including the problem details plugin
+  when configured with
+  ``ProblemDetailsConfig(enable_for_all_http_exceptions=True)``.
 
 * The Litestar extension setting ``manage_lifespan`` controls whether the plugin
   creates and closes each config's pool with the application. It defaults to the

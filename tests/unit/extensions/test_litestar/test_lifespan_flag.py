@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from litestar import get
 from litestar.config.app import AppConfig
-from litestar.di import Provide
+from litestar.di import NamedDependency, Provide
 from litestar.testing import create_test_client
 
 from sqlspec.adapters.aiosqlite import AiosqliteDriver
@@ -110,7 +110,7 @@ def test_disable_di_manage_lifespan_serves_requests_with_user_provider() -> None
             yield session  # noqa: ASYNC119
 
     @get("/value")
-    async def read_value(session: AiosqliteDriver) -> "dict[str, Any]":
+    async def read_value(session: NamedDependency[AiosqliteDriver]) -> "dict[str, Any]":
         return {"value": await session.select_value("SELECT 1"), "pool_started": config.connection_instance is not None}
 
     with create_test_client(

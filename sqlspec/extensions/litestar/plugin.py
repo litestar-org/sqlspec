@@ -122,7 +122,10 @@ def not_found_error_handler(request: "Request[Any, Any, Any]", exc: NotFoundErro
     404 or for the HTTP exception type, such as a problem details handler, and otherwise from
     Litestar's default exception response. The response is returned inside the route's
     middleware stack, so middleware-set headers and ``after_exception`` hooks behave as for
-    any other handled exception.
+    any other handled exception. Unlike :func:`integrity_error_handler`, it does not defer to
+    handlers registered for base classes of :class:`~sqlspec.exceptions.NotFoundError` or for
+    status 500: once registered for :class:`~sqlspec.exceptions.NotFoundError`, it takes
+    precedence over those broader handlers.
     """
     http_exc = NotFoundException(detail=str(exc) or "Not Found")
     http_exc.__cause__ = exc
@@ -134,19 +137,21 @@ def integrity_error_handler(request: "Request[Any, Any, Any]", exc: IntegrityErr
 
     Covers every constraint-violation subclass, such as
     :class:`sqlspec.exceptions.UniqueViolationError`. When the route resolves a handler for a
-    base class of :class:`~sqlspec.exceptions.IntegrityError` (for example
-    :class:`~sqlspec.exceptions.SQLSpecError` or :class:`Exception`) or for status 500, at any
-    application layer, that handler receives the original exception. Otherwise the error
-    becomes a :class:`litestar.exceptions.ClientException` with status 409 and the generic
-    detail ``"Conflict"``, rendered the same way as :func:`not_found_error_handler`.
+    class that follows :class:`~sqlspec.exceptions.IntegrityError` in the raised exception's
+    MRO (for example :class:`~sqlspec.exceptions.SQLSpecError`, :class:`Exception`, or a mixin
+    of a user subclass) or for status 500, at any application layer, that handler receives the
+    original exception; SQLSpec's own repository-error handlers are skipped. Otherwise the
+    error becomes a :class:`litestar.exceptions.ClientException` with status 409 and the
+    generic detail ``"Conflict"``, rendered the same way as :func:`not_found_error_handler`.
     Applications that want a richer message register their own
     :class:`~sqlspec.exceptions.IntegrityError` handler, which takes precedence.
     """
     handlers = _resolve_exception_handlers(request)
-    broader_handler = next(
-        (handlers[cls] for cls in IntegrityError.__mro__[1:] if cls in handlers),
-        handlers.get(HTTP_500_INTERNAL_SERVER_ERROR),
-    )
+    exc_mro = type(exc).__mro__
+    candidates = [handlers[cls] for cls in exc_mro[exc_mro.index(IntegrityError) + 1 :] if cls in handlers]
+    if HTTP_500_INTERNAL_SERVER_ERROR in handlers:
+        candidates.append(handlers[HTTP_500_INTERNAL_SERVER_ERROR])
+    broader_handler = next((handler for handler in candidates if not _is_repository_error_handler(handler)), None)
     if broader_handler is not None:
         return broader_handler(request, exc)
     http_exc = ClientException(status_code=HTTP_409_CONFLICT, detail="Conflict")
@@ -449,16 +454,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         new_middlewares: list[DefineMiddleware] = []
         if self._correlation_headers:
-            if _has_correlation_middleware(app_config.middleware):
-                default_headers = self._correlation_headers == TRACE_CONTEXT_FALLBACK_HEADERS
+            existing_correlation = _find_correlation_middleware(app_config.middleware)
+            if existing_correlation is not None:
+                headers_honored = self._correlation_headers == TRACE_CONTEXT_FALLBACK_HEADERS or (
+                    isinstance(existing_correlation, DefineMiddleware)
+                    and tuple(existing_correlation.kwargs.get("headers", ())) == self._correlation_headers
+                )
                 log_with_context(
                     logger,
-                    logging.DEBUG if default_headers else logging.WARNING,
+                    logging.DEBUG if headers_honored else logging.WARNING,
                     "extension.init",
                     framework="litestar",
                     stage="correlation_middleware_skipped",
                     reason="already_installed",
-                    unapplied_correlation_headers=None if default_headers else list(self._correlation_headers),
+                    unapplied_correlation_headers=None if headers_honored else list(self._correlation_headers),
                 )
             else:
                 new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
@@ -1136,8 +1145,8 @@ def _build_correlation_headers(*, primary: str, configured: list[str], auto_trac
     return tuple(_dedupe_headers(header_order))
 
 
-def _has_correlation_middleware(middleware: "Iterable[Middleware] | None") -> bool:
-    """Return whether the middleware stack already contains :class:`CorrelationMiddleware`.
+def _find_correlation_middleware(middleware: "Iterable[Middleware] | None") -> "Middleware | None":
+    """Return the first entry in the middleware stack that installs :class:`CorrelationMiddleware`.
 
     Matches :class:`CorrelationMiddleware` or a subclass, either as a bare class or wrapped in
     :class:`litestar.middleware.DefineMiddleware`. Factories such as :func:`functools.partial`,
@@ -1147,8 +1156,8 @@ def _has_correlation_middleware(middleware: "Iterable[Middleware] | None") -> bo
     for entry in middleware or ():
         candidate = entry.middleware if isinstance(entry, DefineMiddleware) else entry
         if isinstance(candidate, type) and issubclass(candidate, CorrelationMiddleware):
-            return True
-    return False
+            return entry
+    return None
 
 
 def _resolve_exception_handlers(request: "Request[Any, Any, Any]") -> "ExceptionHandlersMap":
@@ -1171,9 +1180,14 @@ def _render_http_exception(
     handler = handlers.get(http_exc.status_code) or next(
         (handlers[cls] for cls in type(http_exc).__mro__ if cls in handlers), None
     )
-    if handler is None or handler is integrity_error_handler or handler is not_found_error_handler:
+    if handler is None or _is_repository_error_handler(handler):
         return create_exception_response(request=request, exc=http_exc)
     return handler(request, http_exc)
+
+
+def _is_repository_error_handler(handler: Any) -> bool:
+    """Return whether ``handler`` is one of SQLSpec's repository-error exception handlers."""
+    return handler is integrity_error_handler or handler is not_found_error_handler
 
 
 def _get_litestar_numpy_array_type() -> type[Any] | None:

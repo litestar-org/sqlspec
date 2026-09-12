@@ -33,7 +33,7 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     session_provider_maker,
 )
-from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
+from sqlspec.extensions.litestar.plugin import SQLSpecPlugin, integrity_error_handler, not_found_error_handler
 
 if TYPE_CHECKING:
     from litestar.types import ASGIApp, Message, Receive, Scope, Send
@@ -573,6 +573,51 @@ def test_broader_router_handler_takes_precedence_over_integrity_default() -> Non
 
     assert response.status_code == 418
     assert response.json() == {"handled": "UniqueViolationError"}
+
+
+@pytest.mark.parametrize(
+    "handlers",
+    [
+        {RepositoryError: integrity_error_handler},
+        {SQLSpecError: not_found_error_handler},
+        {500: integrity_error_handler},
+    ],
+    ids=["repository_error_integrity_handler", "sqlspec_error_not_found_handler", "status_500_integrity_handler"],
+)
+def test_integrity_default_skips_sqlspec_handlers_registered_for_broader_keys(
+    handlers: "dict[int | type[Exception], Any]",
+) -> None:
+    """SQLSpec's own handlers registered under broader keys are not deferred to."""
+    with create_test_client(
+        route_handlers=[_raising_route(UniqueViolationError("dup"))],
+        plugins=[_build_integrity_plugin()],
+        exception_handlers=handlers,
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Conflict"
+
+
+class _TaggedError(Exception):
+    pass
+
+
+class _TaggedUniqueViolationError(UniqueViolationError, _TaggedError):
+    pass
+
+
+def test_integrity_default_defers_to_handler_for_subclass_mixin() -> None:
+    """A handler for a base class that a raised IntegrityError subclass mixes in receives the exception."""
+    with create_test_client(
+        route_handlers=[_raising_route(_TaggedUniqueViolationError("dup"))],
+        plugins=[_build_integrity_plugin()],
+        exception_handlers={_TaggedError: _teapot_handler},
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == 418
+    assert response.json() == {"handled": "_TaggedUniqueViolationError"}
 
 
 def test_integrity_subclass_handler_takes_precedence() -> None:

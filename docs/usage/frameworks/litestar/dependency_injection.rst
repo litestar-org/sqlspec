@@ -164,12 +164,12 @@ application and closed when it shuts down.
 
 .. note::
 
-   ``SQLSpecPlugin.provide_request_session()``, ``provide_request_session_sync()``,
-   ``provide_request_session_async()``, and the matching ``provide_request_connection*()``
-   helpers store the request connection in the ASGI scope and rely on the plugin's
-   per-request handler to commit and close it. That handler is not registered when
-   ``disable_di=True``, so providers for those apps open sessions with the context-managed
-   ``config.provide_session()`` instead.
+   The request-scoped helpers depend on the plugin's per-request handler, which is not
+   registered when ``disable_di=True``. ``SQLSpecPlugin.provide_request_session()`` and
+   ``provide_request_connection()`` read a connection that handler's dependency providers
+   placed in the ASGI scope, and the ``_sync`` and ``_async`` variants open a connection
+   that the handler is expected to close. Neither works with ``disable_di=True``; open
+   sessions with the context-managed ``config.provide_session()`` instead.
 
 Config Lookup Outside App Construction
 --------------------------------------

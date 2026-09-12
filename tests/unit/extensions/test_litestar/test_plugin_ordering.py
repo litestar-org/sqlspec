@@ -178,7 +178,7 @@ def test_correlation_middleware_prepended_once_without_existing() -> None:
     existing = DefineMiddleware(_ExistingMiddleware)
     app_config = AppConfig(middleware=[existing])
     _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
-    assert _middleware_types(app_config) == [CorrelationMiddleware, _ExistingMiddleware]
+    assert tuple(_middleware_types(app_config)) == (CorrelationMiddleware, _ExistingMiddleware)
 
 
 def test_repeated_on_app_init_keeps_single_correlation_middleware() -> None:
@@ -218,7 +218,7 @@ def test_skipped_correlation_middleware_warns_about_unapplied_header_settings(
     plugin = _build_plugin(correlation=True, **litestar_settings)
     with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
         plugin.on_app_init(app_config)
-    assert [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert _correlation_skip_levels(caplog) == [logging.WARNING]
 
 
 def test_skipped_correlation_middleware_with_default_headers_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
@@ -226,5 +226,29 @@ def test_skipped_correlation_middleware_with_default_headers_does_not_warn(caplo
     plugin = _build_plugin(correlation=True)
     with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
         plugin.on_app_init(app_config)
+    assert _correlation_skip_levels(caplog) == [logging.DEBUG]
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
-    assert [record for record in caplog.records if record.levelno == logging.DEBUG]
+
+
+def test_skipped_correlation_middleware_with_matching_headers_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    app_config = AppConfig(
+        middleware=[DefineMiddleware(_SubclassedCorrelationMiddleware, headers=("x-custom-id", "x-tenant-trace"))]
+    )
+    plugin = _build_plugin(
+        correlation=True,
+        correlation_header="x-custom-id",
+        correlation_headers=["x-tenant-trace"],
+        auto_trace_headers=False,
+    )
+    with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
+        plugin.on_app_init(app_config)
+    assert _correlation_skip_levels(caplog) == [logging.DEBUG]
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def _correlation_skip_levels(caplog: pytest.LogCaptureFixture) -> "list[int]":
+    return [
+        record.levelno
+        for record in caplog.records
+        if getattr(record, "extra_fields", {}).get("stage") == "correlation_middleware_skipped"
+    ]
