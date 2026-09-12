@@ -66,6 +66,14 @@ Unreleased
   only from the method's explicit ``storage_options`` argument, not pipeline
   writer defaults.
 
+* The Litestar plugin returns HTTP 409 Conflict when a route raises
+  ``IntegrityError`` or one of its subclasses, such as
+  ``UniqueViolationError`` or ``ForeignKeyViolationError``. The response detail
+  is a generic ``Conflict`` so database error text is not sent to clients.
+  Previously these errors produced a 500 response. To return a more specific
+  message, register a handler for ``IntegrityError`` in the application's
+  ``exception_handlers``; it takes precedence.
+
 **Breaking changes:**
 
 * Removed the unimplemented driver methods ``stage_artifact()``,

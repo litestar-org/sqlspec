@@ -5,11 +5,20 @@ from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from litestar import get
 from litestar.constants import HTTP_RESPONSE_START
+from litestar.response import Response
+from litestar.testing import create_test_client
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.base import SQLSpec
+from sqlspec.exceptions import (
+    ForeignKeyViolationError,
+    ImproperConfigurationError,
+    IntegrityError,
+    UniqueViolationError,
+)
 from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
@@ -19,6 +28,7 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     session_provider_maker,
 )
+from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
 if TYPE_CHECKING:
     from litestar.types import Message, Scope
@@ -372,3 +382,46 @@ async def test_sync_lifespan_handler_creates_and_closes_pool() -> None:
         assert mock_app.state[pool_key] is not None
 
     assert pool_key not in mock_app.state
+
+
+def _build_integrity_plugin() -> SQLSpecPlugin:
+    sqlspec = SQLSpec()
+    sqlspec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    return SQLSpecPlugin(sqlspec=sqlspec)
+
+
+@pytest.mark.parametrize("error_type", [UniqueViolationError, ForeignKeyViolationError])
+def test_integrity_error_maps_to_409(error_type: "type[IntegrityError]") -> None:
+    """A route raising an IntegrityError subclass returns 409 without exposing the exception message."""
+
+    @get("/conflict")
+    async def raise_conflict() -> None:
+        raise error_type("dup")
+
+    with create_test_client(route_handlers=[raise_conflict], plugins=[_build_integrity_plugin()]) as client:
+        response = client.get("/conflict")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Conflict"
+    assert "dup" not in response.text
+
+
+def test_user_integrity_handler_wins() -> None:
+    """A user-registered IntegrityError handler replaces the plugin default."""
+
+    def user_handler(_request: Any, exc: IntegrityError) -> "Response[dict[str, str]]":
+        return Response(content={"custom": str(exc)}, status_code=422)
+
+    @get("/conflict")
+    async def raise_conflict() -> None:
+        raise UniqueViolationError("dup")
+
+    with create_test_client(
+        route_handlers=[raise_conflict],
+        plugins=[_build_integrity_plugin()],
+        exception_handlers={IntegrityError: user_handler},
+    ) as client:
+        response = client.get("/conflict")
+
+    assert response.status_code == 422
+    assert response.json() == {"custom": "dup"}

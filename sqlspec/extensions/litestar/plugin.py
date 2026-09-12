@@ -5,9 +5,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
 
 from litestar.di import Provide
-from litestar.exceptions import NotFoundException
+from litestar.exceptions import ClientException, NotFoundException
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
+from litestar.status_codes import HTTP_409_CONFLICT
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import (
@@ -22,7 +23,7 @@ from sqlspec.config import (
 )
 from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.exceptions import ImproperConfigurationError, IntegrityError, NotFoundError
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
@@ -78,6 +79,7 @@ __all__ = (
     "PluginConfigState",
     "SQLSpecPlugin",
     "_OffsetPaginationSchemaPlugin",
+    "integrity_error_handler",
     "not_found_error_handler",
 )
 
@@ -112,6 +114,20 @@ def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundErr
     """
     detail = str(exc) or "Not Found"
     raise NotFoundException(detail=detail) from exc
+
+
+def integrity_error_handler(_request: "Request[Any, Any, Any]", exc: IntegrityError) -> NoReturn:
+    """Translate :class:`sqlspec.exceptions.IntegrityError` into Litestar's HTTP 409.
+
+    Covers every constraint-violation subclass, such as
+    :class:`sqlspec.exceptions.UniqueViolationError`. Re-raised as a
+    :class:`litestar.exceptions.ClientException` with a 409 status so the standard
+    Litestar exception-handler chain renders it. The response detail is always the
+    generic ``"Conflict"``; the original exception is kept as the cause for
+    server-side logging. Applications that want a richer message register their own
+    :class:`sqlspec.exceptions.IntegrityError` handler, which takes precedence.
+    """
+    raise ClientException(status_code=HTTP_409_CONFLICT, detail="Conflict") from exc
 
 
 class CorrelationMiddleware:
@@ -383,6 +399,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if app_config.exception_handlers is None:
             app_config.exception_handlers = {}
         app_config.exception_handlers.setdefault(NotFoundError, not_found_error_handler)
+        app_config.exception_handlers.setdefault(IntegrityError, integrity_error_handler)
 
         # Inject sqlspec's DEFAULT_TYPE_ENCODERS into Litestar's response serializer
         # (user-supplied encoders win on conflict). Litestar's per-handler
