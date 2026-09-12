@@ -510,7 +510,7 @@ def is_iterable_parameters(parameters: Any) -> "TypeGuard[Sequence[Any]]":
 
 
 def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
-    """Check if an object has a callable 'with_' method.
+    """Check if an object has a callable ``with_`` method.
 
     This is a more specific check than hasattr for SQLGlot expressions.
 
@@ -518,7 +518,7 @@ def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
         obj: The object to check
 
     Returns:
-        True if the object has a callable with_ method, False otherwise
+        True if the object has a callable ``with_`` method, False otherwise
     """
     return isinstance(obj, WithMethodProtocol)
 

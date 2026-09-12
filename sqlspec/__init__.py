@@ -82,6 +82,7 @@ from sqlspec.observability import (
 )
 from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
+from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 
 if TYPE_CHECKING:
     from sqlspec import dialects
@@ -159,11 +160,15 @@ __all__ = (
     "loader",
     "matches_param_type",
     "migrations",
+    "nanoid",
     "register_param_type",
     "resolve_param_type",
     "sql",
     "typing",
     "utils",
+    "uuid4",
+    "uuid6",
+    "uuid7",
 )
 
 suppress_erroneous_sqlglot_log_messages()

@@ -29,7 +29,9 @@ __all__ = (
     "SQLConversionError",
     "SQLFileNotFoundError",
     "SQLFileParseError",
+    "SQLFragmentNotFoundError",
     "SQLParsingError",
+    "SQLSlotError",
     "SQLSpecError",
     "SQLStatementNotFoundError",
     "SerializationConflictError",
@@ -350,6 +352,31 @@ class SQLStatementNotFoundError(SQLFileNotFoundError):
         self.query_count = query_count
 
 
+class SQLFragmentNotFoundError(SQLStatementNotFoundError):
+    """Raised when a SQL fragment named by an include or lookup is not loaded."""
+
+    def __init__(self, name: str, normalized_name: str, fragment_count: int) -> None:
+        """Initialize the error.
+
+        Args:
+            name: Fragment name requested by the caller or include marker.
+            normalized_name: Normalized fragment name used for lookup.
+            fragment_count: Number of SQL fragments loaded in the registry.
+        """
+        if fragment_count == 0:
+            message = f"SQL fragment '{name}' not found. No SQL fragments are loaded."
+        else:
+            message = (
+                f"SQL fragment '{name}' not found. {fragment_count} SQL fragments are loaded. "
+                "Use list_fragments() to inspect available fragment names."
+            )
+        SQLSpecError.__init__(self, message)
+        self.name = name
+        self.path = None
+        self.normalized_name = normalized_name
+        self.query_count = fragment_count
+
+
 class SQLFileParseError(SQLSpecError):
     """Raised when a SQL file cannot be parsed."""
 
@@ -370,6 +397,20 @@ class SQLFileParseError(SQLSpecError):
         self.path = path
         self.original_error = original_error
         self.line = line
+
+
+class SQLSlotError(SQLSpecError):
+    """Raised when a SQL statement slot is missing, unknown, or conflicts."""
+
+    def __init__(self, statement: str, message: str) -> None:
+        """Initialize the error.
+
+        Args:
+            statement: Name of the SQL statement whose slots could not be filled.
+            message: Description of the slot problem.
+        """
+        super().__init__(f"SQL statement '{statement}': {message}")
+        self.statement = statement
 
 
 class MigrationError(SQLSpecError):
