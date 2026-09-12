@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 from collections import OrderedDict
+from collections.abc import Mapping
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
@@ -1316,10 +1317,10 @@ class CommonDriverAttributesMixin:
             if (
                 bound_named
                 and not sql_statement.positional_parameters
-                and (not data_parameters or isinstance(extra_mapping, dict))
+                and (not data_parameters or isinstance(extra_mapping, Mapping))
             ):
                 merged_named = dict(bound_named)
-                if isinstance(extra_mapping, dict):
+                if isinstance(extra_mapping, Mapping):
                     merged_named.update(extra_mapping)
                 return SQL(
                     sql_statement.raw_expression or sql_statement.raw_sql,

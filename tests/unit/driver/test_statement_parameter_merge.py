@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -49,6 +50,7 @@ def test_sync_mapping_merges_with_bound_named_parameters(sqlite_session: SqliteD
     statement = SQL("SELECT :a AS a, :b AS b", a=1)
 
     assert sqlite_session.select_one(statement, {"b": 2}) == {"a": 1, "b": 2}
+    assert sqlite_session.select_one(statement, MappingProxyType({"b": 5})) == {"a": 1, "b": 5}
 
 
 def test_sync_statement_without_extra_parameters_unchanged(sqlite_session: SqliteDriver) -> None:
