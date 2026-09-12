@@ -1,7 +1,9 @@
 from typing import Any, cast
 
 from litestar import Litestar, get
+from litestar.middleware import DefineMiddleware
 from litestar.testing import TestClient
+from litestar.types import ASGIApp, Receive, Scope, Send
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -45,6 +47,67 @@ def _build_app(
     spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}, extension_config=extension_config))
 
     return Litestar(route_handlers=[correlation_handler], plugins=[SQLSpecPlugin(sqlspec=spec)])
+
+
+class _RejectingMiddleware:
+    """ASGI middleware that records the correlation ID and answers with 401.
+
+    Stands in for application auth or session middleware that refuses a request
+    before it reaches the route handler.
+    """
+
+    __slots__ = ("app", "recorder")
+
+    def __init__(self, app: "ASGIApp", *, recorder: "list[str | None]") -> None:
+        self.app = app
+        self.recorder = recorder
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if str(scope.get("type")) != "http":
+            await self.app(scope, receive, send)
+            return
+
+        self.recorder.append(CorrelationContext.get())
+        await send({"type": "http.response.start", "status": 401, "headers": [(b"content-length", b"0")]})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
+def _build_rejecting_app(recorder: "list[str | None]", *, enable: bool = True) -> Litestar:
+    extension_config = cast(
+        "ExtensionConfigs",
+        {"litestar": {"enable_correlation_middleware": enable, "correlation_headers": ["x-correlation-id"]}},
+    )
+
+    spec = SQLSpec()
+    spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}, extension_config=extension_config))
+
+    return Litestar(
+        route_handlers=[correlation_handler],
+        plugins=[SQLSpecPlugin(sqlspec=spec)],
+        middleware=[DefineMiddleware(_RejectingMiddleware, recorder=recorder)],
+    )
+
+
+def test_correlation_middleware_runs_before_rejecting_application_middleware() -> None:
+    recorder: list[str | None] = []
+    app = _build_rejecting_app(recorder)
+
+    with TestClient(app) as client:
+        response = client.get("/correlation", headers={"X-Correlation-ID": "abc"})
+
+    assert response.status_code == 401
+    assert recorder == ["abc"]
+
+
+def test_rejected_request_has_no_correlation_id_when_middleware_disabled() -> None:
+    recorder: list[str | None] = []
+    app = _build_rejecting_app(recorder, enable=False)
+
+    with TestClient(app) as client:
+        response = client.get("/correlation", headers={"X-Correlation-ID": "abc"})
+
+    assert response.status_code == 401
+    assert recorder == [None]
 
 
 def test_correlation_middleware_uses_default_header() -> None:

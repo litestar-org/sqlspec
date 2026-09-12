@@ -14,6 +14,11 @@ Unreleased
 
 **Fixed:**
 
+* The Litestar plugin registers its correlation and SQLCommenter middleware at the
+  outermost position of the middleware stack instead of the innermost one. Requests
+  rejected by application middleware such as authentication or session handling now carry
+  a correlation ID in logs and error hooks, and application middleware keeps its original
+  relative order. (`#729 <https://github.com/litestar-org/sqlspec/issues/729>`_)
 * A migration whose ``up()`` returns an empty list is now recorded in the
   tracking table instead of being reported as applied and then staying pending
   forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An

@@ -399,7 +399,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if self._enable_sqlcommenter_middleware:
             new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
         if new_middlewares:
-            app_config.middleware = [*(app_config.middleware or []), *new_middlewares]
+            app_config.middleware = [*new_middlewares, *(app_config.middleware or [])]
 
         log_with_context(
             logger,
