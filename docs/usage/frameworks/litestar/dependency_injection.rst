@@ -162,6 +162,15 @@ from the pool the plugin started:
 Register ``provide_session`` with your container; the pool is open for the lifetime of the
 application and closed when it shuts down.
 
+.. note::
+
+   ``SQLSpecPlugin.provide_request_session()``, ``provide_request_session_sync()``,
+   ``provide_request_session_async()``, and the matching ``provide_request_connection*()``
+   helpers store the request connection in the ASGI scope and rely on the plugin's
+   per-request handler to commit and close it. That handler is not registered when
+   ``disable_di=True``, so providers for those apps open sessions with the context-managed
+   ``config.provide_session()`` instead.
+
 Config Lookup Outside App Construction
 --------------------------------------
 

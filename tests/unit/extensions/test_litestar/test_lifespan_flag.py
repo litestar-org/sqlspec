@@ -1,11 +1,16 @@
 """Tests for the Litestar ``manage_lifespan`` setting and its interaction with ``disable_di``."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from litestar import get
 from litestar.config.app import AppConfig
+from litestar.di import Provide
+from litestar.testing import create_test_client
 
+from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
 from sqlspec.base import SQLSpec
@@ -90,3 +95,32 @@ def test_store_accepts_manage_lifespan() -> None:
         extension_config={"litestar": {"disable_di": True, "manage_lifespan": True}},
     )
     assert AiosqliteStore(config).config is config
+
+
+def test_disable_di_manage_lifespan_serves_requests_with_user_provider() -> None:
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"litestar": {"disable_di": True, "manage_lifespan": True}},
+    )
+    sqlspec = SQLSpec()
+    sqlspec.add_config(config)
+
+    async def provide_session() -> "AsyncIterator[AiosqliteDriver]":
+        async with config.provide_session() as session:
+            yield session  # noqa: ASYNC119
+
+    @get("/value")
+    async def read_value(session: AiosqliteDriver) -> "dict[str, Any]":
+        return {"value": await session.select_value("SELECT 1"), "pool_started": config.connection_instance is not None}
+
+    with create_test_client(
+        route_handlers=[read_value],
+        plugins=[SQLSpecPlugin(sqlspec=sqlspec)],
+        dependencies={"session": Provide(provide_session)},
+    ) as client:
+        assert client.app.state.get("db_pool") is not None
+        response = client.get("/value")
+
+    assert response.status_code == 200
+    assert response.json() == {"value": 1, "pool_started": True}
+    assert config.connection_instance is None
