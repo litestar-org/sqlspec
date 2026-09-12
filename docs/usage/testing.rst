@@ -99,8 +99,11 @@ arguments with an async driver.
   drivers and converts these JSON values:
 
   - ISO 8601 strings in ``timestamp``/``timestamptz``/``datetime`` columns to
-    ``datetime``, in ``date`` columns to ``date``, and in ``time`` columns
-    without a time zone to ``time`` (not on MySQL);
+    ``datetime``, in ``date`` columns to ``date``, and in ``time`` columns, with
+    or without a time zone, to ``time`` (not on MySQL);
+  - ISO 8601 durations and numbers of seconds in ``interval`` columns to
+    ``timedelta``, and DuckDB ``[months, days, nanoseconds]`` interval lists to
+    interval text;
   - strings and numbers in ``numeric``/``decimal`` columns to ``Decimal``;
   - strings in ``uuid`` columns to ``UUID``;
   - base64 strings in ``bytea``, ``blob``, ``tinyblob``, ``mediumblob``,
@@ -109,11 +112,14 @@ arguments with an async driver.
   - values of PostgreSQL and MySQL ``json``/``jsonb`` columns to JSON text.
 
   Every other value is passed to the driver as decoded from JSON. That includes
-  ``time with time zone``, intervals, ``BIT`` columns (including MySQL ``BIT``),
+  ``BIT`` columns (including MySQL ``BIT``),
   MySQL ``TIME``, DuckDB ``MAP``, and the elements of arrays, so arrays of dates,
   timestamps, or UUIDs are not converted. On other databases no column types are
   read, and only values the driver accepts as JSON-decoded strings, numbers,
   booleans, nulls, lists, and objects load.
+- **Generated columns:** columns the database computes (``GENERATED ALWAYS AS``)
+  are left out of exported files, and their values in a loaded file are ignored,
+  so files that contain them still load.
 - **Upserts:** ``conflict_keys`` maps a table to the columns of a unique
   constraint; every entry must name a table being loaded, spelled exactly. Rows
   for that table update the non-key columns of existing rows instead of failing;
@@ -143,8 +149,8 @@ arguments with an async driver.
 - **Exporting:** every row of each table is written to ``<table>.json``, or
   ``<table>.jsonl`` with ``jsonl=True``, gzipped by default (``compress=True``).
   Rows are ordered by the primary key, or by every column when there is none
-  (PostgreSQL ``json``, ``xml``, and geometric columns are left out of the
-  ordering), so repeated exports of unchanged data produce identical files.
+  (PostgreSQL ``json``, ``xml``, and geometric columns, and arrays of them, are
+  left out of the ordering), so repeated exports of unchanged data produce identical files.
   Dates and times are written as ISO 8601 strings, ``Decimal`` and ``UUID``
   values as strings, and bytes as base64 strings. Each file is written to a
   temporary file created with the process umask and moved into place; the
@@ -152,7 +158,9 @@ arguments with an async driver.
   next to a new ``users.json.gz``, are then removed so the next load reads the
   exported file. The directory is created when missing. Values of the column
   types listed above, and JSON-native values in other columns, load back
-  unchanged.
+  unchanged. DuckDB ``MAP`` values and the offsets of DuckDB ``TIME WITH TIME
+  ZONE`` values do not round-trip, and PostgreSQL interval months and years come
+  back as days because the drivers return intervals as ``timedelta``.
 
 Related Guides
 --------------

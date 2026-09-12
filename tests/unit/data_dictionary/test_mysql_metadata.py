@@ -201,3 +201,11 @@ def test_mysql_family_columns_report_primary_key_flag(dialect: str, query_name: 
     assert "column_type" in columns
     assert "column_key = 'PRI' AS" in columns
     assert "is_primary" in columns
+
+
+def test_mysql_table_columns_report_extra() -> None:
+    """Single-table MySQL column metadata includes ``extra``, which marks generated columns."""
+    columns = DataDictionaryLoader().get_domain_query_text("mysql", "columns", "by_table")
+
+    assert columns is not None
+    assert "extra AS `extra`" in columns

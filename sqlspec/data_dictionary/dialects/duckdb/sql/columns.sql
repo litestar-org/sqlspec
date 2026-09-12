@@ -22,7 +22,24 @@ SELECT
           AND k.table_name = c.table_name
           AND k.constraint_type = 'PRIMARY KEY'
           AND list_contains(k.constraint_column_names, c.column_name)
-    ) AS is_primary
+    ) AS is_primary,
+    EXISTS (
+        SELECT 1
+        FROM duckdb_tables() AS t
+        WHERE t.database_name = c.database_name
+          AND t.schema_name = c.schema_name
+          AND t.table_name = c.table_name
+          AND (
+              contains(t.sql, '(' || c.column_name || ' ' || c.data_type || ' GENERATED ALWAYS AS(')
+              OR contains(t.sql, ', ' || c.column_name || ' ' || c.data_type || ' GENERATED ALWAYS AS(')
+              OR contains(
+                  t.sql, '("' || replace(c.column_name, '"', '""') || '" ' || c.data_type || ' GENERATED ALWAYS AS('
+              )
+              OR contains(
+                  t.sql, ', "' || replace(c.column_name, '"', '""') || '" ' || c.data_type || ' GENERATED ALWAYS AS('
+              )
+          )
+    ) AS is_generated
 FROM duckdb_columns() AS c
 WHERE schema_name = COALESCE(:schema_name, current_schema())
   AND NOT internal
@@ -52,7 +69,24 @@ SELECT
           AND k.table_name = c.table_name
           AND k.constraint_type = 'PRIMARY KEY'
           AND list_contains(k.constraint_column_names, c.column_name)
-    ) AS is_primary
+    ) AS is_primary,
+    EXISTS (
+        SELECT 1
+        FROM duckdb_tables() AS t
+        WHERE t.database_name = c.database_name
+          AND t.schema_name = c.schema_name
+          AND t.table_name = c.table_name
+          AND (
+              contains(t.sql, '(' || c.column_name || ' ' || c.data_type || ' GENERATED ALWAYS AS(')
+              OR contains(t.sql, ', ' || c.column_name || ' ' || c.data_type || ' GENERATED ALWAYS AS(')
+              OR contains(
+                  t.sql, '("' || replace(c.column_name, '"', '""') || '" ' || c.data_type || ' GENERATED ALWAYS AS('
+              )
+              OR contains(
+                  t.sql, ', "' || replace(c.column_name, '"', '""') || '" ' || c.data_type || ' GENERATED ALWAYS AS('
+              )
+          )
+    ) AS is_generated
 FROM duckdb_columns() AS c
 WHERE schema_name = COALESCE(:schema_name, current_schema())
   AND table_name = :table_name

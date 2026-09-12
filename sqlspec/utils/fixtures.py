@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import zipfile
-from datetime import time
+from datetime import time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
@@ -74,6 +74,12 @@ _UNORDERABLE_POSTGRES_TYPES: Final["frozenset[str]"] = frozenset({
     "polygon",
     "xml",
 })
+_ISO_DURATION_PATTERN: Final["re.Pattern[str]"] = re.compile(
+    r"(-)?P(?:(\d+(?:\.\d+)?)W)?(?:(\d+(?:\.\d+)?)D)?"
+    r"(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?"
+)
+_DUCKDB_INTERVAL_PARTS: Final[int] = 3
+_NANOSECONDS_PER_MICROSECOND: Final[int] = 1000
 _TEMPORARY_FILE_MODE: Final[int] = 0o666
 
 logger = get_logger("sqlspec.utils.fixtures")
@@ -243,13 +249,16 @@ def load_table_fixtures_sync(
     On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's columns
     are read from the driver's data dictionary first, and JSON values of these column
     types are converted: ISO 8601 strings in timestamp, datetime, date, and (except on
-    MySQL) time-without-time-zone columns to datetimes, dates, and times; strings and
-    numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
-    ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
-    PostgreSQL and MySQL json and jsonb values to JSON text. SQLite only converts binary
-    columns. All other values, including array elements, are passed to the driver as
-    decoded from JSON. On PostgreSQL, ``GENERATED ALWAYS`` identity columns receive the
-    loaded values through ``OVERRIDING SYSTEM VALUE`` and are never updated by upserts.
+    MySQL) time columns to datetimes, dates, and times; ISO 8601 durations and numbers
+    of seconds in interval columns to ``timedelta``, and DuckDB ``[months, days,
+    nanoseconds]`` interval lists to interval text; strings and numbers in numeric and
+    decimal columns to ``Decimal``; strings in uuid columns to ``UUID``; base64 strings
+    in bytea, blob, binary, and varbinary columns to bytes; and PostgreSQL and MySQL
+    json and jsonb values to JSON text. SQLite only converts binary columns. All other
+    values, including array elements, are passed to the driver as decoded from JSON.
+    Values of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS``
+    identity columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and
+    are never updated by upserts.
 
     Args:
         driver: Sync driver that runs the inserts.
@@ -278,8 +287,8 @@ def load_table_fixtures_sync(
         ValueError: If ``batch_size`` is below 1, ``conflict_keys`` is given for an
             unsupported dialect or names a table that is not loaded, a table or column
             name is not a plain SQL identifier,
-            a table has more than one fixture file, or the rows of a fixture file have
-            differing columns.
+            a table has more than one fixture file, the rows of a fixture file have
+            differing columns, or a fixture file only holds generated columns.
         TypeError: If a fixture file does not hold a list of row objects.
         FileNotFoundError: If a requested table has no fixture file.
     """
@@ -295,6 +304,7 @@ def load_table_fixtures_sync(
         rows = _table_fixture_rows(file_path, _read_table_fixture_text(file_path))
         columns = _table_columns_sync(driver, family, table) if rows or resync else []
         if rows:
+            _drop_generated_values(rows, columns)
             _decode_row_values(rows, family, columns)
             statement = _table_insert_statement(
                 dialect, family, table, list(rows[0]), _conflict_keys_for(conflict_keys, table), columns
@@ -331,13 +341,16 @@ async def load_table_fixtures_async(
     On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's columns
     are read from the driver's data dictionary first, and JSON values of these column
     types are converted: ISO 8601 strings in timestamp, datetime, date, and (except on
-    MySQL) time-without-time-zone columns to datetimes, dates, and times; strings and
-    numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
-    ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
-    PostgreSQL and MySQL json and jsonb values to JSON text. SQLite only converts binary
-    columns. All other values, including array elements, are passed to the driver as
-    decoded from JSON. On PostgreSQL, ``GENERATED ALWAYS`` identity columns receive the
-    loaded values through ``OVERRIDING SYSTEM VALUE`` and are never updated by upserts.
+    MySQL) time columns to datetimes, dates, and times; ISO 8601 durations and numbers
+    of seconds in interval columns to ``timedelta``, and DuckDB ``[months, days,
+    nanoseconds]`` interval lists to interval text; strings and numbers in numeric and
+    decimal columns to ``Decimal``; strings in uuid columns to ``UUID``; base64 strings
+    in bytea, blob, binary, and varbinary columns to bytes; and PostgreSQL and MySQL
+    json and jsonb values to JSON text. SQLite only converts binary columns. All other
+    values, including array elements, are passed to the driver as decoded from JSON.
+    Values of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS``
+    identity columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and
+    are never updated by upserts.
 
     Args:
         driver: Async driver that runs the inserts.
@@ -366,8 +379,8 @@ async def load_table_fixtures_async(
         ValueError: If ``batch_size`` is below 1, ``conflict_keys`` is given for an
             unsupported dialect or names a table that is not loaded, a table or column
             name is not a plain SQL identifier,
-            a table has more than one fixture file, or the rows of a fixture file have
-            differing columns.
+            a table has more than one fixture file, the rows of a fixture file have
+            differing columns, or a fixture file only holds generated columns.
         TypeError: If a fixture file does not hold a list of row objects.
         FileNotFoundError: If a requested table has no fixture file.
     """
@@ -383,6 +396,7 @@ async def load_table_fixtures_async(
         rows = _table_fixture_rows(file_path, await _async_read_table_fixture_text(file_path))
         columns = await _table_columns_async(driver, family, table) if rows or resync else []
         if rows:
+            _drop_generated_values(rows, columns)
             _decode_row_values(rows, family, columns)
             statement = _table_insert_statement(
                 dialect, family, table, list(rows[0]), _conflict_keys_for(conflict_keys, table), columns
@@ -408,8 +422,9 @@ def export_table_fixtures_sync(
 
     Writes every row of each table to ``<table>.json`` (a JSON array) or, with
     ``jsonl``, ``<table>.jsonl`` (one JSON object per line), gzipped with a ``.gz``
-    suffix when ``compress`` is set. Rows are ordered by the primary key, or by every
-    orderable column when the table has none, and each table is read into memory. Dates,
+    suffix when ``compress`` is set. Generated columns are left out. Rows are ordered by
+    the primary key, or by every orderable column when the table has none, and each
+    table is read into memory. Dates,
     times, and datetimes are written as ISO 8601 strings, ``Decimal`` and ``UUID``
     values as strings, and bytes as base64 strings, which
     :func:`load_table_fixtures_sync` converts back for typed columns.
@@ -439,7 +454,7 @@ def export_table_fixtures_sync(
     counts: dict[str, int] = {}
     for table in table_names:
         columns = _table_columns_sync(driver, family, table)
-        rows = driver.select(_table_export_query(dialect, table, columns))
+        rows = _without_generated_values(driver.select(_table_export_query(dialect, table, columns)), columns)
         _write_table_fixture(Path(fixtures_path), table, rows, compress, jsonl)
         counts[table] = len(rows)
     return counts
@@ -457,8 +472,9 @@ async def export_table_fixtures_async(
 
     Writes every row of each table to ``<table>.json`` (a JSON array) or, with
     ``jsonl``, ``<table>.jsonl`` (one JSON object per line), gzipped with a ``.gz``
-    suffix when ``compress`` is set. Rows are ordered by the primary key, or by every
-    orderable column when the table has none, and each table is read into memory. Dates,
+    suffix when ``compress`` is set. Generated columns are left out. Rows are ordered by
+    the primary key, or by every orderable column when the table has none, and each
+    table is read into memory. Dates,
     times, and datetimes are written as ISO 8601 strings, ``Decimal`` and ``UUID``
     values as strings, and bytes as base64 strings, which
     :func:`load_table_fixtures_async` converts back for typed columns.
@@ -489,7 +505,7 @@ async def export_table_fixtures_async(
     counts: dict[str, int] = {}
     for table in table_names:
         columns = await _table_columns_async(driver, family, table)
-        rows = await driver.select(_table_export_query(dialect, table, columns))
+        rows = _without_generated_values(await driver.select(_table_export_query(dialect, table, columns)), columns)
         await _async_write_table_fixture(Path(fixtures_path), table, rows, compress, jsonl)
         counts[table] = len(rows)
     return counts
@@ -503,6 +519,7 @@ class _TableColumn(NamedTuple):
     is_primary: bool
     identity_kind: str
     sequence_name: "str | None"
+    is_generated: bool
 
 
 def _read_text_sync(path: "Path") -> str:
@@ -827,7 +844,20 @@ def _table_column(row: "Mapping[str, Any]") -> _TableColumn:
         is_primary=bool(row.get("is_primary")),
         identity_kind=str(row.get("identity_generation") or ""),
         sequence_name=None if sequence_name is None else str(sequence_name),
+        is_generated=_is_generated_column(row),
     )
+
+
+def _is_generated_column(row: "Mapping[str, Any]") -> bool:
+    """Return whether a data dictionary column row describes a generated (computed) column.
+
+    PostgreSQL rows carry ``generated_kind``, DuckDB rows ``is_generated``, CockroachDB
+    rows ``generation_expression``, and MySQL, MariaDB, and SQLite rows an ``extra``
+    value containing the word ``generated``.
+    """
+    if row.get("is_generated") or row.get("generated_kind") or row.get("generation_expression"):
+        return True
+    return "generated" in str(row.get("extra") or "").lower().split()
 
 
 def _column_lookup_names(family: str, table: str) -> "tuple[str, str | None]":
@@ -856,6 +886,36 @@ async def _table_columns_async(driver: "AsyncDriverAdapterBase", family: str, ta
     return [_table_column(row) for row in rows]
 
 
+def _generated_column_names(columns: "list[_TableColumn]") -> "set[str]":
+    """Return the names of the generated columns of a table."""
+    return {column.name for column in columns if column.is_generated}
+
+
+def _drop_generated_values(rows: "list[dict[str, Any]]", columns: "list[_TableColumn]") -> None:
+    """Remove the values of generated columns from fixture rows in place.
+
+    Raises:
+        ValueError: If only generated columns remain in the rows.
+    """
+    generated = _generated_column_names(columns)
+    if not rows or generated.isdisjoint(rows[0]):
+        return
+    for row in rows:
+        for name in generated:
+            row.pop(name, None)
+    if not rows[0]:
+        msg = f"Table fixture rows only contain generated columns: {sorted(generated)}"
+        raise ValueError(msg)
+
+
+def _without_generated_values(rows: "list[dict[str, Any]]", columns: "list[_TableColumn]") -> "list[dict[str, Any]]":
+    """Return exported rows without the values of generated columns."""
+    generated = _generated_column_names(columns)
+    if not generated:
+        return rows
+    return [{key: value for key, value in row.items() if key not in generated} for row in rows]
+
+
 def _decode_bytes(value: Any) -> Any:
     """Decode a base64 string to bytes."""
     return base64.b64decode(value, validate=True) if isinstance(value, str) else value
@@ -876,6 +936,44 @@ def _decode_time(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     return time.fromisoformat(f"{value[:-1]}+00:00" if value.endswith("Z") else value)
+
+
+def _decode_interval(value: Any) -> Any:
+    """Decode an ISO 8601 duration string or a number of seconds to a timedelta."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return timedelta(seconds=value)
+    if not isinstance(value, str):
+        return value
+    match = _ISO_DURATION_PATTERN.fullmatch(value)
+    if match is None:
+        return value
+    sign, weeks, days, hours, minutes, seconds = match.groups()
+    if not (weeks or days or hours or minutes or seconds):
+        return value
+    whole_seconds, _, fraction = (seconds or "0").partition(".")
+    duration = timedelta(
+        weeks=float(weeks or 0),
+        days=float(days or 0),
+        hours=float(hours or 0),
+        minutes=float(minutes or 0),
+        seconds=int(whole_seconds),
+        microseconds=round(float(f"0.{fraction or 0}") * 1_000_000),
+    )
+    return -duration if sign else duration
+
+
+def _decode_duckdb_interval(value: Any) -> Any:
+    """Decode a ``[months, days, nanoseconds]`` list to DuckDB interval text and other values to a timedelta."""
+    if (
+        isinstance(value, list)
+        and len(value) == _DUCKDB_INTERVAL_PARTS
+        and all(isinstance(part, int) and not isinstance(part, bool) for part in value)
+    ):
+        months, days, nanoseconds = value
+        return f"{months} months {days} days {nanoseconds // _NANOSECONDS_PER_MICROSECOND} microseconds"
+    return _decode_interval(value)
 
 
 def _decode_decimal(value: Any) -> Any:
@@ -911,8 +1009,10 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
         return _decode_datetime
     if data_type == "date":
         return _decode_date
-    if data_type.startswith("time") and family != "mysql" and "with time zone" not in data_type:
+    if data_type.startswith("time") and family != "mysql":
         return _decode_time
+    if data_type.startswith("interval"):
+        return _decode_duckdb_interval if family == "duckdb" else _decode_interval
     if data_type.startswith(("numeric", "decimal")):
         return _decode_decimal
     if data_type == "uuid":
@@ -991,10 +1091,15 @@ def _table_insert_statement(
     return insert_expression.sql(dialect=dialect).replace(") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1)
 
 
+def _is_orderable_type(data_type: str) -> bool:
+    """Return whether a column type, or the element type of an array type, can be used in ORDER BY."""
+    return data_type.partition("[")[0] not in _UNORDERABLE_POSTGRES_TYPES
+
+
 def _table_export_query(dialect: "DialectType", table: str, table_columns: "list[_TableColumn]") -> Select:
     """Return a SELECT of every row ordered by the primary key, every orderable column, or position 1."""
     order_columns = [column.name for column in table_columns if column.is_primary] or [
-        column.name for column in table_columns if column.data_type not in _UNORDERABLE_POSTGRES_TYPES
+        column.name for column in table_columns if _is_orderable_type(column.data_type)
     ]
     order_by = [_quoted_identifier_sql(name) for name in order_columns] or ["1"]
     return Select("*", dialect=dialect).from_(_quoted_table_name(table)).order_by(*order_by)

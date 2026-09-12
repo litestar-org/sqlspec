@@ -32,7 +32,8 @@ SELECT
     is_nullable AS `is_nullable`,
     column_default AS `column_default`,
     column_key AS `column_key`,
-    column_key = 'PRI' AS `is_primary`
+    column_key = 'PRI' AS `is_primary`,
+    extra AS `extra`
 FROM information_schema.columns
 WHERE table_name = :table_name
   AND table_schema = COALESCE(:schema_name, DATABASE())

@@ -23,9 +23,11 @@ CREATE TABLE `fixture_order` (
     day DATE,
     amount DECIMAL(12, 4),
     payload BLOB,
-    document JSON
+    document JSON,
+    doubled INT GENERATED ALWAYS AS (id * 2) VIRTUAL,
+    shout VARCHAR(50) GENERATED ALWAYS AS (UPPER(`userName`)) STORED
 );
-INSERT INTO `fixture_order` VALUES
+INSERT INTO `fixture_order` (id, `userName`, `group`, created_at, day, amount, payload, document) VALUES
     (1, 'Ann', 'a', '2024-01-02 03:04:05.123456', '2024-01-02', 12.3450, X'00FF10', '{"a": [1, "x"]}'),
     (2, 'Ben', 'b', NULL, NULL, NULL, NULL, '[1, "two", null]');
 """
@@ -56,5 +58,25 @@ async def test_export_load_roundtrip_and_upsert(asyncmy_driver: "AsyncmyDriver",
 
         rows = await driver.select("SELECT id, `group` FROM `fixture_order` ORDER BY id")
         assert rows == [{"id": 1, "group": "z"}, {"id": 2, "group": "b"}, {"id": 3, "group": "c"}]
+    finally:
+        await driver.execute_script(TEARDOWN_SQL)
+
+
+async def test_generated_columns_are_skipped(asyncmy_driver: "AsyncmyDriver", tmp_path: Path) -> None:
+    """Virtual and stored generated columns are left out of exports and ignored in loaded files."""
+    driver = asyncmy_driver
+    await driver.execute_script(SETUP_SQL)
+    try:
+        await export_table_fixtures_async(driver, tmp_path / "out", ["fixture_order"], compress=False)
+        exported = json.loads((tmp_path / "out" / "fixture_order.json").read_text())
+        rows = [{"id": 4, "userName": "Di", "group": "d", "doubled": 0, "shout": "x"}]
+        (tmp_path / "fixture_order.json").write_text(json.dumps(rows), encoding="utf-8")
+        await driver.execute("DELETE FROM `fixture_order`")
+
+        await load_table_fixtures_async(driver, tmp_path)
+
+        assert all("doubled" not in row and "shout" not in row for row in exported)
+        loaded = await driver.select("SELECT id, doubled, shout FROM `fixture_order`")
+        assert loaded == [{"id": 4, "doubled": 8, "shout": "DI"}]
     finally:
         await driver.execute_script(TEARDOWN_SQL)

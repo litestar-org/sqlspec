@@ -1210,6 +1210,7 @@ class ColumnMetadata(TypedDict, total=False):
     column_key: str
     identity_generation: str | None
     sequence_name: str | None
+    is_generated: bool | int
 
 
 class TableMetadata(TypedDict, total=False):

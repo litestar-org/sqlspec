@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec.utils.fixtures import load_table_fixtures_async
+from sqlspec.utils.fixtures import export_table_fixtures_async, load_table_fixtures_async
 
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
@@ -50,3 +50,29 @@ async def test_resync_sequences_cockroach(cockroach_asyncpg_config: "CockroachAs
             assert await driver.select_value("SELECT count(*) FROM fixture_resync_rowid") == 5
         finally:
             await driver.execute_script(TEARDOWN_SQL)
+
+
+async def test_computed_columns_are_skipped_cockroach(
+    cockroach_asyncpg_config: "CockroachAsyncpgConfig", tmp_path: Path
+) -> None:
+    """Stored and virtual computed columns are left out of exports and ignored in loaded files."""
+    async with cockroach_asyncpg_config.provide_session() as driver:
+        await driver.execute_script(
+            "DROP TABLE IF EXISTS fixture_computed; "
+            "CREATE TABLE fixture_computed (id INT8 PRIMARY KEY, name STRING NOT NULL, "
+            "doubled INT8 AS (id * 2) STORED, shout STRING AS (upper(name)) VIRTUAL); "
+            "INSERT INTO fixture_computed (id, name) VALUES (1, 'ann'), (2, 'ben');"
+        )
+        try:
+            before = await driver.select("SELECT * FROM fixture_computed ORDER BY id")
+
+            await export_table_fixtures_async(driver, tmp_path, ["fixture_computed"], compress=False)
+            exported = json.loads((tmp_path / "fixture_computed.json").read_text())
+            (tmp_path / "fixture_computed.json").write_text(json.dumps(before), encoding="utf-8")
+            await driver.execute("DELETE FROM fixture_computed WHERE true")
+            await load_table_fixtures_async(driver, tmp_path)
+
+            assert exported == [{"id": 1, "name": "ann"}, {"id": 2, "name": "ben"}]
+            assert await driver.select("SELECT * FROM fixture_computed ORDER BY id") == before
+        finally:
+            await driver.execute_script("DROP TABLE IF EXISTS fixture_computed")

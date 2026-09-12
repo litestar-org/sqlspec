@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import zipfile
+from datetime import time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -1103,3 +1104,227 @@ def test_values_of_unlisted_types_pass_through_unchanged(tmp_path: Path) -> None
     load_table_fixtures_sync(driver, tmp_path)
 
     assert driver.execute_many.call_args.args[1] == [{"id": 1, "name": "AAE="}]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "generated_column", "expected_generated"),
+    [
+        ("postgres", {"generated_kind": "s"}, True),
+        ("postgres", {"generated_kind": ""}, False),
+        ("postgres", {"generation_expression": "id * 2"}, True),
+        ("postgres", {"generation_expression": ""}, False),
+        ("duckdb", {"is_generated": True}, True),
+        ("mysql", {"extra": "VIRTUAL GENERATED"}, True),
+        ("mysql", {"extra": "STORED GENERATED"}, True),
+        ("mysql", {"extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP"}, False),
+        ("sqlite", {"extra": "generated"}, True),
+        ("sqlite", {"extra": "hidden"}, False),
+    ],
+)
+def test_generated_columns_are_detected_from_column_metadata(
+    tmp_path: Path, dialect: str, generated_column: "dict[str, Any]", expected_generated: bool
+) -> None:
+    """Generated columns are left out of loaded inserts and exported rows for each dialect's metadata."""
+    (tmp_path / "items.json").write_text(json.dumps([{"id": 1, "doubled": 2}]), encoding="utf-8")
+    driver = MagicMock()
+    driver.statement_config.dialect = dialect
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "doubled", "data_type": "integer", "is_primary": False, **generated_column},
+    ]
+    driver.select.return_value = [{"id": 1, "doubled": 2}]
+
+    load_table_fixtures_sync(driver, tmp_path)
+    export_table_fixtures_sync(driver, tmp_path / "out", ["items"], compress=False)
+
+    expected_row = {"id": 1} if expected_generated else {"id": 1, "doubled": 2}
+    assert driver.execute_many.call_args.args[1] == [expected_row]
+    assert json.loads((tmp_path / "out" / "items.json").read_text()) == [expected_row]
+
+
+def test_load_rejects_rows_with_only_generated_columns(tmp_path: Path) -> None:
+    """A fixture file holding only generated column values raises before any insert."""
+    (tmp_path / "items.json").write_text(json.dumps([{"doubled": 2}]), encoding="utf-8")
+    driver = _postgres_mock_driver([
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "doubled", "data_type": "integer", "generated_kind": "s"},
+    ])
+
+    with pytest.raises(ValueError, match="only contain generated columns"):
+        load_table_fixtures_sync(driver, tmp_path)
+
+    driver.execute_many.assert_not_called()
+
+
+def test_sqlite_generated_columns_round_trip(tmp_path: Path) -> None:
+    """SQLite virtual and stored generated columns are skipped on export and on load."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute(
+            "CREATE TABLE gen (id INTEGER PRIMARY KEY, name TEXT, "
+            "doubled INTEGER GENERATED ALWAYS AS (id * 2) VIRTUAL, "
+            "label TEXT GENERATED ALWAYS AS (name || '!') STORED)"
+        )
+        driver.execute("INSERT INTO gen (id, name) VALUES (1, 'a'), (2, 'b')")
+        before = driver.select("SELECT * FROM gen ORDER BY id")
+
+        export_table_fixtures_sync(driver, tmp_path, ["gen"], compress=False)
+        exported = json.loads((tmp_path / "gen.json").read_text())
+        driver.execute("DELETE FROM gen")
+        load_table_fixtures_sync(driver, tmp_path)
+        after_export = driver.select("SELECT * FROM gen ORDER BY id")
+        (tmp_path / "gen.json").write_text(json.dumps(before), encoding="utf-8")
+        driver.execute("DELETE FROM gen")
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"gen": ["id"]})
+        after_full_rows = driver.select("SELECT * FROM gen ORDER BY id")
+
+    assert exported == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+    assert after_export == before
+    assert after_full_rows == before
+    config.close_pool()
+
+
+async def test_aiosqlite_generated_columns_round_trip(tmp_path: Path) -> None:
+    """The async helpers skip generated columns on export and on load."""
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        await driver.execute(
+            "CREATE TABLE gen (id INTEGER PRIMARY KEY, doubled INTEGER GENERATED ALWAYS AS (id * 2) STORED)"
+        )
+        await driver.execute("INSERT INTO gen (id) VALUES (1), (2)")
+        before = await driver.select("SELECT * FROM gen ORDER BY id")
+
+        await export_table_fixtures_async(driver, tmp_path, ["gen"], compress=False)
+        exported = json.loads((tmp_path / "gen.json").read_text())
+        await driver.execute("DELETE FROM gen")
+        (tmp_path / "gen.json").write_text(json.dumps(before), encoding="utf-8")
+        await load_table_fixtures_async(driver, tmp_path)
+
+        assert exported == [{"id": 1}, {"id": 2}]
+        assert await driver.select("SELECT * FROM gen ORDER BY id") == before
+    await config.close_pool()
+
+
+def test_duckdb_generated_columns_round_trip(tmp_path: Path) -> None:
+    """DuckDB generated columns are skipped on export and on load, including files that contain them."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "generated.duckdb")})
+    fixtures_path = tmp_path / "fixtures"
+    with config.provide_session() as driver:
+        driver.execute(
+            'CREATE TABLE "Gen" (id INTEGER PRIMARY KEY, "userName" VARCHAR, '
+            "doubled INTEGER GENERATED ALWAYS AS (id * 2) VIRTUAL, "
+            '"Shout" VARCHAR AS (upper("userName")))'
+        )
+        driver.execute("INSERT INTO \"Gen\" (id, \"userName\") VALUES (1, 'ann'), (2, 'ben')")
+        before = driver.select('SELECT * FROM "Gen" ORDER BY id')
+
+        export_table_fixtures_sync(driver, fixtures_path, ["Gen"], compress=False)
+        exported = json.loads((fixtures_path / "Gen.json").read_text())
+        driver.execute('DELETE FROM "Gen"')
+        load_table_fixtures_sync(driver, fixtures_path)
+        after_export = driver.select('SELECT * FROM "Gen" ORDER BY id')
+        (fixtures_path / "Gen.json").write_text(json.dumps(before), encoding="utf-8")
+        load_table_fixtures_sync(driver, fixtures_path, conflict_keys={"Gen": ["id"]})
+        after_upsert = driver.select('SELECT * FROM "Gen" ORDER BY id')
+
+    assert exported == [{"id": 1, "userName": "ann"}, {"id": 2, "userName": "ben"}]
+    assert after_export == before
+    assert after_upsert == before
+    config.close_pool()
+
+
+def test_duckdb_interval_columns_round_trip(tmp_path: Path) -> None:
+    """DuckDB INTERVAL values exported as month, day, and nanosecond lists load back unchanged."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "interval.duckdb")})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE spans (id INTEGER PRIMARY KEY, span INTERVAL)")
+        driver.execute(
+            "INSERT INTO spans VALUES (1, INTERVAL '14 months 2 days 3 seconds'), "
+            "(2, -INTERVAL '1 day 5 microseconds'), (3, NULL)"
+        )
+        before = driver.select("SELECT * FROM spans ORDER BY id")
+
+        export_table_fixtures_sync(driver, tmp_path, ["spans"])
+        driver.execute("DELETE FROM spans")
+        load_table_fixtures_sync(driver, tmp_path)
+
+        assert driver.select("SELECT * FROM spans ORDER BY id") == before
+    config.close_pool()
+
+
+def test_export_order_skips_arrays_of_unorderable_types(tmp_path: Path) -> None:
+    """Arrays of unorderable PostgreSQL types are left out of the export ordering like their element types."""
+    driver = _postgres_mock_driver([
+        {"column_name": "id", "data_type": "integer", "is_primary": False},
+        {"column_name": "docs", "data_type": "json[]", "is_primary": False},
+        {"column_name": "points", "data_type": "point[]", "is_primary": False},
+        {"column_name": "note", "data_type": "json", "is_primary": False},
+        {"column_name": "names", "data_type": "text[]", "is_primary": False},
+    ])
+    driver.select.return_value = []
+
+    export_table_fixtures_sync(driver, tmp_path, ["items"])
+
+    order_by = driver.select.call_args.args[0].to_statement().sql.partition("ORDER BY")[2]
+    assert '"id"' in order_by
+    assert '"names"' in order_by
+    assert all(name not in order_by for name in ('"docs"', '"points"', '"note"'))
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("P1DT5S", timedelta(days=1, seconds=5)),
+        ("-PT86395S", timedelta(days=-1, seconds=5)),
+        ("PT7200.000005S", timedelta(hours=2, microseconds=5)),
+        ("P2W", timedelta(weeks=2)),
+        ("PT1H30M", timedelta(hours=1, minutes=30)),
+        ("P0D", timedelta(0)),
+        (90, timedelta(seconds=90)),
+        (1.5, timedelta(seconds=1, microseconds=500000)),
+        (True, True),
+        ("1 day", "1 day"),
+        ("P", "P"),
+        ([0, 1, 0], [0, 1, 0]),
+    ],
+)
+def test_decode_interval(value: Any, expected: Any) -> None:
+    """ISO 8601 durations and numbers of seconds decode to timedeltas; other values pass through."""
+    assert fixture_module._decode_interval(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ([14, 2, 3_000_000_000], "14 months 2 days 3000000 microseconds"),
+        ([0, -1, -5000], "0 months -1 days -5 microseconds"),
+        ("P1D", timedelta(days=1)),
+        ([1, 2], [1, 2]),
+    ],
+)
+def test_decode_duckdb_interval(value: Any, expected: Any) -> None:
+    """DuckDB month-day-nanosecond lists decode to interval text and other values decode like intervals."""
+    assert fixture_module._decode_duckdb_interval(value) == expected
+
+
+def test_interval_and_time_with_time_zone_columns_are_decoded(tmp_path: Path) -> None:
+    """PostgreSQL interval and time with time zone values decode to timedelta and offset-aware time."""
+    rows = [{"id": 1, "span": "P1DT5.5S", "at": "03:04:05+02:00", "seconds": 30}]
+    (tmp_path / "items.json").write_text(json.dumps(rows), encoding="utf-8")
+    driver = _postgres_mock_driver([
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "span", "data_type": "interval", "is_primary": False},
+        {"column_name": "at", "data_type": "time with time zone", "is_primary": False},
+        {"column_name": "seconds", "data_type": "interval second", "is_primary": False},
+    ])
+
+    load_table_fixtures_sync(driver, tmp_path)
+
+    assert driver.execute_many.call_args.args[1] == [
+        {
+            "id": 1,
+            "span": timedelta(days=1, seconds=5, microseconds=500000),
+            "at": time(3, 4, 5, tzinfo=timezone(timedelta(hours=2))),
+            "seconds": timedelta(seconds=30),
+        }
+    ]

@@ -249,3 +249,48 @@ def test_duckdb_columns_report_primary_key_columns(tmp_path: Path) -> None:
         column["column_name"]: bool(column["is_primary"]) for column in by_schema if column["table_name"] == "Orders"
     } == {"tenant": True, "orderId": True, "note": False}
     config.close_pool()
+
+
+def test_sqlite_columns_report_generated_columns() -> None:
+    """SQLite column metadata marks virtual and stored generated columns in ``extra``."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute(
+            "CREATE TABLE gen (id INTEGER PRIMARY KEY, v INTEGER GENERATED ALWAYS AS (id * 2) VIRTUAL, "
+            "s INTEGER GENERATED ALWAYS AS (id * 3) STORED)"
+        )
+
+        columns = driver.data_dictionary.get_columns(driver, table="gen")
+
+    assert [(column["column_name"], column["extra"]) for column in columns] == [
+        ("id", None),
+        ("v", "generated"),
+        ("s", "generated"),
+    ]
+    config.close_pool()
+
+
+def test_duckdb_columns_report_generated_columns(tmp_path: Path) -> None:
+    """DuckDB column metadata flags generated columns, including quoted and mixed-case names."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "generated.duckdb")})
+    with config.provide_session() as driver:
+        driver.execute(
+            'CREATE TABLE "Gen" (id INTEGER PRIMARY KEY, "userName" VARCHAR, '
+            "doubled INTEGER GENERATED ALWAYS AS (id * 2) VIRTUAL, "
+            '"Two Words" DECIMAL(10, 2) AS (id + 1), "select" INTEGER AS (id), '
+            "note VARCHAR DEFAULT 'doubled INTEGER GENERATED ALWAYS AS(')"
+        )
+
+        by_table = driver.data_dictionary.get_columns(driver, table="Gen")
+        by_schema = driver.data_dictionary.get_columns(driver)
+
+    expected = {"id": False, "userName": False, "doubled": True, "Two Words": True, "select": True, "note": False}
+    assert {column["column_name"]: bool(column["is_generated"]) for column in by_table} == expected
+    assert {
+        column["column_name"]: bool(column["is_generated"]) for column in by_schema if column["table_name"] == "Gen"
+    } == expected
+    config.close_pool()

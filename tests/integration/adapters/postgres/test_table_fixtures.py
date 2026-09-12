@@ -55,8 +55,21 @@ INSERT INTO fixture_resync.typed_items VALUES
      '7f3c1d2e-9a4b-4c5d-8e6f-0a1b2c3d4e5f', '\\x00ff10', '{"a": {"b": [1, "x"]}}', '[1, "two", null]', '"text"',
      '{1,2,3}', true),
     (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+CREATE TABLE fixture_resync.generated_items (
+    id INTEGER PRIMARY KEY,
+    doubled INTEGER GENERATED ALWAYS AS (id * 2) STORED,
+    span INTERVAL,
+    at_timetz TIME WITH TIME ZONE
+);
+INSERT INTO fixture_resync.generated_items (id, span, at_timetz) VALUES
+    (1, '1 day 02:03:04.5', '03:04:05+02'),
+    (2, '-00:00:01', '23:59:59-05:30'),
+    (3, NULL, NULL);
+CREATE TABLE fixture_resync.unkeyed_items (id INTEGER, docs JSON[], spots POINT[]);
+INSERT INTO fixture_resync.unkeyed_items VALUES (2, ARRAY['{"a": 1}'::json], ARRAY[point(1, 2)]), (1, NULL, NULL);
 """
 TEARDOWN_SQL = "DROP SCHEMA IF EXISTS fixture_resync CASCADE"
+SELECT_GENERATED_SQL = "SELECT * FROM fixture_resync.generated_items ORDER BY id"
 ROWS = [{"id": row_id, "name": f"item {row_id}"} for row_id in range(1, 6)]
 SELECT_TYPED_SQL = "SELECT * FROM fixture_resync.typed_items ORDER BY id"
 RESYNC_TABLES = (
@@ -235,3 +248,51 @@ async def test_upsert_on_non_identity_key_skips_always_identity_columns(
         assert rows == [{"id": 10, "email": "a@example.com", "name": "Bea"}]
     finally:
         await driver.execute_script(TEARDOWN_SQL)
+
+
+async def test_generated_interval_and_timetz_columns_round_trip_asyncpg(
+    asyncpg_async_driver: "AsyncpgDriver", tmp_path: Path
+) -> None:
+    """Stored generated columns are skipped, and interval and time with time zone values load back through asyncpg."""
+    driver = asyncpg_async_driver
+    await driver.execute_script(SETUP_SQL)
+    try:
+        before = await driver.select(SELECT_GENERATED_SQL)
+
+        await export_table_fixtures_async(
+            driver, tmp_path, ["fixture_resync.generated_items", "fixture_resync.unkeyed_items"], compress=False
+        )
+        exported = json.loads((tmp_path / "fixture_resync.generated_items.json").read_text())
+        await driver.execute("DELETE FROM fixture_resync.generated_items")
+        await load_table_fixtures_async(driver, tmp_path, tables=["fixture_resync.generated_items"])
+
+        assert all("doubled" not in row for row in exported)
+        assert await driver.select(SELECT_GENERATED_SQL) == before
+        assert [row["id"] for row in json.loads((tmp_path / "fixture_resync.unkeyed_items.json").read_text())] == [1, 2]
+    finally:
+        await driver.execute_script(TEARDOWN_SQL)
+
+
+def test_generated_interval_and_timetz_columns_round_trip_psycopg(
+    psycopg_sync_config: "PsycopgSyncConfig", tmp_path: Path
+) -> None:
+    """Files that include generated column values load and upsert through psycopg."""
+    with psycopg_sync_config.provide_session() as driver:
+        driver.execute_script(SETUP_SQL)
+        try:
+            before = driver.select(SELECT_GENERATED_SQL)
+
+            export_table_fixtures_sync(driver, tmp_path, ["fixture_resync.generated_items"])
+            driver.execute("DELETE FROM fixture_resync.generated_items")
+            load_table_fixtures_sync(driver, tmp_path)
+            (tmp_path / "fixture_resync.generated_items.json.gz").unlink()
+            _write_rows(
+                tmp_path, "fixture_resync.generated_items", [{"id": 1, "doubled": 99, "span": None, "at_timetz": None}]
+            )
+            load_table_fixtures_sync(driver, tmp_path, conflict_keys={"fixture_resync.generated_items": ["id"]})
+
+            rows = driver.select(SELECT_GENERATED_SQL)
+            assert rows[1:] == before[1:]
+            assert rows[0] == {"id": 1, "doubled": 2, "span": None, "at_timetz": None}
+        finally:
+            driver.execute_script(TEARDOWN_SQL)
