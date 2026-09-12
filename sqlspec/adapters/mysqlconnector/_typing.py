@@ -12,12 +12,8 @@ import mysql.connector as _mysql_connector
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
 from mysql.connector import aio as _mysql_connector_aio
 from mysql.connector import pooling as _mysql_connector_pooling
-from mysql.connector.aio import (
-    MySQLConnection as _MysqlConnectorAsyncConnection,  # pyright: ignore[reportMissingImports]
-)
-from mysql.connector.aio.cursor import (
-    MySQLCursor as _MysqlConnectorAsyncRawCursor,  # pyright: ignore[reportMissingImports]
-)
+from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection  # pyright: ignore[reportMissingImports]
+from mysql.connector.aio.cursor import MySQLCursor as _MysqlConnectorAsyncRawCursor  # pyright: ignore[reportMissingImports]
 from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 

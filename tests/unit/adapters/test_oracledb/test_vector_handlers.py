@@ -367,9 +367,7 @@ def test_pack_sequence_converter_is_module_level_named_function() -> None:
     """The vector inconverter must be a named module-level function."""
     import inspect
 
-    from sqlspec.adapters.oracledb._vector_handlers import (
-        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
-    )
+    from sqlspec.adapters.oracledb._vector_handlers import _pack_sequence_converter  # pyright: ignore[reportPrivateUsage]
 
     assert inspect.isfunction(_pack_sequence_converter)
     assert _pack_sequence_converter.__name__ == "_pack_sequence_converter"
@@ -378,9 +376,7 @@ def test_pack_sequence_converter_is_module_level_named_function() -> None:
 
 def test_pack_sequence_converter_float_list() -> None:
     """_pack_sequence_converter packs float lists as float32."""
-    from sqlspec.adapters.oracledb._vector_handlers import (
-        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
-    )
+    from sqlspec.adapters.oracledb._vector_handlers import _pack_sequence_converter  # pyright: ignore[reportPrivateUsage]
 
     result = _pack_sequence_converter([1.5, 2.5, 3.5])
 
@@ -391,9 +387,7 @@ def test_pack_sequence_converter_float_list() -> None:
 
 def test_pack_sequence_converter_int8_range() -> None:
     """_pack_sequence_converter packs small int lists as int8."""
-    from sqlspec.adapters.oracledb._vector_handlers import (
-        _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
-    )
+    from sqlspec.adapters.oracledb._vector_handlers import _pack_sequence_converter  # pyright: ignore[reportPrivateUsage]
 
     result = _pack_sequence_converter([-128, 0, 127])
 
