@@ -151,9 +151,16 @@ may hit a unique constraint run without aborting the surrounding transaction:
             pass
         user = await service.get_one("SELECT id, email FROM users WHERE email = $1", email)
 
-The outer block commits everything that was not rolled back. Nesting works the
-same way for services built from a session. Adapters without savepoint support
+The outer block commits everything that was not rolled back; if the outer block
+raises, work from inner blocks that succeeded is rolled back with it. Nesting works
+the same way for services built from a session. Adapters without savepoint support
 raise ``ImproperConfigurationError`` when a nested block is entered.
+
+A nested block must run in the task or thread that entered the outer block. Entering
+``begin_transaction()`` from another task or thread while the outer block is active
+raises ``ImproperConfigurationError`` instead of starting a second transaction on the
+same session. The outer block itself may be entered and exited in different tasks or
+threads, as happens with framework dependencies that run in a thread pool.
 
 Services expose ``config``, the configuration they were built from, so a service
 can construct a collaborating service without reaching into private state:
@@ -161,6 +168,10 @@ can construct a collaborating service without reaching into private state:
 .. code-block:: python
 
     audit = AuditService(config=users.config)
+
+``audit`` is a separate service with its own sessions and transactions. It does not
+join a transaction that ``users`` has open; pass ``session=`` to run its helpers on
+that session instead.
 
 Domain Services with a Caller-Owned Session
 ==========================================

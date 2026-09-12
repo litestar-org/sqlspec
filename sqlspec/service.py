@@ -69,10 +69,32 @@ def _active_transaction(key: object) -> _TransactionState | None:
     return state
 
 
-def _owned_transaction(key: object) -> _TransactionState | None:
-    state = (_TRANSACTIONS.get() or {}).get(key)
-    if state is None or state.driver is None or state.owner != _execution_owner():
+def _live_transaction(key: object) -> _TransactionState | None:
+    current = _TRANSACTIONS.get()
+    state = None if current is None else current.get(key)
+    if state is None:
         return None
+    if state.driver is None:
+        _discard_transaction(state)
+        return None
+    return _active_transaction(key)
+
+
+def _discard_transaction(state: _TransactionState) -> None:
+    current = _TRANSACTIONS.get()
+    if current is not None and any(value is state for value in current.values()):
+        _TRANSACTIONS.set({key: value for key, value in current.items() if value is not state} or None)
+
+
+def _session_transaction(state: _TransactionState | None) -> _TransactionState | None:
+    if state is None or state.driver is None:
+        return None
+    if state.owner != _execution_owner():
+        msg = (
+            "A service transaction is active in another task or thread; nested begin_transaction() blocks must "
+            "run in the task or thread that entered the outer block."
+        )
+        raise ImproperConfigurationError(msg)
     return state
 
 
@@ -152,7 +174,10 @@ def _bind_transaction(
 def _release_transaction(state: _TransactionState, token: Token[dict[object, _TransactionState] | None]) -> None:
     state.driver = None
     state.owner = (0, None)
-    _TRANSACTIONS.reset(token)
+    try:
+        _TRANSACTIONS.reset(token)
+    except ValueError:
+        _discard_transaction(state)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -168,7 +193,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         loader: Optional SQL file loader to expose without resolving named queries.
     """
 
-    __slots__ = ("_config", "_loader", "_session", "_transaction_key")
+    __slots__ = ("_config", "_loader", "_session", "_transaction_key", "_transaction_state")
 
     def __init__(
         self,
@@ -187,6 +212,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         self._config = config
         self._loader = loader
         self._transaction_key = object()
+        self._transaction_state: _TransactionState | None = None
 
     @property
     def session(self) -> AsyncDriverT:
@@ -448,7 +474,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         loader: Optional SQL file loader to expose without resolving named queries.
     """
 
-    __slots__ = ("_config", "_loader", "_session", "_transaction_key")
+    __slots__ = ("_config", "_loader", "_session", "_transaction_key", "_transaction_state")
 
     def __init__(
         self,
@@ -467,6 +493,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         self._config = config
         self._loader = loader
         self._transaction_key = object()
+        self._transaction_state: _TransactionState | None = None
 
     @property
     def session(self) -> SyncDriverT:
@@ -716,28 +743,34 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
 
 
 class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
-    __slots__ = ("_savepoint", "_service", "_stack", "_state", "_token")
+    __slots__ = ("_savepoint", "_service", "_stack", "_state")
 
     def __init__(self, service: "SQLSpecAsyncService[AsyncDriverT]") -> None:
         self._service = service
         self._stack: AsyncExitStack | None = None
         self._state: _TransactionState | None = None
-        self._token: Token[dict[object, _TransactionState] | None] | None = None
         self._savepoint: str | None = None
 
     async def __aenter__(self) -> AsyncDriverT:
         service = self._service
-        key = service._transaction_key
-        state = _owned_transaction(key) if service._config is None else _active_transaction(key)
-        if state is not None:
-            self._savepoint = await _create_async_savepoint(state)
-            self._state = state
-            return cast("AsyncDriverT", state.driver)
         if service._config is None:
+            active = _session_transaction(service._transaction_state)
+            if active is not None:
+                self._savepoint = await _create_async_savepoint(active)
+                self._state = active
+                return service.session
             await service.begin()
             session = service.session
-            self._state, self._token = _bind_transaction(key, session)
+            state = _TransactionState(session)
+            service._transaction_state = state
+            self._state = state
             return session
+        key = service._transaction_key
+        active = _live_transaction(key)
+        if active is not None:
+            self._savepoint = await _create_async_savepoint(active)
+            self._state = active
+            return cast("AsyncDriverT", active.driver)
         stack = AsyncExitStack()
         try:
             driver = await stack.enter_async_context(service.provide_session())
@@ -748,6 +781,7 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
             await stack.__aexit__(*sys.exc_info())
             raise
         self._stack = stack
+        self._state = state
         return driver
 
     async def __aexit__(
@@ -756,13 +790,13 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
         service = self._service
         state = self._state
         savepoint = self._savepoint
-        token = self._token
         stack = self._stack
         self._state = None
         self._savepoint = None
-        self._token = None
         self._stack = None
-        if state is not None and savepoint is not None:
+        if state is None:
+            return False
+        if savepoint is not None:
             await _exit_async_savepoint(state, savepoint, failed=exc_type is not None)
             return False
         if stack is None:
@@ -772,14 +806,16 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
                 else:
                     await service.rollback()
             finally:
-                if state is not None and token is not None:
-                    _release_transaction(state, token)
+                state.driver = None
+                if service._transaction_state is state:
+                    service._transaction_state = None
             return False
+        driver = cast("AsyncDriverAdapterBase", state.driver)
         try:
             if exc_type is None:
-                await service.session.commit()
+                await driver.commit()
             else:
-                await service.session.rollback()
+                await driver.rollback()
         except BaseException:
             await stack.__aexit__(*sys.exc_info())
             raise
@@ -788,28 +824,34 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
 
 
 class _SyncBeginTransactionContext(Generic[SyncDriverT]):
-    __slots__ = ("_savepoint", "_service", "_stack", "_state", "_token")
+    __slots__ = ("_savepoint", "_service", "_stack", "_state")
 
     def __init__(self, service: "SQLSpecSyncService[SyncDriverT]") -> None:
         self._service = service
         self._stack: ExitStack | None = None
         self._state: _TransactionState | None = None
-        self._token: Token[dict[object, _TransactionState] | None] | None = None
         self._savepoint: str | None = None
 
     def __enter__(self) -> SyncDriverT:
         service = self._service
-        key = service._transaction_key
-        state = _owned_transaction(key) if service._config is None else _active_transaction(key)
-        if state is not None:
-            self._savepoint = _create_sync_savepoint(state)
-            self._state = state
-            return cast("SyncDriverT", state.driver)
         if service._config is None:
+            active = _session_transaction(service._transaction_state)
+            if active is not None:
+                self._savepoint = _create_sync_savepoint(active)
+                self._state = active
+                return service.session
             service.begin()
             session = service.session
-            self._state, self._token = _bind_transaction(key, session)
+            state = _TransactionState(session)
+            service._transaction_state = state
+            self._state = state
             return session
+        key = service._transaction_key
+        active = _live_transaction(key)
+        if active is not None:
+            self._savepoint = _create_sync_savepoint(active)
+            self._state = active
+            return cast("SyncDriverT", active.driver)
         stack = ExitStack()
         try:
             driver = stack.enter_context(service.provide_session())
@@ -820,6 +862,7 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
             stack.__exit__(*sys.exc_info())
             raise
         self._stack = stack
+        self._state = state
         return driver
 
     def __exit__(
@@ -828,13 +871,13 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
         service = self._service
         state = self._state
         savepoint = self._savepoint
-        token = self._token
         stack = self._stack
         self._state = None
         self._savepoint = None
-        self._token = None
         self._stack = None
-        if state is not None and savepoint is not None:
+        if state is None:
+            return False
+        if savepoint is not None:
             _exit_sync_savepoint(state, savepoint, failed=exc_type is not None)
             return False
         if stack is None:
@@ -844,14 +887,16 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
                 else:
                     service.rollback()
             finally:
-                if state is not None and token is not None:
-                    _release_transaction(state, token)
+                state.driver = None
+                if service._transaction_state is state:
+                    service._transaction_state = None
             return False
+        driver = cast("SyncDriverAdapterBase", state.driver)
         try:
             if exc_type is None:
-                service.session.commit()
+                driver.commit()
             else:
-                service.session.rollback()
+                driver.rollback()
         except BaseException:
             stack.__exit__(*sys.exc_info())
             raise
