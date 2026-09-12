@@ -17,7 +17,9 @@ Unreleased
 * Optimized ``INSERT`` builds keep ``ON CONFLICT ... DO UPDATE`` and
   ``ON DUPLICATE KEY UPDATE`` assignments in written order. An assignment such as
   ``do_update(name=exp.column("name", table="excluded"))`` previously rendered as
-  ``SET excluded.name = name``, which databases reject.
+  ``SET excluded.name = name``, which databases reject. Conflict targets and
+  ``SET`` columns are quoted like the rest of the statement, so reserved words
+  such as ``order`` and ``group`` work as conflict and update columns.
 
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests

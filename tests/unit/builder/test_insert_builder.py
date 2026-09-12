@@ -218,7 +218,23 @@ def test_on_conflict_do_update_keeps_excluded_assignment_order(dialect: str) -> 
     statement_sql = " ".join(query.to_statement().sql.split())
 
     assert 'SET "name" = "excluded"."name"' in built_sql
-    assert "SET name = excluded.name" in statement_sql
+    assert 'ON CONFLICT("id") DO UPDATE SET "name" = "excluded"."name"' in statement_sql
+
+
+def test_on_conflict_statement_quotes_reserved_word_identifiers() -> None:
+    """Statements built for execution quote conflict targets and SET columns that are reserved words."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute('CREATE TABLE "t" ("order" INTEGER PRIMARY KEY, "group" TEXT)')
+        driver.execute("INSERT INTO t VALUES (1, 'a')")
+
+        driver.execute(sql.insert("t").values(**{"order": 1, "group": "b"}).on_conflict("order").do_update(group="z"))
+        driver.execute(sql.insert("t").values(**{"order": 1, "group": "c"}).on_conflict("order").do_nothing())
+
+        assert driver.select('SELECT "order", "group" FROM t') == [{"order": 1, "group": "z"}]
+    config.close_pool()
 
 
 def test_on_duplicate_key_update_keeps_assignment_order() -> None:
