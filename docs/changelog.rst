@@ -23,6 +23,9 @@ Unreleased
   (type, provider, scope, or unredacted values such as ``key_id`` or ``endpoint``) differ
   from the declaration raises for ``required=True`` secrets and logs a warning otherwise.
   (`#754 <https://github.com/litestar-org/sqlspec/issues/754>`_)
+* The ``litestar`` extra now requires ``litestar>=2.23.0``. The Litestar
+  extension imports ``NamedDependency`` and ``SkipValidation``, which are not
+  available in 2.22, so installs resolved to 2.22 failed on import.
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
@@ -62,6 +65,16 @@ Unreleased
   superseded by the typed per-adapter exception handlers.
 
 **Added:**
+
+* ``SQLSpecChannelsBackend`` can check a payload against the PostgreSQL
+  ``NOTIFY`` limit before publishing. ``measure(data)`` returns the encoded
+  ``notify`` envelope size, ``fits(data)`` reports whether it is within ``notify_budget``,
+  and ``notify_budget`` is ``None`` for backends without a payload limit.
+  ``metrics_snapshot()`` returns all observability metrics for the event
+  channel's database configuration together with the backend instance's output
+  queue depth and dropped message count. ``AsyncEventChannel`` and
+  ``SyncEventChannel`` also expose ``backend_name`` and ``metrics_snapshot()``.
+  (`#756 <https://github.com/litestar-org/sqlspec/issues/756>`_)
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
