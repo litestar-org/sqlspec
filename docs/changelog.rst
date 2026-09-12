@@ -54,6 +54,15 @@ Unreleased
 
 **Added:**
 
+* ``sqlspec.utils.fixtures`` loads and exports table data with
+  ``load_table_fixtures_sync``/``load_table_fixtures_async`` and
+  ``export_table_fixtures_sync``/``export_table_fixtures_async``. Each table uses
+  one ``<table>.json`` or ``<table>.jsonl`` file, optionally gzipped. Loading
+  supports a table subset, an explicit load order, batched inserts, upserts on
+  conflict key columns, and, on PostgreSQL, resetting serial and identity
+  sequences past the loaded ids. The loader does not commit. Exporting replaces the
+  table's other fixture files in the directory. See :doc:`/usage/testing`.
+
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
   ``begin_transaction()`` to keep several calls in one transaction. Existing

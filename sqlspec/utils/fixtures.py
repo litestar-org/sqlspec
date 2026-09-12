@@ -15,6 +15,7 @@ from sqlglot import exp
 
 from sqlspec.builder import Insert, Select
 from sqlspec.storage import storage_registry
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json as decode_json
 from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.serializers import to_json as encode_json
@@ -43,6 +44,20 @@ _JSON_FIXTURE_EXTENSIONS: Final["tuple[str, ...]"] = (".json", ".json.gz", ".jso
 _TABLE_FIXTURE_EXTENSIONS: Final["tuple[str, ...]"] = (".json", ".json.gz", ".jsonl", ".jsonl.gz")
 _COLUMN_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TABLE_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
+_POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
+_SEQUENCE_COLUMNS_FILTER: Final[str] = (
+    "AND table_name = :table_name "
+    "AND (left(column_default, 8) = 'nextval(' OR is_identity = 'YES') "
+    "ORDER BY ordinal_position"
+)
+_SEQUENCE_COLUMNS_SQL: Final[str] = (
+    f"SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() {_SEQUENCE_COLUMNS_FILTER}"
+)
+_SCHEMA_SEQUENCE_COLUMNS_SQL: Final[str] = (
+    f"SELECT column_name FROM information_schema.columns WHERE table_schema = :schema_name {_SEQUENCE_COLUMNS_FILTER}"
+)
+
+logger = get_logger("sqlspec.utils.fixtures")
 
 
 def open_fixture_sync(fixtures_path: Any, fixture_name: str) -> Any:
@@ -195,6 +210,7 @@ def load_table_fixtures_sync(
     table_order: "Sequence[str] | None" = None,
     conflict_keys: "Mapping[str, Sequence[str]] | None" = None,
     batch_size: int = 500,
+    resync_sequences: bool = False,
 ) -> "dict[str, int]":
     """Load per-table fixture files into database tables.
 
@@ -216,6 +232,10 @@ def load_table_fixtures_sync(
             Rows for these tables are upserted, updating every non-key column when a row
             with the same key already exists.
         batch_size: Maximum number of rows per ``execute_many`` call.
+        resync_sequences: On PostgreSQL-family drivers, set the sequence behind each
+            serial or identity column of a loaded table to the column's maximum value
+            (or back to 1 for an empty table), so the next generated value follows the
+            loaded rows. On other dialects the option is skipped with a debug log.
 
     Returns:
         Mapping of table name to the number of rows loaded, in load order.
@@ -229,6 +249,7 @@ def load_table_fixtures_sync(
     _validate_load_arguments(conflict_keys, batch_size)
     table_files = _ordered_table_files(fixtures_path, tables, table_order)
     dialect = driver.statement_config.dialect
+    resync = _sequence_resync_enabled(resync_sequences, dialect)
     counts: dict[str, int] = {}
     for table, file_path in table_files:
         rows = _table_fixture_rows(file_path, _read_table_fixture_text(file_path))
@@ -236,6 +257,8 @@ def load_table_fixtures_sync(
             statement = _table_insert_statement(dialect, table, list(rows[0]), _conflict_keys_for(conflict_keys, table))
             for start in range(0, len(rows), batch_size):
                 driver.execute_many(statement, rows[start : start + batch_size])
+        if resync:
+            _resync_postgres_sequences_sync(driver, table)
         counts[table] = len(rows)
     return counts
 
@@ -248,6 +271,7 @@ async def load_table_fixtures_async(
     table_order: "Sequence[str] | None" = None,
     conflict_keys: "Mapping[str, Sequence[str]] | None" = None,
     batch_size: int = 500,
+    resync_sequences: bool = False,
 ) -> "dict[str, int]":
     """Load per-table fixture files into database tables asynchronously.
 
@@ -269,6 +293,10 @@ async def load_table_fixtures_async(
             Rows for these tables are upserted, updating every non-key column when a row
             with the same key already exists.
         batch_size: Maximum number of rows per ``execute_many`` call.
+        resync_sequences: On PostgreSQL-family drivers, set the sequence behind each
+            serial or identity column of a loaded table to the column's maximum value
+            (or back to 1 for an empty table), so the next generated value follows the
+            loaded rows. On other dialects the option is skipped with a debug log.
 
     Returns:
         Mapping of table name to the number of rows loaded, in load order.
@@ -282,6 +310,7 @@ async def load_table_fixtures_async(
     _validate_load_arguments(conflict_keys, batch_size)
     table_files = await _async_ordered_table_files(fixtures_path, tables, table_order)
     dialect = driver.statement_config.dialect
+    resync = _sequence_resync_enabled(resync_sequences, dialect)
     counts: dict[str, int] = {}
     for table, file_path in table_files:
         rows = _table_fixture_rows(file_path, await _async_read_table_fixture_text(file_path))
@@ -289,6 +318,8 @@ async def load_table_fixtures_async(
             statement = _table_insert_statement(dialect, table, list(rows[0]), _conflict_keys_for(conflict_keys, table))
             for start in range(0, len(rows), batch_size):
                 await driver.execute_many(statement, rows[start : start + batch_size])
+        if resync:
+            await _resync_postgres_sequences_async(driver, table)
         counts[table] = len(rows)
     return counts
 
@@ -612,6 +643,70 @@ def _table_insert_statement(
     if not updates:
         return statement.on_conflict(*conflict_keys).do_nothing()
     return statement.on_conflict(*conflict_keys).do_update(**updates)
+
+
+def _sequence_resync_enabled(resync_sequences: bool, dialect: "DialectType") -> bool:
+    """Return whether sequence resync applies, logging when it is skipped for the dialect."""
+    if not resync_sequences:
+        return False
+    if dialect is None:
+        dialect_name = ""
+    elif isinstance(dialect, str):
+        dialect_name = dialect
+    elif isinstance(dialect, type):
+        dialect_name = dialect.__name__
+    else:
+        dialect_name = type(dialect).__name__
+    if dialect_name.lower() in _POSTGRES_DIALECTS:
+        return True
+    logger.debug("Skipping table fixture sequence resync for non-PostgreSQL dialect %r", dialect_name or None)
+    return False
+
+
+def _quoted_identifier(name: str) -> str:
+    """Return the name as a double-quoted SQL identifier."""
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _quoted_table_name(table: str) -> str:
+    """Return a validated plain or schema-qualified table name with each part double-quoted."""
+    return ".".join(_quoted_identifier(part) for part in table.split("."))
+
+
+def _sequence_columns_query(table: str) -> "tuple[str, dict[str, str]]":
+    """Return the query and parameters listing a table's serial and identity columns."""
+    schema_name, _, table_name = table.rpartition(".")
+    if schema_name:
+        return _SCHEMA_SEQUENCE_COLUMNS_SQL, {"schema_name": schema_name, "table_name": table_name}
+    return _SEQUENCE_COLUMNS_SQL, {"table_name": table_name}
+
+
+def _sequence_resync_statement(table: str, column: str) -> "tuple[str, dict[str, str]]":
+    """Return the statement and parameters that align a column's owned sequence with its maximum value."""
+    quoted_column = _quoted_identifier(column)
+    statement = (
+        f"SELECT setval(pg_get_serial_sequence(:table_name, :column_name), "
+        f"coalesce(max({quoted_column}), 1), max({quoted_column}) IS NOT NULL) "
+        f"FROM {_quoted_table_name(table)}"
+    )
+    return statement, {"table_name": _quoted_table_name(table), "column_name": column}
+
+
+def _resync_postgres_sequences_sync(driver: "SyncDriverAdapterBase", table: str) -> None:
+    """Align the sequences behind a table's serial and identity columns with the loaded rows."""
+    query, parameters = _sequence_columns_query(table)
+    for row in driver.select(query, parameters):
+        statement, statement_parameters = _sequence_resync_statement(table, str(row["column_name"]))
+        driver.execute(statement, statement_parameters)
+
+
+async def _resync_postgres_sequences_async(driver: "AsyncDriverAdapterBase", table: str) -> None:
+    """Align the sequences behind a table's serial and identity columns with the loaded rows."""
+    query, parameters = _sequence_columns_query(table)
+    for row in await driver.select(query, parameters):
+        statement, statement_parameters = _sequence_resync_statement(table, str(row["column_name"]))
+        await driver.execute(statement, statement_parameters)
 
 
 def _table_fixture_text(rows: "list[dict[str, Any]]", jsonl: bool) -> str:

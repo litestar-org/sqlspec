@@ -8,6 +8,7 @@ JSON fixture file loading with compression support.
 import gzip
 import importlib
 import json
+import logging
 import sys
 import zipfile
 from pathlib import Path
@@ -785,3 +786,34 @@ def test_table_fixture_helpers_reject_invalid_arguments(tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="Invalid table name"):
             export_table_fixtures_sync(driver, tmp_path, ["users where 1=1"])
     config.close_pool()
+
+
+def test_resync_noop_on_sqlite(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Sequence resync is skipped with a debug log on non-PostgreSQL drivers."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    caplog.set_level(logging.DEBUG, logger="sqlspec.utils.fixtures")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+        counts = load_table_fixtures_sync(driver, tmp_path, resync_sequences=True)
+
+        assert counts == {"users": 2}
+        assert _normalized(driver.select("SELECT * FROM users")) == USER_ROWS
+    config.close_pool()
+    assert any("resync" in record.getMessage() and record.levelno == logging.DEBUG for record in caplog.records)
+
+
+async def test_resync_noop_on_sqlite_async(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The async loader skips sequence resync on non-PostgreSQL drivers."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    caplog.set_level(logging.DEBUG, logger="sqlspec.utils.fixtures")
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        await driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+        counts = await load_table_fixtures_async(driver, tmp_path, resync_sequences=True)
+
+        assert counts == {"users": 2}
+    await config.close_pool()
+    assert any("resync" in record.getMessage() and record.levelno == logging.DEBUG for record in caplog.records)
