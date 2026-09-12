@@ -18,11 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
 
+from sqlglot import exp
+
 from sqlspec.core import SQL, ParameterDeclaration, ParameterValidator, get_cache, get_cache_config
 from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
     SQLFileParseError,
+    SQLSlotError,
     SQLStatementNotFoundError,
     StorageOperationFailedError,
 )
@@ -1182,21 +1185,39 @@ class SQLFileLoader:
             self._raise_statement_not_found(name, safe_name)
         return self._resolve_statement_text(safe_name)
 
-    def get_sql(self, name: str) -> "SQL":
-        """Get a SQL object by statement name.
+    def get_sql(self, name: str, **slots: Any) -> "SQL":
+        """Get a SQL object by statement name, filling its slots.
+
+        Each ``/* slot: name */`` marker is replaced by the matching keyword value,
+        or by the slot's ``-- slot:`` default when no value is given. A value may be
+        a ``str`` (spliced verbatim), a sqlglot expression (rendered with the
+        statement's dialect), or a ``SQL`` object (its text is spliced and its named
+        parameters are bound on the returned statement). Slot values are SQL, not
+        data: pass user input as parameters of a ``SQL`` value.
+
+        The statement is cached only when no slot values are given.
 
         Args:
             name: Name of the statement (from -- name: in SQL file).
                 Hyphens in names are converted to underscores.
+            **slots: Values for the statement's slots, keyed by slot name.
 
         Returns:
             SQL object ready for execution.
+
+        Raises:
+            SQLSlotError: If a required slot is missing, a slot name is unknown, a
+                ``SQL`` value uses positional parameters, or slot parameter names collide
+                with each other or with the statement's placeholders.
+            TypeError: If a slot value is not a ``str``, sqlglot expression, or ``SQL``.
+            SQLFileParseError: If declared parameters do not match the filled SQL or the
+                SQL cannot be compiled.
         """
         safe_name = _normalize_query_name(name)
 
         if safe_name not in self._queries:
             self._raise_statement_not_found(name, safe_name)
-        if safe_name in self._compiled_statements:
+        if not slots and safe_name in self._compiled_statements:
             return self._compiled_statements[safe_name]
 
         parsed_statement = self._queries[safe_name]
@@ -1205,24 +1226,135 @@ class SQLFileLoader:
             sqlglot_dialect = _normalize_dialect(parsed_statement.dialect)
 
         statement_text = parsed_statement.sql
-        if parsed_statement.slots or parsed_statement.has_includes:
-            statement_text = self._resolve_statement_text(safe_name)
-            if not parsed_statement.slots:
-                self._check_declared_parameters(
-                    statement_text,
-                    parsed_statement.parameters,
-                    name,
-                    self._query_to_file.get(safe_name, "<directly added>"),
-                    start_line=parsed_statement.start_line,
-                )
+        slot_parameters: dict[str, Any] = {}
+        if slots or parsed_statement.slots or parsed_statement.has_includes:
+            statement_text, slot_parameters = self._fill_slots(
+                safe_name, self._resolve_statement_text(safe_name), slots, sqlglot_dialect
+            )
+            self._check_declared_parameters(
+                statement_text,
+                parsed_statement.parameters,
+                name,
+                self._query_to_file.get(safe_name, "<directly added>"),
+                start_line=parsed_statement.start_line,
+            )
 
         sql = SQL(statement_text, dialect=sqlglot_dialect, declared_parameters=parsed_statement.parameters)
         try:
             sql.compile()
         except Exception as exc:
             raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
-        self._compiled_statements[safe_name] = sql
+        if slot_parameters:
+            return SQL(
+                statement_text,
+                slot_parameters,
+                dialect=sqlglot_dialect,
+                declared_parameters=parsed_statement.parameters,
+            )
+        if not slots:
+            self._compiled_statements[safe_name] = sql
         return sql
+
+    def _fill_slots(
+        self, safe_name: str, resolved_text: str, provided: "dict[str, Any]", dialect: "str | None"
+    ) -> "tuple[str, dict[str, Any]]":
+        """Replace slot markers in resolved statement text with provided values or defaults.
+
+        Args:
+            safe_name: Normalized, registered statement name.
+            resolved_text: Statement text with includes resolved.
+            provided: Slot values keyed by slot name.
+            dialect: Dialect used to render sqlglot expression values.
+
+        Returns:
+            The filled SQL text and the named parameters contributed by ``SQL`` values.
+
+        Raises:
+            SQLSlotError: If a slot is unknown or missing, or parameter names collide.
+            TypeError: If a slot value has an unsupported type.
+        """
+        declared = _merge_slot_markers(self._queries[safe_name].slots, resolved_text)
+        slot_names = {slot.name for slot in declared}
+        unknown_names = sorted(slot_name for slot_name in provided if slot_name not in slot_names)
+        if unknown_names:
+            raise SQLSlotError(
+                safe_name, f"unknown slot(s) {unknown_names}; available slots: {sorted(slot_names) or 'none'}"
+            )
+        if not declared:
+            return resolved_text, {}
+
+        fills: dict[str, str] = {}
+        body_fills: dict[str, str] = {}
+        merged_parameters: dict[str, Any] = {}
+        parameter_sources: dict[str, str] = {}
+        for slot in declared:
+            if slot.name in provided:
+                fill_text, fill_parameters, is_statement = self._render_slot_value(
+                    safe_name, slot.name, provided[slot.name], dialect
+                )
+            elif slot.default is not None:
+                fill_text, fill_parameters, is_statement = slot.default, {}, False
+            else:
+                raise SQLSlotError(safe_name, f"missing required slot '{slot.name}'")
+            fills[slot.name] = fill_text
+            body_fills[slot.name] = " " if is_statement else fill_text
+            for parameter_name, parameter_value in fill_parameters.items():
+                if parameter_name in merged_parameters:
+                    raise SQLSlotError(
+                        safe_name,
+                        f"parameter '{parameter_name}' is supplied by both slot "
+                        f"'{parameter_sources[parameter_name]}' and slot '{slot.name}'",
+                    )
+                merged_parameters[parameter_name] = parameter_value
+                parameter_sources[parameter_name] = slot.name
+
+        if merged_parameters:
+            body_text = _substitute_slot_markers(resolved_text, body_fills)
+            body_names = {info.name for info in ParameterValidator().extract_parameters(body_text) if info.name}
+            for parameter_name, source_slot in parameter_sources.items():
+                if parameter_name in body_names:
+                    raise SQLSlotError(
+                        safe_name,
+                        f"parameter '{parameter_name}' from slot '{source_slot}' collides with a placeholder "
+                        "in the statement",
+                    )
+        return _substitute_slot_markers(resolved_text, fills), merged_parameters
+
+    @staticmethod
+    def _render_slot_value(
+        safe_name: str, slot_name: str, value: Any, dialect: "str | None"
+    ) -> "tuple[str, dict[str, Any], bool]":
+        """Render one slot value to SQL text.
+
+        Args:
+            safe_name: Normalized statement name for error messages.
+            slot_name: Slot being filled.
+            value: A ``str``, sqlglot expression, or ``SQL`` object.
+            dialect: Dialect used to render sqlglot expressions.
+
+        Returns:
+            The SQL text, the named parameters it contributes, and whether the value
+            was a ``SQL`` object.
+
+        Raises:
+            SQLSlotError: If a ``SQL`` value carries positional parameters.
+            TypeError: If the value has an unsupported type.
+        """
+        if isinstance(value, str):
+            return value, {}, False
+        if isinstance(value, SQL):
+            if value.positional_parameters:
+                raise SQLSlotError(
+                    safe_name, f"slot '{slot_name}' value uses positional parameters; use named parameters instead"
+                )
+            return value.sql, dict(value.named_parameters), True
+        if isinstance(value, exp.Expr):
+            return value.sql(dialect=dialect), {}, False
+        msg = (
+            f"Statement '{safe_name}' slot '{slot_name}' value must be str, SQL, or a sqlglot expression, "
+            f"not {type(value).__name__}"
+        )
+        raise TypeError(msg)
 
     def _resolve_statement_text(self, safe_name: str) -> str:
         """Return a loaded statement's text with includes resolved.
@@ -1363,6 +1495,18 @@ def _normalize_dialect(dialect: str) -> str:
 def _namespace_of(name: str) -> "str | None":
     """Return the namespace prefix of a registered name, or None when it has none."""
     return name.rpartition(".")[0] or None
+
+
+def _substitute_slot_markers(text: str, fills: "dict[str, str]") -> str:
+    """Replace every ``/* slot: name */`` marker in ``text`` with ``fills[name]``."""
+    parts: list[str] = []
+    last_end = 0
+    for match in SLOT_MARKER_PATTERN.finditer(text):
+        parts.append(text[last_end : match.start()])
+        parts.append(fills[match.group(1)])
+        last_end = match.end()
+    parts.append(text[last_end:])
+    return "".join(parts)
 
 
 def _section_match_start(item: "tuple[re.Match[str], bool]") -> int:
