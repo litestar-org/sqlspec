@@ -254,6 +254,20 @@ isolate channels onto per-channel physical queues, template the queue name with
 Channels
 ========
 
+Both channel classes expose ``backend_name``, the resolved backend kind
+(``notify``, ``notify_queue``, ``poll_queue``, ``aq``, or ``txeventq``), and
+``metrics_snapshot()``, which returns the event metrics recorded for the
+channel's configuration as floats keyed under its diagnostics prefix:
+
+.. code-block:: python
+
+    channel = spec.event_channel(config)
+    await channel.publish("notifications", {"action": "refresh"})
+
+    if channel.backend_name == "notify":
+        ...
+    published = channel.metrics_snapshot().get("AsyncpgConfig.events.publish", 0.0)
+
 .. autoclass:: sqlspec.extensions.events.AsyncEventChannel
    :members:
    :show-inheritance:
