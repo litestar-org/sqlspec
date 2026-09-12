@@ -101,9 +101,12 @@ arguments with an async driver.
   - ISO 8601 strings in ``timestamp``/``timestamptz``/``datetime`` columns to
     ``datetime``, in ``date`` columns to ``date``, and in ``time`` columns, with
     or without a time zone, to ``time`` (not on MySQL);
-  - ISO 8601 durations and numbers of seconds in ``interval`` columns to
-    ``timedelta``, and DuckDB ``[months, days, nanoseconds]`` interval lists to
-    interval text;
+  - ISO 8601 durations without year or month parts and numbers of seconds in
+    ``interval`` columns to ``timedelta``, and DuckDB
+    ``[months, days, nanoseconds]`` interval lists to interval text. Durations
+    with year or month parts, such as ``P1Y`` or ``P1M``, are passed through as
+    text, which some drivers, such as asyncpg, reject. Exported files never
+    contain them;
   - strings and numbers in ``numeric``/``decimal`` columns to ``Decimal``;
   - strings in ``uuid`` columns to ``UUID``;
   - base64 strings in ``bytea``, ``blob``, ``tinyblob``, ``mediumblob``,
@@ -117,9 +120,12 @@ arguments with an async driver.
   timestamps, or UUIDs are not converted. On other databases no column types are
   read, and only values the driver accepts as JSON-decoded strings, numbers,
   booleans, nulls, lists, and objects load.
-- **Generated columns:** columns the database computes (``GENERATED ALWAYS AS``)
-  are left out of exported files, and their values in a loaded file are ignored,
-  so files that contain them still load.
+- **Generated columns:** on PostgreSQL-family, MySQL, DuckDB, and SQLite
+  drivers, columns the database computes (``GENERATED ALWAYS AS``) are left out
+  of exported files, and their values in a loaded file are ignored, so files that
+  contain them still load. Other databases are not checked for them, so SQL Server
+  computed columns and Oracle virtual columns are exported and loaded like any
+  other column.
 - **Upserts:** ``conflict_keys`` maps a table to the columns of a unique
   constraint; every entry must name a table being loaded, spelled exactly. Rows
   for that table update the non-key columns of existing rows instead of failing;

@@ -249,16 +249,17 @@ def load_table_fixtures_sync(
     On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's columns
     are read from the driver's data dictionary first, and JSON values of these column
     types are converted: ISO 8601 strings in timestamp, datetime, date, and (except on
-    MySQL) time columns to datetimes, dates, and times; ISO 8601 durations and numbers
-    of seconds in interval columns to ``timedelta``, and DuckDB ``[months, days,
-    nanoseconds]`` interval lists to interval text; strings and numbers in numeric and
-    decimal columns to ``Decimal``; strings in uuid columns to ``UUID``; base64 strings
-    in bytea, blob, binary, and varbinary columns to bytes; and PostgreSQL and MySQL
-    json and jsonb values to JSON text. SQLite only converts binary columns. All other
-    values, including array elements, are passed to the driver as decoded from JSON.
-    Values of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS``
-    identity columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and
-    are never updated by upserts.
+    MySQL) time columns to datetimes, dates, and times; ISO 8601 durations without year
+    or month parts and numbers of seconds in interval columns to ``timedelta``, and
+    DuckDB ``[months, days, nanoseconds]`` interval lists to interval text; strings and
+    numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
+    ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
+    PostgreSQL and MySQL json and jsonb values to JSON text. SQLite only converts binary
+    columns. All other values, including array elements and durations with year or
+    month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
+    of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS`` identity
+    columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and are never
+    updated by upserts.
 
     Args:
         driver: Sync driver that runs the inserts.
@@ -341,16 +342,17 @@ async def load_table_fixtures_async(
     On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's columns
     are read from the driver's data dictionary first, and JSON values of these column
     types are converted: ISO 8601 strings in timestamp, datetime, date, and (except on
-    MySQL) time columns to datetimes, dates, and times; ISO 8601 durations and numbers
-    of seconds in interval columns to ``timedelta``, and DuckDB ``[months, days,
-    nanoseconds]`` interval lists to interval text; strings and numbers in numeric and
-    decimal columns to ``Decimal``; strings in uuid columns to ``UUID``; base64 strings
-    in bytea, blob, binary, and varbinary columns to bytes; and PostgreSQL and MySQL
-    json and jsonb values to JSON text. SQLite only converts binary columns. All other
-    values, including array elements, are passed to the driver as decoded from JSON.
-    Values of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS``
-    identity columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and
-    are never updated by upserts.
+    MySQL) time columns to datetimes, dates, and times; ISO 8601 durations without year
+    or month parts and numbers of seconds in interval columns to ``timedelta``, and
+    DuckDB ``[months, days, nanoseconds]`` interval lists to interval text; strings and
+    numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
+    ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
+    PostgreSQL and MySQL json and jsonb values to JSON text. SQLite only converts binary
+    columns. All other values, including array elements and durations with year or
+    month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
+    of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS`` identity
+    columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and are never
+    updated by upserts.
 
     Args:
         driver: Async driver that runs the inserts.
