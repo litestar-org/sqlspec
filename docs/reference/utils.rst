@@ -5,8 +5,9 @@ Utility Functions
 SQLSpec exposes small, reusable helpers for runtime type narrowing, configuration,
 identifier generation, text and identifier formatting, serialization, schema
 conversion, correlation tracking, optional dependency loading, sync/async
-interoperation, deprecation, and fixture files. These modules are supported
-public APIs; import helpers from their defining ``sqlspec.utils`` module.
+interoperation, deprecation, and fixture files. The modules and members
+documented on this page are supported public APIs; import helpers from their
+defining ``sqlspec.utils`` module.
 
 Type Guards
 ===========

@@ -82,10 +82,10 @@ from sqlspec.observability import (
 )
 from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
+from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 
 if TYPE_CHECKING:
     from sqlspec import dialects
-    from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 
 __all__ = (
     "SQL",
@@ -171,25 +171,13 @@ __all__ = (
     "uuid7",
 )
 
-_LAZY_UUID_NAMES = frozenset(("nanoid", "uuid4", "uuid6", "uuid7"))
-
 suppress_erroneous_sqlglot_log_messages()
 
 
 def __getattr__(name: str) -> "Any":
-    import importlib
-
     if name == "dialects":
+        import importlib
+
         return importlib.import_module("sqlspec.dialects")
-    if name in _LAZY_UUID_NAMES:
-        value = getattr(importlib.import_module("sqlspec.utils.uuids"), name)
-        globals()[name] = value
-        return value
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)
-
-
-def __dir__() -> "list[str]":
-    """Expose the public surface for autocomplete and ``dir()``."""
-
-    return sorted(set(globals()) | set(__all__))

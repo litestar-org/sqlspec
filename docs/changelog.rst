@@ -62,9 +62,10 @@ Unreleased
 * ``uuid4``, ``uuid6``, ``uuid7``, and ``nanoid`` can be imported from the
   top-level ``sqlspec`` package. ``sqlspec.extensions.litestar`` exports
   ``CorrelationMiddleware`` and ``TRACE_CONTEXT_FALLBACK_HEADERS``. The
-  :doc:`/reference/utils` reference now covers ``sqlspec.utils.text``,
-  ``sqlspec.utils.serializers``, ``sqlspec.utils.schema``, and
-  ``sqlspec.utils.correlation`` as supported modules.
+  :doc:`/reference/utils` reference now covers the ``sqlspec.utils.text``,
+  ``sqlspec.utils.serializers``, and ``sqlspec.utils.correlation`` modules and
+  the ``to_schema``, ``to_value_type``, and ``transform_dict_keys`` functions
+  from ``sqlspec.utils.schema`` as supported APIs.
 
 * Storage pipelines expose ``resolve_destination()``, returning a
   ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.
