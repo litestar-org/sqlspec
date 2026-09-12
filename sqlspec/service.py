@@ -35,11 +35,12 @@ SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase, default=SyncDr
 
 
 class _TransactionState:
-    __slots__ = ("depth", "driver", "owner")
+    __slots__ = ("depth", "driver", "origin", "owner")
 
     def __init__(self, driver: AsyncDriverAdapterBase | SyncDriverAdapterBase) -> None:
         self.driver: AsyncDriverAdapterBase | SyncDriverAdapterBase | None = driver
         self.owner = _execution_owner()
+        self.origin = _owner_identity(self.owner)
         self.depth = 0
 
 
@@ -56,11 +57,18 @@ def _execution_owner() -> tuple[int, object]:
     return get_ident(), task
 
 
+def _owner_identity(owner: tuple[int, object]) -> tuple[int, int]:
+    return owner[0], id(owner[1])
+
+
 def _active_transaction(key: object) -> _TransactionState | None:
     state = (_TRANSACTIONS.get() or {}).get(key)
     if state is None:
         return None
     if state.driver is None:
+        if state.origin == _owner_identity(_execution_owner()):
+            _discard_transaction(state)
+            return None
         msg = "The inherited service transaction is no longer active."
         raise ImproperConfigurationError(msg)
     if state.owner != _execution_owner():

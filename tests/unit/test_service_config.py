@@ -833,7 +833,7 @@ def test_service_transaction_context_releases_retained_driver(
             inherited = copy_context()
         assert _TRANSACTIONS.get() is initial
         assert all(state.driver is None for state in (inherited.run(_TRANSACTIONS.get) or {}).values())
-        with pytest.raises(ImproperConfigurationError, match="no longer active"):
+        with pytest.raises(ImproperConfigurationError, match="No session is available"):
             inherited.run(lambda: service.session)
 
 
@@ -1070,3 +1070,41 @@ def test_sync_nested_transactions_are_independent_between_threads(
         ("release", "sqlspec_sp_1"),
         ("release", "sqlspec_sp_1"),
     ]
+
+
+def test_sync_transaction_exited_on_another_thread_releases_entering_thread(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]],
+) -> None:
+    config, _ = sync_config
+    service = SQLSpecSyncService(config=config)
+
+    def later_transaction() -> object:
+        with service.begin_transaction() as session:
+            return session.select_value("SELECT 2")
+
+    with ThreadPoolExecutor(max_workers=1) as entering, ThreadPoolExecutor(max_workers=1) as exiting:
+        context = service.begin_transaction()
+        driver = entering.submit(context.__enter__).result(timeout=10)
+        entering.submit(driver.execute, "INSERT INTO service_values VALUES (2)").result(timeout=10)
+        assert exiting.submit(context.__exit__, None, None, None).result(timeout=10) is False
+        assert _committed_values(config) == [1, 2]
+        assert entering.submit(service.exists, sql.select("value").from_("service_values").where("value = 2")).result(
+            timeout=10
+        )
+        with pytest.raises(ImproperConfigurationError, match="No session is available"):
+            entering.submit(lambda: service.session).result(timeout=10)
+        assert entering.submit(later_transaction).result(timeout=10) == 2
+        assert exiting.submit(later_transaction).result(timeout=10) == 2
+
+
+async def test_run_in_executor_transaction_exited_on_another_thread_releases_entering_thread(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]],
+) -> None:
+    config, _ = sync_config
+    service = SQLSpecSyncService(config=config)
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as entering, ThreadPoolExecutor(max_workers=1) as exiting:
+        context = service.begin_transaction()
+        await loop.run_in_executor(entering, context.__enter__)
+        assert await loop.run_in_executor(exiting, context.__exit__, None, None, None) is False
+        assert await loop.run_in_executor(entering, service.exists, sql.select("value").from_("service_values"))
