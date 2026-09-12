@@ -153,8 +153,10 @@ may hit a unique constraint run without aborting the surrounding transaction:
 
 The outer block commits everything that was not rolled back; if the outer block
 raises, work from inner blocks that succeeded is rolled back with it. Nesting works
-the same way for services built from a session. Adapters without savepoint support
-raise ``ImproperConfigurationError`` when a nested block is entered.
+the same way for services built from a session, including a block entered inside
+the session's own ``transaction()`` block. If the outer commit fails, the block
+attempts a rollback before raising the commit error. Adapters without savepoint
+support raise ``ImproperConfigurationError`` when a nested block is entered.
 
 A nested block must run in the task or thread that entered the outer block. Entering
 ``begin_transaction()`` from another task or thread while the outer block is active

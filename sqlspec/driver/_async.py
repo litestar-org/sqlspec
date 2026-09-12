@@ -532,8 +532,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Entering the block calls ``begin()`` and yields this driver. A normal exit
         calls ``commit()``; an exception calls ``rollback()`` and propagates. A
         failed commit is followed by a rollback attempt before the commit error
-        propagates. When the connection is already inside a transaction, the
-        block runs in a savepoint instead and leaves the outer transaction open.
+        propagates. Inside another ``transaction()`` or service
+        ``begin_transaction()`` block on this driver, the block runs in a savepoint
+        instead and leaves the outer transaction open.
         Isolation settings are applied with ``execute_script`` inside the block.
 
         Example:
@@ -2210,24 +2211,34 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
 class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
     """Context manager that commits on success and rolls back on error.
 
-    When the connection is already inside a transaction, the block runs in a
-    savepoint that is released on success and rolled back to on error.
+    Inside another SQLSpec transaction block on the same driver, the block runs in
+    a savepoint that is released on success and rolled back to on error.
     """
 
-    __slots__ = ("_driver", "_savepoint")
+    __slots__ = ("_driver", "_entered", "_savepoint")
 
     def __init__(self, driver: "_AsyncDriverT") -> None:
         self._driver = driver
         self._savepoint: str | None = None
+        self._entered = False
 
     async def __aenter__(self) -> "_AsyncDriverT":
         driver = self._driver
-        if driver._connection_in_transaction():
-            name = f"sqlspec_tx_{id(self):x}"
-            await driver.create_savepoint(name)
+        depth = driver._transaction_depth
+        if depth > 0:
+            name = f"sqlspec_sp_{depth}"
+            try:
+                await driver.create_savepoint(name)
+            except NotImplementedError as exc:
+                msg = f"{type(driver).__name__} does not support the savepoints used by nested transaction blocks."
+                error = ImproperConfigurationError(msg)
+                error.__cause__ = exc
+                raise error from exc
             self._savepoint = name
         else:
             await driver.begin()
+        driver._transaction_depth = depth + 1
+        self._entered = True
         return driver
 
     async def __aexit__(
@@ -2235,22 +2246,28 @@ class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
     ) -> "Literal[False]":
         driver = self._driver
         savepoint = self._savepoint
+        entered = self._entered
         self._savepoint = None
-        if savepoint is not None:
-            if exc_type is None:
-                await driver.release_savepoint(savepoint)
-            else:
-                await driver.rollback_to_savepoint(savepoint)
-            return False
-        if exc_type is not None:
-            await driver.rollback()
-            return False
+        self._entered = False
         try:
-            await driver.commit()
-        except BaseException:
-            try:
+            if savepoint is not None:
+                if exc_type is None:
+                    await driver.release_savepoint(savepoint)
+                else:
+                    await driver.rollback_to_savepoint(savepoint)
+                return False
+            if exc_type is not None:
                 await driver.rollback()
-            except Exception:
-                logger.debug("Rollback after a failed commit also failed", exc_info=True)
-            raise
-        return False
+                return False
+            try:
+                await driver.commit()
+            except BaseException:
+                try:
+                    await driver.rollback()
+                except Exception:
+                    logger.debug("Rollback after a failed commit also failed", exc_info=True)
+                raise
+            return False
+        finally:
+            if entered and driver._transaction_depth > 0:
+                driver._transaction_depth -= 1

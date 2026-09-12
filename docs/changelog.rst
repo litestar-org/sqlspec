@@ -68,10 +68,13 @@ Unreleased
 
 * Sync and async drivers provide ``transaction()``, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
-  it fails. Inside an existing transaction the block uses a savepoint instead of
-  committing. Services allow nested ``begin_transaction()`` blocks: an inner block
-  runs in a savepoint on the same session, so a failure such as a unique
-  violation undoes only the inner work and the outer block can still commit.
+  it fails; a failed commit is followed by a rollback attempt. A block entered
+  inside another ``transaction()`` or service ``begin_transaction()`` block on the
+  same driver uses a savepoint instead of committing. Services allow nested
+  ``begin_transaction()`` blocks the same way: an inner block runs in a savepoint
+  on the same session, so a failure such as a unique violation undoes only the
+  inner work and the outer block can still commit. Adapters without savepoint
+  support raise ``ImproperConfigurationError`` when a block is nested.
   Services also expose ``config``, the configuration they were built from, or
   ``None`` when built from a session. See :doc:`/reference/driver` and
   :doc:`/recipes/service_layer`.

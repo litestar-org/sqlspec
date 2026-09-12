@@ -606,6 +606,7 @@ class CommonDriverAttributesMixin:
         "_stmt_cache_enabled",
         "_stmt_cache_max_size",
         "_stmt_cache_rebind_processor",
+        "_transaction_depth",
         "connection",
         "driver_features",
         "statement_config",
@@ -634,6 +635,7 @@ class CommonDriverAttributesMixin:
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
         self._observability = observability
+        self._transaction_depth = 0
         self._statement_cache: OrderedDict[str, SQL] = OrderedDict()
         self._stmt_cache_max_size = self._statement_cache_size()
         self._stmt_cache = QueryCache(self._stmt_cache_max_size)

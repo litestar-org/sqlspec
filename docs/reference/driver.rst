@@ -27,9 +27,9 @@ commits; an exception rolls back and propagates to the caller. If the commit
 itself fails, the block attempts a rollback and then raises the commit error.
 
 The block calls the adapter's own ``begin()``, ``commit()``, and ``rollback()``,
-so it follows each database's transaction model. BigQuery has no transactions and
-those methods do nothing there; Spanner commits or rolls back only sessions opened
-for writes.
+so it follows each database's transaction model. A statement run before the block
+that opened a transaction implicitly, as SQLite does in its default mode or a
+connection with autocommit disabled does, is committed together with the block.
 
 .. code-block:: python
 
@@ -48,12 +48,12 @@ for writes.
 Nested blocks
 -------------
 
-When the connection is already inside a transaction, ``transaction()`` does not
-begin or commit. The block runs in a savepoint instead: a normal exit releases the
-savepoint, and an exception rolls back to it and propagates. The enclosing
-transaction stays open and decides whether the work is committed. This applies to
-a block nested in another ``transaction()`` block, a block inside a service's
-``begin_transaction()``, and a block entered after ``begin()``.
+A ``transaction()`` block entered inside another ``transaction()`` block on the
+same driver, or inside a service's ``begin_transaction()`` block that uses the
+driver, does not begin or commit. It runs in a savepoint instead: a normal exit
+releases the savepoint, and an exception rolls back to it and propagates. The
+enclosing block stays open and decides whether the work is committed. A service
+``begin_transaction()`` block inside a ``transaction()`` block nests the same way.
 
 .. code-block:: python
 
@@ -67,16 +67,18 @@ a block nested in another ``transaction()`` block, a block inside a service's
         except UniqueViolationError:
             pass
 
-Nesting needs savepoint support. DuckDB, BigQuery, Spanner, and ADBC connections
-to DuckDB, BigQuery, or Snowflake raise ``NotImplementedError`` when a block is
-nested.
+Only blocks are tracked. A transaction started by calling ``begin()`` directly is
+not an enclosing block: a ``transaction()`` or ``begin_transaction()`` block
+entered after it calls ``begin()`` and commits on exit, which ends that
+transaction. Use ``transaction()`` for the outer transaction when blocks nest.
 
-The check uses the adapter's view of the connection. Adapters whose connection
-reports implicit transactions, such as SQLite in its default mode, a MySQL
-connection with autocommit disabled, or psycopg without autocommit, treat a
-transaction opened implicitly by an earlier statement as the enclosing
-transaction. Commit that transaction yourself, or start the block before other
-statements.
+Nesting needs savepoint support. When the adapter cannot create a savepoint,
+entering a nested block raises ``ImproperConfigurationError`` and the enclosing
+block stays usable. DuckDB and ADBC connections to DuckDB, BigQuery, or Snowflake
+report missing savepoint support. BigQuery has no transactions, so its
+``begin()``, ``commit()``, and ``rollback()`` do nothing, and Spanner commits or
+rolls back only sessions opened for writes; neither supports savepoints, so nested
+blocks are not supported on either.
 
 Isolation settings
 ------------------
