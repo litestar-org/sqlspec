@@ -26,6 +26,11 @@ Correlation Middleware
 ``enable_correlation_middleware`` is enabled, which is the default. Add it
 yourself only when you build the middleware stack without the plugin.
 
+When the application's middleware stack already contains ``CorrelationMiddleware``
+or a subclass, ``SQLSpecPlugin`` automatically skips adding a duplicate instance.
+It logs at ``DEBUG`` when the existing middleware honors the configured headers,
+or logs a ``WARNING`` when configured correlation headers would remain unapplied.
+
 .. code-block:: python
 
    from litestar.middleware import DefineMiddleware
@@ -46,6 +51,26 @@ yourself only when you build the middleware stack without the plugin.
    to inspect the names or pass them to ``CorrelationMiddleware``.
 
    :type: tuple[str, ...]
+
+Error Handling
+==============
+
+``SQLSpecPlugin`` automatically registers default exception handlers on Litestar's
+application configuration for database errors:
+
+* :class:`~sqlspec.exceptions.NotFoundError`: translated to HTTP 404, with the error message as detail.
+* :class:`~sqlspec.exceptions.IntegrityError` (and subclasses such as :class:`~sqlspec.exceptions.UniqueViolationError`): translated to HTTP 409 Conflict with the generic detail ``"Conflict"``, preventing internal database constraint or schema text from leaking to clients.
+
+The plugin renders these responses within the route's middleware stack, keeping headers
+added by application middleware and running ``after_exception`` hooks once. Handlers
+explicitly registered on the application or router for :class:`~sqlspec.exceptions.IntegrityError`
+or its subclasses take precedence; handlers for broader exceptions (such as
+:class:`~sqlspec.exceptions.SQLSpecError`, :class:`Exception`, or status 500) receive the original
+exception, while handlers for status 409 or :class:`litestar.exceptions.HTTPException` render the HTTP response.
+
+.. autofunction:: sqlspec.extensions.litestar.plugin.not_found_error_handler
+
+.. autofunction:: sqlspec.extensions.litestar.plugin.integrity_error_handler
 
 Channels Backend
 ================

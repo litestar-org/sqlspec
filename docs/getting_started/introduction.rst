@@ -70,4 +70,3 @@ Next steps
 
 - Head to :doc:`installation` to install SQLSpec and database driver dependencies.
 - Follow the :doc:`quickstart` guide to connect and execute your first query.
-

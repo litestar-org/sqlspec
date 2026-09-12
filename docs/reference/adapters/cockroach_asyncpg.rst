@@ -87,7 +87,8 @@ inherited client-side path.
             exported = await driver.select_to_storage(
                 "SELECT :id::INT8 AS id, :label::STRING AS label",
                 destination,
-                {"id": 7, "label": "O'Reilly"},
+                id=7,
+                label="O'Reilly",
                 format_hint="csv",
             )
             prefix = urlsplit(exported.telemetry["destination"])

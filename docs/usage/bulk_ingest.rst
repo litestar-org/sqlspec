@@ -83,6 +83,12 @@ Capability matrix
      - Binary ``COPY`` with ``INSERT`` fallback
      - Atomic
      - Always on
+   * - cockroach (asyncpg / psycopg)
+     - ``COPY`` streaming for records/Arrow; ``load_from_storage`` appends
+       remote CSV/Parquet through ``IMPORT INTO``
+     - Server-managed (``IMPORT INTO`` takes table offline and invalidates FKs)
+     - Opt-in via ``enable_native_storage=True``; autocommit required on psycopg;
+       transactions and overwrite retain client Arrow path
    * - adbc
      - ``adbc_ingest`` (append/replace)
      - Driver-dependent; ``adbc_ingest`` is always attempted and unsupported drivers raise
@@ -165,6 +171,15 @@ Some fast paths are opt-in because they read local files or change semantics:
   high-throughput, independently committed ``insert_or_update`` groups instead
   of a single in-transaction flush. The upsert semantics keep each group
   idempotent on replay.
+- **CockroachDB native storage** (``enable_native_storage``) routes
+  ``load_from_storage`` through server-side ``IMPORT INTO`` for remote CSV and
+  Parquet. CockroachDB takes the target table offline during the import and
+  invalidates foreign keys, which must be revalidated afterward. Psycopg
+  connections require ``connection_config={"autocommit": True}`` because
+  CockroachDB rejects import statements inside user transactions. Native CSV
+  import requires explicit ``native_storage_csv_options={"skip": <count>}``
+  (e.g., ``skip=0`` for headerless files or ``skip=1`` for single-header files)
+  rather than guessing headers.
 
 Examples
 --------

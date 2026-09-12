@@ -21,6 +21,27 @@ Configuration
    :undoc-members:
    :no-index:
 
+Correlation Middleware
+======================
+
+.. autoclass:: CorrelationMiddleware
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+.. py:data:: TRACE_CONTEXT_FALLBACK_HEADERS
+   :no-index:
+
+Exception Handlers
+==================
+
+.. autofunction:: sqlspec.extensions.litestar.plugin.not_found_error_handler
+   :no-index:
+
+.. autofunction:: sqlspec.extensions.litestar.plugin.integrity_error_handler
+   :no-index:
+
 Session Stores
 ==============
 

@@ -122,7 +122,7 @@ Requirements
 ------------
 
 - **Python 3.10+**
-- **Litestar 2.0+**
+- **Litestar 2.23+**
 - A compatible database adapter (async recommended for web request concurrency)
 
 Next Steps

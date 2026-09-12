@@ -99,3 +99,15 @@ SQLSpec drivers provide explicit savepoint management within active transactions
        await db_session.release_savepoint("sp1")
    except Exception:
        await db_session.rollback_to_savepoint("sp1")
+
+Error Handling and 409 Conflict
+-------------------------------
+
+When a database operation raises :class:`~sqlspec.exceptions.IntegrityError` (such as a unique
+constraint or foreign key violation), ``SQLSpecPlugin`` automatically translates it to an
+HTTP 409 Conflict response with generic detail ``"Conflict"``. In ``autocommit`` mode,
+this error status triggers an automatic rollback of the request transaction.
+
+Custom handlers registered on the application or router for :class:`~sqlspec.exceptions.IntegrityError`
+take precedence, while broader handlers (e.g. for :class:`~sqlspec.exceptions.SQLSpecError` or status 500)
+receive the original exception.

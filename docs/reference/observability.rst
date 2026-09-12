@@ -117,4 +117,3 @@ Helper Functions
 .. autofunction:: sqlspec.observability.get_trace_context
 
 .. autofunction:: sqlspec.observability.resolve_db_system
-

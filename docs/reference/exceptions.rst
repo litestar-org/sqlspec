@@ -263,4 +263,3 @@ Constants
 .. autodata:: SQLSTATE_EXCEPTION_MAP
 
 .. autodata:: STACK_SQL_PREVIEW_LIMIT
-

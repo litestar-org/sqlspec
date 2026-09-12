@@ -124,4 +124,3 @@ Type Variables
 .. autodata:: ConfigT
 
 .. autodata:: DriverT
-
