@@ -62,6 +62,7 @@ Unreleased
   channel's database configuration together with the backend instance's output
   queue depth and dropped message count. ``AsyncEventChannel`` and
   ``SyncEventChannel`` also expose ``backend_name`` and ``metrics_snapshot()``.
+  (`#756 <https://github.com/litestar-org/sqlspec/issues/756>`_)
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
