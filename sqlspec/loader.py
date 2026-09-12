@@ -958,6 +958,9 @@ class SQLFileLoader:
     ) -> None:
         """Add a named SQL query directly without loading from a file.
 
+        The SQL may contain ``/* include: name */`` and ``/* slot: name */`` markers;
+        slots added this way have no defaults.
+
         Args:
             name: Name for the SQL query.
             sql: Raw SQL content.
@@ -980,10 +983,19 @@ class SQLFileLoader:
 
         declared = tuple(parameters) if parameters else ()
         clean_sql = sql.strip()
-        self._check_declared_parameters(clean_sql, declared, name, "<directly added>")
+        slots = _merge_slot_markers((), clean_sql)
+        has_includes = INCLUDE_MARKER_PATTERN.search(clean_sql) is not None
+        if not slots and not has_includes:
+            self._check_declared_parameters(clean_sql, declared, name, "<directly added>")
 
         statement = NamedStatement(
-            name=normalized_name, sql=clean_sql, dialect=dialect, start_line=0, parameters=declared
+            name=normalized_name,
+            sql=clean_sql,
+            dialect=dialect,
+            start_line=0,
+            parameters=declared,
+            slots=slots,
+            has_includes=has_includes,
         )
         self._queries[normalized_name] = statement
         self._query_to_file[normalized_name] = "<directly added>"

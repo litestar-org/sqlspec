@@ -6,9 +6,9 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import SQLSpec
-from sqlspec.core import SQL
+from sqlspec.core import SQL, ParameterDeclaration
 from sqlspec.exceptions import SQLFileParseError, SQLSlotError
-from sqlspec.loader import SQLFileLoader
+from sqlspec.loader import SlotDeclaration, SQLFileLoader
 
 EFFORT_SQL = """\
 -- fragment: decision_fact_ctes
@@ -163,3 +163,22 @@ def test_sqlspec_get_sql_forwards_slots(tmp_path: Path) -> None:
     assert "ORDER BY e.journey" in _normalize(stmt.sql)
     with pytest.raises(SQLSlotError, match="count_efforts"):
         spec.get_sql("count_efforts")
+
+
+def test_add_named_sql_resolves_includes_and_fills_slots() -> None:
+    sql_loader = SQLFileLoader()
+    sql_loader.add_fragment("scoped", "t.workspace_id = :workspace_id")
+    sql_loader.add_named_sql(
+        "scoped_rows",
+        "SELECT id FROM t WHERE /* include: scoped */ AND /* slot: predicates */",
+        parameters=[ParameterDeclaration("workspace_id", "str")],
+    )
+
+    assert sql_loader.get_query_text("scoped_rows") == (
+        "SELECT id FROM t WHERE t.workspace_id = :workspace_id AND /* slot: predicates */"
+    )
+    assert sql_loader.get_query_slots("scoped_rows") == (SlotDeclaration("predicates"),)
+    with pytest.raises(SQLSlotError, match="predicates"):
+        sql_loader.get_sql("scoped_rows")
+    filled = sql_loader.get_sql("scoped_rows", predicates="t.id > 1")
+    assert _normalize(filled.sql) == "SELECT id FROM t WHERE t.workspace_id = :workspace_id AND t.id > 1"
