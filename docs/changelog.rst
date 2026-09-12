@@ -21,6 +21,19 @@ Unreleased
   count mismatch. A value passed at execute time replaces a bound value of the
   same name. ``execute_many()`` is unchanged.
   (`#762 <https://github.com/litestar-org/sqlspec/issues/762>`_)
+* DuckDB secrets declared in ``driver_features["secrets"]`` are created only when
+  missing, so a second connection to a shared database, such as the default shared
+  in-memory database, or a process restart with a stored persistent secret no longer
+  fails with ``secret already exists``, and concurrent connection setup no longer races.
+  Declared values are not applied to an existing secret unless ``replace=True`` is set,
+  for example after rotating credentials. An existing secret is compared on its type,
+  provider and the declared settings DuckDB does not redact, such as ``scope``,
+  ``key_id`` or ``endpoint``; settings the declaration omits are kept as stored. A
+  difference raises for ``required=True`` secrets and logs a warning otherwise.
+  (`#754 <https://github.com/litestar-org/sqlspec/issues/754>`_)
+* The ``litestar`` extra now requires ``litestar>=2.23.0``. The Litestar
+  extension imports ``NamedDependency`` and ``SkipValidation``, which are not
+  available in 2.22, so installs resolved to 2.22 failed on import.
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
@@ -67,11 +80,29 @@ Unreleased
   ``SQL`` object. These comment shapes are now reserved in ``.sql`` files; see
   :ref:`sql-fragments-and-slots` for the syntax and compatibility notes.
   (`#763 <https://github.com/litestar-org/sqlspec/issues/763>`_)
+* ``SQLSpecChannelsBackend`` can check a payload against the PostgreSQL
+  ``NOTIFY`` limit before publishing. ``measure(data)`` returns the encoded
+  ``notify`` envelope size, ``fits(data)`` reports whether it is within ``notify_budget``,
+  and ``notify_budget`` is ``None`` for backends without a payload limit.
+  ``metrics_snapshot()`` returns all observability metrics for the event
+  channel's database configuration together with the backend instance's output
+  queue depth and dropped message count. ``AsyncEventChannel`` and
+  ``SyncEventChannel`` also expose ``backend_name`` and ``metrics_snapshot()``.
+  (`#756 <https://github.com/litestar-org/sqlspec/issues/756>`_)
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
   ``begin_transaction()`` to keep several calls in one transaction. Existing
   code that passes a driver still works. See :doc:`/recipes/service_layer`.
+
+* ``uuid4``, ``uuid6``, ``uuid7``, and ``nanoid`` can be imported from the
+  top-level ``sqlspec`` package. ``sqlspec.extensions.litestar`` exports
+  ``CorrelationMiddleware`` and ``TRACE_CONTEXT_FALLBACK_HEADERS``. The
+  :doc:`/reference/utils` reference now covers the ``sqlspec.utils.text``,
+  ``sqlspec.utils.serializers``, and ``sqlspec.utils.correlation`` modules and
+  the ``to_schema``, ``to_value_type``, and ``transform_dict_keys`` functions
+  from ``sqlspec.utils.schema`` as supported APIs.
+  (`#758 <https://github.com/litestar-org/sqlspec/issues/758>`_)
 
 * Storage pipelines expose ``resolve_destination()``, returning a
   ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.

@@ -7,7 +7,9 @@ from sqlspec.extensions.litestar.plugin import (
     DEFAULT_CONNECTION_KEY,
     DEFAULT_POOL_KEY,
     DEFAULT_SESSION_KEY,
+    TRACE_CONTEXT_FALLBACK_HEADERS,
     CommitMode,
+    CorrelationMiddleware,
     SQLSpecPlugin,
 )
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -18,8 +20,10 @@ __all__ = (
     "DEFAULT_CONNECTION_KEY",
     "DEFAULT_POOL_KEY",
     "DEFAULT_SESSION_KEY",
+    "TRACE_CONTEXT_FALLBACK_HEADERS",
     "BaseSQLSpecStore",
     "CommitMode",
+    "CorrelationMiddleware",
     "LitestarConfig",
     "SQLSpecAsyncService",
     "SQLSpecChannelsBackend",

@@ -32,6 +32,31 @@ DEFAULT_MAX_POOL: Final[int] = 4
 POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
+SECRET_CONFLICT_ATTEMPTS: Final[int] = 5
+SECRET_CONFLICT_BACKOFF: Final[float] = 0.005
+_SECRET_LOCK: Final = threading.Lock()
+_SECRET_VISIBLE_SETTINGS: Final[frozenset[str]] = frozenset({
+    "endpoint",
+    "http_proxy",
+    "http_proxy_username",
+    "key_id",
+    "region",
+    "url_style",
+    "use_ssl",
+})
+_SECRET_BOOLEAN_SETTINGS: Final[frozenset[str]] = frozenset({"use_ssl"})
+_SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
+    "true": "true",
+    "t": "true",
+    "yes": "true",
+    "y": "true",
+    "1": "true",
+    "false": "false",
+    "f": "false",
+    "no": "false",
+    "n": "false",
+    "0": "false",
+}
 
 
 @final
@@ -440,15 +465,72 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
         _validate_sql_identifier(secret_name, "secret_name")
         _validate_sql_identifier(secret_type, "secret_type")
         sql = _secret_sql(secret_config, secret_name, secret_type)
-        connection.execute(sql)
-        if required:
-            _verify_secret(connection, secret_config, secret_name, secret_type)
+        mismatch = _apply_secret(connection, secret_config, secret_name, secret_type, sql)
     except Exception:
         if required:
             raise
         logger.warning("DuckDB secret %r creation failed (best-effort)", secret_name)
         return False
-    return True
+    if mismatch is None:
+        return True
+    if required:
+        raise RuntimeError(mismatch)
+    logger.warning("%s (best-effort)", mismatch)
+    return False
+
+
+def _apply_secret(
+    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
+) -> "str | None":
+    """Create or reuse a declared secret under the process-wide secret lock.
+
+    Catalog write-write conflicts with connections outside that lock are retried with a
+    short backoff that runs while the lock is released.
+
+    Returns:
+        A description of how the visible secret differs from its declaration, or ``None`` when it matches.
+    """
+    for attempt in range(1, SECRET_CONFLICT_ATTEMPTS):
+        applied, mismatch = _try_apply_secret(connection, secret_config, secret_name, secret_type, sql)
+        if applied:
+            return mismatch
+        time.sleep(SECRET_CONFLICT_BACKOFF * attempt)
+    with _SECRET_LOCK:
+        return _apply_secret_locked(connection, secret_config, secret_name, secret_type, sql)
+
+
+def _try_apply_secret(
+    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
+) -> "tuple[bool, str | None]":
+    """Apply a declared secret once, returning ``(False, None)`` on a catalog write-write conflict."""
+    try:
+        with _SECRET_LOCK:
+            mismatch = _apply_secret_locked(connection, secret_config, secret_name, secret_type, sql)
+    except duckdb.TransactionException as exc:
+        if "write-write conflict" not in str(exc):
+            raise
+        return False, None
+    return True, mismatch
+
+
+def _apply_secret_locked(
+    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
+) -> "str | None":
+    """Reuse a visible secret unless replacement is requested, otherwise create it, then compare it."""
+    expected_provider = secret_config.get("provider") or _default_secret_provider(connection, secret_type)
+    if not secret_config.get("replace", False):
+        existing = _visible_secret(connection, secret_config, secret_name, secret_type)
+        if existing is not None:
+            mismatch = _secret_mismatch(existing, secret_config, secret_name, secret_type, expected_provider, True)
+            if mismatch is None:
+                logger.debug("DuckDB secret %r already exists and is reused", secret_name)
+            return mismatch
+    connection.execute(sql)
+    created = _visible_secret(connection, secret_config, secret_name, secret_type)
+    if created is None:
+        storage = "persistent" if secret_config.get("persistent", False) else "temporary"
+        return f"DuckDB secret {secret_name!r} was not visible as a {storage} secret after creation"
+    return _secret_mismatch(created, secret_config, secret_name, secret_type, expected_provider, False)
 
 
 def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:
@@ -471,9 +553,13 @@ def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: st
     if scope is not None:
         parts.append(f"SCOPE {_format_secret_literal(scope)}")
 
-    create = "CREATE PERSISTENT SECRET" if secret_config.get("persistent", False) else "CREATE SECRET"
+    kind = "PERSISTENT SECRET" if secret_config.get("persistent", False) else "SECRET"
+    if secret_config.get("replace", False):
+        create = f"CREATE OR REPLACE {kind} {secret_name}"
+    else:
+        create = f"CREATE {kind} IF NOT EXISTS {secret_name}"
     body = ",\n    ".join(parts)
-    return f"{create} {secret_name} (\n    {body}\n)"
+    return f"{create} (\n    {body}\n)"
 
 
 def _format_secret_key(key: Any) -> str:
@@ -491,25 +577,78 @@ def _format_secret_literal(value: Any) -> str:
     return f"'{escaped}'"
 
 
-def _verify_secret(
+def _visible_secret(
     connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str
-) -> None:
-    row = connection.execute(
-        "SELECT name, type, scope, persistent FROM duckdb_secrets() WHERE name = ?", (secret_name,)
+) -> "tuple[Any, ...] | None":
+    """Return the type, provider, scope and redacted settings of a visible secret."""
+    return connection.execute(
+        "SELECT type, provider, scope, secret_string FROM duckdb_secrets() WHERE lower(name) = lower(?) AND persistent = ?",
+        (secret_name, bool(secret_config.get("persistent", False))),
     ).fetchone()
-    if not row:
-        msg = f"DuckDB secret {secret_name!r} was not visible after creation"
-        raise RuntimeError(msg)
 
-    actual_name, actual_type, actual_scope, actual_persistent = row
-    expected_persistent = bool(secret_config.get("persistent", False))
+
+def _default_secret_provider(connection: DuckDBConnection, secret_type: str) -> "str | None":
+    """Return DuckDB's default provider for a secret type, or ``None`` when DuckDB does not report it."""
+    try:
+        row = connection.execute(
+            "SELECT default_provider FROM duckdb_secret_types() WHERE type = lower(?)", (secret_type,)
+        ).fetchone()
+    except duckdb.CatalogException:
+        return None
+    return str(row[0]) if row and row[0] else None
+
+
+def _secret_mismatch(
+    row: "tuple[Any, ...]",
+    secret_config: dict[str, Any],
+    secret_name: str,
+    secret_type: str,
+    expected_provider: "str | None",
+    reused: bool,
+) -> "str | None":
+    """Describe how a visible secret differs from its declaration, or return ``None`` when it matches.
+
+    DuckDB redacts credential values, so the comparison covers the type, provider, declared
+    scope and the declared settings DuckDB reports unredacted. Settings the declaration omits
+    are not compared.
+    """
+    storage = "persistent" if secret_config.get("persistent", False) else "temporary"
+    hint = "; set replace=True to apply the declaration" if reused else ""
+    actual_type, actual_provider, actual_scope, secret_string = row
+    if str(actual_type).lower() != secret_type.lower():
+        return (
+            f"DuckDB secret {secret_name!r} exists as a {storage} secret of type {actual_type!r}, "
+            f"but the declaration uses type {secret_type!r}{hint}"
+        )
+    differing: list[str] = []
+    if expected_provider and str(actual_provider).lower() != expected_provider.lower():
+        differing.append("provider")
     scope = secret_config.get("scope")
-    scopes = list(actual_scope or [])
-    if (
-        actual_name != secret_name
-        or str(actual_type).lower() != secret_type.lower()
-        or bool(actual_persistent) != expected_persistent
-        or (scope is not None and scope not in scopes)
-    ):
-        msg = f"DuckDB secret {secret_name!r} verification failed"
-        raise RuntimeError(msg)
+    if scope is not None and scope not in list(actual_scope or []):
+        differing.append("scope")
+    settings = f"{secret_string or ''};"
+    for key, value in (secret_config.get("value") or {}).items():
+        setting = str(key).lower()
+        if (
+            setting in _SECRET_VISIBLE_SETTINGS
+            and f";{setting}={_secret_setting_text(setting, value)};" not in settings
+        ):
+            differing.append(setting)
+    if not differing:
+        return None
+    return (
+        f"DuckDB secret {secret_name!r} exists as a {storage} secret whose settings differ from the "
+        f"declaration: {', '.join(differing)}{hint}"
+    )
+
+
+def _secret_setting_text(setting: str, value: Any) -> str:
+    """Render a declared setting the way ``duckdb_secrets()`` reports it."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if setting in _SECRET_BOOLEAN_SETTINGS:
+        if isinstance(value, (int, float)):
+            return "true" if value else "false"
+        text = str(value).lower()
+        return _SECRET_BOOLEAN_TEXT.get(text, text)
+    return str(value)
