@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
 logger = get_logger("sqlspec.adapters.adbc")
+_DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 
@@ -376,6 +377,33 @@ class AdbcDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
         finally:
             self._transaction_active = False
+
+    def create_savepoint(self, name: str) -> None:
+        """Create a savepoint within the current transaction.
+
+        Raises:
+            NotImplementedError: If the connected database does not support savepoints.
+        """
+        self._require_savepoints()
+        super().create_savepoint(name)
+
+    def release_savepoint(self, name: str) -> None:
+        """Release a previously created savepoint.
+
+        Raises:
+            NotImplementedError: If the connected database does not support savepoints.
+        """
+        self._require_savepoints()
+        super().release_savepoint(name)
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Roll back the current transaction to a previously created savepoint.
+
+        Raises:
+            NotImplementedError: If the connected database does not support savepoints.
+        """
+        self._require_savepoints()
+        super().rollback_to_savepoint(name)
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL when using ADBC PostgreSQL."""
@@ -728,6 +756,11 @@ class AdbcDriver(SyncDriverAdapterBase):
             True when a transaction is active.
         """
         return self._transaction_active
+
+    def _require_savepoints(self) -> None:
+        if self._dialect_name in _DIALECTS_WITHOUT_SAVEPOINTS:
+            msg = f"ADBC {self._dialect_name} connections do not support savepoints."
+            raise NotImplementedError(msg)
 
     @staticmethod
     def _detect_flightsql_connection(connection: "AdbcConnection") -> bool:

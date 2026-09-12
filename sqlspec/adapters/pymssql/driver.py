@@ -178,9 +178,16 @@ class PymssqlDriver(SyncDriverAdapterBase):
         )
 
     def begin(self) -> None:
+        """Begin a transaction on the connection.
+
+        A connection with autocommit disabled already holds an open transaction that
+        ``commit()`` and ``rollback()`` end, so only an autocommit connection issues
+        ``BEGIN TRANSACTION``.
+        """
         try:
-            with PymssqlCursor(self.connection) as cursor:
-                cursor.execute("BEGIN TRANSACTION")
+            if self.connection.autocommit_state:
+                with PymssqlCursor(self.connection) as cursor:
+                    cursor.execute("BEGIN TRANSACTION")
             self._transaction_active = True
         except _pymssql_error_type() as exc:
             msg = f"Failed to begin SQL Server transaction: {exc}"

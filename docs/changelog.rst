@@ -14,6 +14,18 @@ Unreleased
 
 **Fixed:**
 
+* ``PymssqlDriver.begin()`` no longer issues ``BEGIN TRANSACTION`` on a connection
+  with autocommit disabled, where pymssql already holds an open transaction. The
+  extra nesting level kept ``commit()`` from making the work durable.
+* The psqlpy driver tracks transactions opened with ``begin()`` itself. It
+  previously reported every connection as inside a transaction, so statement
+  stacks never opened their own transaction.
+* DuckDB, BigQuery, Spanner, and ADBC connections to DuckDB, BigQuery, or
+  Snowflake raise ``NotImplementedError`` from the savepoint methods instead of
+  sending ``SAVEPOINT`` statements those databases reject. Oracle's
+  ``release_savepoint()`` only validates the name, because Oracle has no
+  ``RELEASE SAVEPOINT`` statement.
+
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry

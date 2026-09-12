@@ -60,6 +60,7 @@ class FakeConnection:
         self.commits = 0
         self.rollbacks = 0
         self.autocommit_values: list[bool] = []
+        self.autocommit_state = True
 
     def cursor(self, *args: Any, **kwargs: Any) -> FakeCursor:
         self.cursor_args = args
@@ -77,6 +78,7 @@ class FakeConnection:
 
     def autocommit(self, value: bool) -> None:
         self.autocommit_values.append(value)
+        self.autocommit_state = value
 
 
 class FakePymssqlModule:

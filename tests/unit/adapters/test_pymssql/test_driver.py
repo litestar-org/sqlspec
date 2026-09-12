@@ -128,6 +128,23 @@ def test_transaction_methods_use_tsql_begin_and_connection_commit_rollback() -> 
     assert connection.rollbacks == 1
 
 
+def test_begin_reuses_the_open_transaction_without_autocommit() -> None:
+    """A connection with autocommit disabled already holds a transaction, so begin issues no SQL."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    connection.autocommit(False)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    driver.begin()
+
+    assert cursor.calls == []
+    assert driver._connection_in_transaction() is True
+    driver.commit()
+    assert driver._connection_in_transaction() is False
+
+
 def test_exception_handler_maps_pymssql_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """pymssql exception handlers should surface mapped SQLSpec exceptions."""
     import sqlspec.adapters.pymssql.driver as driver_module

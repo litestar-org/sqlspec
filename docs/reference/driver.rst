@@ -67,6 +67,10 @@ a block nested in another ``transaction()`` block, a block inside a service's
         except UniqueViolationError:
             pass
 
+Nesting needs savepoint support. DuckDB, BigQuery, Spanner, and ADBC connections
+to DuckDB, BigQuery, or Snowflake raise ``NotImplementedError`` when a block is
+nested.
+
 The check uses the adapter's view of the connection. Adapters whose connection
 reports implicit transactions, such as SQLite in its default mode, a MySQL
 connection with autocommit disabled, or psycopg without autocommit, treat a

@@ -22,6 +22,7 @@ _SUITE_MODULES = (
     "merge_contract",
     "metadata_contract",
     "migrations_contract",
+    "nested_transactions_contract",
     "oracle_lob_fetch_contract",
     "parameter_contract",
     "parameter_styles_contract",
