@@ -19,7 +19,7 @@ Unreleased
   sets. Previously the statement's own parameters were dropped, so
   ``session.select(SQL("... :a ... :b", a=1), b=2)`` failed with a parameter
   count mismatch. A value passed at execute time replaces a bound value of the
-  same name.
+  same name. ``execute_many()`` is unchanged.
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
@@ -69,6 +69,13 @@ Unreleased
   ``add_fragment()``, ``has_fragment()``, ``list_fragments()``,
   ``get_fragment_text()``, and ``get_query_slots()``, and slot problems raise
   ``SQLSlotError``. See :ref:`Fragments and Slots <sql-fragments-and-slots>`.
+
+  Compatibility: ``-- fragment:`` lines, ``-- slot:`` lines, and
+  ``/* include: */`` and ``/* slot: */`` block comments are now reserved in
+  ``.sql`` files. Marker text inside string literals and other comments is
+  ignored, but a prose comment such as ``-- Slot: morning`` in a query's leading
+  comment block becomes a slot declaration, and a ``-- slot:`` line after the
+  SQL has begun raises ``SQLFileParseError``.
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or

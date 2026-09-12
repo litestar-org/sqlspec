@@ -212,7 +212,19 @@ as a ``WHERE`` predicate or an ``ORDER BY`` list. The file stays plain SQL.
 - ``/* slot: <name> */`` marks a fill point. ``-- slot: <name> = <default sql>``
   in the query's leading comment block gives it a default: everything after
   ``=`` up to the end of the line. A slot with no default must be filled on every
-  call.
+  call. When a default or a string value contains ``--``, a line break is added
+  after it so the rest of the query is not commented out.
+- ``add_named_sql()`` accepts the same include and slot markers; slots added
+  this way have no defaults.
+
+**Reserved comment shapes.** These comment forms now have meaning in ``.sql``
+files: ``-- fragment: <name>`` lines, ``-- slot:`` lines in a query's leading
+comment block, and ``/* include: <name> */`` and ``/* slot: <name> */`` block
+comments. Marker text inside quoted strings, quoted identifiers, dollar-quoted
+bodies, or other comments is ignored. A prose comment such as
+``-- Slot: morning`` in a query's leading comment block is read as a slot
+declaration, and a ``-- slot:`` line that starts a line after the SQL has begun
+is an error. Reword such comments when upgrading.
 
 Pass slot values as keyword arguments to ``get_sql()``. Parameters inside the
 fragments are still supplied when the query runs:
@@ -240,7 +252,15 @@ A slot value can be one of three types:
 - ``str`` -- spliced in as written.
 - A sqlglot expression -- rendered with the query's ``-- dialect:``.
 - ``SQL`` -- its text is spliced in, and its named parameters are bound on the
-  returned statement. Parameters you pass when the query runs are added to them.
+  returned statement. Parameters you pass to ``execute()`` or ``select*()`` as
+  keyword arguments or a single mapping are added to them, and a value you pass
+  for the same name replaces the bound one. ``execute_many()`` does not use
+  bound slot parameters; pass every value in its parameter rows instead. A
+  ``SQL`` value cannot carry statement filters, and one ``SQL`` object may fill
+  several slots.
+
+Placeholders inside slot values must use the ``:name`` style that the SQL file
+uses, so they are recognized alongside the query's own placeholders.
 
 .. warning::
 
@@ -251,8 +271,9 @@ A slot value can be one of three types:
 **Errors.**
 
 - A missing required slot, an unknown slot name, a ``SQL`` value with positional
-  parameters, or a slot parameter name that is already used by another slot
-  value or by the query itself raises :exc:`~sqlspec.exceptions.SQLSlotError`.
+  parameters or statement filters, a parameter name that two slot values bind to
+  different values, or a slot parameter name that the query itself already uses
+  raises :exc:`~sqlspec.exceptions.SQLSlotError`.
 - A slot value of any other type raises :exc:`TypeError`.
 - An unknown fragment raises :exc:`~sqlspec.exceptions.SQLStatementNotFoundError`.
 - An include cycle, a duplicate fragment name, a directive on a fragment, a

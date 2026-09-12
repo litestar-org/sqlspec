@@ -1083,8 +1083,9 @@ class SQLFileLoader:
     def get_query_slots(self, name: str) -> "tuple[SlotDeclaration, ...]":
         """Get the slots of a query, including slots contributed by included fragments.
 
-        Declared slots come first in declaration order, followed by undeclared
-        (required) slot markers in order of appearance.
+        Slots declared with ``-- slot:`` come first in declaration order, then
+        undeclared (required) markers in the query's own text, then markers
+        contributed by included fragments; markers keep their order of appearance.
 
         Args:
             name: Query name (hyphens are converted to underscores).
