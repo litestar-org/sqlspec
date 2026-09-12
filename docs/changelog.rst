@@ -56,7 +56,8 @@ Unreleased
 
 * Sync and async drivers provide ``transaction()``, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
-  it fails. Services allow nested ``begin_transaction()`` blocks: an inner block
+  it fails. Inside an existing transaction the block uses a savepoint instead of
+  committing. Services allow nested ``begin_transaction()`` blocks: an inner block
   runs in a savepoint on the same session, so a failure such as a unique
   violation undoes only the inner work and the outer block can still commit.
   Services also expose ``config``, the configuration they were built from, or

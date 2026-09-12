@@ -530,7 +530,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """Return a context manager that wraps a block in a transaction.
 
         Entering the block calls ``begin()`` and yields this driver. A normal exit
-        calls ``commit()``; an exception calls ``rollback()`` and propagates.
+        calls ``commit()``; an exception calls ``rollback()`` and propagates. A
+        failed commit is followed by a rollback attempt before the commit error
+        propagates. When the connection is already inside a transaction, the
+        block runs in a savepoint instead and leaves the outer transaction open.
         Isolation settings are applied with ``execute_script`` inside the block.
 
         Example:
@@ -2205,22 +2208,49 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
 
 
 class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
-    """Context manager that commits on success and rolls back on error."""
+    """Context manager that commits on success and rolls back on error.
 
-    __slots__ = ("_driver",)
+    When the connection is already inside a transaction, the block runs in a
+    savepoint that is released on success and rolled back to on error.
+    """
+
+    __slots__ = ("_driver", "_savepoint")
 
     def __init__(self, driver: "_AsyncDriverT") -> None:
         self._driver = driver
+        self._savepoint: str | None = None
 
     async def __aenter__(self) -> "_AsyncDriverT":
-        await self._driver.begin()
-        return self._driver
+        driver = self._driver
+        if driver._connection_in_transaction():
+            name = f"sqlspec_tx_{id(self):x}"
+            await driver.create_savepoint(name)
+            self._savepoint = name
+        else:
+            await driver.begin()
+        return driver
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"
     ) -> "Literal[False]":
-        if exc_type is None:
-            await self._driver.commit()
-        else:
-            await self._driver.rollback()
+        driver = self._driver
+        savepoint = self._savepoint
+        self._savepoint = None
+        if savepoint is not None:
+            if exc_type is None:
+                await driver.release_savepoint(savepoint)
+            else:
+                await driver.rollback_to_savepoint(savepoint)
+            return False
+        if exc_type is not None:
+            await driver.rollback()
+            return False
+        try:
+            await driver.commit()
+        except BaseException:
+            try:
+                await driver.rollback()
+            except Exception:
+                logger.debug("Rollback after a failed commit also failed", exc_info=True)
+            raise
         return False

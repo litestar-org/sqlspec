@@ -23,8 +23,13 @@ Transaction Blocks
 
 ``transaction()`` wraps a block in a transaction on the driver's connection.
 Entering the block calls ``begin()`` and yields the same driver. A normal exit
-commits; an exception rolls back and propagates to the caller. The block works
-the same way on every adapter.
+commits; an exception rolls back and propagates to the caller. If the commit
+itself fails, the block attempts a rollback and then raises the commit error.
+
+The block calls the adapter's own ``begin()``, ``commit()``, and ``rollback()``,
+so it follows each database's transaction model. BigQuery has no transactions and
+those methods do nothing there; Spanner commits or rolls back only sessions opened
+for writes.
 
 .. code-block:: python
 
@@ -39,6 +44,38 @@ the same way on every adapter.
         with session.transaction():
             session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
             session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+
+Nested blocks
+-------------
+
+When the connection is already inside a transaction, ``transaction()`` does not
+begin or commit. The block runs in a savepoint instead: a normal exit releases the
+savepoint, and an exception rolls back to it and propagates. The enclosing
+transaction stays open and decides whether the work is committed. This applies to
+a block nested in another ``transaction()`` block, a block inside a service's
+``begin_transaction()``, and a block entered after ``begin()``.
+
+.. code-block:: python
+
+    from sqlspec.exceptions import UniqueViolationError
+
+    with session.transaction():
+        session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+        try:
+            with session.transaction():
+                session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+        except UniqueViolationError:
+            pass
+
+The check uses the adapter's view of the connection. Adapters whose connection
+reports implicit transactions, such as SQLite in its default mode, a MySQL
+connection with autocommit disabled, or psycopg without autocommit, treat a
+transaction opened implicitly by an earlier statement as the enclosing
+transaction. Commit that transaction yourself, or start the block before other
+statements.
+
+Isolation settings
+------------------
 
 ``transaction()`` takes no isolation-level argument. Apply isolation or other
 transaction settings with ``execute_script`` as the first statement inside the
