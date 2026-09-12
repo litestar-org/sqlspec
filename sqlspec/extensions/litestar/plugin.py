@@ -450,13 +450,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         new_middlewares: list[DefineMiddleware] = []
         if self._correlation_headers:
             if _has_correlation_middleware(app_config.middleware):
+                default_headers = self._correlation_headers == TRACE_CONTEXT_FALLBACK_HEADERS
                 log_with_context(
                     logger,
-                    logging.DEBUG,
+                    logging.DEBUG if default_headers else logging.WARNING,
                     "extension.init",
                     framework="litestar",
                     stage="correlation_middleware_skipped",
                     reason="already_installed",
+                    unapplied_correlation_headers=None if default_headers else list(self._correlation_headers),
                 )
             else:
                 new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
@@ -1137,13 +1139,16 @@ def _build_correlation_headers(*, primary: str, configured: list[str], auto_trac
 def _has_correlation_middleware(middleware: "Iterable[Middleware] | None") -> bool:
     """Return whether the middleware stack already contains :class:`CorrelationMiddleware`.
 
-    Matches both the bare class and a :class:`litestar.middleware.DefineMiddleware` wrapping it.
+    Matches :class:`CorrelationMiddleware` or a subclass, either as a bare class or wrapped in
+    :class:`litestar.middleware.DefineMiddleware`. Factories such as :func:`functools.partial`,
+    middleware added after the plugin's ``on_app_init`` runs, and router, controller, or route
+    middleware are not detected.
     """
-    return any(
-        entry is CorrelationMiddleware
-        or (isinstance(entry, DefineMiddleware) and entry.middleware is CorrelationMiddleware)
-        for entry in middleware or ()
-    )
+    for entry in middleware or ():
+        candidate = entry.middleware if isinstance(entry, DefineMiddleware) else entry
+        if isinstance(candidate, type) and issubclass(candidate, CorrelationMiddleware):
+            return True
+    return False
 
 
 def _resolve_exception_handlers(request: "Request[Any, Any, Any]") -> "ExceptionHandlersMap":

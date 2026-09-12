@@ -20,9 +20,11 @@ Unreleased
   a correlation ID in logs and error hooks, and application middleware keeps its original
   relative order. (`#729 <https://github.com/litestar-org/sqlspec/issues/729>`_)
 * The Litestar plugin no longer adds a second ``CorrelationMiddleware`` when the
-  application's middleware stack already includes one, either as the class or
-  wrapped in ``DefineMiddleware``. The application's instance and its header
-  settings are used, and correlation IDs are extracted once per request.
+  application's middleware list already includes it or a subclass, either as the
+  class or wrapped in ``DefineMiddleware``. The application's instance and its
+  header settings are used, and correlation IDs are extracted once per request.
+  The plugin logs a warning when this leaves ``correlation_header``,
+  ``correlation_headers``, or ``auto_trace_headers`` settings unapplied.
 * The Litestar plugin's ``NotFoundError`` handler returns its 404 response
   instead of raising a second exception. Routes without route-level middleware
   previously returned a 500 response, ``after_exception`` hooks ran twice, and
