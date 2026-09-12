@@ -273,10 +273,15 @@ def test_unknown_include_raises(tmp_path: Path) -> None:
     loader = SQLFileLoader()
     loader.load_sql(_write(tmp_path / "report.sql", INCLUDING_STATEMENT))
 
-    with pytest.raises(SQLStatementNotFoundError, match="active_users"):
+    with pytest.raises(SQLStatementNotFoundError, match=r"SQL fragment 'active_users' not found\. No SQL fragments"):
         loader.get_query_text("count_active")
-    with pytest.raises(SQLStatementNotFoundError, match="missing"):
+
+    loader.add_fragment("other", "SELECT 1")
+    with pytest.raises(SQLStatementNotFoundError, match=r"SQL fragment 'missing' not found") as exc_info:
         loader.get_fragment_text("missing")
+    assert "list_fragments()" in str(exc_info.value)
+    assert "list_queries()" not in str(exc_info.value)
+    assert exc_info.value.fragment is True
 
 
 def test_namespaced_include_resolves(tmp_path: Path) -> None:

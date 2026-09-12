@@ -1043,7 +1043,9 @@ class SQLFileLoader:
         """
         safe_name = _normalize_query_name(name)
         if safe_name not in self._fragments:
-            raise SQLStatementNotFoundError(name=name, normalized_name=safe_name, query_count=len(self._fragments))
+            raise SQLStatementNotFoundError(
+                name=name, normalized_name=safe_name, query_count=len(self._fragments), fragment=True
+            )
         return self._resolve_includes(
             self._fragments[safe_name].sql, namespace=_namespace_of(safe_name), stack=(safe_name,)
         )
@@ -1454,7 +1456,9 @@ class SQLFileLoader:
             namespaced_name = f"{namespace}.{normalized_name}"
             if namespaced_name in self._fragments:
                 return namespaced_name
-        raise SQLStatementNotFoundError(name=name, normalized_name=normalized_name, query_count=len(self._fragments))
+        raise SQLStatementNotFoundError(
+            name=name, normalized_name=normalized_name, query_count=len(self._fragments), fragment=True
+        )
 
 
 def _normalize_query_name(name: str) -> str:
