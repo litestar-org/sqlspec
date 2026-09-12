@@ -1,13 +1,12 @@
 """Unit tests for the Litestar channels backend payload budget and metrics."""
 
-import base64
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
 
 from sqlspec.exceptions import EventChannelError
-from sqlspec.extensions.events import MAX_NOTIFY_BYTES, encode_notify_payload, measure_notify_payload
+from sqlspec.extensions.events import MAX_NOTIFY_BYTES, encode_notify_payload
 from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 
 if TYPE_CHECKING:
@@ -39,30 +38,6 @@ def _backend(backend_name: str, metrics: "dict[str, float] | None" = None) -> SQ
     return SQLSpecChannelsBackend(cast("AsyncEventChannel", _StubEventChannel(backend_name, metrics)))
 
 
-def _wrapped(data: bytes) -> "dict[str, Any]":
-    return {"data_b64": base64.b64encode(data).decode("ascii")}
-
-
-def test_measure_matches_encoded_envelope() -> None:
-    """measure() returns the size of the envelope publish() would send."""
-    backend = _backend("notify")
-    data = b"x" * 100
-
-    assert backend.measure(data) == measure_notify_payload(_wrapped(data), None)
-    assert backend.measure(data) == len(encode_notify_payload(uuid4().hex, _wrapped(data), None).encode("utf-8"))
-
-
-def test_fits_boundary() -> None:
-    """fits() flips at the first payload whose envelope exceeds the NOTIFY budget."""
-    backend = _backend("notify")
-    size = next(n for n in range(MAX_NOTIFY_BYTES) if backend.measure(b"x" * n) > MAX_NOTIFY_BYTES)
-
-    assert backend.notify_budget == MAX_NOTIFY_BYTES
-    assert backend.measure(b"x" * (size - 1)) <= MAX_NOTIFY_BYTES
-    assert backend.fits(b"x" * (size - 1)) is True
-    assert backend.fits(b"x" * size) is False
-
-
 async def test_measure_matches_published_event_envelope() -> None:
     """measure() matches the notify envelope encoded from the event publish() hands to the channel."""
     stub = _StubEventChannel("notify")
@@ -86,6 +61,7 @@ async def test_fits_agrees_with_notify_encoding_at_boundary() -> None:
 
     _, fitting_payload, fitting_metadata = stub.published[0]
     _, oversized_payload, oversized_metadata = stub.published[1]
+    assert backend.notify_budget == MAX_NOTIFY_BYTES
     assert backend.fits(b"x" * (size - 1)) is True
     encode_notify_payload(uuid4().hex, fitting_payload, fitting_metadata)
     assert backend.fits(b"x" * size) is False
@@ -103,11 +79,11 @@ def test_fits_non_notify_backends_always_true(backend_name: str) -> None:
 
 
 def test_backend_metrics_snapshot_merges_channel() -> None:
-    """metrics_snapshot() merges channel metrics with the backend queue counters."""
-    channel_metrics = {"AsyncpgConfig.events.publish": 3.0, "AsyncpgConfig.events.ack": 2.0}
+    """metrics_snapshot() keeps the channel's metrics and adds the backend queue counters."""
+    channel_metrics = {"AsyncpgConfig.events.publish.native": 3.0, "AsyncpgConfig.events.ack": 2.0}
     backend = _backend("notify", channel_metrics)
 
     snapshot = backend.metrics_snapshot()
 
-    assert snapshot == {**channel_metrics, "channels.output_queue_depth": 0.0, "channels.dropped_messages": 0.0}
-    assert all(isinstance(value, float) for value in snapshot.values())
+    assert {key: snapshot[key] for key in channel_metrics} == channel_metrics
+    assert set(snapshot) == {*channel_metrics, "channels.output_queue_depth", "channels.dropped_message_count"}

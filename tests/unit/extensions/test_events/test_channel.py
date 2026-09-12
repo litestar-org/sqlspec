@@ -312,7 +312,7 @@ def test_metrics_snapshot_public(tmp_path) -> None:
     channel.publish("notifications", {"action": "refresh"})
 
     snapshot = channel.metrics_snapshot()
-    assert snapshot["SqliteConfig.events.publish"] >= 1
+    assert snapshot["SqliteConfig.events.publish"] == pytest.approx(1.0)
     assert all(isinstance(value, float) for value in snapshot.values())
     config.close_pool()
 
@@ -331,12 +331,12 @@ async def test_metrics_snapshot_public_async(tmp_path) -> None:
     await channel.publish("notifications", {"action": "refresh"})
 
     snapshot = channel.metrics_snapshot()
-    assert snapshot["AiosqliteConfig.events.publish"] >= 1
+    assert snapshot["AiosqliteConfig.events.publish"] == pytest.approx(1.0)
     assert all(isinstance(value, float) for value in snapshot.values())
     await config.close_pool()
 
 
-async def test_backend_name_public(tmp_path) -> None:
+def test_backend_name_public(tmp_path) -> None:
     """Both channel classes report the resolved backend kind."""
     sync_channel = SyncEventChannel(SqliteConfig(connection_config={"database": str(tmp_path / "sync.db")}))
     async_channel = AsyncEventChannel(AiosqliteConfig(connection_config={"database": str(tmp_path / "async.db")}))

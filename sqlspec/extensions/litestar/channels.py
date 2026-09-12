@@ -103,7 +103,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         Returns:
             The UTF-8 byte size of the ``notify`` envelope carrying the base64-wrapped ``data``.
         """
-        return measure_notify_payload({"data_b64": base64.b64encode(data).decode("ascii")}, None)
+        return measure_notify_payload(self._wrap_payload(data), None)
 
     def fits(self, data: bytes) -> bool:
         """Return whether ``data`` fits the event backend's payload budget.
@@ -123,11 +123,11 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         Returns:
             Every observability metric recorded for the event channel's database
             configuration, plus this backend's ``channels.output_queue_depth`` and
-            ``channels.dropped_messages``.
+            ``channels.dropped_message_count``.
         """
-        snapshot = dict(self._event_channel.metrics_snapshot())
+        snapshot = self._event_channel.metrics_snapshot()
         snapshot["channels.output_queue_depth"] = float(self.output_queue_depth)
-        snapshot["channels.dropped_messages"] = float(self._dropped_message_count)
+        snapshot["channels.dropped_message_count"] = float(self._dropped_message_count)
         return snapshot
 
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
@@ -141,11 +141,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             channels: Litestar channel names that receive each payload.
         """
         db_channels = [self._db_channel_name(channel) for channel in channels]
-        events = [
-            (db_channel, {"data_b64": base64.b64encode(payload).decode("ascii")}, None)
-            for payload in data
-            for db_channel in db_channels
-        ]
+        events = [(db_channel, self._wrap_payload(payload), None) for payload in data for db_channel in db_channels]
         await self._event_channel.publish_many(events)
 
     async def subscribe(self, channels: "Iterable[str]") -> None:
@@ -228,6 +224,11 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             raise
         except Exception as error:  # pragma: no cover
             logger.warning("litestar channel %s stream worker error: %s", channel, error)
+
+    @staticmethod
+    def _wrap_payload(data: bytes) -> "dict[str, Any]":
+        """Return the event payload that carries ``data`` as base64 text."""
+        return {"data_b64": base64.b64encode(data).decode("ascii")}
 
     @staticmethod
     def _decode_payload(payload: Any) -> bytes | None:

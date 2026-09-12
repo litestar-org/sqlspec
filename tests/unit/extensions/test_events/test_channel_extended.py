@@ -100,7 +100,7 @@ def test_event_channel_backend_name_poll_queue(tmp_path) -> None:
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     channel = SyncEventChannel(config)
 
-    assert channel._backend_name == "poll_queue"
+    assert channel.backend_name == "poll_queue"
 
 
 def test_event_channel_rejects_unknown_backend(tmp_path) -> None:

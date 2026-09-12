@@ -35,8 +35,10 @@ drop diagnostic for lifecycle reuse.
 ``metrics_snapshot()`` returns every observability metric recorded for the
 event channel's database configuration, including loader, migration, storage,
 and other event channels on that configuration, merged with
-``channels.output_queue_depth`` and ``channels.dropped_messages``. The two
-``channels.*`` counters belong to this backend instance. All values are floats.
+``channels.output_queue_depth`` and ``channels.dropped_message_count``. Those
+two keys are unprefixed and describe this backend instance only; they mirror
+the ``output_queue_depth`` and ``dropped_message_count`` properties. All values
+are floats.
 
 Payload budget
 --------------
