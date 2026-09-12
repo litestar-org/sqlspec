@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
 
 from litestar.di import Provide
-from litestar.exceptions import ClientException, NotFoundException
+from litestar.exceptions import ClientException, HTTPException, NotFoundException
+from litestar.exceptions.responses import create_exception_response
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
-from litestar.status_codes import HTTP_409_CONFLICT
+from litestar.status_codes import HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import (
@@ -47,12 +48,20 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from contextlib import AbstractAsyncContextManager
 
-    from litestar import Litestar, Request
+    from litestar import Litestar, Request, Response
     from litestar._openapi.schema_generation.schema import SchemaCreator
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
     from litestar.openapi.spec import Schema
-    from litestar.types import ASGIApp, BeforeMessageSendHookHandler, Middleware, Receive, Scope, Send
+    from litestar.types import (
+        ASGIApp,
+        BeforeMessageSendHookHandler,
+        ExceptionHandlersMap,
+        Middleware,
+        Receive,
+        Scope,
+        Send,
+    )
     from litestar.typing import FieldDefinition
     from rich_click import Group
 
@@ -105,29 +114,44 @@ CORRELATION_STATE_KEY = "sqlspec_correlation_id"
 _LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
 
 
-def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundError) -> NoReturn:
-    """Translate :class:`sqlspec.exceptions.NotFoundError` into Litestar's HTTP 404.
+def not_found_error_handler(request: "Request[Any, Any, Any]", exc: NotFoundError) -> "Response[Any]":
+    """Translate :class:`sqlspec.exceptions.NotFoundError` into Litestar's HTTP 404 response.
 
-    Re-raised as :class:`litestar.exceptions.NotFoundException` so the standard
-    Litestar exception-handler chain renders it (including any RFC 7807 handler
-    the user has registered) and the OpenAPI 404 schema stays consistent.
+    The error becomes a :class:`litestar.exceptions.NotFoundException` whose detail is the
+    exception message. The response comes from the handler resolved for the route for status
+    404 or for the HTTP exception type, such as a problem details handler, and otherwise from
+    Litestar's default exception response. The response is returned inside the route's
+    middleware stack, so middleware-set headers and ``after_exception`` hooks behave as for
+    any other handled exception.
     """
-    detail = str(exc) or "Not Found"
-    raise NotFoundException(detail=detail) from exc
+    http_exc = NotFoundException(detail=str(exc) or "Not Found")
+    http_exc.__cause__ = exc
+    return _render_http_exception(request, http_exc, _resolve_exception_handlers(request))
 
 
-def integrity_error_handler(_request: "Request[Any, Any, Any]", exc: IntegrityError) -> NoReturn:
-    """Translate :class:`sqlspec.exceptions.IntegrityError` into Litestar's HTTP 409.
+def integrity_error_handler(request: "Request[Any, Any, Any]", exc: IntegrityError) -> "Response[Any]":
+    """Translate :class:`sqlspec.exceptions.IntegrityError` into Litestar's HTTP 409 response.
 
     Covers every constraint-violation subclass, such as
-    :class:`sqlspec.exceptions.UniqueViolationError`. Re-raised as a
-    :class:`litestar.exceptions.ClientException` with a 409 status so the standard
-    Litestar exception-handler chain renders it. The response detail is always the
-    generic ``"Conflict"``; the original exception is kept as the cause for
-    server-side logging. Applications that want a richer message register their own
-    :class:`sqlspec.exceptions.IntegrityError` handler, which takes precedence.
+    :class:`sqlspec.exceptions.UniqueViolationError`. When the route resolves a handler for a
+    base class of :class:`~sqlspec.exceptions.IntegrityError` (for example
+    :class:`~sqlspec.exceptions.SQLSpecError` or :class:`Exception`) or for status 500, at any
+    application layer, that handler receives the original exception. Otherwise the error
+    becomes a :class:`litestar.exceptions.ClientException` with status 409 and the generic
+    detail ``"Conflict"``, rendered the same way as :func:`not_found_error_handler`.
+    Applications that want a richer message register their own
+    :class:`~sqlspec.exceptions.IntegrityError` handler, which takes precedence.
     """
-    raise ClientException(status_code=HTTP_409_CONFLICT, detail="Conflict") from exc
+    handlers = _resolve_exception_handlers(request)
+    broader_handler = next(
+        (handlers[cls] for cls in IntegrityError.__mro__[1:] if cls in handlers),
+        handlers.get(HTTP_500_INTERNAL_SERVER_ERROR),
+    )
+    if broader_handler is not None:
+        return broader_handler(request, exc)
+    http_exc = ClientException(status_code=HTTP_409_CONFLICT, detail="Conflict")
+    http_exc.__cause__ = exc
+    return _render_http_exception(request, http_exc, handlers)
 
 
 class CorrelationMiddleware:
@@ -1120,6 +1144,31 @@ def _has_correlation_middleware(middleware: "Iterable[Middleware] | None") -> bo
         or (isinstance(entry, DefineMiddleware) and entry.middleware is CorrelationMiddleware)
         for entry in middleware or ()
     )
+
+
+def _resolve_exception_handlers(request: "Request[Any, Any, Any]") -> "ExceptionHandlersMap":
+    """Return the exception handlers resolved for the request's route, or the application's handlers."""
+    route_handler = request.scope.get("route_handler")
+    if route_handler is not None:
+        return route_handler.resolve_exception_handlers()
+    return request.app.exception_handlers
+
+
+def _render_http_exception(
+    request: "Request[Any, Any, Any]", http_exc: HTTPException, handlers: "ExceptionHandlersMap"
+) -> "Response[Any]":
+    """Render an HTTP exception with the handler Litestar would select for it.
+
+    A handler for the status code wins, then a handler for the first class in the exception's
+    MRO. The SQLSpec repository-error handlers are never selected, and Litestar's default
+    exception response is used when no handler matches.
+    """
+    handler = handlers.get(http_exc.status_code) or next(
+        (handlers[cls] for cls in type(http_exc).__mro__ if cls in handlers), None
+    )
+    if handler is None or handler is integrity_error_handler or handler is not_found_error_handler:
+        return create_exception_response(request=request, exc=http_exc)
+    return handler(request, http_exc)
 
 
 def _get_litestar_numpy_array_type() -> type[Any] | None:

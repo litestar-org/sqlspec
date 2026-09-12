@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from litestar import get
+from litestar import Router, get
 from litestar.constants import HTTP_RESPONSE_START
+from litestar.exceptions import HTTPException
+from litestar.plugins.problem_details import ProblemDetailsConfig, ProblemDetailsPlugin
 from litestar.response import Response
 from litestar.testing import create_test_client
 
@@ -17,6 +19,9 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     ImproperConfigurationError,
     IntegrityError,
+    NotFoundError,
+    RepositoryError,
+    SQLSpecError,
     UniqueViolationError,
 )
 from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
@@ -31,7 +36,7 @@ from sqlspec.extensions.litestar.handlers import (
 from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
 if TYPE_CHECKING:
-    from litestar.types import Message, Scope
+    from litestar.types import ASGIApp, Message, Receive, Scope, Send
 
 pytestmark = pytest.mark.anyio
 
@@ -384,10 +389,47 @@ async def test_sync_lifespan_handler_creates_and_closes_pool() -> None:
     assert pool_key not in mock_app.state
 
 
-def _build_integrity_plugin() -> SQLSpecPlugin:
+def _build_integrity_plugin(*, correlation: bool = True) -> SQLSpecPlugin:
     sqlspec = SQLSpec()
-    sqlspec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    sqlspec.add_config(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"litestar": {"enable_correlation_middleware": correlation}},
+        )
+    )
     return SQLSpecPlugin(sqlspec=sqlspec)
+
+
+class _HeaderMiddleware:
+    def __init__(self, app: "ASGIApp") -> None:
+        self.app = app
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        async def send_with_header(message: "Message") -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), (b"x-app-middleware", b"1")]
+            await send(message)
+
+        await self.app(scope, receive, send_with_header)
+
+
+def _teapot_handler(_request: Any, exc: Exception) -> "Response[dict[str, str]]":
+    return Response(content={"handled": type(exc).__name__}, status_code=418)
+
+
+_REPOSITORY_ERRORS = pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [(UniqueViolationError("dup"), 409, "Conflict"), (NotFoundError("gone"), 404, "gone")],
+    ids=["integrity", "not_found"],
+)
+
+
+def _raising_route(error: Exception) -> Any:
+    @get("/error")
+    async def raise_error() -> None:
+        raise error
+
+    return raise_error
 
 
 @pytest.mark.parametrize("error_type", [UniqueViolationError, ForeignKeyViolationError])
@@ -425,3 +467,122 @@ def test_user_integrity_handler_wins() -> None:
 
     assert response.status_code == 422
     assert response.json() == {"custom": "dup"}
+
+
+@_REPOSITORY_ERRORS
+@pytest.mark.parametrize("correlation", [True, False], ids=["route_middleware", "no_route_middleware"])
+def test_repository_error_response_with_and_without_route_middleware(
+    error: Exception, status_code: int, detail: str, correlation: bool
+) -> None:
+    """Repository errors render their HTTP status whether or not the route has middleware."""
+    with create_test_client(
+        route_handlers=[_raising_route(error)], plugins=[_build_integrity_plugin(correlation=correlation)]
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == status_code
+    assert response.json()["detail"] == detail
+
+
+@_REPOSITORY_ERRORS
+def test_repository_error_response_passes_through_app_middleware(
+    error: Exception, status_code: int, detail: str
+) -> None:
+    """Headers set by application middleware are present on the rendered error response."""
+    with create_test_client(
+        route_handlers=[_raising_route(error)], plugins=[_build_integrity_plugin()], middleware=[_HeaderMiddleware]
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == status_code
+    assert response.headers.get("x-app-middleware") == "1"
+
+
+@_REPOSITORY_ERRORS
+def test_repository_error_runs_after_exception_hooks_once(error: Exception, status_code: int, detail: str) -> None:
+    """after_exception hooks observe the original exception exactly once."""
+    seen: list[str] = []
+
+    async def record(exc: BaseException, _scope: "Scope") -> None:
+        seen.append(type(exc).__name__)
+
+    with create_test_client(
+        route_handlers=[_raising_route(error)], plugins=[_build_integrity_plugin()], after_exception=[record]
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == status_code
+    assert seen == [type(error).__name__]
+
+
+@_REPOSITORY_ERRORS
+def test_repository_error_uses_status_code_handler(error: Exception, status_code: int, detail: str) -> None:
+    """An application handler for the mapped status code renders the response."""
+    with create_test_client(
+        route_handlers=[_raising_route(error)],
+        plugins=[_build_integrity_plugin()],
+        exception_handlers={status_code: _teapot_handler},
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == 418
+    assert response.json() == {"handled": "NotFoundException" if status_code == 404 else "ClientException"}
+
+
+@_REPOSITORY_ERRORS
+@pytest.mark.parametrize("correlation", [True, False], ids=["route_middleware", "no_route_middleware"])
+def test_repository_error_renders_problem_details(
+    error: Exception, status_code: int, detail: str, correlation: bool
+) -> None:
+    """The problem details plugin renders the mapped HTTP exception."""
+    problem_details = ProblemDetailsPlugin(ProblemDetailsConfig(enable_for_all_http_exceptions=True))
+    with create_test_client(
+        route_handlers=[_raising_route(error)],
+        plugins=[_build_integrity_plugin(correlation=correlation), problem_details],
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == status_code
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["title"] == detail
+
+
+@pytest.mark.parametrize("handler_key", [500, SQLSpecError, RepositoryError, Exception])
+def test_broader_app_handler_takes_precedence_over_integrity_default(handler_key: "int | type[Exception]") -> None:
+    """Application handlers for a status 500 or a base class of IntegrityError receive the original exception."""
+    with create_test_client(
+        route_handlers=[_raising_route(UniqueViolationError("dup"))],
+        plugins=[_build_integrity_plugin()],
+        exception_handlers={handler_key: _teapot_handler},
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == 418
+    assert response.json() == {"handled": "UniqueViolationError"}
+
+
+def test_broader_router_handler_takes_precedence_over_integrity_default() -> None:
+    """Router-level handlers for a base class of IntegrityError receive the original exception."""
+    router = Router(
+        "/api",
+        route_handlers=[_raising_route(UniqueViolationError("dup"))],
+        exception_handlers={SQLSpecError: _teapot_handler},
+    )
+    with create_test_client(route_handlers=[router], plugins=[_build_integrity_plugin()]) as client:
+        response = client.get("/api/error")
+
+    assert response.status_code == 418
+    assert response.json() == {"handled": "UniqueViolationError"}
+
+
+def test_integrity_subclass_handler_takes_precedence() -> None:
+    """A handler for a specific IntegrityError subclass renders that subclass."""
+    with create_test_client(
+        route_handlers=[_raising_route(UniqueViolationError("dup"))],
+        plugins=[_build_integrity_plugin()],
+        exception_handlers={UniqueViolationError: _teapot_handler, HTTPException: _teapot_handler},
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == 418
+    assert response.json() == {"handled": "UniqueViolationError"}

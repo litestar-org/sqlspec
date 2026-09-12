@@ -23,6 +23,10 @@ Unreleased
   application's middleware stack already includes one, either as the class or
   wrapped in ``DefineMiddleware``. The application's instance and its header
   settings are used, and correlation IDs are extracted once per request.
+* The Litestar plugin's ``NotFoundError`` handler returns its 404 response
+  instead of raising a second exception. Routes without route-level middleware
+  previously returned a 500 response, ``after_exception`` hooks ran twice, and
+  headers added by application middleware were missing from the 404 response.
 * A migration whose ``up()`` returns an empty list is now recorded in the
   tracking table instead of being reported as applied and then staying pending
   forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
@@ -72,11 +76,13 @@ Unreleased
 
 * The Litestar plugin returns HTTP 409 Conflict when a route raises
   ``IntegrityError`` or one of its subclasses, such as
-  ``UniqueViolationError`` or ``ForeignKeyViolationError``. The response detail
-  is a generic ``Conflict`` so database error text is not sent to clients.
-  Previously these errors produced a 500 response. To return a more specific
-  message, register a handler for ``IntegrityError`` in the application's
-  ``exception_handlers``; it takes precedence.
+  ``UniqueViolationError`` or ``ForeignKeyViolationError``, and no application,
+  router, controller, or route layer registers a handler for that exception,
+  one of its base classes (such as ``SQLSpecError`` or ``Exception``), or
+  status 500. Those handlers keep receiving the original exception. The
+  response detail is a generic ``Conflict`` so database error text is not sent
+  to clients, and a handler registered for status 409 or for the HTTP exception
+  type, such as the problem details plugin, renders it.
 
 * The Litestar extension setting ``manage_lifespan`` controls whether the plugin
   creates and closes each config's pool with the application. It defaults to the
