@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 import sqlspec.utils.fixtures as fixture_module
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.fixtures import (
     _async_compress,
     _async_read_compressed,
@@ -25,17 +27,38 @@ from sqlspec.utils.fixtures import (
     _find_fixture_file,
     _read_compressed_file,
     _serialize_data,
+    export_table_fixtures_async,
+    export_table_fixtures_sync,
+    load_table_fixtures_async,
+    load_table_fixtures_sync,
     open_fixture_async,
     open_fixture_sync,
     write_fixture_async,
     write_fixture_sync,
 )
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.sync_tools import _AsyncWrapper
+
+TABLE_FIXTURE_DDL = (
+    "PRAGMA foreign_keys = ON",
+    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL)",
+)
+USER_ROWS: "list[dict[str, Any]]" = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+POST_ROWS: "list[dict[str, Any]]" = [
+    {"id": 10, "user_id": 1, "title": "Hello"},
+    {"id": 11, "user_id": 2, "title": "World"},
+    {"id": 12, "user_id": 1, "title": "Again"},
+]
 
 
 def test_fixture_helpers_use_explicit_sync_and_async_names() -> None:
     """The clean-break API names both execution modes explicitly."""
     assert fixture_module.__all__ == (
+        "export_table_fixtures_async",
+        "export_table_fixtures_sync",
+        "load_table_fixtures_async",
+        "load_table_fixtures_sync",
         "open_fixture_async",
         "open_fixture_sync",
         "write_fixture_async",
@@ -531,3 +554,234 @@ def test_compressed_roundtrip(tmp_path: Path) -> None:
     compressed_file = tmp_path / "compressed_test.json.gz"
     assert compressed_file.exists()
     assert compressed_file.suffix == ".gz"
+
+
+def _write_table_fixture_files(fixtures_path: Path) -> None:
+    fixtures_path.mkdir(parents=True, exist_ok=True)
+    (fixtures_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    with gzip.open(fixtures_path / "posts.jsonl.gz", "wt", encoding="utf-8") as f:
+        f.write("\n".join(json.dumps(row) for row in POST_ROWS) + "\n")
+
+
+def _normalized(rows: "list[dict[str, Any]]") -> "list[dict[str, Any]]":
+    return sorted(from_json(to_json(rows)), key=lambda row: row["id"])
+
+
+def test_load_table_fixtures_orders_and_counts(tmp_path: Path) -> None:
+    """Every discovered table loads in the requested order and reports row counts."""
+    _write_table_fixture_files(tmp_path)
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            driver.execute(ddl)
+
+        counts = load_table_fixtures_sync(driver, tmp_path, table_order=["users", "posts"])
+
+        assert counts == {"users": 2, "posts": 3}
+        assert list(counts) == ["users", "posts"]
+        assert _normalized(driver.select("SELECT * FROM users")) == USER_ROWS
+        assert _normalized(driver.select("SELECT * FROM posts")) == POST_ROWS
+    config.close_pool()
+
+
+async def test_load_table_fixtures_orders_and_counts_async(tmp_path: Path) -> None:
+    """The async loader discovers, orders, and counts tables like the sync loader."""
+    _write_table_fixture_files(tmp_path)
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            await driver.execute(ddl)
+
+        counts = await load_table_fixtures_async(driver, str(tmp_path), table_order=["users", "posts"], batch_size=2)
+
+        assert counts == {"users": 2, "posts": 3}
+        assert list(counts) == ["users", "posts"]
+        assert _normalized(await driver.select("SELECT * FROM users")) == USER_ROWS
+        assert _normalized(await driver.select("SELECT * FROM posts")) == POST_ROWS
+    await config.close_pool()
+
+
+def test_load_table_fixtures_subset_loads_unlisted_tables_alphabetically(tmp_path: Path) -> None:
+    """Only requested tables load, listed ones first and the rest alphabetically."""
+    _write_table_fixture_files(tmp_path)
+    (tmp_path / "audit.jsonl").write_text('{"id": 1}\n\n{"id": 2}\n', encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        driver.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY)")
+
+        counts = load_table_fixtures_sync(
+            driver, tmp_path, tables=["users", "audit"], table_order=["users", "missing"], batch_size=1
+        )
+
+        assert list(counts.items()) == [("users", 2), ("audit", 2)]
+        assert driver.select_value("SELECT COUNT(*) FROM audit") == 2
+    config.close_pool()
+
+
+def test_load_upserts_with_conflict_keys(tmp_path: Path) -> None:
+    """Conflict keys turn a reload into an update of existing rows."""
+    _write_table_fixture_files(tmp_path)
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            driver.execute(ddl)
+        load_table_fixtures_sync(driver, tmp_path, tables=["users"])
+
+        edited = [{"id": 1, "name": "Alicia"}, {"id": 2, "name": "Bob"}, {"id": 3, "name": "Cara"}]
+        (tmp_path / "users.json").write_text(json.dumps(edited), encoding="utf-8")
+        counts = load_table_fixtures_sync(driver, tmp_path, tables=["users"], conflict_keys={"users": ["id"]})
+
+        assert counts == {"users": 3}
+        assert _normalized(driver.select("SELECT * FROM users")) == edited
+    config.close_pool()
+
+
+async def test_load_upserts_with_conflict_keys_async(tmp_path: Path) -> None:
+    """The async loader upserts on conflict keys."""
+    _write_table_fixture_files(tmp_path)
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            await driver.execute(ddl)
+        await load_table_fixtures_async(driver, tmp_path, tables=["users"])
+
+        edited = [{"id": 1, "name": "Alicia"}, {"id": 2, "name": "Bob"}]
+        (tmp_path / "users.json").write_text(json.dumps(edited), encoding="utf-8")
+        counts = await load_table_fixtures_async(driver, tmp_path, tables=["users"], conflict_keys={"users": ["id"]})
+
+        assert counts == {"users": 2}
+        assert _normalized(await driver.select("SELECT * FROM users")) == edited
+    await config.close_pool()
+
+
+def test_load_without_conflict_keys_rejects_duplicates(tmp_path: Path) -> None:
+    """Reloading existing rows without conflict keys surfaces the database error."""
+    _write_table_fixture_files(tmp_path)
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            driver.execute(ddl)
+        load_table_fixtures_sync(driver, tmp_path, tables=["users"])
+
+        with pytest.raises(Exception, match="UNIQUE"):
+            load_table_fixtures_sync(driver, tmp_path, tables=["users"])
+    config.close_pool()
+
+
+@pytest.mark.parametrize(("compress", "jsonl"), [(True, False), (False, True), (True, True), (False, False)])
+def test_export_load_roundtrip(tmp_path: Path, compress: bool, jsonl: bool) -> None:
+    """Exported table fixtures reload into a fresh database unchanged."""
+    source_path = tmp_path / "source"
+    export_path = tmp_path / "export"
+    _write_table_fixture_files(source_path)
+    source = SqliteConfig(connection_config={"database": ":memory:"})
+    target = SqliteConfig(connection_config={"database": ":memory:"})
+    with source.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            driver.execute(ddl)
+        load_table_fixtures_sync(driver, source_path, table_order=["users", "posts"])
+
+        written = export_table_fixtures_sync(driver, export_path, ["users", "posts"], compress=compress, jsonl=jsonl)
+
+    suffix = (".jsonl" if jsonl else ".json") + (".gz" if compress else "")
+    assert written == {"users": 2, "posts": 3}
+    assert sorted(path.name for path in export_path.iterdir()) == [f"posts{suffix}", f"users{suffix}"]
+
+    with target.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            driver.execute(ddl)
+        counts = load_table_fixtures_sync(driver, export_path, table_order=["users", "posts"])
+
+        assert counts == {"users": 2, "posts": 3}
+        assert _normalized(driver.select("SELECT * FROM users")) == USER_ROWS
+        assert _normalized(driver.select("SELECT * FROM posts")) == POST_ROWS
+    source.close_pool()
+    target.close_pool()
+
+
+async def test_export_load_roundtrip_async(tmp_path: Path) -> None:
+    """The async exporter writes fixtures the async loader reloads unchanged."""
+    source_path = tmp_path / "source"
+    export_path = tmp_path / "export"
+    _write_table_fixture_files(source_path)
+    source = AiosqliteConfig(connection_config={"database": ":memory:"})
+    target = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with source.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            await driver.execute(ddl)
+        await load_table_fixtures_async(driver, source_path, table_order=["users", "posts"])
+
+        written = await export_table_fixtures_async(driver, str(export_path), ["users", "posts"])
+
+    assert written == {"users": 2, "posts": 3}
+    assert sorted(path.name for path in export_path.iterdir()) == ["posts.json.gz", "users.json.gz"]
+
+    async with target.provide_session() as driver:
+        for ddl in TABLE_FIXTURE_DDL:
+            await driver.execute(ddl)
+        counts = await load_table_fixtures_async(driver, export_path, table_order=["users", "posts"])
+
+        assert counts == {"users": 2, "posts": 3}
+        assert _normalized(await driver.select("SELECT * FROM users")) == USER_ROWS
+        assert _normalized(await driver.select("SELECT * FROM posts")) == POST_ROWS
+    await source.close_pool()
+    await target.close_pool()
+
+
+def test_export_replaces_other_fixture_variants_of_the_table(tmp_path: Path) -> None:
+    """Exporting a table removes its other fixture files so a reload reads the export."""
+    (tmp_path / "users.json").write_text(json.dumps([{"id": 99, "name": "Stale"}]), encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        driver.execute_many("INSERT INTO users (id, name) VALUES (:id, :name)", USER_ROWS)
+
+        export_table_fixtures_sync(driver, tmp_path, ["users"], compress=True)
+
+    assert [path.name for path in tmp_path.iterdir()] == ["users.json.gz"]
+    config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content", "tables", "match"),
+    [
+        ("users;drop.json", "[]", None, "Invalid table name"),
+        ("users.json", '[{"id": 1, "name) VALUES (1); --": "x"}]', None, "Invalid column name"),
+        ("users.json", '[{"id": 1}, {"id": 2, "name": "extra"}]', None, "do not match"),
+        ("users.json", "[1, 2]", None, "must be an object"),
+        ("users.json", "[{}]", None, "at least one column"),
+        ("users.json", '{"id": 1}', None, "JSON array"),
+        ("users.json", "[]", ["other"], "Could not find the other fixture"),
+    ],
+)
+def test_load_table_fixtures_rejects_invalid_input(
+    tmp_path: Path, file_name: str, content: str, tables: "list[str] | None", match: str
+) -> None:
+    """Unsafe identifiers, malformed rows, and missing files raise before any insert."""
+    (tmp_path / file_name).write_text(content, encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+        with pytest.raises((ValueError, TypeError, FileNotFoundError), match=match):
+            load_table_fixtures_sync(driver, tmp_path, tables=tables)
+
+        assert driver.select_value("SELECT COUNT(*) FROM users") == 0
+    config.close_pool()
+
+
+def test_table_fixture_helpers_reject_invalid_arguments(tmp_path: Path) -> None:
+    """Invalid batch sizes, conflict keys, and export table names raise ValueError."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+        with pytest.raises(ValueError, match="batch_size"):
+            load_table_fixtures_sync(driver, tmp_path, batch_size=0)
+        with pytest.raises(ValueError, match="Invalid column name"):
+            load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": ["id = 1 --"]})
+        with pytest.raises(ValueError, match="Invalid table name"):
+            export_table_fixtures_sync(driver, tmp_path, ["users where 1=1"])
+    config.close_pool()
