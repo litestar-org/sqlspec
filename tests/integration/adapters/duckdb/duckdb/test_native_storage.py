@@ -29,8 +29,11 @@ def test_native_http_parquet_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     config = DuckDBConfig(
-        connection_config={"database": f":memory:http_{uuid4().hex}"},
-        driver_features={"extensions": [{"name": "httpfs", "required": True}]},
+        connection_config={
+            "database": f":memory:http_{uuid4().hex}",
+            "extension_directory": str(tmp_path / "extensions"),
+        },
+        driver_features={"extensions": [{"name": "httpfs", "install": True, "required": True}]},
     )
 
     def reject_arrow(*args: Any, **kwargs: Any) -> Any:
@@ -88,7 +91,7 @@ def test_unavailable_extension_is_distinct_from_object_failure(tmp_path: Path, a
 def test_pool_storage_snapshot_tracks_actual_connection(tmp_path: Path) -> None:
     config = DuckDBConfig(
         connection_config={"database": f":memory:storage_{uuid4().hex}", "autoload_known_extensions": False},
-        driver_features={"extensions": [{"name": "httpfs", "required": True}]},
+        driver_features={"extensions": [{"name": "httpfs", "install": True, "required": True}]},
     )
     try:
         with config.provide_session() as session:
@@ -128,7 +131,7 @@ def _local_config(service: RustfsService, *, wrong_key: bool = False) -> DuckDBC
             "autoinstall_known_extensions": False,
         },
         driver_features={
-            "extensions": [{"name": "httpfs", "required": True}],
+            "extensions": [{"name": "httpfs", "install": True, "required": True}],
             "secrets": [
                 {
                     "name": "local_storage",

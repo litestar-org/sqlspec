@@ -29,7 +29,7 @@ keeps storage transfers on the Arrow path because its settings are opaque.
 
     config = DuckDBConfig(
         driver_features={
-            "extensions": [{"name": "httpfs", "required": True}],
+            "extensions": [{"name": "httpfs", "install": True, "required": True}],
             "secrets": [{
                 "name": "reports",
                 "secret_type": "s3",

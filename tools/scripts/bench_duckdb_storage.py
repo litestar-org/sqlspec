@@ -86,7 +86,7 @@ def run_benchmark(*, sizes: Sequence[int] = (100, 1000, 10000), warmup: int = 4,
     config = DuckDBConfig(
         connection_config={"database": f":memory:benchmark_{uuid4().hex}"},
         driver_features={
-            "extensions": [{"name": "httpfs", "required": True}],
+            "extensions": [{"name": "httpfs", "install": True, "required": True}],
             "secrets": [
                 {
                     "name": "benchmark",
