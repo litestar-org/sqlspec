@@ -915,13 +915,14 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
     Args:
         value: The value to convert.
         value_type: The target Python type. Supported types include:
-        - Primitives: int, float, str, bool
-        - Temporal: datetime, date, time
-        - Numeric: Decimal
-        - Identifiers: UUID, Path
-        - Collections: dict, list (for JSON/JSONB columns)
-        - Schema types: Pydantic models, dataclasses, msgspec Structs,
-            attrs classes, TypedDict (for JSONB columns)
+
+            - Primitives: int, float, str, bool
+            - Temporal: datetime, date, time
+            - Numeric: Decimal
+            - Identifiers: UUID, Path
+            - Collections: dict, list (for JSON/JSONB columns)
+            - Schema types: Pydantic models, dataclasses, msgspec Structs,
+              attrs classes, TypedDict (for JSONB columns)
 
     Returns:
         The converted value of the specified type.
