@@ -64,8 +64,10 @@ every connection to a database and matched case-insensitively, and persistent se
 outlive the process, so an existing secret is reused and declared values are not
 applied to it unless ``replace=True`` is set, for example after rotating credentials.
 DuckDB redacts credential values, so an existing secret is compared on its type,
-provider, scope, and unredacted values such as ``key_id``, ``region`` and ``endpoint``.
-A difference raises for ``required=True`` secrets and logs a warning otherwise.
+provider and the declared settings DuckDB does not redact, such as ``scope``,
+``key_id``, ``region`` and ``endpoint``. Settings the declaration omits are kept as
+stored and are not compared. A difference raises for ``required=True`` secrets and
+logs a warning otherwise.
 
 Query values and object addresses remain bound parameters. Native import accepts
 one table identifier, optionally schema-qualified or quoted; SQL fragments are

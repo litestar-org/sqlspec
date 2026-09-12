@@ -45,6 +45,18 @@ _SECRET_VISIBLE_SETTINGS: Final[frozenset[str]] = frozenset({
     "use_ssl",
 })
 _SECRET_BOOLEAN_SETTINGS: Final[frozenset[str]] = frozenset({"use_ssl"})
+_SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
+    "true": "true",
+    "t": "true",
+    "yes": "true",
+    "y": "true",
+    "1": "true",
+    "false": "false",
+    "f": "false",
+    "no": "false",
+    "n": "false",
+    "0": "false",
+}
 
 
 @final
@@ -505,19 +517,20 @@ def _apply_secret_locked(
     connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
 ) -> "str | None":
     """Reuse a visible secret unless replacement is requested, otherwise create it, then compare it."""
-    storage = "persistent" if secret_config.get("persistent", False) else "temporary"
+    expected_provider = secret_config.get("provider") or _default_secret_provider(connection, secret_type)
     if not secret_config.get("replace", False):
         existing = _visible_secret(connection, secret_config, secret_name, secret_type)
         if existing is not None:
-            mismatch = _secret_mismatch(existing, secret_config, secret_name, secret_type, storage, reused=True)
+            mismatch = _secret_mismatch(existing, secret_config, secret_name, secret_type, expected_provider, True)
             if mismatch is None:
-                logger.debug("DuckDB secret %r already exists as a %s secret and is reused", secret_name, storage)
+                logger.debug("DuckDB secret %r already exists and is reused", secret_name)
             return mismatch
     connection.execute(sql)
     created = _visible_secret(connection, secret_config, secret_name, secret_type)
     if created is None:
+        storage = "persistent" if secret_config.get("persistent", False) else "temporary"
         return f"DuckDB secret {secret_name!r} was not visible as a {storage} secret after creation"
-    return _secret_mismatch(created, secret_config, secret_name, secret_type, storage, reused=False)
+    return _secret_mismatch(created, secret_config, secret_name, secret_type, expected_provider, False)
 
 
 def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:
@@ -567,13 +580,22 @@ def _format_secret_literal(value: Any) -> str:
 def _visible_secret(
     connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str
 ) -> "tuple[Any, ...] | None":
-    """Return the type, provider, scope, redacted settings and expected provider of a visible secret."""
+    """Return the type, provider, scope and redacted settings of a visible secret."""
     return connection.execute(
-        "SELECT type, provider, scope, secret_string, "
-        "(SELECT default_provider FROM duckdb_secret_types() WHERE name = lower(?)) "
-        "FROM duckdb_secrets() WHERE lower(name) = lower(?) AND persistent = ?",
-        (secret_type, secret_name, bool(secret_config.get("persistent", False))),
+        "SELECT type, provider, scope, secret_string FROM duckdb_secrets() WHERE lower(name) = lower(?) AND persistent = ?",
+        (secret_name, bool(secret_config.get("persistent", False))),
     ).fetchone()
+
+
+def _default_secret_provider(connection: DuckDBConnection, secret_type: str) -> "str | None":
+    """Return DuckDB's default provider for a secret type, or ``None`` when DuckDB does not report it."""
+    try:
+        row = connection.execute(
+            "SELECT default_provider FROM duckdb_secret_types() WHERE type = lower(?)", (secret_type,)
+        ).fetchone()
+    except duckdb.CatalogException:
+        return None
+    return str(row[0]) if row and row[0] else None
 
 
 def _secret_mismatch(
@@ -581,24 +603,25 @@ def _secret_mismatch(
     secret_config: dict[str, Any],
     secret_name: str,
     secret_type: str,
-    storage: str,
+    expected_provider: "str | None",
     reused: bool,
 ) -> "str | None":
     """Describe how a visible secret differs from its declaration, or return ``None`` when it matches.
 
     DuckDB redacts credential values, so the comparison covers the type, provider, declared
-    scope and the declared settings DuckDB reports unredacted.
+    scope and the declared settings DuckDB reports unredacted. Settings the declaration omits
+    are not compared.
     """
+    storage = "persistent" if secret_config.get("persistent", False) else "temporary"
     hint = "; set replace=True to apply the declaration" if reused else ""
-    actual_type, actual_provider, actual_scope, secret_string, default_provider = row
+    actual_type, actual_provider, actual_scope, secret_string = row
     if str(actual_type).lower() != secret_type.lower():
         return (
             f"DuckDB secret {secret_name!r} exists as a {storage} secret of type {actual_type!r}, "
             f"but the declaration uses type {secret_type!r}{hint}"
         )
     differing: list[str] = []
-    expected_provider = secret_config.get("provider") or default_provider
-    if expected_provider and str(actual_provider).lower() != str(expected_provider).lower():
+    if expected_provider and str(actual_provider).lower() != expected_provider.lower():
         differing.append("provider")
     scope = secret_config.get("scope")
     if scope is not None and scope not in list(actual_scope or []):
@@ -614,8 +637,8 @@ def _secret_mismatch(
     if not differing:
         return None
     return (
-        f"DuckDB secret {secret_name!r} exists as a {storage} secret whose {', '.join(differing)} "
-        f"differ from the declaration{hint}"
+        f"DuckDB secret {secret_name!r} exists as a {storage} secret whose settings differ from the "
+        f"declaration: {', '.join(differing)}{hint}"
     )
 
 
@@ -624,6 +647,8 @@ def _secret_setting_text(setting: str, value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if setting in _SECRET_BOOLEAN_SETTINGS:
+        if isinstance(value, (int, float)):
+            return "true" if value else "false"
         text = str(value).lower()
-        return {"1": "true", "0": "false", "t": "true", "f": "false"}.get(text, text)
+        return _SECRET_BOOLEAN_TEXT.get(text, text)
     return str(value)

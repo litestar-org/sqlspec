@@ -126,7 +126,10 @@ def test_existing_secret_with_same_type_is_kept_and_recorded() -> None:
 
 
 def test_existing_persistent_secret_is_reused_after_restart(tmp_path: Path) -> None:
-    config = {"secret_directory": str(tmp_path), "allow_unredacted_secrets": True}
+    config: dict[str, str | bool | int | float | list[str]] = {
+        "secret_directory": str(tmp_path),
+        "allow_unredacted_secrets": True,
+    }
     first = duckdb.connect(":memory:", config=config)
     first.execute("CREATE PERSISTENT SECRET sqlspec_p (TYPE http, BEARER_TOKEN 'stored')")
     first.close()
@@ -228,11 +231,19 @@ def _s3_secret(required: bool, **settings: Any) -> "dict[str, Any]":
     return {"name": "sqlspec_s3", "secret_type": "s3", "value": value, "required": required}
 
 
-def _s3_pool_first_use(secret: "dict[str, Any]", existing_sql: str) -> "tuple[str, ...]":
+def _s3_pool_first_use(
+    secret: "dict[str, Any]", existing_sql: str, skip_when_existing_fails: bool = False
+) -> "tuple[str, ...]":
     database = _database()
     anchor = duckdb.connect(database)
     _load_httpfs_or_skip(anchor)
-    anchor.execute(existing_sql)
+    try:
+        anchor.execute(existing_sql)
+    except duckdb.Error:
+        anchor.close()
+        if skip_when_existing_fails:
+            pytest.skip("existing secret provider is not available")
+        raise
     pool = DuckDBConnectionPool(connection_config={"database": database}, secrets=[secret])
     try:
         return _recorded_secret_names(pool, pool.acquire())
@@ -265,6 +276,19 @@ def test_existing_s3_secret_with_same_visible_settings_is_reused_and_recorded() 
     assert _s3_pool_first_use(_s3_secret(required=True), EXISTING_S3_SQL) == ("sqlspec_s3",)
 
 
+@pytest.mark.parametrize("use_ssl", ["no", "false", 0], ids=["no", "false", "zero"])
+def test_existing_s3_secret_matches_use_ssl_spelled_as_duckdb_accepts(use_ssl: Any) -> None:
+    assert _s3_pool_first_use(_s3_secret(required=True, use_ssl=use_ssl), EXISTING_S3_SQL) == ("sqlspec_s3",)
+
+
+def test_existing_credential_chain_secret_differs_from_declaration_without_provider() -> None:
+    existing = "CREATE SECRET sqlspec_s3 (TYPE s3, PROVIDER credential_chain, CHAIN 'env', VALIDATION 'none')"
+    secret = {"name": "sqlspec_s3", "secret_type": "s3", "value": {"key_id": "AKIA1"}, "required": True}
+
+    with pytest.raises(RuntimeError, match=r"differ from the declaration: provider, key_id; set replace=True"):
+        _s3_pool_first_use(secret, existing, skip_when_existing_fails=True)
+
+
 @pytest.mark.parametrize(
     ("settings", "differing"),
     [({"key_id": "AKIA2"}, "key_id"), ({"endpoint": "storage.example:9000"}, "endpoint")],
@@ -274,7 +298,9 @@ def test_existing_s3_secret_with_other_visible_settings_raises_when_required(
     settings: "dict[str, Any]", differing: str
 ) -> None:
     with pytest.raises(
-        RuntimeError, match=rf"'sqlspec_s3' exists as a temporary secret whose {differing} differ.*replace=True"
+        RuntimeError,
+        match=rf"'sqlspec_s3' exists as a temporary secret whose settings differ from the declaration: {differing}; "
+        r"set replace=True",
     ):
         _s3_pool_first_use(_s3_secret(required=True, **settings), EXISTING_S3_SQL)
 
@@ -311,7 +337,10 @@ def test_replace_overwrites_existing_secret_value() -> None:
 
 
 def test_replace_overwrites_stored_persistent_secret(tmp_path: Path) -> None:
-    config = {"secret_directory": str(tmp_path), "allow_unredacted_secrets": True}
+    config: dict[str, str | bool | int | float | list[str]] = {
+        "secret_directory": str(tmp_path),
+        "allow_unredacted_secrets": True,
+    }
     first = duckdb.connect(":memory:", config=config)
     first.execute("CREATE PERSISTENT SECRET sqlspec_rp (TYPE http, BEARER_TOKEN 'stored')")
     first.close()
