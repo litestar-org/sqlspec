@@ -24,6 +24,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
+from sqlspec.core.parameters import type_coercion_dispatcher
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -44,7 +45,6 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
-from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.core import SQL
+    from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
     "_prepare_batch_with_casts",
@@ -171,7 +172,6 @@ _BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "to
 _FLIGHTSQL_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("username", "password")
 _FLIGHTSQL_TLS_SKIP_VERIFY_KEY: Final[str] = "adbc.flight.sql.client_option.tls_skip_verify"
 _FLIGHTSQL_AUTHORIZATION_HEADER_KEY: Final[str] = "adbc.flight.sql.authorization_header"
-_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 _SQLSTATE_CLASS_CODE_LEN = 2
 _SQLSTATE_DESCRIPTIONS: dict[str, str] = {
     "23": "integrity constraint violation",
@@ -898,7 +898,7 @@ def prepare_parameters_with_casts(
     if isinstance(parameters, (list, tuple)):
         converter = get_adbc_type_converter(dialect)
         type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = _type_coercion_dispatcher(type_map) if type_map else None
+        dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
         return _prepare_parameter_sequence_with_casts(
             parameters, parameter_casts, type_map, dispatcher, converter, json_encoder
         )
@@ -1211,18 +1211,6 @@ def _apply_adbc_json_serializer(
     return statement_config.replace(parameter_config=updated_parameter_config.replace(type_coercion_map=updated_map))
 
 
-def _type_coercion_dispatcher(type_map: "dict[type, Callable[[Any], Any]]") -> "TypeDispatcher[Callable[[Any], Any]]":
-    fallback_items = tuple(type_map.items())
-    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
-    if dispatcher is not None:
-        return dispatcher
-
-    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
-    dispatcher.register_all(fallback_items)
-    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
-    return dispatcher
-
-
 def _prepare_parameter_sequence_with_casts(
     parameters: "list[Any] | tuple[Any, ...]",
     parameter_casts: "dict[int, str]",
@@ -1287,7 +1275,7 @@ def _prepare_batch_with_casts(
     json_encoder = statement_config.parameter_config.json_serializer or json_serializer
     converter = get_adbc_type_converter(dialect)
     type_map = statement_config.parameter_config.type_coercion_map
-    dispatcher = _type_coercion_dispatcher(type_map) if type_map else None
+    dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
     return [
         _prepare_parameter_sequence_with_casts(row, parameter_casts, type_map, dispatcher, converter, json_encoder)
         if isinstance(row, (list, tuple))
