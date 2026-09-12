@@ -15,14 +15,14 @@ def test_named_drift_raises() -> None:
 
 def test_named_all_present_loads() -> None:
     content = "-- name: q\n-- param: a int\n-- param: b int\nselect :a, :b\n"
-    statements = SQLFileLoader._parse_statements(content, "test.sql")
+    statements, _ = SQLFileLoader._parse_statements(content, "test.sql")
     assert len(statements["q"].parameters) == 2
 
 
 def test_undeclared_placeholder_is_allowed() -> None:
     # declared subset of placeholders -> OK (filters/undeclared params are legal)
     content = "-- name: q\n-- param: a int\nselect :a, :b\n"
-    statements = SQLFileLoader._parse_statements(content, "test.sql")
+    statements, _ = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["q"].parameters == (ParameterDeclaration("a", "int"),)
 
 
@@ -34,14 +34,14 @@ def test_positional_count_mismatch_raises() -> None:
 
 def test_positional_count_match_loads() -> None:
     content = "-- name: q\n-- param: a int\n-- param: b int\nselect ?, ?\n"
-    statements = SQLFileLoader._parse_statements(content, "test.sql")
+    statements, _ = SQLFileLoader._parse_statements(content, "test.sql")
     assert len(statements["q"].parameters) == 2
 
 
 def test_no_declarations_skips_validation() -> None:
     # mismatched counts but no declarations -> no validation, loads fine
     content = "-- name: q\nselect ?, ?, ?\n"
-    statements = SQLFileLoader._parse_statements(content, "test.sql")
+    statements, _ = SQLFileLoader._parse_statements(content, "test.sql")
     assert statements["q"].parameters == ()
 
 

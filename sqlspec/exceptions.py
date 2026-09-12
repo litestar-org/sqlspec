@@ -30,6 +30,7 @@ __all__ = (
     "SQLFileNotFoundError",
     "SQLFileParseError",
     "SQLParsingError",
+    "SQLSlotError",
     "SQLSpecError",
     "SQLStatementNotFoundError",
     "SerializationConflictError",
@@ -370,6 +371,20 @@ class SQLFileParseError(SQLSpecError):
         self.path = path
         self.original_error = original_error
         self.line = line
+
+
+class SQLSlotError(SQLSpecError):
+    """Raised when a SQL statement slot is missing, unknown, or conflicts."""
+
+    def __init__(self, statement: str, message: str) -> None:
+        """Initialize the error.
+
+        Args:
+            statement: Name of the SQL statement whose slots could not be filled.
+            message: Description of the slot problem.
+        """
+        super().__init__(f"SQL statement '{statement}': {message}")
+        self.statement = statement
 
 
 class MigrationError(SQLSpecError):
