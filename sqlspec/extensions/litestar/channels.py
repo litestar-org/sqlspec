@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from litestar.channels.backends.base import ChannelsBackend
 
+from sqlspec.extensions.events import MAX_NOTIFY_BYTES, measure_notify_payload
 from sqlspec.extensions.events._buffer import enqueue_with_capacity, validate_queue_capacity
 from sqlspec.utils.logging import get_logger
 
@@ -83,6 +84,50 @@ class SQLSpecChannelsBackend(ChannelsBackend):
     def dropped_message_count(self) -> int:
         """Return the cumulative number of messages dropped due to overflow."""
         return self._dropped_message_count
+
+    @property
+    def notify_budget(self) -> "int | None":
+        """Return the NOTIFY byte budget, or None when the event backend has no payload limit.
+
+        Only the ``notify`` backend carries each payload inside a PostgreSQL
+        notification; every other backend kind returns None.
+        """
+        return MAX_NOTIFY_BYTES if self._event_channel.backend_name == "notify" else None
+
+    def measure(self, data: bytes) -> int:
+        """Return the encoded envelope size that ``publish()`` sends for ``data``.
+
+        Args:
+            data: Channel payload to measure.
+
+        Returns:
+            The UTF-8 byte size of the notification envelope wrapping ``data``.
+        """
+        return measure_notify_payload({"data_b64": base64.b64encode(data).decode("ascii")}, None)
+
+    def fits(self, data: bytes) -> bool:
+        """Return whether ``data`` fits the event backend's payload budget.
+
+        Args:
+            data: Channel payload to check.
+
+        Returns:
+            True when the backend has no payload budget or the encoded envelope is within it.
+        """
+        budget = self.notify_budget
+        return budget is None or self.measure(data) <= budget
+
+    def metrics_snapshot(self) -> "dict[str, float]":
+        """Return event channel metrics merged with this backend's queue counters.
+
+        Returns:
+            The event channel's metrics plus ``channels.output_queue_depth`` and
+            ``channels.dropped_messages``.
+        """
+        snapshot = dict(self._event_channel.metrics_snapshot())
+        snapshot["channels.output_queue_depth"] = float(self.output_queue_depth)
+        snapshot["channels.dropped_messages"] = float(self._dropped_message_count)
+        return snapshot
 
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
         await self.publish_many((data,), channels)
