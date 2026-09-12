@@ -55,6 +55,10 @@ SLOT_DIRECTIVE_PATTERN = re.compile(
 
 SLOT_PREFIX_PATTERN = re.compile(r"^\s*--\s*slot\s*:", re.IGNORECASE)
 
+SLOT_COMMENT_PATTERN = re.compile(r"--\s*slot\s*:", re.IGNORECASE)
+
+SQL_LEXEME_PATTERN = re.compile(r"'|\"|--|/\*|\$[A-Za-z_]*\$")
+
 SLOT_MARKER_PATTERN = re.compile(r"/\*\s*slot\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\*/")
 
 INCLUDE_MARKER_PATTERN = re.compile(r"/\*\s*include\s*:\s*([\w.-]+)\s*\*/")
@@ -537,15 +541,21 @@ class SQLFileLoader:
                     directive=stripped,
                     status="malformed",
                 )
-        for idx in range(body_start, len(raw_lines)):
-            if SLOT_PREFIX_PATTERN.match(raw_lines[idx]):
+        body_text = "\n".join(raw_lines[body_start:])
+        if SLOT_COMMENT_PATTERN.search(body_text) is not None:
+            for start, end, is_block in _scan_sql_comments(body_text):
+                if is_block or SLOT_COMMENT_PATTERN.match(body_text, start) is None:
+                    continue
+                line_start = body_text.rfind("\n", 0, start) + 1
+                if body_text[line_start:start].strip():
+                    continue
                 raise SQLFileParseError(
                     file_path,
                     file_path,
                     ValueError(
-                        f"-- slot: directive must appear in the leading directive block: {raw_lines[idx].strip()}"
+                        f"-- slot: directive must appear in the leading directive block: {body_text[start:end].strip()}"
                     ),
-                    line=base_line + idx + 1,
+                    line=base_line + body_start + body_text.count("\n", 0, start) + 1,
                 )
         return dialect, tuple(params), "\n".join(raw_lines[body_start:]), tuple(slots)
 
@@ -692,7 +702,7 @@ class SQLFileLoader:
                 )
 
             slots = _merge_slot_markers(declared_slots, clean_sql)
-            has_includes = INCLUDE_MARKER_PATTERN.search(clean_sql) is not None
+            has_includes = bool(_find_markers(clean_sql, INCLUDE_MARKER_PATTERN, "include"))
             if not slots and not has_includes:
                 SQLFileLoader._check_declared_parameters(
                     clean_sql, declared_params, raw_statement_name, file_path, start_line=statement_start_line
@@ -984,7 +994,7 @@ class SQLFileLoader:
         declared = tuple(parameters) if parameters else ()
         clean_sql = sql.strip()
         slots = _merge_slot_markers((), clean_sql)
-        has_includes = INCLUDE_MARKER_PATTERN.search(clean_sql) is not None
+        has_includes = bool(_find_markers(clean_sql, INCLUDE_MARKER_PATTERN, "include"))
         if not slots and not has_includes:
             self._check_declared_parameters(clean_sql, declared, name, "<directly added>")
 
@@ -1394,7 +1404,7 @@ class SQLFileLoader:
             return cached_text
 
         resolved_text = self._resolve_includes(statement.sql, namespace=_namespace_of(safe_name), stack=())
-        marker_names = {match.group(1) for match in SLOT_MARKER_PATTERN.finditer(resolved_text)}
+        marker_names = {match.group(1) for match in _find_markers(resolved_text, SLOT_MARKER_PATTERN, "slot")}
         for slot in statement.slots:
             if slot.name not in marker_names:
                 file_path = self._query_to_file.get(safe_name, "<directly added>")
@@ -1426,11 +1436,12 @@ class SQLFileLoader:
             SQLStatementNotFoundError: If an included fragment does not exist.
             SQLFileParseError: If the includes form a cycle.
         """
-        if INCLUDE_MARKER_PATTERN.search(text) is None:
+        include_markers = _find_markers(text, INCLUDE_MARKER_PATTERN, "include")
+        if not include_markers:
             return text
         parts: list[str] = []
         last_end = 0
-        for match in INCLUDE_MARKER_PATTERN.finditer(text):
+        for match in include_markers:
             fragment_name = self._find_fragment_name(match.group(1), namespace)
             if fragment_name in stack:
                 file_path = self._fragment_to_file.get(fragment_name, "<directly added>")
@@ -1517,7 +1528,7 @@ def _substitute_slot_markers(text: str, fills: "dict[str, str]") -> str:
     """Replace every ``/* slot: name */`` marker in ``text`` with ``fills[name]``."""
     parts: list[str] = []
     last_end = 0
-    for match in SLOT_MARKER_PATTERN.finditer(text):
+    for match in _find_markers(text, SLOT_MARKER_PATTERN, "slot"):
         parts.append(text[last_end : match.start()])
         parts.append(fills[match.group(1)])
         last_end = match.end()
@@ -1542,7 +1553,7 @@ def _merge_slot_markers(declared: "tuple[SlotDeclaration, ...]", text: str) -> "
     """
     known_names = {slot.name for slot in declared}
     required: list[SlotDeclaration] = []
-    for match in SLOT_MARKER_PATTERN.finditer(text):
+    for match in _find_markers(text, SLOT_MARKER_PATTERN, "slot"):
         slot_name = match.group(1)
         if slot_name not in known_names:
             known_names.add(slot_name)
@@ -1550,3 +1561,73 @@ def _merge_slot_markers(declared: "tuple[SlotDeclaration, ...]", text: str) -> "
     if not required:
         return declared
     return (*declared, *required)
+
+
+def _scan_sql_comments(text: str) -> "list[tuple[int, int, bool]]":
+    """Locate SQL comments outside quoted strings, quoted identifiers, and dollar-quoted bodies.
+
+    Args:
+        text: SQL text to scan.
+
+    Returns:
+        ``(start, end, is_block)`` for each ``--`` line comment and ``/* */`` block comment.
+    """
+    comments: list[tuple[int, int, bool]] = []
+    length = len(text)
+    position = 0
+    while position < length:
+        match = SQL_LEXEME_PATTERN.search(text, position)
+        if match is None:
+            break
+        lexeme = match.group(0)
+        start = match.start()
+        if lexeme == "--":
+            end = text.find("\n", start)
+            end = length if end == -1 else end
+            comments.append((start, end, False))
+        elif lexeme == "/*":
+            end = text.find("*/", start + 2)
+            end = length if end == -1 else end + 2
+            comments.append((start, end, True))
+        elif lexeme in {"'", '"'}:
+            end = match.end()
+            while True:
+                close = text.find(lexeme, end)
+                if close == -1:
+                    end = length
+                    break
+                if text.startswith(lexeme, close + 1):
+                    end = close + 2
+                    continue
+                end = close + 1
+                break
+        else:
+            close = text.find(lexeme, match.end())
+            end = length if close == -1 else close + len(lexeme)
+        position = end
+    return comments
+
+
+def _find_markers(text: str, pattern: "re.Pattern[str]", keyword: str) -> "list[re.Match[str]]":
+    """Find ``/* keyword: name */`` markers that are real block comments in SQL text.
+
+    Marker-shaped text inside quoted strings, quoted identifiers, dollar-quoted bodies,
+    or line comments is not a marker.
+
+    Args:
+        text: SQL text to scan.
+        pattern: Pattern matching one complete marker comment.
+        keyword: Word that every marker contains, used to skip scanning text without markers.
+
+    Returns:
+        Marker matches in order of appearance.
+    """
+    if keyword not in text or "/*" not in text:
+        return []
+    markers: list[re.Match[str]] = []
+    for start, end, is_block in _scan_sql_comments(text):
+        if is_block:
+            marker = pattern.fullmatch(text, start, end)
+            if marker is not None:
+                markers.append(marker)
+    return markers

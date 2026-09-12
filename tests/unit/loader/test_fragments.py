@@ -368,3 +368,40 @@ def test_clear_cache_drops_fragments(tmp_path: Path) -> None:
 
     assert loader.list_fragments() == []
     assert not loader.has_fragment("decision_fact_ctes")
+
+
+def test_marker_text_inside_literals_and_comments_is_ignored(tmp_path: Path) -> None:
+    content = """\
+-- fragment: real
+real AS (SELECT 'it''s /* slot: in_fragment_literal */' AS note)
+
+-- name: literal_markers
+SELECT '/* slot: s */' AS a, '/* include: real */' AS b, "/* slot: t */" AS c, $$/* slot: u */$$ AS d
+-- see /* include: real */ for details
+
+-- name: literal_directive
+SELECT '
+-- slot: x
+' AS a
+
+-- name: comment_directive
+SELECT 1 /*
+-- slot: y
+*/ AS a
+
+-- name: mixed
+WITH /* include: real */
+SELECT 'it''s' AS a FROM real WHERE /* slot: predicate */
+"""
+    loader = SQLFileLoader()
+    loader.load_sql(_write(tmp_path / "literals.sql", content))
+    statements, _ = SQLFileLoader._parse_statements(content, "literals.sql")
+
+    assert statements["literal_markers"].has_includes is False
+    assert statements["literal_markers"].slots == ()
+    assert loader.get_query_slots("literal_markers") == ()
+    assert loader.get_query_text("literal_markers") == statements["literal_markers"].sql
+    assert loader.get_query_text("literal_directive") == "SELECT '\n-- slot: x\n' AS a"
+    assert loader.get_query_slots("comment_directive") == ()
+    assert loader.get_query_slots("mixed") == (SlotDeclaration("predicate", None),)
+    assert "/* slot: in_fragment_literal */" in loader.get_query_text("mixed")
