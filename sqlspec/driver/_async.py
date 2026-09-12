@@ -532,9 +532,11 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Entering the block calls ``begin()`` and yields this driver. A normal exit
         calls ``commit()``; an exception calls ``rollback()`` and propagates. A
         failed commit is followed by a rollback attempt before the commit error
-        propagates. Inside another ``transaction()`` or service
-        ``begin_transaction()`` block on this driver, the block runs in a savepoint
-        instead and leaves the outer transaction open.
+        propagates. When the connection already has an open transaction, the block
+        joins it instead of calling ``begin()`` and commits it on exit. Inside
+        another ``transaction()`` or service ``begin_transaction()`` block on this
+        driver, the block runs in a savepoint instead and leaves the outer
+        transaction open.
         Isolation settings are applied with ``execute_script`` inside the block.
 
         Example:
@@ -2236,7 +2238,12 @@ class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
                 raise error from exc
             self._savepoint = name
         else:
-            await driver.begin()
+            try:
+                in_transaction = driver._connection_in_transaction()
+            except NotImplementedError:
+                in_transaction = False
+            if not in_transaction:
+                await driver.begin()
         driver._transaction_depth = depth + 1
         self._entered = True
         return driver

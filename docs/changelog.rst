@@ -71,7 +71,9 @@ Unreleased
 
 * Sync and async drivers provide ``transaction()``, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
-  it fails; a failed commit is followed by a rollback attempt. A block entered
+  it fails; a failed commit is followed by a rollback attempt. A block entered while
+  the connection already has an open transaction joins it and ends it on exit. A
+  block entered
   inside another ``transaction()`` or service ``begin_transaction()`` block on the
   same driver uses a savepoint instead of committing. Services allow nested
   ``begin_transaction()`` blocks the same way: an inner block runs in a savepoint

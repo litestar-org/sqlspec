@@ -27,9 +27,11 @@ commits; an exception rolls back and propagates to the caller. If the commit
 itself fails, the block attempts a rollback and then raises the commit error.
 
 The block calls the adapter's own ``begin()``, ``commit()``, and ``rollback()``,
-so it follows each database's transaction model. A statement run before the block
-that opened a transaction implicitly, as SQLite does in its default mode or a
-connection with autocommit disabled does, is committed together with the block.
+so it follows each database's transaction model. When the connection already has
+an open transaction, whether started by ``begin()`` or implicitly by an earlier
+statement as SQLite does in its default mode or a connection with autocommit
+disabled does, the block joins it instead of calling ``begin()``. Exiting the block
+commits or rolls back that whole transaction, including work done before the block.
 
 .. code-block:: python
 
@@ -66,11 +68,6 @@ enclosing block stays open and decides whether the work is committed. A service
                 session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
         except UniqueViolationError:
             pass
-
-Only blocks are tracked. A transaction started by calling ``begin()`` directly is
-not an enclosing block: a ``transaction()`` or ``begin_transaction()`` block
-entered after it calls ``begin()`` and commits on exit, which ends that
-transaction. Use ``transaction()`` for the outer transaction when blocks nest.
 
 Nesting needs savepoint support. When the adapter cannot create a savepoint,
 entering a nested block raises ``ImproperConfigurationError`` and the enclosing

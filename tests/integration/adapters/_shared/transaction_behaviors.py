@@ -97,6 +97,14 @@ def assert_sync_nested_transaction_contract(driver: object, case: DriverCase) ->
             sync_driver.execute(table.insert_qmark_sql, _ROWS["b"])
         assert _sync_committed_names(sync_driver, case) == _expected("a", "b")
 
+        sync_driver.begin()
+        sync_driver.execute(table.insert_qmark_sql, _ROWS["n"])
+        with pytest.raises(NestedBlockError):
+            with sync_driver.transaction():
+                sync_driver.execute(table.insert_qmark_sql, _ROWS["d"])
+                raise NestedBlockError
+        assert _sync_committed_names(sync_driver, case) == _expected("a", "b")
+
         if not case.supports_savepoints:
             with service.begin_transaction() as session:
                 with pytest.raises(ImproperConfigurationError, match="savepoint"):
@@ -194,6 +202,14 @@ async def assert_async_nested_transaction_contract(driver: object, case: DriverC
         await async_driver.execute(table.insert_qmark_sql, _ROWS["a"])
         async with async_driver.transaction():
             await async_driver.execute(table.insert_qmark_sql, _ROWS["b"])
+        assert await _async_committed_names(async_driver, case) == _expected("a", "b")
+
+        await async_driver.begin()
+        await async_driver.execute(table.insert_qmark_sql, _ROWS["n"])
+        with pytest.raises(NestedBlockError):
+            async with async_driver.transaction():
+                await async_driver.execute(table.insert_qmark_sql, _ROWS["d"])
+                raise NestedBlockError
         assert await _async_committed_names(async_driver, case) == _expected("a", "b")
 
         if not case.supports_savepoints:
