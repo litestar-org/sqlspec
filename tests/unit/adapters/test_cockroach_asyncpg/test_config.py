@@ -20,6 +20,37 @@ from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgRetryConfig,
 )
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
+
+
+def test_cockroach_asyncpg_native_storage_defaults_off() -> None:
+    config = CockroachAsyncpgConfig()
+    assert config.driver_features["enable_native_storage"] is False
+
+
+def test_cockroach_asyncpg_native_storage_options_reach_driver() -> None:
+    options = {"nullas": "NULL", "nullif": "NULL", "skip": 0}
+    config = CockroachAsyncpgConfig(
+        driver_features={"enable_native_storage": True, "native_storage_csv_options": options}
+    )
+    driver = config.driver_type(connection=cast("Any", object()), driver_features=config.driver_features)
+    assert driver.driver_features["enable_native_storage"] is True
+    assert driver.driver_features["native_storage_csv_options"] == options
+
+
+@pytest.mark.parametrize(
+    "options",
+    [None, [], {"invalid": "fragment"}, {"nullas": 1}, {"nullif": None}, {"skip": -1}, {"skip": True}, {"skip": "1"}],
+)
+def test_cockroach_asyncpg_native_storage_rejects_invalid_csv_options(options: Any) -> None:
+    with pytest.raises(ImproperConfigurationError, match="native_storage_csv_options"):
+        CockroachAsyncpgConfig(driver_features={"native_storage_csv_options": options})
+
+
+@pytest.mark.parametrize("options", [{}, {"skip": 1}, {"nullas": ""}, {"nullif": ""}])
+def test_cockroach_asyncpg_native_storage_preserves_explicit_csv_options(options: dict[str, Any]) -> None:
+    config = CockroachAsyncpgConfig(driver_features={"native_storage_csv_options": options})
+    assert config.driver_features["native_storage_csv_options"] == options
 
 
 def test_cockroach_asyncpg_config_default_initialization() -> None:
