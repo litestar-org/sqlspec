@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, closing, contextmanager
+from contextlib import asynccontextmanager, closing, contextmanager, nullcontext
 from contextvars import copy_context
 from pathlib import Path
 from typing import Any
@@ -15,6 +15,7 @@ import pytest
 from sqlspec import sql
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLSpecError
@@ -1229,3 +1230,69 @@ async def test_async_commit_failure_rolls_back_service_transaction(
         async with service.begin_transaction() as session:
             await session.execute("INSERT INTO service_values VALUES (3)")
     assert _committed_values(config) == [1, 3]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("opened", ["begin", "implicit"])
+def test_sync_session_service_joins_open_transaction(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]], opened: str, fail: bool
+) -> None:
+    config, _ = sync_config
+    with config.provide_session() as session:
+        service = SQLSpecSyncService(session)
+        if opened == "begin":
+            session.begin()
+        session.execute("INSERT INTO service_values VALUES (2)")
+        with pytest.raises(ValueError, match="body") if fail else nullcontext():
+            with service.begin_transaction() as bound:
+                assert bound is session
+                bound.execute("INSERT INTO service_values VALUES (3)")
+                if fail:
+                    raise ValueError("body")
+        assert not session.connection.in_transaction
+    assert _committed_values(config) == ([1] if fail else [1, 2, 3])
+
+
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("opened", ["begin", "implicit"])
+async def test_async_session_service_joins_open_transaction(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]], opened: str, fail: bool
+) -> None:
+    config, _ = async_config
+    async with config.provide_session() as session:
+        service = SQLSpecAsyncService(session)
+        if opened == "begin":
+            await session.begin()
+        await session.execute("INSERT INTO service_values VALUES (2)")
+        with pytest.raises(ValueError, match="body") if fail else nullcontext():
+            async with service.begin_transaction() as bound:
+                assert bound is session
+                await bound.execute("INSERT INTO service_values VALUES (3)")
+                if fail:
+                    raise ValueError("body")
+        assert not session.connection.in_transaction
+    assert _committed_values(config) == ([1] if fail else [1, 2, 3])
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_sync_session_service_joins_open_duckdb_transaction(fail: bool) -> None:
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE service_values (value INTEGER)")
+            session.execute("INSERT INTO service_values VALUES (1)")
+            service = SQLSpecSyncService(session)
+            session.begin()
+            session.execute("INSERT INTO service_values VALUES (2)")
+            with pytest.raises(ValueError, match="body") if fail else nullcontext():
+                with service.begin_transaction() as bound:
+                    assert bound is session
+                    bound.execute("INSERT INTO service_values VALUES (3)")
+                    if fail:
+                        raise ValueError("body")
+            with service.begin_transaction() as bound:
+                bound.execute("INSERT INTO service_values VALUES (4)")
+            values = [row["value"] for row in session.select("SELECT value FROM service_values ORDER BY value")]
+    finally:
+        config.close_pool()
+    assert values == ([1, 4] if fail else [1, 2, 3, 4])

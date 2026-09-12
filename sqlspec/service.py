@@ -108,6 +108,13 @@ def _session_transaction(state: _TransactionState | None) -> _TransactionState |
     return state
 
 
+def _connection_in_transaction(driver: AsyncDriverAdapterBase | SyncDriverAdapterBase) -> bool:
+    try:
+        return driver._connection_in_transaction()
+    except NotImplementedError:
+        return False
+
+
 def _transaction_session(key: object) -> AsyncDriverAdapterBase | SyncDriverAdapterBase | None:
     state = _active_transaction(key)
     return None if state is None else state.driver
@@ -711,7 +718,8 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
                 await nested.__aenter__()
                 self._nested = nested
                 return session
-            await service.begin()
+            if not _connection_in_transaction(session):
+                await service.begin()
             session._transaction_depth += 1
             state = _TransactionState(session)
             service._transaction_state = state
@@ -797,7 +805,8 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
                 nested.__enter__()
                 self._nested = nested
                 return session
-            service.begin()
+            if not _connection_in_transaction(session):
+                service.begin()
             session._transaction_depth += 1
             state = _TransactionState(session)
             service._transaction_state = state
