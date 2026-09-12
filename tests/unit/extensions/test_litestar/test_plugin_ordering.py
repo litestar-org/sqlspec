@@ -10,8 +10,10 @@ walking the old list and any plugin appended afterwards is silently dropped.
 These tests pin SQLSpecPlugin to the in-place mutation contract.
 """
 
+import logging
 from typing import Any, cast
 
+import pytest
 from litestar import Litestar
 from litestar.config.app import AppConfig
 from litestar.middleware import DefineMiddleware
@@ -100,7 +102,7 @@ class _ExistingMiddleware:
         await self.app(scope, receive, send)
 
 
-def _build_plugin(*, correlation: bool = False, sqlcommenter: bool = False) -> SQLSpecPlugin:
+def _build_plugin(*, correlation: bool = False, sqlcommenter: bool = False, **litestar_settings: Any) -> SQLSpecPlugin:
     sqlspec = SQLSpec()
     sqlspec.add_config(
         AiosqliteConfig(
@@ -110,6 +112,7 @@ def _build_plugin(*, correlation: bool = False, sqlcommenter: bool = False) -> S
                 "litestar": {
                     "enable_correlation_middleware": correlation,
                     "enable_sqlcommenter_middleware": sqlcommenter,
+                    **litestar_settings,
                 }
             },
         )
@@ -154,3 +157,86 @@ def test_on_app_init_middleware_on_app_init_preserves_existing_middlewares() -> 
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
     assert _middleware_types(app_config)[:2] == [CorrelationMiddleware, SQLCommenterMiddleware]
     assert app_config.middleware[-1] is existing
+
+
+def test_existing_correlation_middleware_not_duplicated() -> None:
+    existing = DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",))
+    app_config = AppConfig(middleware=[DefineMiddleware(_ExistingMiddleware), existing])
+    _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
+    assert _middleware_types(app_config) == [SQLCommenterMiddleware, _ExistingMiddleware, CorrelationMiddleware]
+    assert app_config.middleware[-1] is existing
+    assert existing.kwargs == {"headers": ("x-app-request-id",)}
+
+
+def test_repeated_on_app_init_keeps_single_correlation_middleware() -> None:
+    app_config = AppConfig()
+    _build_plugin(correlation=True).on_app_init(app_config)
+    _build_plugin(correlation=True).on_app_init(app_config)
+    assert _middleware_types(app_config) == [CorrelationMiddleware]
+
+
+class _SubclassedCorrelationMiddleware(CorrelationMiddleware):
+    __slots__ = ()
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        DefineMiddleware(_SubclassedCorrelationMiddleware, headers=("x-app-request-id",)),
+        _SubclassedCorrelationMiddleware,
+    ],
+    ids=["define_middleware", "bare_class"],
+)
+def test_existing_correlation_middleware_subclass_not_duplicated(existing: Any) -> None:
+    app_config = AppConfig(middleware=[existing])
+    _build_plugin(correlation=True).on_app_init(app_config)
+    assert app_config.middleware == [existing]
+
+
+@pytest.mark.parametrize(
+    "litestar_settings",
+    [{"correlation_header": "x-custom-id"}, {"correlation_headers": ["x-tenant-trace"]}, {"auto_trace_headers": False}],
+    ids=["correlation_header", "correlation_headers", "auto_trace_headers"],
+)
+def test_skipped_correlation_middleware_warns_about_unapplied_header_settings(
+    litestar_settings: "dict[str, Any]", caplog: pytest.LogCaptureFixture
+) -> None:
+    app_config = AppConfig(middleware=[DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",))])
+    plugin = _build_plugin(correlation=True, **litestar_settings)
+    with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
+        plugin.on_app_init(app_config)
+    assert _correlation_skip_levels(caplog) == [logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    ("existing", "litestar_settings"),
+    [
+        (DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",)), {}),
+        (
+            DefineMiddleware(_SubclassedCorrelationMiddleware, headers=("x-custom-id", "x-tenant-trace")),
+            {
+                "correlation_header": "x-custom-id",
+                "correlation_headers": ["x-tenant-trace"],
+                "auto_trace_headers": False,
+            },
+        ),
+    ],
+    ids=["default_headers", "matching_headers"],
+)
+def test_skipped_correlation_middleware_does_not_warn(
+    existing: DefineMiddleware, litestar_settings: "dict[str, Any]", caplog: pytest.LogCaptureFixture
+) -> None:
+    app_config = AppConfig(middleware=[existing])
+    plugin = _build_plugin(correlation=True, **litestar_settings)
+    with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
+        plugin.on_app_init(app_config)
+    assert _correlation_skip_levels(caplog) == [logging.DEBUG]
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def _correlation_skip_levels(caplog: pytest.LogCaptureFixture) -> "list[int]":
+    return [
+        record.levelno
+        for record in caplog.records
+        if getattr(record, "extra_fields", {}).get("stage") == "correlation_middleware_skipped"
+    ]

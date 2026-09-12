@@ -536,17 +536,19 @@ class SQLSpec:
         loader.add_named_sql(name, sql, dialect, parameters)
         logger.debug("Added named SQL: %s", name)
 
-    def get_sql(self, name: str) -> "SQL":
-        """Get a SQL object by name.
+    def get_sql(self, name: str, **slots: Any) -> "SQL":
+        """Get a SQL object by name, filling its slots.
 
         Args:
             name: Name of the statement from SQL file comments.
                 Hyphens in names are converted to underscores.
+            **slots: Values for the statement's ``/* slot: name */`` markers: a ``str``,
+                a sqlglot expression, or a ``SQL`` object whose named parameters are bound.
 
         Returns:
             SQL object ready for execution.
         """
-        return self._ensure_loader().get_sql(name)
+        return self._ensure_loader().get_sql(name, **slots)
 
     def get_query_parameters(self, name: str) -> "tuple[ParameterDeclaration, ...]":
         """Get declared parameter metadata for a query.

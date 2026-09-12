@@ -14,6 +14,26 @@ Unreleased
 
 **Fixed:**
 
+* Executing a ``SQL`` object that already carries named parameters with more
+  named parameters, as keyword arguments or a single mapping, now binds both
+  sets. Previously the statement's own parameters were dropped, so
+  ``session.select(SQL("... :a ... :b", a=1), b=2)`` failed with a parameter
+  count mismatch. A value passed at execute time replaces a bound value of the
+  same name. ``execute_many()`` is unchanged.
+  (`#762 <https://github.com/litestar-org/sqlspec/issues/762>`_)
+* DuckDB secrets declared in ``driver_features["secrets"]`` are created only when
+  missing, so a second connection to a shared database, such as the default shared
+  in-memory database, or a process restart with a stored persistent secret no longer
+  fails with ``secret already exists``, and concurrent connection setup no longer races.
+  Declared values are not applied to an existing secret unless ``replace=True`` is set,
+  for example after rotating credentials. An existing secret is compared on its type,
+  provider and the declared settings DuckDB does not redact, such as ``scope``,
+  ``key_id`` or ``endpoint``; settings the declaration omits are kept as stored. A
+  difference raises for ``required=True`` secrets and logs a warning otherwise.
+  (`#754 <https://github.com/litestar-org/sqlspec/issues/754>`_)
+* The ``litestar`` extra now requires ``litestar>=2.23.0``. The Litestar
+  extension imports ``NamedDependency`` and ``SkipValidation``, which are not
+  available in 2.22, so installs resolved to 2.22 failed on import.
 * ``PymssqlDriver.begin()`` no longer issues ``BEGIN TRANSACTION`` on a connection
   with autocommit disabled, where pymssql already holds an open transaction. The
   extra nesting level kept ``commit()`` from making the work durable. On an
@@ -34,6 +54,14 @@ Unreleased
   rejected by application middleware such as authentication or session handling now carry
   a correlation ID in logs and error hooks, and application middleware keeps its original
   relative order. (`#729 <https://github.com/litestar-org/sqlspec/issues/729>`_)
+* The Litestar plugin no longer adds a second ``CorrelationMiddleware`` when the
+  application's middleware already includes it or a subclass, and warns when that
+  leaves configured correlation header settings unapplied.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+* Litestar routes raising ``NotFoundError`` no longer return 500 when they have no
+  middleware, run ``after_exception`` hooks twice, or drop headers added by
+  application middleware from the 404 response.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
 * A migration whose ``up()`` returns an empty list is now recorded in the
   tracking table instead of being reported as applied and then staying pending
   forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
@@ -69,13 +97,27 @@ Unreleased
 
 **Added:**
 
+* SQL files can share SQL through ``-- fragment:`` sections spliced in with
+  ``/* include: name */``, and mark ``/* slot: name */`` fill points that
+  ``spec.get_sql(name, **slots)`` fills with a string, a sqlglot expression, or a
+  ``SQL`` object. These comment shapes are now reserved in ``.sql`` files; see
+  :ref:`sql-fragments-and-slots` for the syntax and compatibility notes.
+  (`#763 <https://github.com/litestar-org/sqlspec/issues/763>`_)
+* ``SQLSpecChannelsBackend`` can check a payload against the PostgreSQL
+  ``NOTIFY`` limit before publishing. ``measure(data)`` returns the encoded
+  ``notify`` envelope size, ``fits(data)`` reports whether it is within ``notify_budget``,
+  and ``notify_budget`` is ``None`` for backends without a payload limit.
+  ``metrics_snapshot()`` returns all observability metrics for the event
+  channel's database configuration together with the backend instance's output
+  queue depth and dropped message count. ``AsyncEventChannel`` and
+  ``SyncEventChannel`` also expose ``backend_name`` and ``metrics_snapshot()``.
+  (`#756 <https://github.com/litestar-org/sqlspec/issues/756>`_)
 * Sync and async drivers provide ``transaction()``, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
   it fails; a failed commit is followed by a rollback attempt. A block entered while
   the connection already has an open transaction joins it and ends it on exit. A
-  block entered
-  inside another ``transaction()`` or service ``begin_transaction()`` block on the
-  same driver uses a savepoint instead of committing. Services allow nested
+  block entered inside another ``transaction()`` or service ``begin_transaction()``
+  block on the same driver uses a savepoint instead of committing. Services allow nested
   ``begin_transaction()`` blocks the same way: an inner block runs in a savepoint
   on the same session, so a failure such as a unique violation undoes only the
   inner work and the outer block can still commit. Adapters without savepoint
@@ -89,12 +131,35 @@ Unreleased
   ``begin_transaction()`` to keep several calls in one transaction. Existing
   code that passes a driver still works. See :doc:`/recipes/service_layer`.
 
+* ``uuid4``, ``uuid6``, ``uuid7``, and ``nanoid`` can be imported from the
+  top-level ``sqlspec`` package. ``sqlspec.extensions.litestar`` exports
+  ``CorrelationMiddleware`` and ``TRACE_CONTEXT_FALLBACK_HEADERS``. The
+  :doc:`/reference/utils` reference now covers the ``sqlspec.utils.text``,
+  ``sqlspec.utils.serializers``, and ``sqlspec.utils.correlation`` modules and
+  the ``to_schema``, ``to_value_type``, and ``transform_dict_keys`` functions
+  from ``sqlspec.utils.schema`` as supported APIs.
+  (`#758 <https://github.com/litestar-org/sqlspec/issues/758>`_)
+
 * Storage pipelines expose ``resolve_destination()``, returning a
   ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.
   Direct remote URIs retain their address, alias paths resolve relative to the
   configured backend, and local paths become absolute. Backend options come
   only from the method's explicit ``storage_options`` argument, not pipeline
   writer defaults.
+
+* The Litestar plugin returns HTTP 409 with the generic detail ``Conflict`` when a
+  route raises ``IntegrityError`` or a subclass. Existing handlers for
+  ``IntegrityError``, its base classes, or status 500 still receive the exception,
+  and a handler for status 409 or ``HTTPException`` renders the response.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+
+* The Litestar extension setting ``manage_lifespan`` controls whether the plugin
+  creates and closes each config's pool with the application. It defaults to the
+  inverse of ``disable_di``, so existing applications are unchanged. Set
+  ``disable_di=True`` and ``manage_lifespan=True`` to use another dependency
+  injection container while the plugin still manages the pool. See
+  :doc:`/usage/frameworks/litestar/dependency_injection`.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
 
 **Breaking changes:**
 

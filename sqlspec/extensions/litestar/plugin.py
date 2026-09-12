@@ -5,9 +5,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
 
 from litestar.di import Provide
-from litestar.exceptions import NotFoundException
+from litestar.exceptions import ClientException, HTTPException, NotFoundException
+from litestar.exceptions.responses import create_exception_response
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
+from litestar.status_codes import HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import (
@@ -22,7 +24,7 @@ from sqlspec.config import (
 )
 from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.exceptions import ImproperConfigurationError, IntegrityError, NotFoundError
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
@@ -46,12 +48,20 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from contextlib import AbstractAsyncContextManager
 
-    from litestar import Litestar, Request
+    from litestar import Litestar, Request, Response
     from litestar._openapi.schema_generation.schema import SchemaCreator
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
     from litestar.openapi.spec import Schema
-    from litestar.types import ASGIApp, BeforeMessageSendHookHandler, Receive, Scope, Send
+    from litestar.types import (
+        ASGIApp,
+        BeforeMessageSendHookHandler,
+        ExceptionHandlersMap,
+        Middleware,
+        Receive,
+        Scope,
+        Send,
+    )
     from litestar.typing import FieldDefinition
     from rich_click import Group
 
@@ -78,6 +88,7 @@ __all__ = (
     "PluginConfigState",
     "SQLSpecPlugin",
     "_OffsetPaginationSchemaPlugin",
+    "integrity_error_handler",
     "not_found_error_handler",
 )
 
@@ -103,18 +114,56 @@ CORRELATION_STATE_KEY = "sqlspec_correlation_id"
 _LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
 
 
-def not_found_error_handler(_request: "Request[Any, Any, Any]", exc: NotFoundError) -> NoReturn:
-    """Translate :class:`sqlspec.exceptions.NotFoundError` into Litestar's HTTP 404.
+def not_found_error_handler(request: "Request[Any, Any, Any]", exc: NotFoundError) -> "Response[Any]":
+    """Return a 404 response whose detail is the :class:`~sqlspec.exceptions.NotFoundError` message.
 
-    Re-raised as :class:`litestar.exceptions.NotFoundException` so the standard
-    Litestar exception-handler chain renders it (including any RFC 7807 handler
-    the user has registered) and the OpenAPI 404 schema stays consistent.
+    A handler for status 404 or for the HTTP exception type renders it, otherwise Litestar's
+    default exception response. Handlers for :class:`~sqlspec.exceptions.NotFoundError` or a
+    subclass take precedence; handlers for its base classes or status 500 do not.
     """
-    detail = str(exc) or "Not Found"
-    raise NotFoundException(detail=detail) from exc
+    http_exc = NotFoundException(detail=str(exc) or "Not Found")
+    http_exc.__cause__ = exc
+    return _render_http_exception(request, http_exc, _resolve_exception_handlers(request))
+
+
+def integrity_error_handler(request: "Request[Any, Any, Any]", exc: IntegrityError) -> "Response[Any]":
+    """Return a 409 response with the generic detail ``"Conflict"``.
+
+    A handler for status 409 or for the HTTP exception type renders it, otherwise Litestar's
+    default exception response. Handlers for :class:`~sqlspec.exceptions.IntegrityError` or a
+    subclass take precedence, and handlers for a later class in the error's MRO or for status
+    500 receive the original exception.
+    """
+    handlers = _resolve_exception_handlers(request)
+    exc_mro = type(exc).__mro__
+    broader_handler = next(
+        (handlers[cls] for cls in exc_mro[exc_mro.index(IntegrityError) + 1 :] if cls in handlers),
+        handlers.get(HTTP_500_INTERNAL_SERVER_ERROR),
+    )
+    if broader_handler is not None:
+        return broader_handler(request, exc)
+    http_exc = ClientException(status_code=HTTP_409_CONFLICT, detail="Conflict")
+    http_exc.__cause__ = exc
+    return _render_http_exception(request, http_exc, handlers)
 
 
 class CorrelationMiddleware:
+    """ASGI middleware that binds a correlation ID to each HTTP request.
+
+    The first non-empty value among ``headers``, checked in order, becomes the
+    correlation ID after surrounding whitespace is trimmed and the value is
+    truncated to 128 characters; when no header has a value, or the trimmed
+    value is empty, a new ID is generated. The ID is set on
+    :class:`~sqlspec.utils.correlation.CorrelationContext` and in the request scope
+    for the duration of the request, then the previous ID is restored. Non-HTTP
+    scopes, and instances created with an empty ``headers`` tuple, pass through
+    unchanged.
+
+    Args:
+        app: The downstream ASGI application.
+        headers: Request header names to check, in priority order.
+    """
+
     __slots__ = ("_app", "_extractor", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
@@ -167,6 +216,7 @@ class PluginConfigState:
     enable_sqlcommenter_middleware: bool
     correlation_headers: tuple[str, ...] = field(init=False)
     disable_di: bool
+    manage_lifespan: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
     pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
@@ -244,6 +294,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         configured_headers = _normalize_header_list(litestar_config.get("correlation_headers"))
         auto_trace_headers = bool(litestar_config.get("auto_trace_headers", True))
 
+        disable_di = litestar_config.get("disable_di", False)
+
         return {
             "connection_key": connection_key,
             "pool_key": pool_key,
@@ -256,7 +308,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "correlation_headers": _build_correlation_headers(
                 primary=correlation_header, configured=configured_headers, auto_trace_headers=auto_trace_headers
             ),
-            "disable_di": litestar_config.get("disable_di", False),
+            "disable_di": disable_di,
+            "manage_lifespan": litestar_config.get("manage_lifespan", not disable_di),
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
         }
 
@@ -274,15 +327,18 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             correlation_header=settings["correlation_header"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             disable_di=settings["disable_di"],
+            manage_lifespan=settings["manage_lifespan"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
 
+        if state.manage_lifespan:
+            state.lifespan_handler = lifespan_handler_maker(config, state.pool_key)
         if not state.disable_di:
-            self._setup_handlers(state)
+            self._setup_di_handlers(state)
         return state
 
-    def _setup_handlers(self, state: PluginConfigState) -> None:
-        """Setup handlers for the plugin state."""
+    def _setup_di_handlers(self, state: PluginConfigState) -> None:
+        """Build the dependency providers and before-send handler for the plugin state."""
         connection_key = state.connection_key
         pool_key = state.pool_key
         commit_mode = state.commit_mode
@@ -291,7 +347,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
         state.session_provider = session_provider_maker(config, connection_key)
-        state.lifespan_handler = lifespan_handler_maker(config, pool_key)
 
         if commit_mode == "manual":
             state.before_send_handler = manual_handler_maker(connection_key)
@@ -347,17 +402,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
             signature_namespace.update(state.config.get_signature_namespace())
 
+            if state.manage_lifespan:
+                if state.lifespan_handler is None:
+                    self._raise_lifespan_handler_not_initialized(state.session_key)
+                app_config.lifespan.append(state.lifespan_handler)
+
             if not state.disable_di:
                 if (
                     state.connection_provider is None
                     or state.pool_provider is None
                     or state.session_provider is None
                     or state.before_send_handler is None
-                    or state.lifespan_handler is None
                 ):
                     self._raise_di_handlers_not_initialized(state.session_key)
                 app_config.before_send.append(state.before_send_handler)
-                app_config.lifespan.append(state.lifespan_handler)
                 app_config.dependencies.update({
                     state.connection_key: Provide(state.connection_provider),
                     state.pool_key: Provide(state.pool_provider),
@@ -383,6 +441,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if app_config.exception_handlers is None:
             app_config.exception_handlers = {}
         app_config.exception_handlers.setdefault(NotFoundError, not_found_error_handler)
+        app_config.exception_handlers.setdefault(IntegrityError, integrity_error_handler)
 
         # Inject sqlspec's DEFAULT_TYPE_ENCODERS into Litestar's response serializer
         # (user-supplied encoders win on conflict). Litestar's per-handler
@@ -395,7 +454,23 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         new_middlewares: list[DefineMiddleware] = []
         if self._correlation_headers:
-            new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
+            existing_correlation = _find_correlation_middleware(app_config.middleware)
+            if existing_correlation is not None:
+                headers_honored = self._correlation_headers == TRACE_CONTEXT_FALLBACK_HEADERS or (
+                    isinstance(existing_correlation, DefineMiddleware)
+                    and tuple(existing_correlation.kwargs.get("headers", ())) == self._correlation_headers
+                )
+                log_with_context(
+                    logger,
+                    logging.DEBUG if headers_honored else logging.WARNING,
+                    "extension.init",
+                    framework="litestar",
+                    stage="correlation_middleware_skipped",
+                    reason="already_installed",
+                    unapplied_correlation_headers=None if headers_honored else list(self._correlation_headers),
+                )
+            else:
+                new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
         if self._enable_sqlcommenter_middleware:
             new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
         if new_middlewares:
@@ -910,6 +985,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         )
         raise ImproperConfigurationError(msg)
 
+    def _raise_lifespan_handler_not_initialized(self, session_key: str) -> NoReturn:
+        """Raise error when the lifespan handler is missing for a lifespan-managed configuration."""
+        msg = (
+            f"Lifespan handler was not initialized for configuration '{session_key}'. "
+            "Handlers are created during plugin construction for configurations with lifespan management enabled."
+        )
+        raise ImproperConfigurationError(msg)
+
     def _raise_config_not_found(self, key: Any) -> NoReturn:
         """Raise error when configuration is not found."""
         msg = f"No database configuration found for name '{key}'. Available keys: {self._get_available_keys()}"
@@ -1060,6 +1143,45 @@ def _build_correlation_headers(*, primary: str, configured: list[str], auto_trac
     if auto_trace_headers:
         header_order.extend(TRACE_CONTEXT_FALLBACK_HEADERS)
     return tuple(_dedupe_headers(header_order))
+
+
+def _find_correlation_middleware(middleware: "Iterable[Middleware] | None") -> "Middleware | None":
+    """Return the first entry in the middleware stack that installs :class:`CorrelationMiddleware`.
+
+    Matches :class:`CorrelationMiddleware` or a subclass, either as a bare class or wrapped in
+    :class:`litestar.middleware.DefineMiddleware`. Factories such as :func:`functools.partial`,
+    middleware added after the plugin's ``on_app_init`` runs, and router, controller, or route
+    middleware are not detected.
+    """
+    for entry in middleware or ():
+        candidate = entry.middleware if isinstance(entry, DefineMiddleware) else entry
+        if isinstance(candidate, type) and issubclass(candidate, CorrelationMiddleware):
+            return entry
+    return None
+
+
+def _resolve_exception_handlers(request: "Request[Any, Any, Any]") -> "ExceptionHandlersMap":
+    """Return the exception handlers resolved for the request's route, or the application's handlers."""
+    route_handler = request.scope.get("route_handler")
+    if route_handler is not None:
+        return route_handler.resolve_exception_handlers()
+    return request.app.exception_handlers
+
+
+def _render_http_exception(
+    request: "Request[Any, Any, Any]", http_exc: HTTPException, handlers: "ExceptionHandlersMap"
+) -> "Response[Any]":
+    """Render an HTTP exception with the handler Litestar would select for it.
+
+    A handler for the status code wins, then a handler for the first class in the exception's
+    MRO; Litestar's default exception response is used when no handler matches.
+    """
+    handler = handlers.get(http_exc.status_code) or next(
+        (handlers[cls] for cls in type(http_exc).__mro__ if cls in handlers), None
+    )
+    if handler is None:
+        return create_exception_response(request=request, exc=http_exc)
+    return handler(request, http_exc)
 
 
 def _get_litestar_numpy_array_type() -> type[Any] | None:

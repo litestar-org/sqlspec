@@ -46,6 +46,9 @@ class _StreamingEventChannel:
     async def shutdown(self) -> None:
         self.shutdown_calls += 1
 
+    def metrics_snapshot(self) -> "dict[str, float]":
+        return {"AiosqliteConfig.events.ack": float(len(self.acked))}
+
 
 async def test_litestar_channels_backend_database_roundtrip(tmp_path: "Any") -> None:
     migrations = tmp_path / "migrations"
@@ -133,6 +136,10 @@ async def test_litestar_channels_backend_drops_oldest_and_preserves_acknowledgem
     assert backend.output_queue_depth == 2
     assert backend.dropped_message_count == 1
     assert event_channel.acked == ["0", "1", "2"]
+    snapshot = backend.metrics_snapshot()
+    assert snapshot["channels.output_queue_depth"] == pytest.approx(2.0)
+    assert snapshot["channels.dropped_message_count"] == pytest.approx(1.0)
+    assert snapshot["AiosqliteConfig.events.ack"] == pytest.approx(3.0)
     stream = backend.stream_events()
     assert await anext(stream) == ("alerts", b"second")
     assert await anext(stream) == ("alerts", b"third")
