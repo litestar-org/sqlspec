@@ -148,6 +148,22 @@ def integrity_error_handler(request: "Request[Any, Any, Any]", exc: IntegrityErr
 
 
 class CorrelationMiddleware:
+    """ASGI middleware that binds a correlation ID to each HTTP request.
+
+    The first non-empty value among ``headers``, checked in order, becomes the
+    correlation ID after surrounding whitespace is trimmed and the value is
+    truncated to 128 characters; when no header has a value, or the trimmed
+    value is empty, a new ID is generated. The ID is set on
+    :class:`~sqlspec.utils.correlation.CorrelationContext` and in the request scope
+    for the duration of the request, then the previous ID is restored. Non-HTTP
+    scopes, and instances created with an empty ``headers`` tuple, pass through
+    unchanged.
+
+    Args:
+        app: The downstream ASGI application.
+        headers: Request header names to check, in priority order.
+    """
+
     __slots__ = ("_app", "_extractor", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:

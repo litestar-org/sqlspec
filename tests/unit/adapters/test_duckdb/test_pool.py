@@ -1,11 +1,13 @@
 """Unit tests for DuckDB connection pool helpers."""
 
+import logging
 from typing import Any
 from uuid import uuid4
 
+import duckdb
 import pytest
 
-from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _validate_sql_identifier
+from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _secret_sql, _validate_sql_identifier
 
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
@@ -43,6 +45,27 @@ def test_validate_sql_identifier_accepts_safe_identifiers(identifier: str) -> No
 def test_validate_sql_identifier_rejects_unsafe_identifiers(identifier: str) -> None:
     with pytest.raises(ValueError, match="secret_name"):
         _validate_sql_identifier(identifier, "secret_name")
+
+
+@pytest.mark.parametrize(
+    ("persistent", "replace", "prefix"),
+    [
+        (False, False, "CREATE SECRET IF NOT EXISTS s1 ("),
+        (True, False, "CREATE PERSISTENT SECRET IF NOT EXISTS s1 ("),
+        (False, True, "CREATE OR REPLACE SECRET s1 ("),
+        (True, True, "CREATE OR REPLACE PERSISTENT SECRET s1 ("),
+    ],
+)
+def test_secret_sql_statement_prefix(persistent: bool, replace: bool, prefix: str) -> None:
+    secret = {
+        "name": "s1",
+        "secret_type": "gcs",
+        "value": {"key_id": "k"},
+        "persistent": persistent,
+        "replace": replace,
+    }
+
+    assert _secret_sql(secret, "s1", "gcs").startswith(prefix)
 
 
 def test_create_connection_raises_for_malicious_secret_name() -> None:
@@ -183,6 +206,180 @@ def test_create_connection_raises_when_secret_verification_fails(monkeypatch: py
 
     with pytest.raises(RuntimeError, match="DuckDB secret 'missing_secret' was not visible"):
         pool._create_connection()
+
+
+S3_SECRET_STRING = "name=reports;type=s3;provider=config;serializable=true;scope=s3://;key_id=abc;secret=redacted"
+
+
+class _SecretCatalogConnection(_FakeDuckDBConnection):
+    def __init__(self, verification_row: "tuple[Any, ...]", secret_types_available: bool = True) -> None:
+        super().__init__(verification_row=verification_row)
+        self.secret_types_available = secret_types_available
+
+    def execute(self, sql: str, parameters: Any = None) -> "_SecretCatalogConnection":
+        if "duckdb_secret_types" in sql and not self.secret_types_available:
+            msg = "Catalog Error: Table Function with name duckdb_secret_types does not exist!"
+            raise duckdb.CatalogException(msg)
+        self.executed.append((sql, parameters))
+        return self
+
+    def fetchone(self) -> "tuple[Any, ...] | None":
+        if "duckdb_secret_types" in self.executed[-1][0]:
+            return ("config",)
+        return self.verification_row
+
+
+def _existing_row(
+    secret_type: str = "s3", provider: str = "config", secret_string: str = S3_SECRET_STRING
+) -> "tuple[Any, ...]":
+    return (secret_type, provider, ["s3://"], secret_string)
+
+
+def _pool_with_fake_secret_row(
+    monkeypatch: pytest.MonkeyPatch,
+    verification_row: "tuple[Any, ...]",
+    required: bool,
+    declaration: "dict[str, Any] | None" = None,
+    secret_types_available: bool = True,
+) -> DuckDBConnectionPool:
+    monkeypatch.setattr(
+        "sqlspec.adapters.duckdb.pool.duckdb.connect",
+        lambda **_: _SecretCatalogConnection(verification_row, secret_types_available),
+    )
+    secret: dict[str, Any] = {"name": "reports", "secret_type": "s3", "required": required, "value": {"key_id": "abc"}}
+    secret.update(declaration or {})
+    return DuckDBConnectionPool({"database": ":memory:"}, secrets=[secret])
+
+
+def _recorded_names(pool: DuckDBConnectionPool) -> "list[str]":
+    connection = pool._create_connection()
+    pool._thread_local.connection = connection
+    return [secret["name"] for secret in pool._storage_settings(connection)["_duckdb_storage_secrets"]]
+
+
+def test_secret_with_different_existing_type_raises_when_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = _pool_with_fake_secret_row(monkeypatch, _existing_row(secret_type="http"), required=True)
+
+    with pytest.raises(RuntimeError, match=r"'reports' exists as a temporary secret of type 'http'.*type 's3'"):
+        pool._create_connection()
+
+
+def test_secret_with_different_existing_type_is_skipped_when_optional(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pool = _pool_with_fake_secret_row(monkeypatch, _existing_row(secret_type="http"), required=False)
+
+    with caplog.at_level(logging.WARNING):
+        names = _recorded_names(pool)
+
+    assert names == []
+    assert any("'reports' exists as a temporary secret of type 'http'" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("row", "declaration", "differing"),
+    [
+        (_existing_row(provider="credential_chain"), {}, "provider"),
+        (_existing_row(), {"provider": "credential_chain"}, "provider"),
+        (_existing_row(secret_string=S3_SECRET_STRING.replace("key_id=abc", "key_id=other")), {}, "key_id"),
+        (_existing_row(), {"value": {"key_id": "abc", "endpoint": "minio:9000"}}, "endpoint"),
+        (_existing_row(), {"value": {"key_id": "other", "endpoint": "minio:9000"}}, "key_id, endpoint"),
+        (_existing_row(), {"scope": "s3://reports/"}, "scope"),
+    ],
+    ids=[
+        "provider_differs",
+        "provider_declared",
+        "key_id_differs",
+        "endpoint_missing",
+        "two_settings",
+        "scope_missing",
+    ],
+)
+def test_secret_with_differing_visible_settings_raises_when_required(
+    monkeypatch: pytest.MonkeyPatch, row: "tuple[Any, ...]", declaration: "dict[str, Any]", differing: str
+) -> None:
+    pool = _pool_with_fake_secret_row(monkeypatch, row, required=True, declaration=declaration)
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"'reports' exists as a temporary secret whose settings differ from the declaration: {differing}; "
+        r"set replace=True",
+    ):
+        pool._create_connection()
+
+
+def test_secret_with_differing_visible_settings_is_skipped_when_optional(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    row = _existing_row(secret_string=S3_SECRET_STRING.replace("key_id=abc", "key_id=other"))
+    pool = _pool_with_fake_secret_row(monkeypatch, row, required=False)
+
+    with caplog.at_level(logging.WARNING):
+        names = _recorded_names(pool)
+
+    assert names == []
+    assert any("settings differ from the declaration: key_id" in record.message for record in caplog.records)
+    assert not any("abc" in record.message or "other" in record.message for record in caplog.records)
+
+
+def test_secret_with_matching_existing_settings_is_reused_and_recorded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pool = _pool_with_fake_secret_row(
+        monkeypatch, _existing_row(), required=True, declaration={"value": {"key_id": "abc", "secret": "xyz"}}
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="sqlspec.pool"):
+        names = _recorded_names(pool)
+
+    assert names == ["reports"]
+    assert any(
+        record.levelno == logging.DEBUG and "'reports' already exists" in record.message for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    ("stored", "declared"),
+    [
+        ("false", False),
+        ("false", 0),
+        ("true", 1),
+        ("true", 2),
+        ("false", "no"),
+        ("false", "N"),
+        ("true", "yes"),
+        ("true", "T"),
+        ("false", "0"),
+        ("true", "true"),
+    ],
+)
+def test_secret_use_ssl_declarations_match_duckdb_boolean_rendering(
+    monkeypatch: pytest.MonkeyPatch, stored: str, declared: Any
+) -> None:
+    row = _existing_row(secret_string=f"{S3_SECRET_STRING};use_ssl={stored}")
+    pool = _pool_with_fake_secret_row(
+        monkeypatch, row, required=True, declaration={"value": {"key_id": "abc", "use_ssl": declared}}
+    )
+
+    assert _recorded_names(pool) == ["reports"]
+
+
+def test_secret_use_ssl_declaration_that_differs_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = _existing_row(secret_string=f"{S3_SECRET_STRING};use_ssl=true")
+    pool = _pool_with_fake_secret_row(
+        monkeypatch, row, required=True, declaration={"value": {"key_id": "abc", "use_ssl": "no"}}
+    )
+
+    with pytest.raises(RuntimeError, match="differ from the declaration: use_ssl"):
+        pool._create_connection()
+
+
+def test_secret_provider_default_is_skipped_when_secret_types_are_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = _pool_with_fake_secret_row(
+        monkeypatch, _existing_row(provider="credential_chain"), required=True, secret_types_available=False
+    )
+
+    assert _recorded_names(pool) == ["reports"]
 
 
 class _FailingSecretConnection(_FakeDuckDBConnection):

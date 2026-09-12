@@ -221,6 +221,19 @@ class SyncEventChannel:
         )
         self._listeners: dict[str, SyncEventListener] = {}
 
+    @property
+    def backend_name(self) -> str:
+        """Return the resolved event backend kind, such as ``"notify"`` or ``"poll_queue"``."""
+        return self._backend_name
+
+    def metrics_snapshot(self) -> "dict[str, float]":
+        """Return the observability metrics recorded for this channel's configuration.
+
+        Returns:
+            A new dictionary of metric values keyed under the configuration's diagnostics prefix.
+        """
+        return self._runtime.metrics_snapshot()
+
     def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         """Publish an event to a channel."""
         channel = normalize_event_channel_name(channel)
@@ -490,6 +503,19 @@ class AsyncEventChannel:
             event_poll_interval=self._event_poll_interval,
         )
         self._listeners: dict[str, AsyncEventListener] = {}
+
+    @property
+    def backend_name(self) -> str:
+        """Return the resolved event backend kind, such as ``"notify"`` or ``"poll_queue"``."""
+        return self._backend_name
+
+    def metrics_snapshot(self) -> "dict[str, float]":
+        """Return the observability metrics recorded for this channel's configuration.
+
+        Returns:
+            A new dictionary of metric values keyed under the configuration's diagnostics prefix.
+        """
+        return self._runtime.metrics_snapshot()
 
     async def publish(self, channel: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None" = None) -> str:
         """Publish an event to a channel."""

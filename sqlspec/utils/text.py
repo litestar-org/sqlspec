@@ -237,7 +237,7 @@ def quote_backtick_identifier(identifier: str) -> str:
     """Quote a SQL identifier with backtick escaping (MySQL family).
 
     Wraps the value in backticks and escapes any embedded backtick by
-    doubling it (`` ` `` -> `` `` ``). Used by MySQL-family adapters
+    doubling it, so each backtick becomes two. Used by MySQL-family adapters
     (asyncmy, aiomysql, mysqlconnector, pymysql) where the backtick is
     the dialect's identifier delimiter.
 

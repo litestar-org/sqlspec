@@ -220,7 +220,7 @@ def nanoid() -> str:
 
     Nano IDs are URL-safe, compact 21-character identifiers suitable
     for use as primary keys or short identifiers. The default alphabet
-    uses A-Za-z0-9_- characters.
+    uses ``A-Za-z0-9_-`` characters.
 
     Returns:
         A 21-character Nano ID string, or 32-character UUID hex if
