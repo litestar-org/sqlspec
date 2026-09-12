@@ -82,6 +82,7 @@ Unreleased
   by primary key (or by every column), writes files atomically, and replaces the
   table's other fixture files in the directory.
   See :doc:`/usage/testing`.
+  (`#766 <https://github.com/litestar-org/sqlspec/issues/766>`_)
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
