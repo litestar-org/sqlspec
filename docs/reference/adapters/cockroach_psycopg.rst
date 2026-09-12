@@ -19,6 +19,27 @@ Async Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgConnectionConfig
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgPoolConfig
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgDriverFeatures
+   :members:
+   :show-inheritance:
+
 Sync Driver
 ===========
 

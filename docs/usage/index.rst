@@ -90,6 +90,12 @@ Choose a topic
 
       Move data between databases with Arrow-based bulk transfer.
 
+   .. grid-item-card:: Bulk Ingest
+      :link: bulk_ingest
+      :link-type: doc
+
+      High-volume data writes using native database bulk loaders.
+
    .. grid-item-card:: Performance Tuning
       :link: performance
       :link-type: doc

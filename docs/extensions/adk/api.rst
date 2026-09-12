@@ -13,13 +13,13 @@ Services
    :show-inheritance:
    :no-index:
 
-.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecMemoryService
+.. autoclass:: SQLSpecMemoryService
    :members:
    :undoc-members:
    :show-inheritance:
    :no-index:
 
-.. autoclass:: sqlspec.extensions.adk.memory.SQLSpecSyncMemoryService
+.. autoclass:: SQLSpecSyncMemoryService
    :members:
    :undoc-members:
    :show-inheritance:
@@ -76,6 +76,15 @@ Artifact Stores
    :show-inheritance:
    :no-index:
 
+Session Listing & Ordering
+==========================
+
+.. autodata:: SessionOrderBy
+   :no-index:
+
+.. autofunction:: normalize_session_list_options
+   :no-index:
+
 Retention Helpers
 =================
 
@@ -94,16 +103,31 @@ arguments and produces the same report.
 .. autofunction:: prune_sessions
    :no-index:
 
+.. autofunction:: prune_sessions_sync
+   :no-index:
+
 .. autofunction:: prune_events
+   :no-index:
+
+.. autofunction:: prune_events_sync
    :no-index:
 
 .. autofunction:: prune_memory
    :no-index:
 
+.. autofunction:: prune_memory_sync
+   :no-index:
+
 .. autofunction:: prune_user_state
    :no-index:
 
+.. autofunction:: prune_user_state_sync
+   :no-index:
+
 .. autofunction:: prune_artifacts
+   :no-index:
+
+.. autofunction:: prune_artifacts_sync
    :no-index:
 
 Pruning Artifacts
@@ -186,10 +210,18 @@ Configuration
    :show-inheritance:
    :no-index:
 
-Converters
-==========
+Session Converters
+==================
 
 .. automodule:: sqlspec.extensions.adk.converters
+   :members:
+   :undoc-members:
+   :no-index:
+
+Memory Converters
+=================
+
+.. automodule:: sqlspec.extensions.adk.memory.converters
    :members:
    :undoc-members:
    :no-index:

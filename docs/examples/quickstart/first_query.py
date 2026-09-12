@@ -1,18 +1,13 @@
-from __future__ import annotations
-
-from pathlib import Path
-
 __all__ = ("test_first_query",)
 
 
-def test_first_query(tmp_path: Path) -> None:
+def test_first_query() -> None:
     # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
 
-    db_path = tmp_path / "queries.db"
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
         session.execute("create table if not exists users (id integer primary key, name text)")

@@ -144,6 +144,20 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.bigquery.BigQueryConnectionParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.bigquery.BigQueryDriverFeatures
+   :members:
+   :show-inheritance:
+
 Driver
 ======
 

@@ -27,6 +27,10 @@ Middleware
    :members:
    :show-inheritance:
 
+.. autoclass:: sqlspec.extensions.starlette.middleware.SQLCommenterMiddleware
+   :members:
+   :show-inheritance:
+
 State
 =====
 

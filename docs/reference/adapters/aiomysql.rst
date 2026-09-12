@@ -11,13 +11,6 @@ Configuration
    :members:
    :show-inheritance:
 
-Driver
-======
-
-.. autoclass:: sqlspec.adapters.aiomysql.AiomysqlDriver
-   :members:
-   :show-inheritance:
-
 Connection Parameters
 =====================
 
@@ -36,6 +29,13 @@ Driver Features
 ===============
 
 .. autoclass:: sqlspec.adapters.aiomysql.AiomysqlDriverFeatures
+   :members:
+   :show-inheritance:
+
+Driver
+======
+
+.. autoclass:: sqlspec.adapters.aiomysql.AiomysqlDriver
    :members:
    :show-inheritance:
 

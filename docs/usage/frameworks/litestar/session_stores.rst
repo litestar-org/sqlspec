@@ -28,11 +28,19 @@ Pass a SQLSpec store to Litestar's ``SessionMiddleware``:
 Available Stores
 ----------------
 
-SQLSpec provides stores for async adapters:
+SQLSpec provides store backends for both async and sync database adapters, all inheriting
+from :class:`~sqlspec.extensions.litestar.store.BaseSQLSpecStore`:
 
-- ``AsyncpgStore`` - PostgreSQL via asyncpg
-- ``AiosqliteStore`` - SQLite via aiosqlite
-- ``ArrowOdbcStore`` - SQL Server via arrow-odbc and Microsoft ODBC Driver 18
+- **SQLite**: ``sqlspec.adapters.aiosqlite.litestar.AiosqliteStore`` (async) and ``sqlspec.adapters.sqlite.litestar.SQLiteStore`` (sync)
+- **PostgreSQL**: ``sqlspec.adapters.asyncpg.litestar.AsyncpgStore`` (asyncpg), ``sqlspec.adapters.psycopg.litestar.PsycopgAsyncStore`` (psycopg async), and ``sqlspec.adapters.psycopg.litestar.PsycopgSyncStore`` (psycopg sync)
+- **MySQL**: ``sqlspec.adapters.pymysql.litestar.PyMysqlStore``
+- **DuckDB**: ``sqlspec.adapters.duckdb.litestar.DuckdbStore``
+- **SQL Server / ODBC**: ``sqlspec.adapters.arrow_odbc.litestar.ArrowOdbcStore``, ``sqlspec.adapters.pymssql.litestar.PymssqlStore``, and ``sqlspec.adapters.mssql_python.litestar.MssqlPythonStore``
+- **CockroachDB**: ``sqlspec.adapters.cockroach_asyncpg.litestar.CockroachAsyncpgStore``
+- **BigQuery**: ``sqlspec.adapters.bigquery.litestar.BigQueryStore``
+- **Spanner**: ``sqlspec.adapters.spanner.litestar.SpannerSyncStore``
+- **Oracle**: ``sqlspec.adapters.oracledb.litestar.OracleAsyncStore`` and ``sqlspec.adapters.oracledb.litestar.OracleSyncStore``
+- **Arrow / ADBC**: ``sqlspec.adapters.adbc.litestar.ADBCStore``
 
 Each store can create its session table. It can also add new columns from its
 own DDL. Set this behavior under ``extension_config["litestar"]``:

@@ -13,6 +13,10 @@ SQL
    :members:
    :show-inheritance:
 
+.. data:: Statement
+
+   Alias for :class:`SQL`.
+
 StatementConfig
 ===============
 
@@ -50,6 +54,10 @@ Compiler
 .. autoclass:: OperationProfile
    :members:
    :show-inheritance:
+
+.. data:: OperationType
+
+   Literal type for operation classifications (``SELECT``, ``INSERT``, ``UPDATE``, ``DELETE``, ``COPY``, ``COPY_FROM``, ``COPY_TO``, ``EXECUTE``, ``SCRIPT``, ``DDL``, ``PRAGMA``, ``MERGE``, ``COMMAND``).
 
 .. autofunction:: is_copy_operation
 

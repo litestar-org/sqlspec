@@ -54,5 +54,5 @@ def test_batch_write_ingest(spanner_batch_write_config: SpannerSyncConfig, test_
         assert job.telemetry["rows_processed"] == 8
 
     with spanner_batch_write_config.provide_session() as session:
-        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", {"ids": user_ids})
+        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
         assert len(rows) == 8

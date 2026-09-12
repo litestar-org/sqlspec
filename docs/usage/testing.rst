@@ -1,16 +1,17 @@
 Testing
 =======
 
-SQLSpec provides tools for both unit and integration testing of database code.
+SQLSpec provides comprehensive support for both fast in-memory unit tests and containerized
+integration testing against real database engines.
 
-Pytest Fixture Tips
--------------------
+Unit Testing with SQLite
+------------------------
 
-- Use ``tmp_path`` (pytest built-in) for SQLite file databases
-- Use ``:memory:`` for fast in-memory tests
-- Create factory functions for reusable test setup
-- Use ``execute_many`` for bulk fixture data
-- Use ``select_value`` for assertion checks on counts
+For fast unit tests without external service dependencies, SQLite in-memory (``:memory:``)
+or temporary file databases via pytest's ``tmp_path`` fixture are recommended.
+
+Fast In-Memory Fixture
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -19,28 +20,169 @@ Pytest Fixture Tips
     from sqlspec.adapters.sqlite import SqliteConfig
 
     @pytest.fixture
-    def db(tmp_path):
+    def db_session():
+        spec = SQLSpec()
+        config = spec.add_config(
+            SqliteConfig(connection_config={"database": ":memory:"})
+        )
+        with spec.provide_session(config) as session:
+            session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+            yield session
+        config.close_pool()
+
+Temporary File Fixture
+~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``tmp_path`` when testing multi-connection scenarios, migrations, or file-backed storage:
+
+.. code-block:: python
+
+    from pathlib import Path
+    import pytest
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    @pytest.fixture
+    def db_config(tmp_path: Path) -> SqliteConfig:
         spec = SQLSpec()
         config = spec.add_config(
             SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
         )
         with spec.provide_session(config) as session:
-            session.execute("create table users (id integer primary key, name text)")
+            session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            session.execute_many(
+                "INSERT INTO users (name) VALUES (?)",
+                [("Alice",), ("Bob",)],
+            )
+        yield config
+        config.close_pool()
+
+    def test_get_users(db_config: SqliteConfig) -> None:
+        with db_config.provide_session() as session:
+            count = session.select_value("SELECT COUNT(*) FROM users")
+            assert count == 2
+
+Integration Testing with ``pytest-databases``
+---------------------------------------------
+
+For integration testing against production-grade database systems, SQLSpec integrates
+directly with `pytest-databases <https://github.com/litestar-org/pytest-databases>`_.
+``pytest-databases`` provisions and manages Docker containers for database engines and
+handles database isolation across parallel ``pytest-xdist`` workers.
+
+Supported Database Services
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``pytest-databases`` provides managed Docker fixtures for:
+
+- ``PostgresService`` (PostgreSQL, pgvector, ParadeDB)
+- ``MySQLService`` (MySQL, MariaDB)
+- ``OracleService`` (Oracle Free / Express)
+- ``MSSQLService`` (Microsoft SQL Server)
+- ``BigQueryService`` (Google Cloud BigQuery emulator)
+- ``SpannerService`` (Google Cloud Spanner emulator)
+- ``CockroachDBService`` (CockroachDB)
+- ``RustfsService`` (S3 / cloud blob storage emulator)
+
+PostgreSQL Integration Example
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Install ``pytest-databases`` with PostgreSQL support:
+
+.. code-block:: console
+
+    uv add --dev "pytest-databases[postgres]"
+
+Configure your pytest fixtures using the provided service fixture:
+
+.. code-block:: python
+
+    from collections.abc import AsyncGenerator
+    import pytest
+    from pytest_databases.docker.postgres import PostgresService
+    from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+
+    @pytest.fixture
+    def asyncpg_config(postgres_service: PostgresService) -> AsyncpgConfig:
+        """Create an AsyncpgConfig connected to the containerized test database."""
+        return AsyncpgConfig(
+            connection_config={
+                "host": postgres_service.host,
+                "port": postgres_service.port,
+                "user": postgres_service.user,
+                "password": postgres_service.password,
+                "database": postgres_service.database,
+            }
+        )
+
+    @pytest.fixture
+    async def db_session(asyncpg_config: AsyncpgConfig) -> AsyncGenerator[AsyncpgDriver, None]:
+        """Provide an active session with automatic pool teardown."""
+        async with asyncpg_config.provide_session() as session:
+            await session.execute(
+                "CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, title TEXT NOT NULL)"
+            )
             yield session
+        await asyncpg_config.close_pool()
 
-Integration Test Patterns
--------------------------
+    async def test_insert_and_fetch_item(db_session: AsyncpgDriver) -> None:
+        result = await db_session.execute(
+            "INSERT INTO items (title) VALUES (:title) RETURNING id",
+            title="Widget",
+        )
+        item_id = result.last_inserted_id
+        assert item_id is not None
 
-For integration tests against real databases, use the standard ``SQLSpec`` +
-adapter config pattern with temporary databases.
+        item = await db_session.select_one("SELECT title FROM items WHERE id = :id", id=item_id)
+        assert item["title"] == "Widget"
 
-.. literalinclude:: /examples/patterns/integration_testing.py
-   :language: python
-   :caption: ``integration test fixtures``
-   :start-after: # start-example
-   :end-before: # end-example
-   :dedent: 4
-   :no-upgrade:
+Running Migrations in Test Fixtures
+-----------------------------------
+
+When testing against real databases, use ``migrate_up()`` to initialize the schema before tests:
+
+.. code-block:: python
+
+    @pytest.fixture
+    async def migrated_config(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgConfig, None]:
+        config = AsyncpgConfig(
+            connection_config={
+                "host": postgres_service.host,
+                "port": postgres_service.port,
+                "user": postgres_service.user,
+                "password": postgres_service.password,
+                "database": postgres_service.database,
+            },
+            migration_config={
+                "script_location": "migrations/postgres",
+            },
+        )
+        # Apply all migrations up to head
+        await config.migrate_up()
+
+        yield config
+
+        # Teardown connection pool
+        await config.close_pool()
+
+Parallel Testing with ``pytest-xdist``
+--------------------------------------
+
+``pytest-databases`` automatically allocates unique database names or schemas per xdist
+worker process, preventing tests from colliding when running in parallel:
+
+.. code-block:: console
+
+    # Run tests in parallel across CPU cores
+    uv run pytest -n auto
+
+Testing Best Practices
+----------------------
+
+1. **Always clean up connection pools**: Call ``config.close_pool()`` or ``await config.close_pool()`` in fixture teardown to prevent hanging database connections.
+2. **Use function-based tests**: Write asynchronous tests using ``async def test_...`` without wrapping them in test classes.
+3. **Assert with ``select_value``**: For aggregate queries like counts, use ``session.select_value("SELECT COUNT(*)...")`` to retrieve scalar values directly.
+4. **Bulk test seeding**: Seed test datasets efficiently with ``session.execute_many()`` or native ``driver.load_from_records()``.
 
 Table Fixtures
 --------------
@@ -171,5 +313,7 @@ arguments with an async driver.
 Related Guides
 --------------
 
-- :doc:`configuration` for adapter configuration options.
-- :doc:`drivers_and_querying` for the full query API.
+- :doc:`configuration` for full adapter configuration options.
+- :doc:`drivers_and_querying` for querying and transaction APIs.
+- :doc:`migrations` for migration execution and schema tracking.
+- :doc:`bulk_ingest` for high-volume data loading in tests.

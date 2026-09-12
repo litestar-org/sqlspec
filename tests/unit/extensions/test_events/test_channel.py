@@ -57,7 +57,7 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
     assert message.payload["action"] == "refresh"
     channel.ack(message.event_id)
     with config.provide_session() as driver:
-        row = driver.select_one("SELECT status FROM app_events WHERE event_id = :event_id", {"event_id": event_id})
+        row = driver.select_one("SELECT status FROM app_events WHERE event_id = :event_id", event_id=event_id)
     assert row["status"] == "acked"
     snapshot = spec.telemetry_snapshot()
     assert snapshot.get("SqliteConfig.events.publish") == pytest.approx(1.0)

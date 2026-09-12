@@ -60,9 +60,63 @@ Protocols
 
 .. currentmodule:: sqlspec.typing
 
+SQLSpec defines focused protocols for reading dictionary-like rows, inspecting
+dataclasses, and interfacing with Apache Arrow record batch readers and schemas.
+
+.. note::
+   SQLSpec does not define standalone ``DriverProtocol``, ``AsyncDriverProtocol``,
+   or ``SessionProtocol`` protocols. Driver instances are implementations of
+   :class:`~sqlspec.driver.SyncDriverAdapterBase` or
+   :class:`~sqlspec.driver.AsyncDriverAdapterBase`, typed with
+   :data:`~sqlspec.driver.DriverAdapterProtocol`. Database configurations conform
+   to :class:`~sqlspec.config.DatabaseConfigProtocol`. Runtime statement protocols
+   reside in :mod:`sqlspec.protocols`.
+
 .. autoclass:: DictLike
    :members:
    :show-inheritance:
+
+.. autoclass:: DataclassProtocol
+   :members:
+   :show-inheritance:
+
+.. autoclass:: ArrowRecordBatchReaderProtocol
+   :members:
+   :show-inheritance:
+
+.. autoclass:: ArrowSchemaProtocol
+   :members:
+   :show-inheritance:
+
+Type Variables
+==============
+
+.. autodata:: ConnectionT
+
+.. autodata:: PoolT
+
+.. autodata:: SchemaT
+
+Type Aliases
+============
+
+.. autodata:: SupportedSchemaModel
+
+.. autodata:: StatementParameters
+
+.. autodata:: ArrowReturnFormat
+
+Sentinels
+=========
+
+.. autodata:: Empty
+
+.. autodata:: UNSET
+
+Helper Functions
+================
+
+.. autofunction:: get_type_adapter
 
 Feature Flags
 =============

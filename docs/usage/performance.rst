@@ -43,6 +43,32 @@ The checked-in baseline snapshots themselves are interpreted/uncompiled only
 (``metadata.mypyc_compiled`` is ``false``); they are not compiled-performance
 references.
 
+To benchmark custom driver scenarios directly:
+
+.. code-block:: bash
+
+   # Run a targeted benchmark scenario
+   uv run python tools/scripts/bench.py --driver asyncpg --library sqlspec --scenario read_heavy --iterations 5
+
+   # Run the performance regression gate with custom row counts
+   uv run python tools/scripts/bench_gate.py --rows 5000 --iterations 5
+
+Compiled Execution (MyPyC)
+==========================
+
+For production deployments, SQLSpec supports native compilation via MyPyC for
+significant CPU overhead reduction across statement compilation, parameter processing,
+and result mapping:
+
+.. code-block:: bash
+
+   # Build editable compiled install
+   make install-compiled
+
+   # Build distribution wheel with compiled C-extensions
+   make build-performance
+
+
 Async bridge executor limits
 ============================
 

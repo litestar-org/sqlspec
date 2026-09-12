@@ -10,9 +10,10 @@ and building condition expressions programmatically.
 ConditionFactory
 ================
 
-.. autoclass:: ConditionFactory
-   :members:
-   :show-inheritance:
+.. data:: ConditionFactory
+
+   Callable type alias: ``Callable[[exp.Expr, exp.Placeholder], exp.Expr]``.
+   Used for constructing condition expressions from a column and placeholder.
 
 Statement Modifiers
 ===================
@@ -26,6 +27,8 @@ Statement Modifiers
 .. autofunction:: apply_offset
 
 .. autofunction:: apply_select_only
+
+.. autofunction:: apply_column_pruning
 
 .. autofunction:: safe_modify_with_cte
 

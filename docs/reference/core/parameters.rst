@@ -10,51 +10,81 @@ Supports QMARK (``?``), NAMED (``:name``), NUMERIC (``$1``), and FORMAT (``%s``)
 ParameterProcessor
 ==================
 
-.. autoclass:: sqlspec.core.parameters._processor.ParameterProcessor
+.. autoclass:: ParameterProcessor
    :members:
    :show-inheritance:
 
 ParameterConverter
 ==================
 
-.. autoclass:: sqlspec.core.parameters._converter.ParameterConverter
+.. autoclass:: ParameterConverter
    :members:
    :show-inheritance:
 
 ParameterValidator
 ==================
 
-.. autoclass:: sqlspec.core.parameters._validator.ParameterValidator
+.. autoclass:: ParameterValidator
    :members:
    :show-inheritance:
 
-Types
-=====
+Types and Profiles
+==================
 
-.. autoclass:: sqlspec.core.parameters._types.ParameterStyle
+.. autoclass:: ParameterStyle
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.core.parameters._types.ParameterStyleConfig
+.. autoclass:: ParameterStyleConfig
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.core.parameters._types.TypedParameter
+.. autoclass:: TypedParameter
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.core.parameters._types.ParameterInfo
+.. autoclass:: ParameterInfo
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.core.parameters._types.DriverParameterProfile
+.. autoclass:: DriverParameterProfile
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.core.parameters._types.ParameterProfile
+.. autoclass:: ParameterProfile
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.core.parameters._types.ParameterProcessingResult
+.. autoclass:: ParameterProcessingResult
    :members:
    :show-inheritance:
+
+.. autoclass:: ParameterDeclaration
+   :members:
+   :show-inheritance:
+
+Profile Management
+==================
+
+.. autofunction:: get_driver_profile
+
+.. autofunction:: register_driver_profile
+
+.. autofunction:: build_statement_config_from_profile
+
+Parameter Helpers
+=================
+
+.. autofunction:: validate_parameter_alignment
+
+.. autofunction:: normalize_parameter_key
+
+.. autofunction:: is_iterable_parameters
+
+.. autofunction:: wrap_with_type
+
+.. autofunction:: register_param_type
+
+.. autofunction:: resolve_param_type
+
+.. autofunction:: matches_param_type

@@ -79,8 +79,14 @@ Registry
    :members:
    :show-inheritance:
 
-Configuration Types
-===================
+.. autodata:: sqlspec.storage.storage_registry
+
+Configuration and Type Aliases
+==============================
+
+.. autodata:: sqlspec.storage.StorageDestination
+
+.. autodata:: sqlspec.storage.StorageFormat
 
 .. autoclass:: sqlspec.storage.StorageCapabilities
    :members:

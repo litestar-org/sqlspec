@@ -8,8 +8,8 @@ track request correlations, and gather metrics on query duration and rows affect
 Instrumentation
 ---------------
 
-To enable observability features, you typically wrap or extend your base configuration.
-SQLSpec provides helper functions in `sqlspec.extensions` to make this easier.
+To enable observability features, you can attach an :class:`~sqlspec.observability.ObservabilityConfig`
+to your database configuration or SQLSpec instance, or declare settings via ``extension_config``.
 
 Custom Statement Observers
 --------------------------
@@ -42,61 +42,151 @@ every SQL execution. Custom observers conform to the public
 OpenTelemetry Tracing
 ---------------------
 
-SQLSpec can automatically generate OpenTelemetry spans for every SQL query. This is useful
-for distributed tracing and performance bottlenecks analysis.
+SQLSpec can automatically generate OpenTelemetry spans for every SQL query and migration command.
+This enables end-to-end distributed tracing across microservices and storage operations.
 
-To enable tracing, use the ``enable_tracing`` helper:
+To enable tracing programmatically, use the ``enable_tracing`` helper:
 
 .. code-block:: python
 
     from sqlspec.extensions.otel import enable_tracing
-    from sqlspec.config import ObservabilityConfig
+    from sqlspec.observability import ObservabilityConfig
 
     # Create a configuration with tracing enabled
     observability = enable_tracing(
         base_config=ObservabilityConfig(),
-        resource_attributes={"service.name": "my-service"}
+        resource_attributes={"service.name": "my-service"},
+        enable_spans=True,
     )
 
-    # Use this config when initializing SQLSpec or your session
-    # ...
+    # Attach to database configuration
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        observability_config=observability,
+    )
 
-This will create spans with attributes like:
-- ``db.system`` (e.g., "postgresql", "sqlite")
+Alternatively, configure OpenTelemetry declaratively via ``extension_config``:
+
+.. code-block:: python
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        extension_config={
+            "otel": {
+                "enabled": True,
+                "resource_attributes": {"service.name": "my-service"},
+                "enable_spans": True,
+            }
+        },
+    )
+
+Generated spans include standard semantic attributes:
+- ``db.system`` (e.g., "postgresql", "sqlite", "duckdb")
 - ``db.statement`` (the sanitized SQL query)
-- ``db.operation`` (e.g., "SELECT", "INSERT")
+- ``db.operation`` (e.g., "SELECT", "INSERT", "UPDATE")
+- Migration command spans under ``command.upgrade``, ``command.downgrade``, etc.
 
 Prometheus Metrics
 ------------------
 
-You can expose Prometheus metrics for your database interactions, such as query counts
-and execution time histograms.
+Expose Prometheus metrics for queries, execution duration histograms, and affected row counts.
 
-To enable metrics, use the ``enable_metrics`` helper:
+To enable metrics programmatically, use the ``enable_metrics`` helper:
 
 .. code-block:: python
 
     from sqlspec.extensions.prometheus import enable_metrics
-    from sqlspec.config import ObservabilityConfig
+    from sqlspec.observability import ObservabilityConfig
 
     # Enable Prometheus metrics
     observability = enable_metrics(
         base_config=ObservabilityConfig(),
-        namespace="myapp_sql",  # Prefix for metrics
-        label_names=("db_system", "operation")
+        namespace="myapp_sql",       # Metric prefix (default: 'sqlspec')
+        subsystem="driver",          # Metric subsystem (default: 'driver')
+        label_names=("db_system", "operation"),
     )
 
-    # Use this config...
+Or declaratively via ``extension_config``:
 
-Metrics exposed:
-- ``myapp_sql_query_total``: Counter of executed queries.
-- ``myapp_sql_query_duration_seconds``: Histogram of execution duration.
-- ``myapp_sql_query_rows``: Histogram of rows affected.
+.. code-block:: python
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        extension_config={
+            "prometheus": {
+                "enabled": True,
+                "namespace": "myapp_sql",
+                "subsystem": "driver",
+                "label_names": ("db_system", "operation"),
+            }
+        },
+    )
+
+Exposed metrics:
+- ``{namespace}_{subsystem}_query_total``: Counter of executed queries.
+- ``{namespace}_{subsystem}_query_duration_seconds``: Histogram of execution duration.
+- ``{namespace}_{subsystem}_query_rows``: Histogram of rows affected.
+
+Pass ``subsystem=""`` if you wish to omit the subsystem prefix (e.g., ``myapp_sql_query_total``).
 
 OpenTelemetry tracing is span-based and does not register a statement observer.
 Use ``statement_observers`` for callback-style integrations such as metrics,
 audit sinks, or custom log emission; use ``TelemetryConfig`` or
 ``enable_tracing()`` for OpenTelemetry spans.
+
+Lifecycle Hooks
+---------------
+
+Lifecycle hooks allow applications to intercept connection pool events, session lifecycles,
+and statement execution phases:
+
+.. code-block:: python
+
+    from sqlspec.observability import ObservabilityConfig
+
+    def on_connection_created(connection: object) -> None:
+        print(f"New connection established: {connection}")
+
+    def on_query_start(sql: str, params: dict) -> None:
+        print(f"Starting execution: {sql}")
+
+    def on_query_error(error: Exception, sql: str, params: dict) -> None:
+        print(f"Query error occurred: {error} in {sql}")
+
+    observability = ObservabilityConfig(
+        lifecycle={
+            "on_connection_create": [on_connection_created],
+            "on_query_start": [on_query_start],
+            "on_error": [on_query_error],
+        }
+    )
+
+Supported lifecycle hooks include:
+
+- ``on_connection_create`` / ``on_connection_destroy``: Connection lifecycle events.
+- ``on_pool_create`` / ``on_pool_destroying`` / ``on_pool_destroy``: Pool lifecycle events.
+- ``on_session_start`` / ``on_session_end``: Session boundary events.
+- ``on_query_start``: Invoked before statement execution with ``(sql, params)``.
+- ``on_query_complete``: Invoked after successful statement execution with ``(sql, params, result)``.
+- ``on_error``: Invoked on execution failure with ``(exception, sql, params)``.
+
+Data Redaction
+--------------
+
+Sensitive parameter and literal masking can be configured via :class:`~sqlspec.observability.RedactionConfig`:
+
+.. code-block:: python
+
+    from sqlspec.observability import ObservabilityConfig, RedactionConfig
+
+    observability = ObservabilityConfig(
+        redaction=RedactionConfig(
+            mask_parameters=True,
+            mask_literals=True,
+            parameter_allow_list=("user_id", "status"),
+        )
+    )
+
 
 SQLCommenter
 ------------

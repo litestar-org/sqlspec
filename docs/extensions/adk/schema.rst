@@ -272,19 +272,108 @@ Default name: ``adk_memory``
    * - ``user_id``
      - ``VARCHAR`` / ``TEXT``
      - User identifier.
-   * - ``content_text``
-     - ``TEXT``
-     - Searchable text content (used by FTS).
+   * - ``scope``
+     - ``VARCHAR`` / ``TEXT``
+     - Scope visibility: ``'user'`` (default) or ``'app'``.
+   * - ``event_id``
+     - ``VARCHAR`` / ``TEXT``
+     - Unique event identifier for deduplication on ingest.
+   * - ``author``
+     - ``VARCHAR`` / ``TEXT``
+     - Author or role of the originating event (e.g. ``user``, ``model``).
+   * - ``timestamp``
+     - ``TIMESTAMP`` / ``TIMESTAMPTZ``
+     - Event timestamp.
+   * - ``embedding``
+     - ``VECTOR`` (or dialect array)
+     - Vector embedding of size ``vector_dimensions`` for semantic recall.
    * - ``content_json``
      - ``JSONB`` / ``JSON`` / ``TEXT``
-     - Structured content.
+     - Full structured ADK Content object.
+   * - ``content_text``
+     - ``TEXT``
+     - Plain text extracted from content parts (used by FTS/BM25).
+   * - ``metadata_json``
+     - ``JSONB`` / ``JSON`` / ``TEXT`` (nullable)
+     - Custom or entry-level metadata dictionary.
    * - ``inserted_at``
-     - ``TIMESTAMP``
-     - When the entry was created.
+     - ``TIMESTAMP`` / ``TIMESTAMPTZ``
+     - When the entry was inserted (UTC).
 
-When ``memory_use_fts`` is enabled in the ADK config, backends create
-full-text search indexes on ``content_text`` using the database's native
-FTS engine (tsvector, FTS5, InnoDB FT, etc.).
+An optional ``owner_id`` column can be added via ``owner_id_column`` in the ADK
+config for multi-tenant isolation.
+
+.. _pgvector-recall:
+
+pgvector Recall and Search Strategies
+=====================================
+
+When querying memories via :meth:`~sqlspec.extensions.adk.SQLSpecMemoryService.search_memory`,
+SQLSpec supports multiple retrieval modes depending on adapter capabilities and configuration:
+
+1. **Semantic Vector Search (pgvector)**
+   When an ``embedding`` vector is passed, PostgreSQL uses the pgvector cosine distance
+   operator (``embedding <=> :query_vector::vector``) to rank entries by semantic similarity:
+
+   .. code-block:: sql
+
+      SELECT * FROM adk_memory
+      WHERE app_name = $1 AND ((scope = 'user' AND user_id = $2) OR scope = 'app')
+        AND embedding IS NOT NULL
+      ORDER BY embedding <=> $3::float8[]::vector ASC, timestamp DESC
+      LIMIT $4
+
+   Vector indexes are configured via ``vector_index_type``:
+   - ``"hnsw"`` (default): Hierarchical Navigable Small World graphs with ``vector_cosine_ops``.
+   - ``"ivfflat"``: Inverted file index with vector cosine distance.
+   - ``"scann"``: AlloyDB/ScaNN tree quantization index (tuned via ``scann_num_leaves`` and ``scann_quantizer``).
+
+2. **Full-Text Search (FTS)**
+   When ``memory_use_fts`` is ``True``, backends create native full-text indexes (GIN on
+   ``to_tsvector('english', content_text)`` on PostgreSQL, FTS5 on SQLite, InnoDB FT on MySQL,
+   Oracle Text on Oracle, or ``TOKENIZE_FULLTEXT`` on Spanner). Queries execute using native
+   stemmed text matching.
+
+3. **Hybrid Search with Reciprocal Rank Fusion (RRF)**
+   When both a text ``query`` and a vector ``embedding`` are provided and ``enable_bm25=True``
+   (using PostgreSQL 17/18 with ``pg_textsearch`` or AlloyDB), SQLSpec executes a hybrid query
+   fusing dense vector search and sparse BM25 text rank using Reciprocal Rank Fusion:
+
+   .. code-block:: sql
+
+      WITH vector_matches AS (
+          SELECT id, RANK() OVER (ORDER BY embedding <=> $3::float8[]::vector) AS rank_vec
+          FROM adk_memory
+          WHERE ... AND embedding IS NOT NULL
+          LIMIT $5
+      ),
+      text_matches AS (
+          SELECT id, RANK() OVER (ORDER BY content_text <@> $4) AS rank_txt
+          FROM adk_memory
+          WHERE ...
+          LIMIT $5
+      )
+      SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+      FROM adk_memory m
+      LEFT JOIN vector_matches v ON m.id = v.id
+      LEFT JOIN text_matches t ON m.id = t.id
+      WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+      ORDER BY rrf_score DESC, m.timestamp DESC
+      LIMIT $6
+
+4. **Simple Fallback**
+   When FTS and vector search are not configured, queries fall back to case-insensitive
+   substring matching (``content_text ILIKE %query%``).
+
+Indexes Created on Memory Table
+-------------------------------
+
+- ``idx_{table}_app_scope_user_time``: composite index on ``(app_name, scope, user_id, timestamp DESC)``
+- ``idx_{table}_scope``: composite index on ``(app_name, scope)``
+- ``idx_{table}_session``: index on ``(session_id)``
+- ``idx_{table}_fts``: GIN index on ``to_tsvector('english', content_text)`` (when ``memory_use_fts=True``)
+- ``idx_{table}_bm25``: BM25 index on ``content_text`` (when ``enable_bm25=True``)
+- ``idx_{table}_{index_type}``: HNSW, IVFFlat, or ScaNN vector index on ``embedding``
 
 .. _artifact-schema:
 
@@ -333,10 +422,10 @@ Default name: ``adk_artifact``
 
 The composite key is ``(app_name, user_id, session_id, filename, version)``.
 
-Table Name Configuration
-========================
+Table and Extension Configuration
+=================================
 
-All table names are configurable:
+All table names and extension settings are configured through ``extension_config["adk"]``:
 
 .. code-block:: python
 
@@ -344,13 +433,31 @@ All table names are configurable:
        connection_config={"dsn": "postgresql://..."},
        extension_config={
            "adk": {
-               "session_table": "my_sessions",        # default: "adk_session"
-               "events_table": "my_events",            # default: "adk_event"
-               "app_state_table": "my_app_state",      # default: "adk_app_state"
-               "user_state_table": "my_user_state",    # default: "adk_user_state"
-               "metadata_table": "my_metadata",        # default: "adk_internal_metadata"
-               "memory_table": "my_memory",            # default: "adk_memory"
-               "artifact_table": "my_artifacts",       # artifact metadata stores
+               # Table name overrides
+               "session_table": "adk_session",
+               "events_table": "adk_event",
+               "app_state_table": "adk_app_state",
+               "user_state_table": "adk_user_state",
+               "metadata_table": "adk_internal_metadata",
+               "memory_table": "adk_memory",
+               "artifact_table": "adk_artifact",
+               # Multi-tenant isolation
+               "owner_id_column": "tenant_id INTEGER NOT NULL",
+               # Memory search & pgvector configuration
+               "memory_use_fts": True,
+               "memory_max_results": 20,
+               "vector_index_type": "hnsw",  # 'hnsw', 'ivfflat', or 'scann'
+               "vector_dimensions": 768,      # embedding dimension
+               "enable_bm25": False,          # requires pg_textsearch
+               "scann_num_leaves": 100,
+               "scann_quantizer": "SQ8",
+               # Artifact storage
+               "artifact_storage_uri": "s3://my-bucket/adk-artifacts",
+               # Schema lifecycle
+               "manage_schema": True,
+               "create_schema": True,
+               "enable_sessions": True,
+               "enable_memory": True,
            }
        },
    )

@@ -12,6 +12,27 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.asyncpg.AsyncpgConnectionConfig
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.asyncpg.AsyncpgPoolConfig
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.asyncpg.AsyncpgDriverFeatures
+   :members:
+   :show-inheritance:
+
 JSON and JSONB Codecs
 =====================
 
@@ -21,14 +42,6 @@ This lets regular statement execution and ``load_from_arrow()`` pass Python
 preserving asyncpg's binary COPY protocol expectations for ``jsonb`` payloads.
 Set ``driver_features={"enable_json_codecs": False}`` when an application needs
 to manage asyncpg JSON codecs manually.
-
-.. autoclass:: sqlspec.adapters.asyncpg.config.AsyncpgPoolConfig
-   :members:
-   :show-inheritance:
-
-.. autoclass:: sqlspec.adapters.asyncpg.config.AsyncpgConnectionConfig
-   :members:
-   :show-inheritance:
 
 Driver
 ======

@@ -166,6 +166,10 @@ Storage
    :members:
    :show-inheritance:
 
+.. autoclass:: StoragePathTraversalError
+   :members:
+   :show-inheritance:
+
 SQL Files
 =========
 
@@ -239,6 +243,7 @@ Inheritance Tree
    +-- StackExecutionError
    +-- StorageOperationFailedError
    |   +-- FileNotFoundInStorageError
+   |   +-- StoragePathTraversalError
    +-- StorageCapabilityError
    +-- SQLFileNotFoundError
    |   +-- SQLStatementNotFoundError
@@ -251,3 +256,11 @@ SQLSTATE Mapping
 ================
 
 .. autofunction:: map_sqlstate_to_exception
+
+Constants
+=========
+
+.. autodata:: SQLSTATE_EXCEPTION_MAP
+
+.. autodata:: STACK_SQL_PREVIEW_LIMIT
+

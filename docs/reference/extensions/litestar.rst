@@ -115,6 +115,8 @@ an endpoint must accept only raw configured values. Alias values are normalized
 before ``OrderByFilter`` is created, and unknown aliases cannot bypass the
 ``sort_field`` allowlist.
 
+.. autofunction:: sqlspec.extensions.litestar.providers.create_filter_dependencies
+
 .. autoclass:: sqlspec.extensions.litestar.providers.DependencyDefaults
    :members:
    :show-inheritance:

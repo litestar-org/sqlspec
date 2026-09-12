@@ -12,9 +12,9 @@ The API
 Three methods cover the common shapes. They share return type
 ``StorageBridgeJob`` (its ``telemetry`` dict reports ``rows_processed``):
 
-- ``load_from_arrow(table, source, *, overwrite=False)`` -- load an Arrow table
-  (or anything coercible to one) using the adapter's native ingest path.
-- ``load_from_storage(table, source, *, file_format, overwrite=False)`` -- load
+- ``load_from_arrow(table, source, *, partitioner=None, overwrite=False)`` -- load an Arrow table,
+  RecordBatch, RecordBatchReader, or an ``ArrowResult`` directly using the adapter's native ingest path.
+- ``load_from_storage(table, source, *, file_format, partitioner=None, overwrite=False)`` -- load
   a staged artifact (a local path or cloud URI) into a table.
 - ``load_from_records(table, records, *, columns=None, overwrite=False)`` --
   load in-memory rows. ``records`` may be mappings (columns derived from the
@@ -22,6 +22,8 @@ Three methods cover the common shapes. They share return type
   normalize records through their native Arrow ingest path. AsyncPG sends
   validated record tuples directly to binary ``COPY``; callers that pass an
   actual Arrow input still use ``load_from_arrow`` unchanged.
+
+In synchronous drivers:
 
 .. code-block:: python
 
@@ -31,8 +33,32 @@ Three methods cover the common shapes. They share return type
     # positional records -- columns required
     driver.load_from_records("orders", [(3, 1.0), (4, 2.0)], columns=["id", "total"])
 
+    # load staged local Parquet or CSV file
+    driver.load_from_storage("orders", "data/staging_orders.parquet", file_format="parquet")
+
+In asynchronous drivers, all three methods are coroutines:
+
+.. code-block:: python
+
+    # Ingest in-memory records
+    await async_driver.load_from_records("orders", [{"id": 1, "total": 9.99}])
+
+    # Load from cloud storage (S3 / GCS / Azure)
+    await async_driver.load_from_storage(
+        "orders",
+        "s3://my-bucket/staging/orders.parquet",
+        file_format="parquet",
+        overwrite=True,
+    )
+
+    # Direct zero-copy ingest from an ArrowResult or pyarrow.Table
+    arrow_result = await source_driver.select_to_arrow("SELECT * FROM raw_orders", native_only=True)
+    job = await target_driver.load_from_arrow("orders", arrow_result)
+    print(f"Loaded {job.telemetry['rows_processed']} rows")
+
 Empty input, mismatched mapping keys, or a positional/column width mismatch
 raise :class:`~sqlspec.exceptions.ImproperConfigurationError`.
+
 
 Capability matrix
 -----------------

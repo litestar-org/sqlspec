@@ -48,6 +48,13 @@ with ``/* include: name */``, and mark fill points with ``/* slot: name */``. Se
    :members:
    :show-inheritance:
 
+SQLFileCacheEntry
+=================
+
+.. autoclass:: SQLFileCacheEntry
+   :members:
+   :show-inheritance:
+
 Declared Parameters
 ===================
 
@@ -58,6 +65,7 @@ for the grammar and validation behavior.
 .. autoclass:: sqlspec.ParameterDeclaration
    :members:
    :show-inheritance:
+   :no-index:
 
 .. autofunction:: sqlspec.register_param_type
 

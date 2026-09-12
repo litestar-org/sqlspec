@@ -301,3 +301,10 @@ How Query Names Work
 - Add ``-- dialect: postgres`` on the first line of a block to bind SQL to a dialect.
 - Declare parameters with ``-- param: <name> <type>[?] [description]`` (see `Declared Parameters`_).
 - Directory structures become namespaces when you load directories (``reports/daily.sql`` -> ``reports.<query>``).
+
+Related Guides
+--------------
+
+- :doc:`drivers_and_querying` for query execution and transaction patterns.
+- :doc:`query_builder` for programmatic SQL construction and chaining.
+- :doc:`/reference/loader` for the ``SQLFileLoader`` reference documentation.

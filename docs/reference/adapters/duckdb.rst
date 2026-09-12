@@ -194,11 +194,35 @@ Configuration
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.adapters.duckdb.config.DuckDBExtensionConfig
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.duckdb.DuckDBConnectionParams
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.adapters.duckdb.config.DuckDBSecretConfig
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.duckdb.DuckDBPoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.duckdb.DuckDBDriverFeatures
+   :members:
+   :show-inheritance:
+
+Extensions and Secrets
+======================
+
+.. autoclass:: sqlspec.adapters.duckdb.DuckDBExtensionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.duckdb.DuckDBSecretConfig
    :members:
    :show-inheritance:
 

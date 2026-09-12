@@ -106,11 +106,22 @@ Migrations can also be driven in process:
 
 .. code-block:: python
 
+    # Apply all pending migrations (head)
     config.migrate_up()
+
+    # Apply up to a specific revision
     config.migrate_up(revision="003")
+
+    # Dry-run migration execution
     config.migrate_up(dry_run=True)
 
-For async configurations, ``migrate_up()`` returns an awaitable:
+    # Revert the last migration step
+    config.migrate_down()
+
+    # Revert back to a specific revision (or "base" for all)
+    config.migrate_down(revision="base")
+
+For async configurations, ``migrate_up()`` and ``migrate_down()`` return awaitables:
 
 .. code-block:: python
 
@@ -122,6 +133,7 @@ For async configurations, ``migrate_up()`` returns an awaitable:
     )
 
     await config.migrate_up()
+    await config.migrate_down(revision="-1")
 
 Common keys
 ~~~~~~~~~~~
@@ -398,13 +410,107 @@ finds nothing to do:
             return []
         return ["ALTER TABLE orders ADD COLUMN audited_at TIMESTAMP"]
 
-The same holds for ``down()``: an empty list reverses nothing and removes the
-tracking record. Omitting ``down()`` entirely is different -- it marks the
-migration irreversible, and a downgrade skips it with a warning rather than
-removing its record.
+Programmatic Migration Runner
+-----------------------------
+
+In addition to ``config.migrate_up()``, SQLSpec provides lower-level migration command
+interfaces via ``create_migration_commands(config)`` or ``config.get_migration_commands()``:
+
+.. code-block:: python
+
+    from sqlspec.migrations.commands import create_migration_commands
+
+    commands = create_migration_commands(config)
+
+    # Sync configs: direct execution
+    commands.init("migrations", package=True)
+    commands.revision("add products table", file_type="sql")
+    commands.upgrade(revision="head")
+    current_rev = commands.current(verbose=True)
+    commands.stamp("0003")
+
+For async configurations, `create_migration_commands` returns an `AsyncMigrationCommands`
+instance where operations like `init()`, `upgrade()`, and `downgrade()` are awaitable.
+
+Squashing Migrations
+--------------------
+
+Over time, long migration histories can slow down fresh database provisioning and test
+initialization. SQLSpec can squash a contiguous range of sequential migrations into a
+single consolidated migration file:
+
+.. code-block:: console
+
+    # Squash revisions 0001 through 0007 into a single migration
+    sqlspec squash 1:7 -m "squash initial schema" --dry-run
+    sqlspec squash 1:7 -m "squash initial schema" --yes
+
+In Python:
+
+.. code-block:: python
+
+    commands.squash(
+        start_version="0001",
+        end_version="0007",
+        description="squash initial schema",
+        output_format="sql",  # or "py"
+        dry_run=False,
+    )
+
+The squashed migration combines the SQL statements, updates tracker records, and safely
+removes the intermediate files. Use ``--allow-gaps`` if migrations contain gaps in their
+version numbers.
+
+Fixing Timestamp Migrations
+---------------------------
+
+If your project began with timestamp-based migration names (e.g.,
+``20240101120000_create_users.sql``), use the ``fix`` command to convert them to
+deterministic sequential format (``0001_create_users.sql``):
+
+.. code-block:: console
+
+    sqlspec fix --dry-run
+    sqlspec fix --yes
+
+This updates both the filenames on disk and the corresponding applied records in the
+database tracking table.
+
+Additive Schema Management
+--------------------------
+
+For microservices or applications requiring additive schema verification at startup without
+running full migration files, SQLSpec includes ``ensure_schema_sync`` and
+``ensure_schema_async``:
+
+.. code-block:: python
+
+    from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
+    from sqlspec.builder import sql
+
+    # Define target table using SQLSpec builder
+    users_target = SchemaTarget(
+        table_name="users",
+        create_table=(
+            sql.create_table("users")
+            .column("id", "INTEGER", primary_key=True)
+            .column("email", "VARCHAR(255)", not_null=True, unique=True)
+            .column("created_at", "TIMESTAMP", default="CURRENT_TIMESTAMP")
+        ),
+    )
+
+    with config.provide_session() as driver:
+        result = ensure_schema_sync(
+            driver,
+            [users_target],
+            manage_schema=True,  # Discovers existing schema and creates missing tables/columns
+            create_schema=True,
+        )
+        print(f"Created tables: {result.created_tables}, Added columns: {result.added_columns}")
 
 Output and Logging
 ------------------
+
 
 Control output with ``migration_config`` keys or their CLI equivalents:
 

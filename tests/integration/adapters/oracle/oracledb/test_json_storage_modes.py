@@ -42,7 +42,7 @@ async def test_native_json_round_trip_matrix(oracle_async_session: "OracleAsyncD
     try:
         for row_id, payload in enumerate(payloads, start=1):
             await oracle_async_session.execute(
-                f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)", {"id": row_id, "payload": payload}
+                f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)", id=row_id, payload=payload
             )
 
         rows = await oracle_async_session.select(f"SELECT id, payload FROM {table_name} ORDER BY id")
@@ -69,7 +69,7 @@ async def test_blob_is_json_round_trip_on_oracle_18c(oracle_18c_async_session: "
 
     try:
         await oracle_18c_async_session.execute(
-            f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)", {"id": 1, "payload": direct_payload}
+            f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)", id=1, payload=direct_payload
         )
         await oracle_18c_async_session.execute_many(
             f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)",
@@ -97,11 +97,10 @@ async def test_clob_is_json_round_trip_on_oracle_18c(oracle_18c_async_session: "
 
     try:
         await oracle_18c_async_session.execute(
-            f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)",
-            {"id": 1, "payload": OracleClob(to_json(payload))},
+            f"INSERT INTO {table_name} (id, payload) VALUES (:id, :payload)", id=1, payload=OracleClob(to_json(payload))
         )
 
-        row = await oracle_18c_async_session.select_one(f"SELECT payload FROM {table_name} WHERE id = :id", {"id": 1})
+        row = await oracle_18c_async_session.select_one(f"SELECT payload FROM {table_name} WHERE id = :id", id=1)
 
         assert row["payload"] == payload
         assert isinstance(row["payload"]["number"], float)

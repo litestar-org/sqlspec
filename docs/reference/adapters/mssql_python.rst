@@ -15,13 +15,22 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
 .. autoclass:: sqlspec.adapters.mssql_python.MssqlPythonConnectionParams
    :members:
    :show-inheritance:
 
+Pool Parameters
+===============
+
 .. autoclass:: sqlspec.adapters.mssql_python.MssqlPythonPoolParams
    :members:
    :show-inheritance:
+
+Driver Features
+===============
 
 .. autoclass:: sqlspec.adapters.mssql_python.MssqlPythonDriverFeatures
    :members:

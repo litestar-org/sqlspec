@@ -12,7 +12,24 @@ Configuration
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.adapters.psqlpy.config.PsqlpyConnectionParams
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.psqlpy.PsqlpyConnectionParams
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.psqlpy.PsqlpyPoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.psqlpy.PsqlpyDriverFeatures
    :members:
    :show-inheritance:
 

@@ -8,10 +8,11 @@ Supported Drivers (High Level)
 ------------------------------
 
 - **PostgreSQL**: asyncpg, psycopg (sync/async), psqlpy, ADBC
+- **CockroachDB**: cockroach-asyncpg, cockroach-psycopg
 - **SQLite**: sqlite3, aiosqlite, ADBC
-- **MySQL**: asyncmy, mysql-connector, pymysql
+- **MySQL & MariaDB**: aiomysql, asyncmy, mysql-connector, pymysql
 - **SQL Server**: mssql-python, pymssql, arrow-odbc
-- **Analytics / Cloud**: DuckDB, BigQuery, Spanner, Oracle, ADBC
+- **Analytics & Cloud**: DuckDB, BigQuery, Spanner, Oracle, ADBC, arrow-odbc
 
 Core Execution Pattern
 ----------------------
@@ -49,8 +50,12 @@ Parameter Binding
 Schema Mapping
 --------------
 
-Use the ``schema_type`` parameter on ``select()``, ``select_one()``, and
-``select_one_or_none()`` to map result rows to dataclass instances automatically.
+Use the ``schema_type`` parameter on ``select()``, ``select_one()``,
+``select_one_or_none()``, and ``select_stream()`` to map result rows directly to
+dataclasses, msgspec Structs, Pydantic models, attrs classes, or TypedDict
+shapes. When working with raw ``SQLResult`` objects from ``execute()``, pass
+``schema_type`` to ``result.all()``, ``result.one()``, ``result.one_or_none()``,
+or ``result.get_data()``.
 
 .. literalinclude:: /examples/querying/schema_mapping.py
    :language: python
@@ -63,9 +68,10 @@ Use the ``schema_type`` parameter on ``select()``, ``select_one()``, and
 Scalar Values and Pagination
 -----------------------------
 
-``select_value`` returns a single scalar from a one-row, one-column result.
-``select_value_or_none`` returns ``None`` when no rows match.
-``select_with_total`` returns both the data page and the total count for pagination.
+- ``select_value()`` returns a single scalar from a one-row, one-column result (with optional type conversion via ``value_type``).
+- ``select_value_or_none()`` returns ``None`` when no rows match.
+- ``select_with_total()`` returns a ``(data_rows, total_count)`` tuple for pagination.
+- Drivers also provide ``fetch()``, ``fetch_one()``, ``fetch_one_or_none()``, ``fetch_value()``, ``fetch_value_or_none()``, ``fetch_with_total()``, and ``fetch_stream()`` aliases matching asyncpg conventions.
 
 .. literalinclude:: /examples/querying/batch_operations.py
    :language: python
@@ -162,5 +168,6 @@ Driver Configuration Examples
 Related References
 ------------------
 
-- :doc:`../reference/adapters` for full adapter configuration reference.
-- :doc:`/reference/adapters` for adapter capabilities and connection profiles.
+- :doc:`/reference/adapters/index` for full adapter configuration, feature matrix, and connection profiles.
+- :doc:`/reference/driver` for the driver interface and query execution API.
+- :doc:`/reference/core/statement` for the ``SQL`` statement model and modifiers.

@@ -47,6 +47,38 @@ Driver
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.pymysql.PyMysqlConnectionParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.pymysql.config.PyMysqlSslParams
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.pymysql.PyMysqlPoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.pymysql.PyMysqlDriverFeatures
+   :members:
+   :show-inheritance:
+
+Connection Pool
+===============
+
+.. autoclass:: sqlspec.adapters.pymysql.pool.PyMysqlConnectionPool
+   :members:
+   :show-inheritance:
+
 Data Dictionary
 ===============
 

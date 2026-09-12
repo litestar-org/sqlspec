@@ -28,7 +28,7 @@ def test_load_from_arrow_inserts_via_mutations(spanner_config: SpannerSyncConfig
         assert job.telemetry["rows_processed"] == 10
 
     with spanner_config.provide_session() as session:
-        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", {"ids": user_ids})
+        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
         assert len(rows) == 10
 
 
@@ -48,5 +48,5 @@ def test_load_from_arrow_rerun_upserts_idempotently(spanner_config: SpannerSyncC
         session.load_from_arrow(test_users_table, arrow_table)
 
     with spanner_config.provide_session() as session:
-        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", {"ids": user_ids})
+        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
         assert len(rows) == 5

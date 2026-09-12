@@ -18,6 +18,39 @@ Async Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.MysqlConnectorSyncConnectionParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.MysqlConnectorAsyncConnectionParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.MysqlConnectorCursorParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.MysqlConnectorFailoverTarget
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.MysqlConnectorPoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.MysqlConnectorDriverFeatures
+   :members:
+   :show-inheritance:
+
 Sync Driver
 ===========
 

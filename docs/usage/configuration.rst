@@ -19,9 +19,12 @@ Core Configuration
 Pooling and Connections
 -----------------------
 
-- Sync adapters expose ``provide_session()`` and ``provide_connection()`` context managers.
-- Async adapters expose async context managers with the same method names.
-- Drivers with pooling support provide ``create_pool()`` and ``get_pool()`` helpers.
+- Sync database configs expose ``provide_session()`` and ``provide_connection()`` context managers.
+- Async database configs expose async context managers with the same method names.
+- ``provide_session()`` yields a driver adapter instance ready for executing queries and managing transactions.
+- ``provide_connection()`` yields the raw, underlying database connection from the driver.
+- Configs supporting connection pooling implement ``create_pool()`` and ``provide_pool()``.
+- On a ``SQLSpec`` registry instance, call ``spec.get_pool(config)`` to obtain the managed connection pool.
 
 Extension Settings
 ------------------
@@ -54,6 +57,7 @@ Key points:
 Related Guides
 --------------
 
-- :doc:`drivers_and_querying` for driver-specific connection settings.
+- :doc:`drivers_and_querying` for driver-specific connection settings and execution patterns.
 - :doc:`framework_integrations` for framework extension configuration.
-- :doc:`../reference/adapters` for adapter-specific configuration reference.
+- :doc:`/reference/adapters/index` for adapter-specific configuration reference.
+- :doc:`/reference/config` for core configuration classes and options.

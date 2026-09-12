@@ -201,7 +201,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            result = driver.select_one(sql, {"session_id": key})
+            result = driver.select_one(sql, session_id=key)
 
             if result is None:
                 return None
@@ -218,7 +218,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
                     SET expires_at = @expires_at
                     WHERE session_id = @session_id
                     """
-                    driver.execute(update_sql, {"expires_at": new_expires_at_ts, "session_id": key})
+                    driver.execute(update_sql, expires_at=new_expires_at_ts, session_id=key)
 
             return bytes(data) if data is not None else None
 
@@ -240,14 +240,14 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            driver.execute(sql, {"session_id": key, "data": data, "expires_at": expires_at_ts})
+            driver.execute(sql, session_id=key, data=data, expires_at=expires_at_ts)
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
 
         with self._config.provide_session() as driver:
-            driver.execute(sql, {"session_id": key})
+            driver.execute(sql, session_id=key)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
@@ -267,7 +267,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            result = driver.select_one(sql, {"session_id": key})
+            result = driver.select_one(sql, session_id=key)
             return result is not None
 
     def _expires_in(self, key: str) -> "int | None":
@@ -278,7 +278,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            result = driver.select_one(sql, {"session_id": key})
+            result = driver.select_one(sql, session_id=key)
 
             if result is None:
                 return None

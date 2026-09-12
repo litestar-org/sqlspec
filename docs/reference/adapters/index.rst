@@ -113,7 +113,7 @@ exports a typed config class and a driver implementation.
       :link: mssql_python
       :link-type: doc
 
-      Sync + Async SQL Server via Microsoft's official mssql-python driver.
+      Sync SQL Server via Microsoft's official mssql-python driver.
 
    .. grid-item-card:: pymssql
       :link: pymssql
@@ -237,7 +237,7 @@ Feature Comparison
      -
    * - mssql_python
      - Yes
-     - Yes
+     -
      - Yes
      -
      -

@@ -194,16 +194,13 @@ inside ``begin_transaction()`` or through an explicitly provided session.
 
       .. code-block:: python
 
-         from typing import TYPE_CHECKING
+         from uuid import UUID
 
          from pydantic import BaseModel
          from sqlspec import sql
          from sqlspec.adapters.asyncpg import AsyncpgDriver
          from sqlspec.core.filters import OffsetPagination, StatementFilter
          from sqlspec.service import SQLSpecAsyncService
-
-         if TYPE_CHECKING:
-             from uuid import UUID
 
 
          class User(BaseModel):
@@ -221,7 +218,7 @@ inside ``begin_transaction()`` or through an explicitly provided session.
                      schema_type=User,
                  )
 
-             async def get_user(self, user_id: "UUID") -> User:
+             async def get_user(self, user_id: UUID) -> User:
                  return await self.get_one(
                      sql.select("id", "email", "name").from_("users").where_eq("id", user_id),
                      schema_type=User,
@@ -238,16 +235,13 @@ inside ``begin_transaction()`` or through an explicitly provided session.
 
       .. code-block:: python
 
-         from typing import TYPE_CHECKING
+         from uuid import UUID
 
          from pydantic import BaseModel
          from sqlspec import sql
          from sqlspec.adapters.sqlite import SqliteDriver
          from sqlspec.core.filters import OffsetPagination, StatementFilter
          from sqlspec.service import SQLSpecSyncService
-
-         if TYPE_CHECKING:
-             from uuid import UUID
 
 
          class User(BaseModel):
@@ -265,7 +259,7 @@ inside ``begin_transaction()`` or through an explicitly provided session.
                      schema_type=User,
                  )
 
-             def get_user(self, user_id: "UUID") -> User:
+             def get_user(self, user_id: UUID) -> User:
                  return self.get_one(
                      sql.select("id", "email", "name").from_("users").where_eq("id", user_id),
                      schema_type=User,

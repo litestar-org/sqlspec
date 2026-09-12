@@ -11,8 +11,7 @@ def test_asyncpg_connection() -> None:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
 
     config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://user:pass@localhost:5432/app"},
-        pool_config={"min_size": 1, "max_size": 5},
+        connection_config={"dsn": "postgresql://user:pass@localhost:5432/app", "min_size": 1, "max_size": 5}
     )
     # end-example
 
