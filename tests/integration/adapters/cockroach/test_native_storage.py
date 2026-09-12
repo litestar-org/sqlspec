@@ -33,15 +33,25 @@ async def test_native_storage_export_import_roundtrip(
         "enable_native_storage": True,
         "native_storage_csv_options": {"skip": 0, "nullas": "NULL", "nullif": "NULL"},
     }
-    config = {"host": cockroachdb_service.host, "port": cockroachdb_service.port, "user": "root"}
     connection: Any = native_connection
     if adapter == "async":
         connection = await psycopg.AsyncConnection.connect(
-            **config, dbname=cockroachdb_service.database, sslmode="disable", autocommit=True
+            host=cockroachdb_service.host,
+            port=cockroachdb_service.port,
+            user="root",
+            dbname=cockroachdb_service.database,
+            sslmode="disable",
+            autocommit=True,
         )
         driver: Any = CockroachPsycopgAsyncDriver(connection, driver_features=features)
     elif adapter == "asyncpg":
-        connection = await asyncpg.connect(**config, database=cockroachdb_service.database, ssl=False)
+        connection = await asyncpg.connect(
+            host=cockroachdb_service.host,
+            port=cockroachdb_service.port,
+            user="root",
+            database=cockroachdb_service.database,
+            ssl=False,
+        )
         driver = CockroachAsyncpgDriver(connection, driver_features=features)
     else:
         driver = CockroachPsycopgSyncDriver(connection, driver_features=features)
@@ -88,15 +98,25 @@ async def test_native_storage_export_null_refusal(
 ) -> None:
     from sqlspec.exceptions import SQLSpecError
 
-    config = {"host": cockroachdb_service.host, "port": cockroachdb_service.port, "user": "root"}
     connection: Any = native_connection
     if adapter == "async":
         connection = await psycopg.AsyncConnection.connect(
-            **config, dbname=cockroachdb_service.database, sslmode="disable", autocommit=True
+            host=cockroachdb_service.host,
+            port=cockroachdb_service.port,
+            user="root",
+            dbname=cockroachdb_service.database,
+            sslmode="disable",
+            autocommit=True,
         )
         driver: Any = CockroachPsycopgAsyncDriver(connection, driver_features={"enable_native_storage": True})
     elif adapter == "asyncpg":
-        connection = await asyncpg.connect(**config, database=cockroachdb_service.database, ssl=False)
+        connection = await asyncpg.connect(
+            host=cockroachdb_service.host,
+            port=cockroachdb_service.port,
+            user="root",
+            database=cockroachdb_service.database,
+            ssl=False,
+        )
         driver = CockroachAsyncpgDriver(connection, driver_features={"enable_native_storage": True})
     else:
         driver = CockroachPsycopgSyncDriver(connection, driver_features={"enable_native_storage": True})
