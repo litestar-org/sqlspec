@@ -125,11 +125,42 @@ Outside a config service's transaction, ``session`` and ``driver`` raise
 ``rollback()`` also require an available session. Use ``begin_transaction()``
 or pass a driver explicitly with ``session=`` for manual control.
 
-Config services do not allow nested transaction blocks. Tasks and threads can
-use the same service, within the adapter's concurrency limits. A child
-task cannot implicitly reuse its parent's transaction, even after that
-transaction exits. Start independent work outside the parent's transaction
-context, or pass a session whose use you control.
+Tasks and threads can use the same service, within the adapter's concurrency
+limits. A child task of a config service cannot implicitly reuse its parent's
+transaction, even after that transaction exits. Start independent work outside
+the parent's transaction context, or pass a session whose use you control.
+
+Nested Transaction Blocks
+=========================
+
+A ``begin_transaction()`` block entered inside another block on the same service
+runs in a savepoint on the outer session; no second session is acquired. When the
+inner block raises, only its work is rolled back and the exception propagates, so
+the outer block can catch it and keep using the session. This lets an insert that
+may hit a unique constraint run without aborting the surrounding transaction:
+
+.. code-block:: python
+
+    from sqlspec.exceptions import UniqueViolationError
+
+    async with service.begin_transaction() as session:
+        try:
+            async with service.begin_transaction():
+                await session.execute("INSERT INTO users (email) VALUES ($1)", email)
+        except UniqueViolationError:
+            pass
+        user = await service.get_one("SELECT id, email FROM users WHERE email = $1", email)
+
+The outer block commits everything that was not rolled back. Nesting works the
+same way for services built from a session. Adapters without savepoint support
+raise ``ImproperConfigurationError`` when a nested block is entered.
+
+Services expose ``config``, the configuration they were built from, so a service
+can construct a collaborating service without reaching into private state:
+
+.. code-block:: python
+
+    audit = AuditService(config=users.config)
 
 Domain Services with a Caller-Owned Session
 ==========================================

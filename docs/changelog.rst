@@ -54,6 +54,15 @@ Unreleased
 
 **Added:**
 
+* Sync and async drivers provide ``transaction()``, a context manager that begins a
+  transaction, commits when the block succeeds, and rolls back and re-raises when
+  it fails. Services allow nested ``begin_transaction()`` blocks: an inner block
+  runs in a savepoint on the same session, so a failure such as a unique
+  violation undoes only the inner work and the outer block can still commit.
+  Services also expose ``config``, the configuration they were built from, or
+  ``None`` when built from a session. See :doc:`/reference/driver` and
+  :doc:`/recipes/service_layer`.
+
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
   ``begin_transaction()`` to keep several calls in one transaction. Existing

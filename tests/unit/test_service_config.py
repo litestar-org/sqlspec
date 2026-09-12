@@ -427,38 +427,303 @@ async def test_async_transaction_failure_releases_and_resets(
     assert await service.exists(sql.select("value").from_("service_values"))
 
 
-def test_sync_nested_transaction_does_not_commit(
-    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]],
+def _committed_values(config: "SqliteConfig | AiosqliteConfig") -> list[int]:
+    with closing(sqlite3.connect(config.connection_config["database"])) as outside:
+        return [row[0] for row in outside.execute("SELECT value FROM service_values ORDER BY value")]
+
+
+@pytest.fixture
+def savepoint_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    calls: list[tuple[str, str]] = []
+    for kind, method in (
+        ("create", "create_savepoint"),
+        ("release", "release_savepoint"),
+        ("rollback", "rollback_to_savepoint"),
+    ):
+        sync_original = getattr(SqliteDriver, method)
+        async_original = getattr(AiosqliteDriver, method)
+
+        def sync_spy(self: SqliteDriver, name: str, _kind: str = kind, _original: Any = sync_original) -> None:
+            calls.append((_kind, name))
+            _original(self, name)
+
+        async def async_spy(
+            self: AiosqliteDriver, name: str, _kind: str = kind, _original: Any = async_original
+        ) -> None:
+            calls.append((_kind, name))
+            await _original(self, name)
+
+        monkeypatch.setattr(SqliteDriver, method, sync_spy)
+        monkeypatch.setattr(AiosqliteDriver, method, async_spy)
+    return calls
+
+
+async def test_config_property(async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]]) -> None:
+    config, _ = async_config
+    assert SQLSpecAsyncService(config=config).config is config
+    async with config.provide_session() as async_session:
+        assert SQLSpecAsyncService(async_session).config is None
+    sync_config = SqliteConfig()
+    assert SQLSpecSyncService(config=sync_config).config is sync_config
+    with sync_config.provide_session() as sync_session:
+        assert SQLSpecSyncService(sync_session).config is None
+    sync_config.close_pool()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_sync_nested_begin_transaction_uses_savepoint(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]], savepoint_calls: list[tuple[str, str]], fail: bool
 ) -> None:
     config, events = sync_config
     service = SQLSpecSyncService(config=config)
-    with pytest.raises(ValueError, match="outer"):
-        with service.begin_transaction() as session:
-            session.execute("INSERT INTO service_values VALUES (2)")
-            with pytest.raises(ImproperConfigurationError, match="Nested"):
-                with service.begin_transaction():
-                    pytest.fail("nested entry")
-            assert service.session is session
-            assert [event for event, _ in events] == ["enter"]
-            raise ValueError("outer")
-    assert not service.exists(sql.select("value").from_("service_values").where("value = 2"))
+    with service.begin_transaction() as outer:
+        outer.execute("INSERT INTO service_values VALUES (2)")
+        try:
+            with service.begin_transaction() as inner:
+                assert inner is outer
+                inner.execute("INSERT INTO service_values VALUES (3)")
+                with service.begin_transaction() as innermost:
+                    assert innermost is outer
+                if fail:
+                    raise RuntimeError("inner")
+        except RuntimeError:
+            assert fail
+        assert service.session is outer
+        assert service.exists(sql.select("value").from_("service_values").where("value = 3")) is not fail
+        assert [event for event, _ in events] == ["enter"]
+        assert _committed_values(config) == [1]
+    assert [event for event, _ in events] == ["enter", "exit"]
+    assert savepoint_calls == [
+        ("create", "sqlspec_sp_1"),
+        ("create", "sqlspec_sp_2"),
+        ("release", "sqlspec_sp_2"),
+        ("rollback" if fail else "release", "sqlspec_sp_1"),
+    ]
+    assert _committed_values(config) == ([1, 2] if fail else [1, 2, 3])
 
 
-async def test_async_nested_transaction_does_not_commit(
-    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+async def test_nested_begin_transaction_uses_savepoint(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]], savepoint_calls: list[tuple[str, str]]
 ) -> None:
     config, events = async_config
     service = SQLSpecAsyncService(config=config)
-    with pytest.raises(ValueError, match="outer"):
-        async with service.begin_transaction() as session:
-            await session.execute("INSERT INTO service_values VALUES (2)")
-            with pytest.raises(ImproperConfigurationError, match="Nested"):
+    async with service.begin_transaction() as outer:
+        await outer.execute("INSERT INTO service_values VALUES (2)")
+        async with service.begin_transaction() as inner:
+            assert inner is outer
+            assert service.session is outer
+            await inner.execute("INSERT INTO service_values VALUES (3)")
+            async with service.begin_transaction() as innermost:
+                assert innermost is outer
+        assert service.session is outer
+        assert [event for event, _ in events] == ["enter"]
+        assert _committed_values(config) == [1]
+    assert [event for event, _ in events] == ["enter", "exit"]
+    assert savepoint_calls == [
+        ("create", "sqlspec_sp_1"),
+        ("create", "sqlspec_sp_2"),
+        ("release", "sqlspec_sp_2"),
+        ("release", "sqlspec_sp_1"),
+    ]
+    assert _committed_values(config) == [1, 2, 3]
+
+
+async def test_inner_failure_keeps_outer(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]], savepoint_calls: list[tuple[str, str]]
+) -> None:
+    config, events = async_config
+    service = SQLSpecAsyncService(config=config)
+    async with service.begin_transaction() as outer:
+        await outer.execute("INSERT INTO service_values VALUES (2)")
+        with pytest.raises(RuntimeError, match="inner"):
+            async with service.begin_transaction() as inner:
+                await inner.execute("INSERT INTO service_values VALUES (3)")
+                raise RuntimeError("inner")
+        assert service.session is outer
+        assert await service.exists(sql.select("value").from_("service_values").where("value = 2"))
+        assert not await service.exists(sql.select("value").from_("service_values").where("value = 3"))
+        async with service.begin_transaction() as retry:
+            await retry.execute("INSERT INTO service_values VALUES (4)")
+    assert [event for event, _ in events] == ["enter", "exit"]
+    assert savepoint_calls == [
+        ("create", "sqlspec_sp_1"),
+        ("rollback", "sqlspec_sp_1"),
+        ("create", "sqlspec_sp_1"),
+        ("release", "sqlspec_sp_1"),
+    ]
+    assert _committed_values(config) == [1, 2, 4]
+
+
+def test_sync_session_bound_nested_begin_transaction_uses_savepoint(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]], savepoint_calls: list[tuple[str, str]]
+) -> None:
+    config, _ = sync_config
+    with config.provide_session() as session:
+        service = SQLSpecSyncService(session)
+        with service.begin_transaction() as outer:
+            assert outer is session
+            outer.execute("INSERT INTO service_values VALUES (2)")
+            with pytest.raises(RuntimeError, match="inner"):
+                with service.begin_transaction() as inner:
+                    assert inner is session
+                    inner.execute("INSERT INTO service_values VALUES (3)")
+                    raise RuntimeError("inner")
+            assert service.session is session
+            assert _committed_values(config) == [1]
+        assert not session.connection.in_transaction
+        assert savepoint_calls == [("create", "sqlspec_sp_1"), ("rollback", "sqlspec_sp_1")]
+        with service.begin_transaction():
+            pass
+        assert savepoint_calls == [("create", "sqlspec_sp_1"), ("rollback", "sqlspec_sp_1")]
+    assert _committed_values(config) == [1, 2]
+
+
+async def test_session_bound_nested_begin_transaction_uses_savepoint(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]], savepoint_calls: list[tuple[str, str]]
+) -> None:
+    config, _ = async_config
+    async with config.provide_session() as session:
+        service = SQLSpecAsyncService(session)
+        async with service.begin_transaction() as outer:
+            assert outer is session
+            await outer.execute("INSERT INTO service_values VALUES (2)")
+            with pytest.raises(RuntimeError, match="inner"):
+                async with service.begin_transaction() as inner:
+                    assert inner is session
+                    await inner.execute("INSERT INTO service_values VALUES (3)")
+                    raise RuntimeError("inner")
+            assert service.session is session
+            assert _committed_values(config) == [1]
+        assert not session.connection.in_transaction
+        assert savepoint_calls == [("create", "sqlspec_sp_1"), ("rollback", "sqlspec_sp_1")]
+        async with service.begin_transaction():
+            pass
+        assert savepoint_calls == [("create", "sqlspec_sp_1"), ("rollback", "sqlspec_sp_1")]
+    assert _committed_values(config) == [1, 2]
+
+
+async def test_session_bound_transaction_stays_available_to_child_tasks(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+) -> None:
+    config, _ = async_config
+    async with config.provide_session() as session:
+        service = SQLSpecAsyncService(session)
+
+        async def child() -> bool:
+            assert service.session is session
+            async with service.provide_session() as borrowed:
+                assert borrowed is session
+            return await service.exists(sql.select("value").from_("service_values"))
+
+        async with service.begin_transaction():
+            assert await asyncio.create_task(child())
+        assert await asyncio.create_task(child())
+
+
+@pytest.mark.parametrize("method", ["release_savepoint", "rollback_to_savepoint"])
+def test_sync_nested_savepoint_failure_restores_depth(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]],
+    savepoint_calls: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    config, _ = sync_config
+    service = SQLSpecSyncService(config=config)
+    error = RuntimeError(method)
+
+    def fail(self: SqliteDriver, name: str) -> None:
+        raise error
+
+    with service.begin_transaction():
+        with monkeypatch.context() as patch:
+            patch.setattr(SqliteDriver, method, fail)
+            with pytest.raises(RuntimeError) as raised:
+                with service.begin_transaction():
+                    if method == "rollback_to_savepoint":
+                        raise ValueError("body")
+            assert raised.value is error
+        with service.begin_transaction():
+            pass
+    assert [name for kind, name in savepoint_calls if kind == "create"] == ["sqlspec_sp_1", "sqlspec_sp_1"]
+
+
+@pytest.mark.parametrize("method", ["release_savepoint", "rollback_to_savepoint"])
+async def test_async_nested_savepoint_failure_restores_depth(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+    savepoint_calls: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    config, _ = async_config
+    service = SQLSpecAsyncService(config=config)
+    error = RuntimeError(method)
+
+    async def fail(self: AiosqliteDriver, name: str) -> None:
+        raise error
+
+    async with service.begin_transaction():
+        with monkeypatch.context() as patch:
+            patch.setattr(AiosqliteDriver, method, fail)
+            with pytest.raises(RuntimeError) as raised:
+                async with service.begin_transaction():
+                    if method == "rollback_to_savepoint":
+                        raise ValueError("body")
+            assert raised.value is error
+        async with service.begin_transaction():
+            pass
+    assert [name for kind, name in savepoint_calls if kind == "create"] == ["sqlspec_sp_1", "sqlspec_sp_1"]
+
+
+def test_sync_nested_begin_transaction_requires_savepoint_support(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]],
+    savepoint_calls: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, events = sync_config
+    service = SQLSpecSyncService(config=config)
+
+    def unsupported(self: SqliteDriver, name: str) -> None:
+        raise NotImplementedError
+
+    with service.begin_transaction() as outer:
+        outer.execute("INSERT INTO service_values VALUES (2)")
+        with monkeypatch.context() as patch:
+            patch.setattr(SqliteDriver, "create_savepoint", unsupported)
+            with pytest.raises(ImproperConfigurationError, match="savepoint") as raised:
+                with service.begin_transaction():
+                    pytest.fail("nested entry")
+            assert isinstance(raised.value.__cause__, NotImplementedError)
+        with service.begin_transaction():
+            pass
+        assert [event for event, _ in events] == ["enter"]
+    assert savepoint_calls == [("create", "sqlspec_sp_1"), ("release", "sqlspec_sp_1")]
+    assert _committed_values(config) == [1, 2]
+
+
+async def test_async_nested_begin_transaction_requires_savepoint_support(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+    savepoint_calls: list[tuple[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, events = async_config
+    service = SQLSpecAsyncService(config=config)
+
+    async def unsupported(self: AiosqliteDriver, name: str) -> None:
+        raise NotImplementedError
+
+    async with service.begin_transaction() as outer:
+        await outer.execute("INSERT INTO service_values VALUES (2)")
+        with monkeypatch.context() as patch:
+            patch.setattr(AiosqliteDriver, "create_savepoint", unsupported)
+            with pytest.raises(ImproperConfigurationError, match="savepoint") as raised:
                 async with service.begin_transaction():
                     pytest.fail("nested entry")
-            assert service.session is session
-            assert [event for event, _ in events] == ["enter"]
-            raise ValueError("outer")
-    assert not await service.exists(sql.select("value").from_("service_values").where("value = 2"))
+            assert isinstance(raised.value.__cause__, NotImplementedError)
+        async with service.begin_transaction():
+            pass
+        assert [event for event, _ in events] == ["enter"]
+    assert savepoint_calls == [("create", "sqlspec_sp_1"), ("release", "sqlspec_sp_1")]
+    assert _committed_values(config) == [1, 2]
 
 
 async def test_async_independent_transactions_do_not_share_sessions(
