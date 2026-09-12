@@ -1320,6 +1320,8 @@ class SQLFileLoader:
                 fill_text, fill_parameters, is_statement = slot.default, {}, False
             else:
                 raise SQLSlotError(safe_name, f"missing required slot '{slot.name}'")
+            if "--" in fill_text:
+                fill_text = f"{fill_text}\n"
             fills[slot.name] = fill_text
             body_fills[slot.name] = " " if is_statement else fill_text
             for parameter_name, parameter_value in fill_parameters.items():
