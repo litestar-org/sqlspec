@@ -158,6 +158,141 @@ to escalate malformed annotations to an error. (A genuine *validation mismatch*
 ``spec.get_query_parameters(name)`` or the ``declared_parameters`` tuple on the
 ``SQL`` object returned by ``spec.get_sql(name)``.
 
+.. _sql-fragments-and-slots:
+
+Fragments and Slots
+-------------------
+
+Fragments let several named queries share one piece of SQL, such as a chain of
+CTEs. Slots mark the parts of a query that are chosen when you ask for it, such
+as a ``WHERE`` predicate or an ``ORDER BY`` list. The file stays plain SQL.
+
+.. code-block:: sql
+
+   -- fragment: decision_fact_ctes
+   decisions AS (
+       SELECT d.id, d.workspace_id, d.strategy
+       FROM decision d
+       WHERE d.workspace_id = :workspace_id
+   ),
+   classified AS (
+       SELECT id, workspace_id, CASE WHEN strategy = 'lift' THEN 'homogeneous' ELSE 'modernize' END AS journey
+       FROM decisions
+   )
+
+   -- name: list_efforts
+   -- param: workspace_id str
+   -- slot: predicates = TRUE
+   -- slot: order_by = e.id
+   WITH
+   /* include: decision_fact_ctes */
+   SELECT e.id, e.journey
+   FROM classified e
+   WHERE /* slot: predicates */
+   ORDER BY /* slot: order_by */
+
+   -- name: count_efforts
+   -- param: workspace_id str
+   WITH
+   /* include: decision_fact_ctes */
+   SELECT count(*) FROM classified e WHERE /* slot: predicates */
+
+- ``-- fragment: <name>`` starts a fragment section, the same way ``-- name:``
+  starts a query. Fragments are never run on their own and do not appear in
+  ``list_queries()``. They cannot declare ``-- dialect:``, ``-- param:``, or
+  ``-- slot:`` directives.
+- ``/* include: <name> */`` is replaced by the fragment's text. Fragments can
+  include other fragments, and can live in a different file from the queries that
+  use them. Files can be loaded in any order.
+- When you load a directory, fragments get the same namespace as queries
+  (``shared/ctes.sql`` -> ``shared.<fragment>``). An include looks up the name
+  as written first, then inside the namespace of the query or fragment that
+  contains it, so ``/* include: shared.decision_fact_ctes */`` reaches across
+  namespaces.
+- ``/* slot: <name> */`` marks a fill point. ``-- slot: <name> = <default sql>``
+  in the query's leading comment block gives it a default: everything after
+  ``=`` up to the end of the line. A slot with no default must be filled on every
+  call. When a default or a string value contains ``--``, a line break is added
+  after it so the rest of the query is not commented out.
+- ``add_named_sql()`` accepts the same include and slot markers; slots added
+  this way have no defaults.
+
+**Reserved comment shapes.** These comment forms now have meaning in ``.sql``
+files: ``-- fragment: <name>`` lines, ``-- slot:`` lines in a query's leading
+comment block, and ``/* include: <name> */`` and ``/* slot: <name> */`` block
+comments. Marker text inside quoted strings, quoted identifiers, dollar-quoted
+bodies, or other comments is ignored. A prose comment such as
+``-- Slot: morning`` in a query's leading comment block is read as a slot
+declaration, and a ``-- slot:`` line that starts a line after the SQL has begun
+is an error. Reword such comments when upgrading.
+
+Pass slot values as keyword arguments to ``get_sql()``. Parameters inside the
+fragments are still supplied when the query runs:
+
+.. code-block:: python
+
+   from sqlglot import exp
+
+   from sqlspec import SQL
+
+   spec.load_sql_files("queries/effort.sql")
+
+   stmt = spec.get_sql("list_efforts")  # WHERE TRUE ORDER BY e.id
+   stmt = spec.get_sql("list_efforts", order_by="e.journey, e.id DESC")
+   stmt = spec.get_sql(
+       "list_efforts",
+       predicates=SQL("e.journey = :journey", journey="modernize"),
+   )
+   stmt = spec.get_sql("count_efforts", predicates=exp.column("journey").eq("modernize"))
+
+   rows = session.select(stmt, workspace_id=workspace_id)
+
+A slot value can be one of three types:
+
+- ``str`` -- spliced in as written.
+- A sqlglot expression -- rendered with the query's ``-- dialect:``.
+- ``SQL`` -- its text is spliced in, and its named parameters are bound on the
+  returned statement. Parameters you pass to ``execute()`` or ``select*()`` as
+  keyword arguments or a single mapping are added to them, and a value you pass
+  for the same name replaces the bound one. ``execute_many()`` does not use
+  bound slot parameters; pass every value in its parameter rows instead. A
+  ``SQL`` value cannot carry statement filters, and one ``SQL`` object may fill
+  several slots.
+
+Placeholders inside slot values must use the ``:name`` style that the SQL file
+uses, so they are recognized alongside the query's own placeholders.
+
+.. warning::
+
+   Slot values are SQL, not data. Never put user input into a slot value
+   directly. Put it in a parameter instead, for example
+   ``SQL("e.journey = :journey", journey=user_value)``.
+
+**Errors.**
+
+- A missing required slot, an unknown slot name, a ``SQL`` value with positional
+  parameters or statement filters, a parameter name that two slot values bind to
+  different values, or a slot parameter name that the query itself already uses
+  raises :exc:`~sqlspec.exceptions.SQLSlotError`.
+- A slot value of any other type raises :exc:`TypeError`.
+- An unknown fragment raises :exc:`~sqlspec.exceptions.SQLFragmentNotFoundError`, a
+  subclass of :exc:`~sqlspec.exceptions.SQLStatementNotFoundError`.
+- An include cycle, a duplicate fragment name, a directive on a fragment, a
+  ``-- slot:`` line after the SQL has started, or a ``-- slot:`` default with no
+  matching marker raises :exc:`~sqlspec.exceptions.SQLFileParseError`.
+- For queries that use includes or slots, declared ``-- param:`` names are
+  checked against the final SQL when you call ``get_sql()`` instead of at load
+  time.
+
+**Caching.** ``get_sql(name)`` without slot values returns the same cached
+``SQL`` object on every call. A call with slot values builds a new object each
+time. SQLSpec's statement cache is keyed on the final SQL text, so repeating the
+same fill still reuses compiled work. Loading or adding a fragment clears the
+cached text of every query that includes fragments.
+
+**Programmatic access.** ``spec.loader`` adds, lists, and inspects fragments and
+reports a query's slots; see :class:`~sqlspec.loader.SQLFileLoader`.
+
 How Query Names Work
 --------------------
 

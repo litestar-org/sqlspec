@@ -14,6 +14,13 @@ Unreleased
 
 **Fixed:**
 
+* Executing a ``SQL`` object that already carries named parameters with more
+  named parameters, as keyword arguments or a single mapping, now binds both
+  sets. Previously the statement's own parameters were dropped, so
+  ``session.select(SQL("... :a ... :b", a=1), b=2)`` failed with a parameter
+  count mismatch. A value passed at execute time replaces a bound value of the
+  same name. ``execute_many()`` is unchanged.
+  (`#762 <https://github.com/litestar-org/sqlspec/issues/762>`_)
 * DuckDB secrets declared in ``driver_features["secrets"]`` are created only when
   missing, so a second connection to a shared database, such as the default shared
   in-memory database, or a process restart with a stored persistent secret no longer
@@ -67,6 +74,12 @@ Unreleased
 
 **Added:**
 
+* SQL files can share SQL through ``-- fragment:`` sections spliced in with
+  ``/* include: name */``, and mark ``/* slot: name */`` fill points that
+  ``spec.get_sql(name, **slots)`` fills with a string, a sqlglot expression, or a
+  ``SQL`` object. These comment shapes are now reserved in ``.sql`` files; see
+  :ref:`sql-fragments-and-slots` for the syntax and compatibility notes.
+  (`#763 <https://github.com/litestar-org/sqlspec/issues/763>`_)
 * ``SQLSpecChannelsBackend`` can check a payload against the PostgreSQL
   ``NOTIFY`` limit before publishing. ``measure(data)`` returns the encoded
   ``notify`` envelope size, ``fits(data)`` reports whether it is within ``notify_budget``,
