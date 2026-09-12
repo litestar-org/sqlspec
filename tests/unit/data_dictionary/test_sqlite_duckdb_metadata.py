@@ -1,6 +1,7 @@
 """SQLite and DuckDB data-dictionary metadata tests."""
 
 import sqlite3
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 
@@ -226,11 +227,11 @@ def test_sqlite_columns_report_primary_key_columns() -> None:
     config.close_pool()
 
 
-def test_duckdb_columns_report_primary_key_columns() -> None:
+def test_duckdb_columns_report_primary_key_columns(tmp_path: Path) -> None:
     """DuckDB column metadata flags primary-key columns for exact-case table names."""
     from sqlspec.adapters.duckdb import DuckDBConfig
 
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "metadata.duckdb")})
     with config.provide_session() as driver:
         driver.execute(
             'CREATE TABLE "Orders" ("tenant" VARCHAR, "orderId" INTEGER, note VARCHAR, PRIMARY KEY ("tenant", "orderId"))'
@@ -244,9 +245,7 @@ def test_duckdb_columns_report_primary_key_columns() -> None:
         ("orderId", True),
         ("note", False),
     ]
-    assert {column["column_name"]: bool(column["is_primary"]) for column in by_schema} == {
-        "tenant": True,
-        "orderId": True,
-        "note": False,
-    }
+    assert {
+        column["column_name"]: bool(column["is_primary"]) for column in by_schema if column["table_name"] == "Orders"
+    } == {"tenant": True, "orderId": True, "note": False}
     config.close_pool()

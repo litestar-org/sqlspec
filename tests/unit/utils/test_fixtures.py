@@ -900,7 +900,7 @@ def test_export_load_roundtrip_sqlite_blob(tmp_path: Path) -> None:
 
 def test_export_load_roundtrip_duckdb_types(tmp_path: Path) -> None:
     """DuckDB timestamp, date, decimal, uuid, and blob columns round-trip and upsert."""
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "typed.duckdb")})
     ddl = (
         'CREATE TABLE "Typed" (id INTEGER PRIMARY KEY, ts TIMESTAMP, tstz TIMESTAMPTZ, d DATE, t TIME, '
         'amount DECIMAL(10, 2), u UUID, payload BLOB, "userName" VARCHAR)'
