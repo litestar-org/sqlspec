@@ -39,6 +39,14 @@ Unreleased
   rejected by application middleware such as authentication or session handling now carry
   a correlation ID in logs and error hooks, and application middleware keeps its original
   relative order. (`#729 <https://github.com/litestar-org/sqlspec/issues/729>`_)
+* The Litestar plugin no longer adds a second ``CorrelationMiddleware`` when the
+  application's middleware already includes it or a subclass, and warns when that
+  leaves configured correlation header settings unapplied.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+* Litestar routes raising ``NotFoundError`` no longer return 500 when they have no
+  middleware, run ``after_exception`` hooks twice, or drop headers added by
+  application middleware from the 404 response.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
 * A migration whose ``up()`` returns an empty list is now recorded in the
   tracking table instead of being reported as applied and then staying pending
   forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
@@ -110,6 +118,20 @@ Unreleased
   configured backend, and local paths become absolute. Backend options come
   only from the method's explicit ``storage_options`` argument, not pipeline
   writer defaults.
+
+* The Litestar plugin returns HTTP 409 with the generic detail ``Conflict`` when a
+  route raises ``IntegrityError`` or a subclass. Existing handlers for
+  ``IntegrityError``, its base classes, or status 500 still receive the exception,
+  and a handler for status 409 or ``HTTPException`` renders the response.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+
+* The Litestar extension setting ``manage_lifespan`` controls whether the plugin
+  creates and closes each config's pool with the application. It defaults to the
+  inverse of ``disable_di``, so existing applications are unchanged. Set
+  ``disable_di=True`` and ``manage_lifespan=True`` to use another dependency
+  injection container while the plugin still manages the pool. See
+  :doc:`/usage/frameworks/litestar/dependency_injection`.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
 
 **Breaking changes:**
 

@@ -434,9 +434,20 @@ class LitestarConfig(TypedDict):
 
     disable_di: NotRequired[bool]
     """Disable built-in dependency injection. Default: False.
-    When True, the Litestar plugin will not register dependency providers for managing
-    database connections, pools, and sessions. Users are responsible for managing the
-    database lifecycle manually via their own DI solution.
+    When True, the Litestar plugin will not register dependency providers for database
+    connections, pools, and sessions, or the per-request handler that commits and closes
+    request connections. Pool startup and shutdown follow ``manage_lifespan``, which
+    defaults to False when ``disable_di`` is True.
+    """
+
+    manage_lifespan: NotRequired[bool]
+    """Register the plugin's pool lifespan handler. Default: the inverse of ``disable_di``.
+    When True, the Litestar plugin creates the configuration's pool on application startup,
+    stores it in application state under ``pool_key``, and closes it on shutdown, whether or
+    not ``disable_di`` is set. Set to True alongside ``disable_di=True`` to keep pool lifecycle
+    management while another DI solution provides connections and sessions. When False, the
+    application creates and closes the pool itself; with dependency injection enabled, the
+    plugin's providers still read the pool from application state under ``pool_key``.
     """
 
     enable_sqlcommenter_middleware: NotRequired[bool]
