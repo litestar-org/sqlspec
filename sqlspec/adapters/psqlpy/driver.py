@@ -216,7 +216,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except PsqlpyDatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
-        self._transaction_active = False
+        finally:
+            self._transaction_active = False
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -468,8 +469,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
-        psqlpy does not report transactions opened with a ``BEGIN`` statement, so the
-        state is tracked via a flag toggled in begin/commit/rollback.
+        psqlpy's ``in_transaction()`` is a coroutine, so its truth value cannot be read
+        synchronously; the state is tracked via a flag toggled in begin/commit/rollback.
         """
         return self._transaction_active
 

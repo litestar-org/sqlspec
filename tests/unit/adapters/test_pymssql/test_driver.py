@@ -111,8 +111,9 @@ def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
     assert result.is_many_result is True
 
 
-def test_transaction_methods_use_tsql_begin_and_connection_commit_rollback() -> None:
-    """Transaction operations should use pymssql-compatible calls."""
+@pytest.mark.parametrize("finish", ["commit", "rollback"])
+def test_autocommit_transaction_is_ended_with_tsql(finish: str) -> None:
+    """pymssql ignores commit() and rollback() under autocommit, so the driver ends its own transaction."""
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
     cursor = FakeCursor()
@@ -120,12 +121,28 @@ def test_transaction_methods_use_tsql_begin_and_connection_commit_rollback() -> 
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
 
     driver.begin()
-    driver.commit()
-    driver.rollback()
+    getattr(driver, finish)()
 
-    assert cursor.calls == [("BEGIN TRANSACTION", None)]
-    assert connection.commits == 1
-    assert connection.rollbacks == 1
+    statement = "COMMIT TRANSACTION" if finish == "commit" else "ROLLBACK TRANSACTION"
+    assert cursor.calls == [("BEGIN TRANSACTION", None), (f"IF @@TRANCOUNT > 0 {statement}", None)]
+    assert driver._connection_in_transaction() is False
+
+
+@pytest.mark.parametrize("finish", ["commit", "rollback"])
+def test_non_autocommit_transaction_uses_connection_boundaries(finish: str) -> None:
+    """Without autocommit, pymssql's connection commit() and rollback() end the open transaction."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    connection.autocommit(False)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    driver.begin()
+    getattr(driver, finish)()
+
+    assert cursor.calls == []
+    assert (connection.commits, connection.rollbacks) == ((1, 0) if finish == "commit" else (0, 1))
 
 
 def test_begin_reuses_the_open_transaction_without_autocommit() -> None:
@@ -233,11 +250,7 @@ def test_failed_transaction_boundary_preserves_state(operation: str, monkeypatch
         raise failure
 
     monkeypatch.setattr(driver_module, "pymssql", FakePymssqlModule())
-    monkeypatch.setattr(
-        connection.cursor_obj if operation == "begin" else connection,
-        "execute" if operation == "begin" else operation,
-        fail,
-    )
+    monkeypatch.setattr(connection.cursor_obj, "execute", fail)
     with pytest.raises(SQLSpecError) as caught:
         getattr(driver, operation)()
     assert caught.value.__cause__ is failure
@@ -269,9 +282,8 @@ def test_execute_stack_preserves_caller_transaction(fails: bool, monkeypatch: py
         result = driver.execute_stack(stack)
         assert len(result) == 1
         assert result[0].rows_affected == 1
-    assert connection.commits == 0
-    assert connection.rollbacks == 0
+    assert not any("COMMIT" in sql or "ROLLBACK" in sql for sql, _ in connection.cursor_obj.calls)
     assert driver._connection_in_transaction() is True
     assert sum(sql == "BEGIN TRANSACTION" for sql, _ in connection.cursor_obj.calls) == 1
     driver.rollback()
-    assert connection.rollbacks == 1
+    assert connection.cursor_obj.calls[-1] == ("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", None)

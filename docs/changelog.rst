@@ -16,10 +16,13 @@ Unreleased
 
 * ``PymssqlDriver.begin()`` no longer issues ``BEGIN TRANSACTION`` on a connection
   with autocommit disabled, where pymssql already holds an open transaction. The
-  extra nesting level kept ``commit()`` from making the work durable.
+  extra nesting level kept ``commit()`` from making the work durable. On an
+  autocommit connection, ``commit()`` and ``rollback()`` now end the transaction
+  that ``begin()`` opened with T-SQL, because pymssql ignores those calls under
+  autocommit.
 * The psqlpy driver tracks transactions opened with ``begin()`` itself. It
-  previously reported every connection as inside a transaction, so statement
-  stacks never opened their own transaction.
+  previously read psqlpy's coroutine-returning ``in_transaction()`` as always true,
+  so statement stacks never opened their own transaction.
 * DuckDB, BigQuery, Spanner, and ADBC connections to DuckDB, BigQuery, or
   Snowflake raise ``NotImplementedError`` from the savepoint methods instead of
   sending ``SAVEPOINT`` statements those databases reject. Oracle's
