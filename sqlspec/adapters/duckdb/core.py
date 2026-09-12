@@ -118,12 +118,15 @@ def _resolve_native_storage_target(
     from sqlspec.storage.backends.fsspec import FSSpecBackend
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
-    if not driver_features.get("_duckdb_storage_extensions"):
+    protocols = driver_features.get("_duckdb_storage_protocols", ())
+    if not driver_features.get("_duckdb_storage_extensions") and not protocols:
         return None
     original = str(destination)
     if "?" in original or "#" in original:
         return None
     scheme, separator, suffix = original.partition("://")
+    if separator and scheme != "alias" and scheme in protocols:
+        return ResolvedStorageTarget(original, scheme)
     if not separator or scheme not in {"alias", "s3", "gs", "gcs", "r2", "az", "azure", "abfss", "http", "https"}:
         return None
     normalized = {"gcs": "gs", "r2": "s3"}.get(scheme)
@@ -161,6 +164,8 @@ def _resolve_native_storage_target(
         target = ResolvedStorageTarget(original, scheme)
     if "?" in target.uri or "#" in target.uri:
         return None
+    if target.protocol in protocols and options is not None and not options:
+        return target
     if not _native_storage_eligible(target.uri, target.protocol, options, driver_features, write=write):
         return None
     return target

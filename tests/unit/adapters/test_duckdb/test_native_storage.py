@@ -8,6 +8,40 @@ from sqlspec.adapters.duckdb.core import _native_storage_eligible, _resolve_nati
 from sqlspec.storage import StorageRegistry, SyncStoragePipeline
 
 
+@pytest.mark.parametrize("scheme", ["gcss", "memory", "custom+storage"])
+@pytest.mark.parametrize("write", [True, False])
+def test_configured_filesystem_preserves_uri_without_python_backend(
+    scheme: str, write: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_resolution(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("A configured DuckDB filesystem must not require a Python storage backend")
+
+    monkeypatch.setattr(StorageRegistry, "get", reject_resolution)
+    uri = f"{scheme}://bucket/prefix/file.parquet"
+    target = _resolve_native_storage_target(
+        SyncStoragePipeline(), uri, {"_duckdb_storage_protocols": frozenset({scheme})}, write=write
+    )
+    assert target is not None
+    assert target.uri == uri
+
+
+@pytest.mark.parametrize("options", [{}, {"custom_option": True}])
+def test_registered_filesystem_alias_preserves_backend_options(options: dict[str, Any]) -> None:
+    registry = StorageRegistry()
+    registry.register_alias("reports", "memory://", backend="fsspec", base_path="bucket/prefix", **options)
+    target = _resolve_native_storage_target(
+        SyncStoragePipeline(registry=registry),
+        "alias://reports/file.parquet",
+        {"_duckdb_storage_protocols": frozenset({"memory", "alias"})},
+        write=True,
+    )
+    if options:
+        assert target is None
+    else:
+        assert target is not None
+        assert target.uri == "memory://bucket/prefix/file.parquet"
+
+
 @pytest.fixture
 def storage_settings() -> dict[str, Any]:
     return {

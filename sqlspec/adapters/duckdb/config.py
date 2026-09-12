@@ -118,6 +118,14 @@ class DuckDBExtensionConfig(TypedDict):
     required: NotRequired[bool]
     """When True, install/load failure raises instead of best-effort WARNING."""
 
+    storage_protocols: NotRequired[Sequence[str]]
+    """Additional URI schemes handled by this extension's configured filesystem.
+
+    Addresses using these schemes are passed unchanged to DuckDB after the
+    extension loads. DuckDB owns credential selection and reports transfer
+    errors. Registered Python filesystems are discovered automatically.
+    """
+
 
 class DuckDBSecretConfig(TypedDict):
     """DuckDB secret configuration for AI/API integrations."""

@@ -30,6 +30,9 @@ class _FakeDuckDBConnection:
     def fetchone(self) -> tuple[Any, ...] | None:
         return self.verification_row
 
+    def list_filesystems(self) -> list[str]:
+        return []
+
 
 @pytest.mark.parametrize("identifier", ["my_openai_secret", "openai", "S3", "s3", "r2", "secret_1"])
 def test_validate_sql_identifier_accepts_safe_identifiers(identifier: str) -> None:

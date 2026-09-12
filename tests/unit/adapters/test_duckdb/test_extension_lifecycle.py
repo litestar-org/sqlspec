@@ -62,6 +62,9 @@ class _SpyConnection:
     def close(self) -> None:
         pass
 
+    def list_filesystems(self) -> list[str]:
+        return []
+
 
 def _spy_connect(
     monkeypatch: pytest.MonkeyPatch, *, fail_install: bool = False, fail_load: bool = False
@@ -86,6 +89,23 @@ def test_name_only_extension_never_installs(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert install_log == []
     assert load_log == ["postgres"]
+
+
+@pytest.mark.parametrize("fail_load", [False, True])
+@pytest.mark.parametrize(
+    ("extension", "protocols"),
+    [
+        ({"name": "gcs"}, {"gcss"}),
+        ({"name": "custom", "storage_protocols": ["custom", "custom+alias"]}, {"custom", "custom+alias"}),
+    ],
+)
+def test_filesystem_protocols_require_successful_extension_load(
+    monkeypatch: pytest.MonkeyPatch, extension: dict[str, Any], protocols: set[str], fail_load: bool
+) -> None:
+    _spy_connect(monkeypatch, fail_load=fail_load)
+    pool = DuckDBConnectionPool({"database": ":memory:"}, extensions=[extension])
+    pool._create_connection()
+    assert pool._thread_local.storage_protocols == (frozenset() if fail_load else frozenset(protocols))
 
 
 def test_explicit_install_runs_once_across_sessions(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:

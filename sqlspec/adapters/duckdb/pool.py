@@ -108,7 +108,9 @@ class DuckDBConnectionPool:
         """Create a new DuckDB connection with extensions and secrets."""
         self._thread_local.storage_extensions = frozenset()
         self._thread_local.storage_secrets = ()
+        self._thread_local.storage_protocols = frozenset()
         loaded_extensions: set[str] = set()
+        storage_protocols: set[str] = set()
         connect_parameters = {}
         config_dict = {}
 
@@ -173,6 +175,9 @@ class DuckDBConnectionPool:
                     )
             else:
                 loaded_extensions.add(ext_name)
+                storage_protocols.update(ext_config.get("storage_protocols", ()))
+                if ext_name == "gcs":
+                    storage_protocols.add("gcss")
                 if install_error is not None:
                     log_with_context(
                         logger,
@@ -196,6 +201,8 @@ class DuckDBConnectionPool:
         else:
             self._thread_local.storage_extensions = frozenset(loaded_extensions)
             self._thread_local.storage_secrets = tuple(created_secrets)
+        storage_protocols.update(connection.list_filesystems())
+        self._thread_local.storage_protocols = frozenset(storage_protocols)
         return connection
 
     def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":
@@ -206,6 +213,7 @@ class DuckDBConnectionPool:
         return {
             "_duckdb_storage_extensions": state.get("storage_extensions", frozenset()),
             "_duckdb_storage_secrets": state.get("storage_secrets", ()),
+            "_duckdb_storage_protocols": state.get("storage_protocols", frozenset()),
         }
 
     def _install_extension_once(
@@ -327,6 +335,7 @@ class DuckDBConnectionPool:
         thread_state = self._thread_local.__dict__
         thread_state.pop("storage_extensions", None)
         thread_state.pop("storage_secrets", None)
+        thread_state.pop("storage_protocols", None)
         if "connection" in thread_state:
             with suppress(Exception):
                 self._thread_local.connection.close()

@@ -18,8 +18,9 @@ materializing the data through Python Arrow buffers.
 Configure the required extension and secret through ``driver_features`` before
 opening a session. Native routing uses the settings successfully applied to that
 connection. A failed optional extension or secret does not enable the route.
-Pool recreation resets this record. A custom ``on_connection_create`` callback
-keeps storage transfers on the Arrow path because its settings are opaque.
+Pool recreation resets this record. Filesystems registered through
+``on_connection_create`` are discovered after the callback runs and participate
+without requiring a cloud extension.
 
 .. code-block:: python
 
@@ -84,6 +85,11 @@ Providers and aliases
      - ``httpfs``
      - ``secret_type="r2"`` with ``key_id``, ``secret`` and ``account_id`` or
        the matching R2 endpoint.
+       R2 uses the S3 API through DuckDB's ``httpfs`` extension.
+   * - ``gcss``
+     - Community ``gcs``
+     - DuckDB's ``gcp`` secret configuration, including application default
+       credentials. The original URI is passed to the extension unchanged.
    * - ``az``, ``azure``, ``abfss``
      - ``azure``
      - ``secret_type="azure"`` with a configured ``connection_string`` or
@@ -99,6 +105,30 @@ options match the configured DuckDB secret. Unknown options and credential
 mismatches keep the Arrow route. Alias names are not provider names: an alias
 named ``gcs`` can still refer to S3. Custom storage backend classes and custom
 ``storage_pipeline_factory`` implementations retain their existing behavior.
+
+Additional filesystems
+----------------------
+
+DuckDB's Python client supports registered fsspec filesystems, including
+``gcsfs``. Register an instance using ``connection.register_filesystem()`` in
+``on_connection_create``. Its advertised protocols are discovered automatically;
+eligible transfers use DuckDB's reader or ``COPY`` without materializing an
+Arrow payload in SQLSpec. The filesystem itself can still perform Python I/O.
+
+For additional DuckDB extensions, declare their URI schemes alongside the
+existing extension configuration, for example
+``{"name": "my_filesystem", "repository": "community",
+"storage_protocols": ["myfs", "myfs+alias"]}``. These schemes become available
+only after the extension loads successfully. SQLSpec passes direct addresses
+unchanged; the configured DuckDB filesystem owns authentication and reports
+transfer errors. No matching fsspec or obstore package is required for these
+direct routes. Aliases still resolve through SQLSpec's registry, and backend
+options that cannot be preserved keep the existing storage path.
+
+See DuckDB's `fsspec integration
+<https://duckdb.org/docs/current/guides/python/filesystems>`_ and the
+`community GCS extension
+<https://duckdb.org/community_extensions/extensions/gcs>`_.
 
 Fallbacks and failures
 ----------------------

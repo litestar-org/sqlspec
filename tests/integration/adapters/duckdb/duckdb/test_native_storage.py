@@ -23,6 +23,37 @@ from sqlspec.storage.registry import storage_registry
 from tests.fixtures.rustfs import ensure_rustfs_bucket, rustfs_filesystem, rustfs_obstore_kwargs
 
 
+def test_registered_filesystem_transfers_without_cloud_extensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fsspec.implementations.memory import MemoryFileSystem
+
+    filesystem = MemoryFileSystem()
+
+    def configure(connection: duckdb.DuckDBPyConnection) -> None:
+        connection.register_filesystem(filesystem)
+
+    def reject_arrow(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Registered filesystem transfer unexpectedly materialized Arrow")
+
+    config = DuckDBConfig(
+        connection_config={"database": f":memory:registered_{uuid4().hex}"},
+        driver_features={"on_connection_create": configure},
+    )
+    uri = f"memory://sqlspec-native/{uuid4().hex}.parquet"
+    monkeypatch.setattr(DuckDBDriver, "select_to_arrow", reject_arrow)
+    monkeypatch.setattr(DuckDBDriver, "load_from_arrow", reject_arrow)
+    try:
+        with config.provide_session() as session:
+            exported = session.select_to_storage("SELECT 7 AS value", uri)
+            session.connection.execute("CREATE TABLE target(value INTEGER)")
+            imported = session.load_from_storage("target", uri, file_format="parquet")
+            assert exported.telemetry["backend"] == imported.telemetry["backend"] == "duckdb"
+            assert session.connection.execute("SELECT * FROM target").fetchall() == [(7,)]
+    finally:
+        config.close_pool()
+        if filesystem.exists(uri):
+            filesystem.rm(uri)
+
+
 def test_native_http_parquet_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pq.write_table(pa.table({"id": [1, 2], "name": ["001", None]}), tmp_path / "data.parquet")
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
