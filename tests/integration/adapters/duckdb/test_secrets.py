@@ -8,7 +8,13 @@ from uuid import uuid4
 import duckdb
 import pytest
 
-from sqlspec.adapters.duckdb.pool import _SECRET_LOCK, SECRET_CONFLICT_BACKOFF, DuckDBConnectionPool, _create_secret
+from sqlspec.adapters.duckdb.pool import (
+    _SECRET_LOCK,
+    SECRET_CONFLICT_ATTEMPTS,
+    SECRET_CONFLICT_BACKOFF,
+    DuckDBConnectionPool,
+    _create_secret,
+)
 
 pytestmark = [pytest.mark.xdist_group("duckdb"), pytest.mark.duckdb]
 
@@ -191,6 +197,92 @@ def test_existing_secret_with_other_type_is_not_recorded_when_optional() -> None
     assert row == [("http",)]
 
 
+@pytest.mark.parametrize("required", [True, False], ids=["required", "optional"])
+def test_mixed_case_secret_name_is_created_and_reused(required: bool) -> None:
+    database = _database()
+    secret = {"name": "MyHttpSecret", "secret_type": "http", "value": HTTP_SECRET_VALUE, "required": required}
+    anchor = duckdb.connect(database)
+    pools = [DuckDBConnectionPool(connection_config={"database": database}, secrets=[secret]) for _ in range(2)]
+    try:
+        recorded = [_recorded_secret_names(pool, pool.acquire()) for pool in pools]
+        names = anchor.execute("SELECT name FROM duckdb_secrets() WHERE lower(name) = 'myhttpsecret'").fetchall()
+    finally:
+        for pool in pools:
+            pool.close()
+        anchor.close()
+
+    assert recorded == [("MyHttpSecret",), ("MyHttpSecret",)]
+    assert names == [("myhttpsecret",)]
+
+
+def _s3_secret(required: bool, **settings: Any) -> "dict[str, Any]":
+    value = {
+        "key_id": "AKIA1",
+        "secret": "s",
+        "region": "us-east-1",
+        "endpoint": "minio:9000",
+        "url_style": "path",
+        "use_ssl": False,
+    }
+    value.update(settings)
+    return {"name": "sqlspec_s3", "secret_type": "s3", "value": value, "required": required}
+
+
+def _s3_pool_first_use(secret: "dict[str, Any]", existing_sql: str) -> "tuple[str, ...]":
+    database = _database()
+    anchor = duckdb.connect(database)
+    _load_httpfs_or_skip(anchor)
+    anchor.execute(existing_sql)
+    pool = DuckDBConnectionPool(connection_config={"database": database}, secrets=[secret])
+    try:
+        return _recorded_secret_names(pool, pool.acquire())
+    finally:
+        pool.close()
+        anchor.close()
+
+
+EXISTING_S3_SQL = (
+    "CREATE SECRET sqlspec_s3 (TYPE s3, KEY_ID 'AKIA1', SECRET 'other', REGION 'us-east-1', "
+    "ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false)"
+)
+
+
+def test_new_s3_secret_with_visible_settings_is_recorded() -> None:
+    database = _database()
+    anchor = duckdb.connect(database)
+    _load_httpfs_or_skip(anchor)
+    pool = DuckDBConnectionPool(connection_config={"database": database}, secrets=[_s3_secret(required=True)])
+    try:
+        recorded = _recorded_secret_names(pool, pool.acquire())
+    finally:
+        pool.close()
+        anchor.close()
+
+    assert recorded == ("sqlspec_s3",)
+
+
+def test_existing_s3_secret_with_same_visible_settings_is_reused_and_recorded() -> None:
+    assert _s3_pool_first_use(_s3_secret(required=True), EXISTING_S3_SQL) == ("sqlspec_s3",)
+
+
+@pytest.mark.parametrize(
+    ("settings", "differing"),
+    [({"key_id": "AKIA2"}, "key_id"), ({"endpoint": "storage.example:9000"}, "endpoint")],
+    ids=["key_id", "endpoint"],
+)
+def test_existing_s3_secret_with_other_visible_settings_raises_when_required(
+    settings: "dict[str, Any]", differing: str
+) -> None:
+    with pytest.raises(
+        RuntimeError, match=rf"'sqlspec_s3' exists as a temporary secret whose {differing} differ.*replace=True"
+    ):
+        _s3_pool_first_use(_s3_secret(required=True, **settings), EXISTING_S3_SQL)
+
+
+def test_existing_s3_secret_with_other_visible_settings_is_not_recorded_when_optional() -> None:
+    assert _s3_pool_first_use(_s3_secret(required=False, key_id="AKIA2"), EXISTING_S3_SQL) == ()
+
+
 def test_replace_overwrites_existing_secret_value() -> None:
     database = _database()
     anchor = duckdb.connect(database, config={"allow_unredacted_secrets": True})
@@ -272,11 +364,20 @@ def test_replace_overwrites_existing_secret_of_other_type() -> None:
     assert row == [("s3",)]
 
 
-def test_persistent_write_write_conflict_raises_for_required_secret() -> None:
+def _record_backoffs(monkeypatch: pytest.MonkeyPatch) -> "list[float]":
+    backoffs: list[float] = []
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.time.sleep", backoffs.append)
+    return backoffs
+
+
+def test_unresolved_write_write_conflict_raises_for_required_secret_after_all_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     database = _database()
     holder = _open_uncommitted_secret(database, "sqlspec_r")
     connection = duckdb.connect(database)
     secret = {"name": "sqlspec_r", "secret_type": "http", "value": HTTP_SECRET_VALUE, "required": True}
+    backoffs = _record_backoffs(monkeypatch)
     try:
         with pytest.raises(duckdb.TransactionException, match="write-write conflict"):
             _create_secret(connection, secret)
@@ -284,8 +385,27 @@ def test_persistent_write_write_conflict_raises_for_required_secret() -> None:
         connection.close()
         holder.close()
 
+    assert backoffs == [SECRET_CONFLICT_BACKOFF * attempt for attempt in range(1, SECRET_CONFLICT_ATTEMPTS)]
 
-def test_persistent_write_write_conflict_skips_optional_secret() -> None:
+
+def test_other_transaction_error_is_raised_without_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = duckdb.connect(_database())
+    connection.execute("CREATE TABLE aborted (id INTEGER PRIMARY KEY)")
+    connection.execute("BEGIN")
+    with pytest.raises(duckdb.ConstraintException):
+        connection.execute("INSERT INTO aborted VALUES (1), (1)")
+    secret = {"name": "sqlspec_a", "secret_type": "http", "value": HTTP_SECRET_VALUE, "required": True}
+    backoffs = _record_backoffs(monkeypatch)
+    try:
+        with pytest.raises(duckdb.TransactionException, match="aborted"):
+            _create_secret(connection, secret)
+    finally:
+        connection.close()
+
+    assert backoffs == []
+
+
+def test_unresolved_write_write_conflict_skips_optional_secret() -> None:
     database = _database()
     holder = _open_uncommitted_secret(database, "sqlspec_r")
     connection = duckdb.connect(database)

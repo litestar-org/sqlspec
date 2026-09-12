@@ -60,11 +60,12 @@ without requiring a cloud extension.
         config.close_pool()
 
 Declared secrets are created only when missing. DuckDB secret names are shared by
-every connection to a database, and persistent secrets outlive the process, so an
-existing secret with the same name and type is reused as it is. A same-name secret
-whose type or scope does not match the declaration raises for ``required=True``
-secrets and logs a warning otherwise. Set ``replace=True`` on a secret to overwrite
-an existing secret of the same name, for example after rotating credentials.
+every connection to a database and matched case-insensitively, and persistent secrets
+outlive the process, so an existing secret is reused and declared values are not
+applied to it unless ``replace=True`` is set, for example after rotating credentials.
+DuckDB redacts credential values, so an existing secret is compared on its type,
+provider, scope, and unredacted values such as ``key_id``, ``region`` and ``endpoint``.
+A difference raises for ``required=True`` secrets and logs a warning otherwise.
 
 Query values and object addresses remain bound parameters. Native import accepts
 one table identifier, optionally schema-qualified or quoted; SQL fragments are
