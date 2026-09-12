@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from litestar.channels.backends.base import ChannelsBackend
 
+from sqlspec.extensions.events import MAX_NOTIFY_BYTES, measure_notify_payload
 from sqlspec.extensions.events._buffer import enqueue_with_capacity, validate_queue_capacity
 from sqlspec.utils.logging import get_logger
 
@@ -84,6 +85,51 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         """Return the cumulative number of messages dropped due to overflow."""
         return self._dropped_message_count
 
+    @property
+    def notify_budget(self) -> "int | None":
+        """Return the NOTIFY byte budget, or None when the event backend has no payload limit.
+
+        Only the ``notify`` backend carries each payload inside a PostgreSQL
+        notification; every other backend kind returns None.
+        """
+        return MAX_NOTIFY_BYTES if self._event_channel.backend_name == "notify" else None
+
+    def measure(self, data: bytes) -> int:
+        """Return the encoded size of the PostgreSQL ``notify`` envelope that wraps ``data``.
+
+        Args:
+            data: Channel payload to measure.
+
+        Returns:
+            The UTF-8 byte size of the ``notify`` envelope carrying the base64-wrapped ``data``.
+        """
+        return measure_notify_payload(self._wrap_payload(data), None)
+
+    def fits(self, data: bytes) -> bool:
+        """Return whether ``data`` fits the event backend's payload budget.
+
+        Args:
+            data: Channel payload to check.
+
+        Returns:
+            True when the backend has no payload budget or the encoded envelope is within it.
+        """
+        budget = self.notify_budget
+        return budget is None or self.measure(data) <= budget
+
+    def metrics_snapshot(self) -> "dict[str, float]":
+        """Return configuration metrics merged with this backend instance's queue counters.
+
+        Returns:
+            Every observability metric recorded for the event channel's database
+            configuration, plus this backend's ``channels.output_queue_depth`` and
+            ``channels.dropped_message_count``.
+        """
+        snapshot = self._event_channel.metrics_snapshot()
+        snapshot["channels.output_queue_depth"] = float(self.output_queue_depth)
+        snapshot["channels.dropped_message_count"] = float(self._dropped_message_count)
+        return snapshot
+
     async def publish(self, data: bytes, channels: "Iterable[str]") -> None:
         await self.publish_many((data,), channels)
 
@@ -95,11 +141,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             channels: Litestar channel names that receive each payload.
         """
         db_channels = [self._db_channel_name(channel) for channel in channels]
-        events = [
-            (db_channel, {"data_b64": base64.b64encode(payload).decode("ascii")}, None)
-            for payload in data
-            for db_channel in db_channels
-        ]
+        events = [(db_channel, self._wrap_payload(payload), None) for payload in data for db_channel in db_channels]
         await self._event_channel.publish_many(events)
 
     async def subscribe(self, channels: "Iterable[str]") -> None:
@@ -182,6 +224,11 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             raise
         except Exception as error:  # pragma: no cover
             logger.warning("litestar channel %s stream worker error: %s", channel, error)
+
+    @staticmethod
+    def _wrap_payload(data: bytes) -> "dict[str, Any]":
+        """Return the event payload that carries ``data`` as base64 text."""
+        return {"data_b64": base64.b64encode(data).decode("ascii")}
 
     @staticmethod
     def _decode_payload(payload: Any) -> bytes | None:
