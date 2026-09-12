@@ -47,15 +47,15 @@ class BaseMigrationLoader:
         ...
 
     @abc.abstractmethod
-    async def get_down_sql(self, path: Path) -> list[str]:
+    async def get_down_sql(self, path: Path) -> "list[str] | None":
         """Load and return the 'down' SQL statements from a migration file.
 
         Args:
             path: Path to the migration file.
 
         Returns:
-            List of SQL statements to execute for downgrade.
-            Empty list if no downgrade is available.
+            List of SQL statements to execute for downgrade, which may be empty.
+            None if the migration has no downgrade direction.
 
         Raises:
             MigrationLoadError: If loading fails.
@@ -115,7 +115,7 @@ class SQLFileLoader(BaseMigrationLoader):
         sql_obj = self.sql_loader.get_sql(up_query)
         return [sql_obj.raw_sql]
 
-    async def get_down_sql(self, path: Path) -> list[str]:
+    async def get_down_sql(self, path: Path) -> "list[str] | None":
         """Extract the 'down' SQL from a SQL migration file.
 
         The SQL file must already be loaded via validate_migration_file()
@@ -126,13 +126,14 @@ class SQLFileLoader(BaseMigrationLoader):
             path: Path to SQL migration file.
 
         Returns:
-            List containing single SQL statement for downgrade, or empty list.
+            List containing single SQL statement for downgrade, or None when the
+            file has no down block.
         """
         version = self._extract_version(path.name)
         down_query = f"migrate-{version}-down"
 
         if not self.sql_loader.has_query(down_query):
-            return []
+            return None
 
         sql_obj = self.sql_loader.get_sql(down_query)
         return [sql_obj.raw_sql]
@@ -241,14 +242,15 @@ class PythonFileLoader(BaseMigrationLoader):
 
             return self._normalize_and_validate_sql(sql_result, path)
 
-    async def get_down_sql(self, path: Path) -> list[str]:
+    async def get_down_sql(self, path: Path) -> "list[str] | None":
         """Load Python migration and execute downgrade function.
 
         Args:
             path: Path to Python migration file.
 
         Returns:
-            List of SQL statements for downgrade, or empty list if not available.
+            List of SQL statements for downgrade, which may be empty. None when the
+            module defines no downgrade function.
         """
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
@@ -258,7 +260,7 @@ class PythonFileLoader(BaseMigrationLoader):
                 downgrade_func = _get_callable_attr(module, "migrate_down")
 
             if downgrade_func is None:
-                return []
+                return None
 
             if isinstance(self.context, MigrationContext):
                 self.context.validate_async_usage(downgrade_func)
@@ -450,10 +452,10 @@ def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., An
     return None
 
 
-def _load_migration_sql(loader: BaseMigrationLoader, path: Path, direction: str) -> list[str]:
+def _load_migration_sql(loader: BaseMigrationLoader, path: Path, direction: str) -> "list[str] | None":
     """Bridge the async loader contract for synchronous migration consumers."""
     method = loader.get_up_sql if direction == "up" else loader.get_down_sql
     if inspect.iscoroutinefunction(method):
         return await_(method, raise_sync_error=False)(path)
-    sync_method = cast("Callable[[Path], list[str]]", method)
+    sync_method = cast("Callable[[Path], list[str] | None]", method)
     return sync_method(path)
