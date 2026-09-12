@@ -7,6 +7,7 @@ import pytest
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg import AsyncpgDriver
     from sqlspec.adapters.psycopg import PsycopgSyncConfig
+    from sqlspec.data_dictionary import ColumnMetadata
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -23,7 +24,7 @@ CREATE TABLE column_metadata."MixedItems" (
 TEARDOWN_SQL = "DROP SCHEMA IF EXISTS column_metadata CASCADE"
 
 
-def _metadata(columns: "list[dict[str, object]]") -> "dict[str, tuple[bool, str, object]]":
+def _metadata(columns: "list[ColumnMetadata]") -> "dict[str, tuple[bool, str, object]]":
     return {
         str(column["column_name"]): (
             bool(column["is_primary"]),
