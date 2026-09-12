@@ -7,6 +7,7 @@ import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
 from rich.console import Console
 
 from sqlspec.migrations.base import BaseMigrationTracker
@@ -24,6 +25,7 @@ logger = get_logger("sqlspec.migrations.tracker")
 _console = Console()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Synchronous migration version tracker."""
 
@@ -245,6 +247,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 raise
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
     """Asynchronous migration version tracker."""
 

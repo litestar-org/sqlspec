@@ -41,6 +41,12 @@ Unreleased
   configuration, including ``session_table=True``, through the same type as
   ``sqlspec.config.LitestarConfig``.
 
+* ``PymssqlConfig`` and ``MssqlPythonConfig`` construct again when SQLSpec is
+  installed from a compiled wheel. Both raised
+  ``TypeError: interpreted classes cannot inherit from compiled`` while setting
+  up their migration tracker.
+  (`#747 <https://github.com/litestar-org/sqlspec/issues/747>`_)
+
 **Removed:**
 
 * Removed the undocumented ``sqlspec.exceptions.wrap_exceptions`` helper,

@@ -2,6 +2,7 @@
 
 import argparse
 import importlib
+import inspect
 import json
 import subprocess
 import sys
@@ -549,10 +550,93 @@ def _check_fastapi_filter_construction(*, require_compiled: bool = False) -> dic
     return result
 
 
+def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "list[tuple[str, type[Any]]]":
+    """Return every database config class defined by an adapter ``config`` module.
+
+    A class qualifies when it is defined in ``sqlspec.adapters.<name>.config`` and
+    carries ``migration_tracker_type``, which excludes the pool, connection and
+    extension helper classes that share those modules.
+    """
+    adapters_package = importlib.import_module("sqlspec.adapters")
+    package_root = Path(next(iter(adapters_package.__path__)))
+    discovered: list[tuple[str, type[Any]]] = []
+    for config_path in sorted(package_root.glob("*/config.py")):
+        module_name = f"sqlspec.adapters.{config_path.parent.name}.config"
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if skipped is None or (exc.name or "").split(".")[0] not in {
+                "adbc_driver_manager",
+                "aiomysql",
+                "aiosqlite",
+                "arrow_odbc",
+                "asyncmy",
+                "asyncpg",
+                "duckdb",
+                "google",
+                "mssql_python",
+                "mysql",
+                "oracledb",
+                "psqlpy",
+                "psycopg",
+                "psycopg_pool",
+                "pymssql",
+                "pymysql",
+            }:
+                raise
+            skipped.append(f"{module_name}: optional dependency missing: {exc.name}")
+            continue
+        discovered.extend(
+            (f"{module_name}.{candidate.__name__}", candidate)
+            for candidate in vars(module).values()
+            if inspect.isclass(candidate)
+            and candidate.__module__ == module_name
+            and hasattr(candidate, "migration_tracker_type")
+        )
+    return discovered
+
+
+def _adapter_config_construction_failure(qualified_name: str, config_cls: "type[Any]") -> "str | None":
+    """Return a failure description when an adapter config cannot be constructed."""
+    try:
+        config_cls()
+    except Exception as exc:
+        return f"{qualified_name}: {exc!r}"
+    return None
+
+
+def _check_adapter_config_construction() -> dict[str, Any]:
+    """Construct every adapter database config with no arguments."""
+    result = _new_smoke_result(
+        name="adapter_config_construction", module="sqlspec.adapters", attribute="migration_tracker_type"
+    )
+    try:
+        skipped: list[str] = []
+        discovered = _discover_adapter_config_classes(skipped=skipped)
+        result["skipped_adapters"] = skipped
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    failures = [
+        failure
+        for failure in (
+            _adapter_config_construction_failure(qualified_name, config_cls)
+            for qualified_name, config_cls in discovered
+        )
+        if failure is not None
+    ]
+    if failures:
+        result["error"] = "; ".join(failures)
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
         _check_sqlspec_construction(),
+        _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
         _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
@@ -580,6 +664,7 @@ def _format_text(results: list[dict[str, Any]]) -> str:
         compiled = "compiled" if result["compiled"] else "interpreted"
         required = " required" if result["compiled_required"] else ""
         lines.append(f"- {status} {result['module']} ({compiled}{required})")
+        lines.extend(f"- SKIP {adapter}" for adapter in result.get("skipped_adapters", []))
         if result["error"] is not None:
             lines.append(f"  {result['error']}")
     return "\n".join(lines)

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 from pytest import MonkeyPatch
 
 try:
@@ -141,6 +142,7 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
 
     assert all(result["imported"] or result["skipped"] for result in results)
     assert {result["name"] for result in results} == {
+        "adapter_config_construction",
         "aiosqlite_ambient_exception",
         "aiosqlite_exception_mapping",
         "fastapi_filter_construction",
@@ -151,6 +153,40 @@ def test_construction_checks_build_provider_signatures_without_requiring_compila
     }
     sqlspec_result = next(result for result in results if result["name"] == "sqlspec_construction")
     assert sqlspec_result["error"] is None
+    adapter_result = next(result for result in results if result["name"] == "adapter_config_construction")
+    assert adapter_result["error"] is None
+
+
+def test_adapter_config_construction_check_covers_every_database_config() -> None:
+    module = _load_mypyc_smoke_module()
+
+    discovered = {qualified_name for qualified_name, _ in module._discover_adapter_config_classes()}
+
+    assert discovered == {
+        "sqlspec.adapters.adbc.config.AdbcConfig",
+        "sqlspec.adapters.aiomysql.config.AiomysqlConfig",
+        "sqlspec.adapters.aiosqlite.config.AiosqliteConfig",
+        "sqlspec.adapters.arrow_odbc.config.ArrowOdbcConfig",
+        "sqlspec.adapters.asyncmy.config.AsyncmyConfig",
+        "sqlspec.adapters.asyncpg.config.AsyncpgConfig",
+        "sqlspec.adapters.bigquery.config.BigQueryConfig",
+        "sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgConfig",
+        "sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgAsyncConfig",
+        "sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgSyncConfig",
+        "sqlspec.adapters.duckdb.config.DuckDBConfig",
+        "sqlspec.adapters.mssql_python.config.MssqlPythonConfig",
+        "sqlspec.adapters.mysqlconnector.config.MysqlConnectorAsyncConfig",
+        "sqlspec.adapters.mysqlconnector.config.MysqlConnectorSyncConfig",
+        "sqlspec.adapters.oracledb.config.OracleAsyncConfig",
+        "sqlspec.adapters.oracledb.config.OracleSyncConfig",
+        "sqlspec.adapters.psqlpy.config.PsqlpyConfig",
+        "sqlspec.adapters.psycopg.config.PsycopgAsyncConfig",
+        "sqlspec.adapters.psycopg.config.PsycopgSyncConfig",
+        "sqlspec.adapters.pymssql.config.PymssqlConfig",
+        "sqlspec.adapters.pymysql.config.PyMysqlConfig",
+        "sqlspec.adapters.spanner.config.SpannerSyncConfig",
+        "sqlspec.adapters.sqlite.config.SqliteConfig",
+    }
 
 
 def test_statement_construction_checks_pass_without_requiring_compilation() -> None:
@@ -215,3 +251,38 @@ def test_smoke_runner_skips_missing_optional_parent_package(monkeypatch: MonkeyP
     assert results[0]["error"] is None
     assert results[0]["skip_reason"] == "optional dependency missing: google.adk"
     assert module._failed_results(results) == []
+
+
+@pytest.mark.parametrize("adapter, dependency", [("adbc", "adbc_driver_manager"), ("aiosqlite", "aiosqlite")])
+def test_adapter_discovery_reports_missing_optional_driver(
+    monkeypatch: MonkeyPatch, adapter: str, dependency: str
+) -> None:
+    module = _load_mypyc_smoke_module()
+    original_import = importlib.import_module
+
+    def import_without_driver(name: str) -> ModuleType:
+        if name == f"sqlspec.adapters.{adapter}.config":
+            raise ModuleNotFoundError(f"No module named {dependency!r}", name=dependency)
+        return original_import(name)
+
+    monkeypatch.setattr(module.importlib, "import_module", import_without_driver)
+    result = module._check_adapter_config_construction()
+    assert result["error"] is None
+    assert result["skipped_adapters"] == [
+        f"sqlspec.adapters.{adapter}.config: optional dependency missing: {dependency}"
+    ]
+    assert f"- SKIP sqlspec.adapters.{adapter}.config" in module._format_text([result])
+
+
+def test_adapter_discovery_does_not_hide_internal_import_errors(monkeypatch: MonkeyPatch) -> None:
+    module = _load_mypyc_smoke_module()
+    original_import = importlib.import_module
+
+    def import_broken_adapter(name: str) -> ModuleType:
+        if name == "sqlspec.adapters.adbc.config":
+            raise ModuleNotFoundError("broken internal import", name="sqlspec.missing")
+        return original_import(name)
+
+    monkeypatch.setattr(module.importlib, "import_module", import_broken_adapter)
+    with pytest.raises(ModuleNotFoundError, match="broken internal import"):
+        module._discover_adapter_config_classes(skipped=[])
