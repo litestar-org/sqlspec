@@ -366,10 +366,13 @@ class SQLFileLoader:
     def _reload_changed_files(self) -> "list[str]":
         """Reload tracked SQL files whose content checksum changed.
 
+        Every changed file's queries and fragments are removed before any changed
+        file is loaded again, so names may move between changed files.
+
         Returns:
             Paths of files that were reloaded.
         """
-        changed_paths: list[str] = []
+        pending_reloads: list[tuple[str, str | None]] = []
         for path, sql_file in list(self._files.items()):
             if self._is_file_unchanged(path, sql_file):
                 if self._runtime is not None:
@@ -396,8 +399,13 @@ class SQLFileLoader:
             for name in fragment_names:
                 self._fragments.pop(name, None)
                 self._fragment_to_file.pop(name, None)
-            self._invalidate_resolved()
             self._files.pop(path, None)
+            pending_reloads.append((path, namespace))
+
+        if pending_reloads:
+            self._invalidate_resolved()
+        changed_paths: list[str] = []
+        for path, namespace in pending_reloads:
             self._load_single_file(path, namespace)
             changed_paths.append(path)
             if self._runtime is not None:

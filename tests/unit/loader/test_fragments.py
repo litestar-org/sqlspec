@@ -405,3 +405,22 @@ SELECT 'it''s' AS a FROM real WHERE /* slot: predicate */
     assert loader.get_query_slots("comment_directive") == ()
     assert loader.get_query_slots("mixed") == (SlotDeclaration("predicate", None),)
     assert "/* slot: in_fragment_literal */" in loader.get_query_text("mixed")
+
+
+@pytest.mark.parametrize("source_first", [True, False], ids=["source-loaded-first", "destination-loaded-first"])
+def test_fragment_moved_between_files_reloads(tmp_path: Path, source_first: bool) -> None:
+    source = _write(tmp_path / "source.sql", SHARED_FRAGMENT + "\n-- name: source_query\nSELECT 1\n")
+    destination = _write(tmp_path / "destination.sql", INCLUDING_STATEMENT)
+    loader = SQLFileLoader()
+    loader.load_sql(*((source, destination) if source_first else (destination, source)))
+    assert "active = TRUE" in loader.get_query_text("count_active")
+
+    source.write_text("-- name: source_query\nSELECT 1\n")
+    destination.write_text(
+        "-- fragment: active_users\nactive AS (SELECT id FROM users WHERE active = FALSE)\n\n" + INCLUDING_STATEMENT
+    )
+
+    assert sorted(loader._reload_changed_files()) == sorted([str(source), str(destination)])
+    assert loader.list_fragments() == ["active_users"]
+    assert "active = FALSE" in loader.get_query_text("count_active")
+    assert loader.get_file_for_query("count_active") == loader.get_file(destination)
