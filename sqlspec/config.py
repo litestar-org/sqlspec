@@ -439,6 +439,16 @@ class LitestarConfig(TypedDict):
     database lifecycle manually via their own DI solution.
     """
 
+    manage_lifespan: NotRequired[bool]
+    """Register the plugin's pool lifespan handler. Default: the inverse of ``disable_di``.
+    When True, the Litestar plugin creates the configuration's pool on application startup,
+    stores it in application state under ``pool_key``, and closes it on shutdown, whether or
+    not ``disable_di`` is set. Set to True alongside ``disable_di=True`` to keep pool lifecycle
+    management while another DI solution provides connections and sessions. When False, the
+    application creates and closes the pool itself; with dependency injection enabled, the
+    plugin's providers still read the pool from application state under ``pool_key``.
+    """
+
     enable_sqlcommenter_middleware: NotRequired[bool]
     """Control automatic SQLCommenter middleware registration. Default: True.
     When the driver's :class:`~sqlspec.core.statement.StatementConfig` has

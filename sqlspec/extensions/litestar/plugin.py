@@ -183,6 +183,7 @@ class PluginConfigState:
     enable_sqlcommenter_middleware: bool
     correlation_headers: tuple[str, ...] = field(init=False)
     disable_di: bool
+    manage_lifespan: bool
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
     pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
@@ -260,6 +261,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         configured_headers = _normalize_header_list(litestar_config.get("correlation_headers"))
         auto_trace_headers = bool(litestar_config.get("auto_trace_headers", True))
 
+        disable_di = litestar_config.get("disable_di", False)
+
         return {
             "connection_key": connection_key,
             "pool_key": pool_key,
@@ -272,7 +275,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "correlation_headers": _build_correlation_headers(
                 primary=correlation_header, configured=configured_headers, auto_trace_headers=auto_trace_headers
             ),
-            "disable_di": litestar_config.get("disable_di", False),
+            "disable_di": disable_di,
+            "manage_lifespan": litestar_config.get("manage_lifespan", not disable_di),
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
         }
 
@@ -290,15 +294,22 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             correlation_header=settings["correlation_header"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             disable_di=settings["disable_di"],
+            manage_lifespan=settings["manage_lifespan"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
 
+        if state.manage_lifespan:
+            self._setup_lifespan_handler(state)
         if not state.disable_di:
-            self._setup_handlers(state)
+            self._setup_di_handlers(state)
         return state
 
-    def _setup_handlers(self, state: PluginConfigState) -> None:
-        """Setup handlers for the plugin state."""
+    def _setup_lifespan_handler(self, state: PluginConfigState) -> None:
+        """Build the pool lifespan handler for the plugin state."""
+        state.lifespan_handler = lifespan_handler_maker(state.config, state.pool_key)
+
+    def _setup_di_handlers(self, state: PluginConfigState) -> None:
+        """Build the dependency providers and before-send handler for the plugin state."""
         connection_key = state.connection_key
         pool_key = state.pool_key
         commit_mode = state.commit_mode
@@ -307,7 +318,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
         state.session_provider = session_provider_maker(config, connection_key)
-        state.lifespan_handler = lifespan_handler_maker(config, pool_key)
 
         if commit_mode == "manual":
             state.before_send_handler = manual_handler_maker(connection_key)
@@ -363,17 +373,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
             signature_namespace.update(state.config.get_signature_namespace())
 
+            if state.manage_lifespan:
+                if state.lifespan_handler is None:
+                    self._raise_lifespan_handler_not_initialized(state.session_key)
+                app_config.lifespan.append(state.lifespan_handler)
+
             if not state.disable_di:
                 if (
                     state.connection_provider is None
                     or state.pool_provider is None
                     or state.session_provider is None
                     or state.before_send_handler is None
-                    or state.lifespan_handler is None
                 ):
                     self._raise_di_handlers_not_initialized(state.session_key)
                 app_config.before_send.append(state.before_send_handler)
-                app_config.lifespan.append(state.lifespan_handler)
                 app_config.dependencies.update({
                     state.connection_key: Provide(state.connection_provider),
                     state.pool_key: Provide(state.pool_provider),
@@ -934,6 +947,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         msg = (
             f"Dependency injection handlers were not initialized for configuration '{session_key}'. "
             "Handlers are created during plugin construction for configurations with dependency injection enabled."
+        )
+        raise ImproperConfigurationError(msg)
+
+    def _raise_lifespan_handler_not_initialized(self, session_key: str) -> NoReturn:
+        """Raise error when the lifespan handler is missing for a lifespan-managed configuration."""
+        msg = (
+            f"Lifespan handler was not initialized for configuration '{session_key}'. "
+            "Handlers are created during plugin construction for configurations with lifespan management enabled."
         )
         raise ImproperConfigurationError(msg)
 

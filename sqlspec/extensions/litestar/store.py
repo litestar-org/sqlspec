@@ -59,6 +59,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         "enable_sqlcommenter_middleware",
         "extra_commit_statuses",
         "extra_rollback_statuses",
+        "manage_lifespan",
         "manage_schema",
         "migrations_path",
         "pool_key",

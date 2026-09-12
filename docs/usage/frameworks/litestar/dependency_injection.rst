@@ -99,6 +99,69 @@ sync DuckDB for ETL operations:
        plugins=[SQLSpecPlugin(sqlspec=sqlspec)]  # Single plugin handles all configs
    )
 
+Bringing Your Own DI
+--------------------
+
+Applications that use another dependency injection container can turn off the plugin's
+providers with ``disable_di`` and still let the plugin manage the connection pool with
+``manage_lifespan``. Both settings live in each config's ``extension_config["litestar"]``
+and apply to that config only.
+
+- ``disable_di`` (default ``False``) - when ``True``, the plugin registers no
+  ``session_key``, ``connection_key``, or ``pool_key`` dependencies and no
+  per-request commit or close handling.
+- ``manage_lifespan`` (default ``not disable_di``) - when ``True``, the plugin creates the
+  pool on application startup, stores it in application state under ``pool_key``, and
+  closes it on shutdown.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Settings
+     - Dependencies
+     - Pool lifespan
+   * - defaults
+     - registered
+     - managed
+   * - ``disable_di=True``
+     - not registered
+     - not managed
+   * - ``disable_di=True, manage_lifespan=True``
+     - not registered
+     - managed
+   * - ``manage_lifespan=False``
+     - registered
+     - not managed
+
+With ``disable_di=True`` and ``manage_lifespan=True``, your own providers open sessions
+from the pool the plugin started:
+
+.. code-block:: python
+
+   from collections.abc import AsyncIterator
+
+   from litestar import Litestar
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+   from sqlspec.extensions.litestar import SQLSpecPlugin
+
+   sqlspec = SQLSpec()
+   config = sqlspec.add_config(
+       AsyncpgConfig(
+           connection_config={"dsn": "postgresql://app:secret@localhost:5432/app"},
+           extension_config={"litestar": {"disable_di": True, "manage_lifespan": True}},
+       )
+   )
+
+   async def provide_session() -> AsyncIterator[AsyncpgDriver]:
+       async with config.provide_session() as session:
+           yield session
+
+   app = Litestar(route_handlers=[], plugins=[SQLSpecPlugin(sqlspec=sqlspec)])
+
+Register ``provide_session`` with your container; the pool is open for the lifetime of the
+application and closed when it shuts down.
+
 Config Lookup Outside App Construction
 --------------------------------------
 

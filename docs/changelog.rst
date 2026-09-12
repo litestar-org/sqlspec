@@ -19,6 +19,10 @@ Unreleased
   rejected by application middleware such as authentication or session handling now carry
   a correlation ID in logs and error hooks, and application middleware keeps its original
   relative order. (`#729 <https://github.com/litestar-org/sqlspec/issues/729>`_)
+* The Litestar plugin no longer adds a second ``CorrelationMiddleware`` when the
+  application's middleware stack already includes one, either as the class or
+  wrapped in ``DefineMiddleware``. The application's instance and its header
+  settings are used, and correlation IDs are extracted once per request.
 * A migration whose ``up()`` returns an empty list is now recorded in the
   tracking table instead of being reported as applied and then staying pending
   forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
@@ -73,6 +77,13 @@ Unreleased
   Previously these errors produced a 500 response. To return a more specific
   message, register a handler for ``IntegrityError`` in the application's
   ``exception_handlers``; it takes precedence.
+
+* The Litestar extension setting ``manage_lifespan`` controls whether the plugin
+  creates and closes each config's pool with the application. It defaults to the
+  inverse of ``disable_di``, so existing applications are unchanged. Set
+  ``disable_di=True`` and ``manage_lifespan=True`` to use another dependency
+  injection container while the plugin still manages the pool. See
+  :doc:`/usage/frameworks/litestar/dependency_injection`.
 
 **Breaking changes:**
 
