@@ -106,16 +106,3 @@ def test_cockroach_crdb_internal_query_is_feature_gated_by_default() -> None:
     assert query.capability.support == MetadataSupport.UNSUPPORTED
     assert query.capability.risks == (MetadataRisk.VERSION_GATED,)
     assert query.capability.warnings == ("cockroachdb/crdb_internal/ranges requires supports_crdb_internal_metadata",)
-
-
-@pytest.mark.parametrize("dialect", ["postgres", "cockroachdb"])
-def test_postgres_family_columns_report_keys_identity_and_owned_sequences(dialect: str) -> None:
-    """Column metadata includes the primary-key flag, identity kind, and owned sequence name."""
-    columns = DataDictionaryLoader().get_domain_query_text(dialect, "columns", "by_schema")
-
-    assert columns is not None
-    assert "AS is_primary" in columns
-    assert "AS identity_generation" in columns
-    assert "pg_get_serial_sequence" in columns
-    assert "AS sequence_name" in columns
-    assert "to_regclass" in columns

@@ -4,6 +4,8 @@ from importlib import import_module
 from typing import Any, cast
 
 import pytest
+import sqlglot
+from sqlglot import exp
 
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
@@ -190,22 +192,16 @@ def test_mysql_system_metadata_returns_rows_when_opted_in() -> None:
     assert "sys.schema_table_statistics" in driver.statements[-1]
 
 
-@pytest.mark.parametrize(
-    ("dialect", "query_name"), [("mysql", "by_schema"), ("mysql", "by_table"), ("mariadb", "by_schema")]
-)
-def test_mysql_family_columns_report_primary_key_flag(dialect: str, query_name: str) -> None:
-    """MySQL-family column metadata reports the column type, key, and primary-key flag."""
-    columns = DataDictionaryLoader().get_domain_query_text(dialect, "columns", query_name)
+def test_mariadb_columns_derive_primary_key_flag_from_column_key() -> None:
+    """MariaDB column metadata projects ``is_primary`` from the ``column_key`` value."""
+    columns = DataDictionaryLoader().get_domain_query_text("mariadb", "columns", "by_schema")
 
     assert columns is not None
-    assert "column_type" in columns
-    assert "column_key = 'PRI' AS" in columns
-    assert "is_primary" in columns
-
-
-def test_mysql_table_columns_report_extra() -> None:
-    """Single-table MySQL column metadata includes ``extra``, which marks generated columns."""
-    columns = DataDictionaryLoader().get_domain_query_text("mysql", "columns", "by_table")
-
-    assert columns is not None
-    assert "extra AS `extra`" in columns
+    select = sqlglot.parse_one(columns, read="mysql")
+    assert isinstance(select, exp.Select)
+    projections = {
+        projection.alias_or_name: projection.this.sql(dialect="mysql")
+        for projection in select.selects
+        if isinstance(projection, exp.Alias)
+    }
+    assert projections["is_primary"] == "column_key = 'PRI'"

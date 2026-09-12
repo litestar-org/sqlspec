@@ -992,11 +992,6 @@ def _decode_uuid(value: Any) -> Any:
     return convert_uuid(value) if isinstance(value, str) else value
 
 
-def _encode_json_value(value: Any) -> Any:
-    """Encode a JSON column value as JSON text."""
-    return encode_json(value)
-
-
 def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] | None":
     """Return the converter from a JSON value to the driver value for a column type, if any."""
     if data_type.endswith("]"):
@@ -1006,7 +1001,7 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
     if family == "sqlite":
         return None
     if data_type in {"json", "jsonb"}:
-        return _encode_json_value if family in _JSON_VALUE_FAMILIES else None
+        return encode_json if family in _JSON_VALUE_FAMILIES else None
     if data_type.startswith(("timestamp", "datetime")):
         return _decode_datetime
     if data_type == "date":
