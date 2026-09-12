@@ -471,7 +471,9 @@ def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: st
     if scope is not None:
         parts.append(f"SCOPE {_format_secret_literal(scope)}")
 
-    create = "CREATE PERSISTENT SECRET" if secret_config.get("persistent", False) else "CREATE SECRET"
+    create = (
+        "CREATE OR REPLACE PERSISTENT SECRET" if secret_config.get("persistent", False) else "CREATE OR REPLACE SECRET"
+    )
     body = ",\n    ".join(parts)
     return f"{create} {secret_name} (\n    {body}\n)"
 

@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _validate_sql_identifier
+from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _secret_sql, _validate_sql_identifier
 
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
@@ -43,6 +43,18 @@ def test_validate_sql_identifier_accepts_safe_identifiers(identifier: str) -> No
 def test_validate_sql_identifier_rejects_unsafe_identifiers(identifier: str) -> None:
     with pytest.raises(ValueError, match="secret_name"):
         _validate_sql_identifier(identifier, "secret_name")
+
+
+def test_secret_sql_uses_create_or_replace() -> None:
+    sql = _secret_sql({"name": "s1", "secret_type": "gcs", "value": {"key_id": "k"}}, "s1", "gcs")
+
+    assert sql.startswith("CREATE OR REPLACE SECRET s1 (")
+
+
+def test_secret_sql_persistent_uses_create_or_replace() -> None:
+    sql = _secret_sql({"name": "s1", "secret_type": "gcs", "persistent": True}, "s1", "gcs")
+
+    assert sql.startswith("CREATE OR REPLACE PERSISTENT SECRET s1 (")
 
 
 def test_create_connection_raises_for_malicious_secret_name() -> None:
