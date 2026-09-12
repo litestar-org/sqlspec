@@ -614,10 +614,13 @@ class BaseMigrationRunner:
         raise ValueError(msg) from error
 
     def _finalize_migration_sql(self, sql_statements: Any) -> "list[str] | None":
-        """Normalize loader output into a SQL statement list or None."""
-        if sql_statements:
-            return cast("list[str]", sql_statements)
-        return None
+        """Normalize loader output into a SQL statement list, or None when absent.
+
+        An empty list is preserved as a no-op the caller still records.
+        """
+        if sql_statements is None:
+            return None
+        return cast("list[str]", sql_statements)
 
     def _migration_sql_loader(self, file_path: Path, version: "str | None") -> SQLFileLoader:
         """Return the isolated core SQL loader for an extension migration."""
@@ -668,12 +671,12 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         if file_path.suffix == ".sql":
             partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
-            has_upgrade = bool(self._migration_sql(partial, "up"))
-            has_downgrade = bool(self._migration_sql(partial, "down"))
+            has_upgrade = self._migration_sql(partial, "up") is not None
+            has_downgrade = self._migration_sql(partial, "down") is not None
         else:
             try:
                 partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
-                has_downgrade = bool(self._migration_sql(partial, "down"))
+                has_downgrade = self._migration_sql(partial, "down") is not None
             except Exception:
                 has_downgrade = False
 
@@ -912,12 +915,12 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         if file_path.suffix == ".sql":
             partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
-            has_upgrade = bool(await self._migration_sql(partial, "up"))
-            has_downgrade = bool(await self._migration_sql(partial, "down"))
+            has_upgrade = (await self._migration_sql(partial, "up")) is not None
+            has_downgrade = (await self._migration_sql(partial, "down")) is not None
         else:
             try:
                 partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
-                has_downgrade = bool(await self._migration_sql(partial, "down"))
+                has_downgrade = (await self._migration_sql(partial, "down")) is not None
             except Exception:
                 has_downgrade = False
 

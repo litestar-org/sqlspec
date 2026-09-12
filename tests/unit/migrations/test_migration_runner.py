@@ -915,7 +915,7 @@ def test_migration_sql_empty_statements() -> None:
 
     result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
 
-    assert result is None
+    assert result == []
 
 
 def test_migration_sql_none_statements() -> None:
@@ -1235,6 +1235,7 @@ DROP TABLE test_table;
         file_count_after_down = len(sql_loader.sql_loader._files)
 
         assert file_count_before_down == file_count_after_down, "get_down_sql() should not load additional files"
+        assert down_sql is not None
         assert len(down_sql) == 1
         assert "DROP TABLE test_table" in down_sql[0]
 
@@ -1328,3 +1329,207 @@ def test_migration_context_resolves_multi_underscore_extension_settings(tmp_path
 
     assert context is not None
     assert context.extension_config == settings
+
+
+class _EmptyMigrationLoader:
+    async def get_up_sql(self, _file_path: Path) -> list[str]:
+        return []
+
+    async def get_down_sql(self, _file_path: Path) -> list[str]:
+        return []
+
+
+def _write_python_migration(path: Path, body: str) -> None:
+    path.write_text(body.strip() + "\n")
+
+
+def test_finalize_migration_sql_distinguishes_absent_from_empty(tmp_path: Path) -> None:
+    """None means the direction is absent; an empty list is a real no-op."""
+    runner = _sync_runner(tmp_path, {})
+
+    assert runner._finalize_migration_sql(None) is None
+    assert runner._finalize_migration_sql([]) == []
+    assert runner._finalize_migration_sql(["SELECT 1"]) == ["SELECT 1"]
+
+
+def test_sync_execute_upgrade_records_empty_statement_list(tmp_path: Path) -> None:
+    """An upgrade returning no statements still reports success so it can be recorded."""
+    migration_file = tmp_path / "0001_noop.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {})
+    driver = Mock()
+    on_success = Mock()
+
+    _, execution_time = runner.execute_upgrade(
+        driver, _migration(migration_file, _EmptyMigrationLoader()), use_transaction=True, on_success=on_success
+    )
+
+    driver.execute_script.assert_not_called()
+    on_success.assert_called_once()
+    recorded_time = on_success.call_args.args[0]
+    assert isinstance(recorded_time, int)
+    assert recorded_time >= 0
+    assert execution_time >= 0
+
+
+def test_sync_execute_downgrade_records_empty_statement_list(tmp_path: Path) -> None:
+    """A present-but-empty downgrade still fires the tracking callback."""
+    migration_file = tmp_path / "0001_noop.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {})
+    driver = Mock()
+    on_success = Mock()
+
+    _, execution_time = runner.execute_downgrade(
+        driver, _migration(migration_file, _EmptyMigrationLoader()), use_transaction=True, on_success=on_success
+    )
+
+    driver.execute_script.assert_not_called()
+    on_success.assert_called_once()
+    assert on_success.call_args.args[0] >= 0
+    assert execution_time >= 0
+
+
+def test_sync_execute_downgrade_skips_absent_direction(tmp_path: Path) -> None:
+    """A migration flagged without a downgrade must not be treated as a no-op."""
+    migration_file = tmp_path / "0001_noop.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {})
+    driver = Mock()
+    on_success = Mock()
+    migration = _migration(migration_file, _EmptyMigrationLoader())
+    migration["has_downgrade"] = False
+
+    result = runner.execute_downgrade(driver, migration, use_transaction=True, on_success=on_success)
+
+    assert result == (None, 0)
+    on_success.assert_not_called()
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_async_execute_upgrade_records_empty_statement_list(tmp_path: Path) -> None:
+    """Async upgrades returning no statements still report success."""
+    migration_file = tmp_path / "0001_noop.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {})
+    driver = AsyncMock()
+    on_success = AsyncMock()
+
+    _, execution_time = await runner.execute_upgrade(
+        driver, _migration(migration_file, _EmptyMigrationLoader()), use_transaction=True, on_success=on_success
+    )
+
+    driver.execute_script.assert_not_called()
+    on_success.assert_awaited_once()
+    assert on_success.call_args.args[0] >= 0
+    assert execution_time >= 0
+
+
+@pytest.mark.anyio
+async def test_async_execute_downgrade_records_empty_statement_list(tmp_path: Path) -> None:
+    """Async present-but-empty downgrades still fire the tracking callback."""
+    migration_file = tmp_path / "0001_noop.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {})
+    driver = AsyncMock()
+    on_success = AsyncMock()
+
+    _, execution_time = await runner.execute_downgrade(
+        driver, _migration(migration_file, _EmptyMigrationLoader()), use_transaction=True, on_success=on_success
+    )
+
+    driver.execute_script.assert_not_called()
+    on_success.assert_awaited_once()
+    assert on_success.call_args.args[0] >= 0
+    assert execution_time >= 0
+
+
+@pytest.mark.anyio
+async def test_async_execute_downgrade_skips_absent_direction(tmp_path: Path) -> None:
+    """Async downgrades on a flagged-absent direction return the missing sentinel."""
+    migration_file = tmp_path / "0001_noop.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {})
+    driver = AsyncMock()
+    on_success = AsyncMock()
+    migration = _migration(migration_file, _EmptyMigrationLoader())
+    migration["has_downgrade"] = False
+
+    result = await runner.execute_downgrade(driver, migration, use_transaction=True, on_success=on_success)
+
+    assert result == (None, 0)
+    on_success.assert_not_awaited()
+    driver.execute_script.assert_not_called()
+
+
+def test_load_migration_flags_empty_python_downgrade_as_present(tmp_path: Path) -> None:
+    """A Python down() returning an empty list is a reversible no-op."""
+    migration_file = tmp_path / "0001_empty_down.py"
+    _write_python_migration(
+        migration_file,
+        """
+def up() -> list[str]:
+    return ["CREATE TABLE example (id INTEGER)"]
+
+
+def down() -> list[str]:
+    return []
+""",
+    )
+    runner = _sync_runner(tmp_path, {})
+
+    migration = runner.load_migration(migration_file)
+
+    assert migration["has_downgrade"] is True
+
+
+def test_load_migration_flags_missing_python_downgrade_as_absent(tmp_path: Path) -> None:
+    """A Python migration without down() stays irreversible."""
+    migration_file = tmp_path / "0001_no_down.py"
+    _write_python_migration(
+        migration_file,
+        """
+def up() -> list[str]:
+    return ["CREATE TABLE example (id INTEGER)"]
+""",
+    )
+    runner = _sync_runner(tmp_path, {})
+
+    migration = runner.load_migration(migration_file)
+
+    assert migration["has_downgrade"] is False
+
+
+def test_load_migration_flags_missing_sql_downgrade_as_absent(tmp_path: Path) -> None:
+    """A SQL migration without a down block stays irreversible."""
+    migration_file = tmp_path / "0001_up_only.sql"
+    migration_file.write_text("-- name: migrate-0001-up\nSELECT 1;\n")
+    runner = _sync_runner(tmp_path, {})
+
+    migration = runner.load_migration(migration_file)
+
+    assert migration["has_upgrade"] is True
+    assert migration["has_downgrade"] is False
+
+
+@pytest.mark.anyio
+async def test_async_load_migration_flags_empty_python_downgrade_as_present(tmp_path: Path) -> None:
+    """The async runner agrees that an empty down() is a present direction."""
+    migration_file = tmp_path / "0001_empty_down.py"
+    _write_python_migration(
+        migration_file,
+        """
+def up() -> list[str]:
+    return ["CREATE TABLE example (id INTEGER)"]
+
+
+def down() -> list[str]:
+    return []
+""",
+    )
+    runner = _async_runner(tmp_path, {})
+
+    migration = await runner.load_migration(migration_file)
+
+    assert migration["has_downgrade"] is True

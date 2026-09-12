@@ -14,6 +14,12 @@ Unreleased
 
 **Fixed:**
 
+* A migration whose ``up()`` returns an empty list is now recorded in the
+  tracking table instead of being reported as applied and then staying pending
+  forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
+  empty list is the supported no-op for conditional migrations; omitting
+  ``down()`` still marks a migration irreversible.
+
 * ``Select.group_by()`` accepts the ``sql.rollup()``, ``sql.cube()``, and
   ``sql.grouping_sets()`` factory expressions directly. The factory helpers and
   the ``group_by_rollup()``, ``group_by_cube()``, and
