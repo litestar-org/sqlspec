@@ -40,11 +40,10 @@ yourself only when you build the middleware stack without the plugin.
 
 .. py:data:: sqlspec.extensions.litestar.TRACE_CONTEXT_FALLBACK_HEADERS
 
-   Trace-context headers the plugin checks after ``correlation_header`` and
-   ``correlation_headers`` while ``auto_trace_headers`` is enabled, which is the
-   default. In order: ``x-request-id``, ``x-correlation-id``, ``traceparent``,
-   ``x-cloud-trace-context``, ``grpc-trace-bin``, ``x-amzn-trace-id``,
-   ``x-b3-traceid``, and ``x-client-trace-id``.
+   Ordered trace-context header names that the plugin checks after
+   ``correlation_header`` and ``correlation_headers`` while
+   ``auto_trace_headers`` is enabled, which is the default. Import the constant
+   to inspect the names or pass them to ``CorrelationMiddleware``.
 
    :type: tuple[str, ...]
 

@@ -182,6 +182,14 @@ def __getattr__(name: str) -> "Any":
     if name == "dialects":
         return importlib.import_module("sqlspec.dialects")
     if name in _LAZY_UUID_NAMES:
-        return getattr(importlib.import_module("sqlspec.utils.uuids"), name)
+        value = getattr(importlib.import_module("sqlspec.utils.uuids"), name)
+        globals()[name] = value
+        return value
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)
+
+
+def __dir__() -> "list[str]":
+    """Expose the public surface for autocomplete and ``dir()``."""
+
+    return sorted(set(globals()) | set(__all__))

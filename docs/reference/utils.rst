@@ -44,6 +44,11 @@ Serialization
 .. automodule:: sqlspec.utils.serializers
    :members:
 
+.. py:data:: DEFAULT_TYPE_ENCODERS
+
+   Default mapping of Python types to JSON encoder functions; ``type_encoders``
+   passed to a serializer are merged over it.
+
 Schema Conversion
 =================
 

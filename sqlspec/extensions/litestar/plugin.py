@@ -118,7 +118,9 @@ class CorrelationMiddleware:
     """ASGI middleware that binds a correlation ID to each HTTP request.
 
     The first non-empty value among ``headers``, checked in order, becomes the
-    correlation ID; when none is present a new ID is generated. The ID is set on
+    correlation ID after surrounding whitespace is trimmed and the value is
+    truncated to 128 characters; when no header has a value, or the trimmed
+    value is empty, a new ID is generated. The ID is set on
     :class:`~sqlspec.utils.correlation.CorrelationContext` and in the request scope
     for the duration of the request, then the previous ID is restored. Non-HTTP
     scopes, and instances created with an empty ``headers`` tuple, pass through
@@ -126,7 +128,7 @@ class CorrelationMiddleware:
 
     Args:
         app: The downstream ASGI application.
-        headers: Lower-case request header names to check, in priority order.
+        headers: Request header names to check, in priority order.
     """
 
     __slots__ = ("_app", "_extractor", "_headers")
