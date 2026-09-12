@@ -20,6 +20,7 @@ Unreleased
   ``session.select(SQL("... :a ... :b", a=1), b=2)`` failed with a parameter
   count mismatch. A value passed at execute time replaces a bound value of the
   same name. ``execute_many()`` is unchanged.
+  (`#762 <https://github.com/litestar-org/sqlspec/issues/762>`_)
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
@@ -65,6 +66,7 @@ Unreleased
   ``spec.get_sql(name, **slots)`` fills with a string, a sqlglot expression, or a
   ``SQL`` object. These comment shapes are now reserved in ``.sql`` files; see
   :ref:`sql-fragments-and-slots` for the syntax and compatibility notes.
+  (`#763 <https://github.com/litestar-org/sqlspec/issues/763>`_)
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
