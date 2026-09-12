@@ -28,6 +28,26 @@ NamedStatement
    :members:
    :show-inheritance:
 
+Fragments and Slots
+===================
+
+SQL files can declare reusable ``-- fragment:`` sections, splice them into queries
+with ``/* include: name */``, and mark fill points with ``/* slot: name */``. See
+:ref:`Fragments and Slots <sql-fragments-and-slots>` for the syntax and the
+``get_sql(name, **slots)`` call.
+
+.. autoclass:: SQLFragment
+   :members:
+   :show-inheritance:
+
+.. autoclass:: SlotDeclaration
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.exceptions.SQLSlotError
+   :members:
+   :show-inheritance:
+
 Declared Parameters
 ===================
 

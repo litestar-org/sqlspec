@@ -60,6 +60,16 @@ Unreleased
 
 **Added:**
 
+* SQL files can share and customize SQL. A ``-- fragment: name`` section is
+  spliced into queries with ``/* include: name */``, across files and
+  namespaces. ``/* slot: name */`` marks a fill point, with an optional
+  ``-- slot: name = default`` directive. Fill slots with
+  ``spec.get_sql(name, **slots)`` using a string, a sqlglot expression, or a
+  ``SQL`` object whose named parameters are bound on the result. The loader adds
+  ``add_fragment()``, ``has_fragment()``, ``list_fragments()``,
+  ``get_fragment_text()``, and ``get_query_slots()``, and slot problems raise
+  ``SQLSlotError``. See :ref:`Fragments and Slots <sql-fragments-and-slots>`.
+
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
   ``begin_transaction()`` to keep several calls in one transaction. Existing
