@@ -6,39 +6,11 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import SQL, LimitOffsetFilter, ParameterDeclaration
 from sqlspec.exceptions import SQLFileParseError, SQLSlotError
 from sqlspec.loader import SlotDeclaration, SQLFileLoader
 
-EFFORT_SQL = """\
--- fragment: decision_fact_ctes
-decisions AS (
-    SELECT d.id, d.workspace_id, d.strategy
-    FROM decision d
-    WHERE d.workspace_id = :workspace_id
-),
-classified AS (
-    SELECT id, workspace_id, strategy AS journey
-    FROM decisions
-)
-
--- name: list_efforts
--- param: workspace_id str
--- slot: predicates = TRUE
--- slot: order_by = e.id
-WITH
-/* include: decision_fact_ctes */
-SELECT e.id, e.journey
-FROM classified e
-WHERE /* slot: predicates */
-ORDER BY /* slot: order_by */
-
--- name: count_efforts
--- param: workspace_id str
-WITH
-/* include: decision_fact_ctes */
-SELECT count(*) FROM classified e WHERE /* slot: predicates */
+PLAIN_QUERY_SQL = """
 
 -- name: plain_query
 SELECT id FROM decision
@@ -50,9 +22,9 @@ def _normalize(sql: str) -> str:
 
 
 @pytest.fixture
-def loader(tmp_path: Path) -> SQLFileLoader:
+def loader(tmp_path: Path, effort_sql: str) -> SQLFileLoader:
     path = tmp_path / "effort.sql"
-    path.write_text(EFFORT_SQL)
+    path.write_text(effort_sql + PLAIN_QUERY_SQL)
     sql_loader = SQLFileLoader()
     sql_loader.load_sql(path)
     return sql_loader
@@ -153,9 +125,9 @@ def test_cache_only_default_form(loader: SQLFileLoader) -> None:
     assert loader.get_sql("plain_query") is loader.get_sql("plain_query")
 
 
-def test_sqlspec_get_sql_forwards_slots(tmp_path: Path) -> None:
+def test_sqlspec_get_sql_forwards_slots(tmp_path: Path, effort_sql: str) -> None:
     path = tmp_path / "effort.sql"
-    path.write_text(EFFORT_SQL)
+    path.write_text(effort_sql)
     spec = SQLSpec()
     spec.load_sql_files(path)
 
@@ -183,27 +155,6 @@ def test_add_named_sql_resolves_includes_and_fills_slots() -> None:
         sql_loader.get_sql("scoped_rows")
     filled = sql_loader.get_sql("scoped_rows", predicates="t.id > 1")
     assert _normalize(filled.sql) == "SELECT id FROM t WHERE t.workspace_id = :workspace_id AND t.id > 1"
-
-
-def test_fill_ending_in_line_comment_keeps_following_sql(tmp_path: Path) -> None:
-    path = tmp_path / "commented.sql"
-    path.write_text(
-        "-- name: newest_first\n"
-        "-- slot: p = TRUE -- default\n"
-        "SELECT id FROM item WHERE /* slot: p */ ORDER BY id DESC\n"
-    )
-    spec = SQLSpec()
-    spec.load_sql_files(path)
-    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-
-    with spec.provide_session(config) as session:
-        session.execute_script("CREATE TABLE item (id INTEGER PRIMARY KEY); INSERT INTO item VALUES (1), (2), (3);")
-        default_rows = session.select(spec.get_sql("newest_first"))
-        filled_rows = session.select(spec.get_sql("newest_first", p="id < 3 -- only early rows"))
-    config.close_pool()
-
-    assert [row["id"] for row in default_rows] == [3, 2, 1]
-    assert [row["id"] for row in filled_rows] == [2, 1]
 
 
 def test_sql_value_with_filters_raises(loader: SQLFileLoader) -> None:

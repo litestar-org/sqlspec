@@ -29,6 +29,7 @@ __all__ = (
     "SQLConversionError",
     "SQLFileNotFoundError",
     "SQLFileParseError",
+    "SQLFragmentNotFoundError",
     "SQLParsingError",
     "SQLSlotError",
     "SQLSpecError",
@@ -327,32 +328,53 @@ class SQLFileNotFoundError(SQLSpecError):
 
 
 class SQLStatementNotFoundError(SQLFileNotFoundError):
-    """Raised when a named SQL statement or fragment is not loaded."""
+    """Raised when a named SQL statement is not loaded."""
 
-    def __init__(self, name: str, normalized_name: str, query_count: int, *, fragment: bool = False) -> None:
+    def __init__(self, name: str, normalized_name: str, query_count: int) -> None:
         """Initialize the error.
 
         Args:
             name: Name requested by the caller.
-            normalized_name: Normalized statement or fragment name used for lookup.
-            query_count: Number of SQL statements, or of fragments when ``fragment`` is True, loaded in the registry.
-            fragment: Whether the missing name refers to a SQL fragment.
+            normalized_name: Normalized statement name used for lookup.
+            query_count: Number of SQL statements loaded in the registry.
         """
-        kind = "fragment" if fragment else "statement"
         if query_count == 0:
-            message = f"SQL {kind} '{name}' not found. No SQL {kind}s are loaded."
+            message = f"SQL statement '{name}' not found. No SQL statements are loaded."
         else:
-            listing = "list_fragments()" if fragment else "list_queries()"
             message = (
-                f"SQL {kind} '{name}' not found. {query_count} SQL {kind}s are loaded. "
-                f"Use {listing} to inspect available {kind} names."
+                f"SQL statement '{name}' not found. {query_count} SQL statements are loaded. "
+                "Use list_queries() to inspect available statement names."
             )
         SQLSpecError.__init__(self, message)
         self.name = name
         self.path = None
         self.normalized_name = normalized_name
         self.query_count = query_count
-        self.fragment = fragment
+
+
+class SQLFragmentNotFoundError(SQLStatementNotFoundError):
+    """Raised when a SQL fragment named by an include or lookup is not loaded."""
+
+    def __init__(self, name: str, normalized_name: str, fragment_count: int) -> None:
+        """Initialize the error.
+
+        Args:
+            name: Fragment name requested by the caller or include marker.
+            normalized_name: Normalized fragment name used for lookup.
+            fragment_count: Number of SQL fragments loaded in the registry.
+        """
+        if fragment_count == 0:
+            message = f"SQL fragment '{name}' not found. No SQL fragments are loaded."
+        else:
+            message = (
+                f"SQL fragment '{name}' not found. {fragment_count} SQL fragments are loaded. "
+                "Use list_fragments() to inspect available fragment names."
+            )
+        SQLSpecError.__init__(self, message)
+        self.name = name
+        self.path = None
+        self.normalized_name = normalized_name
+        self.query_count = fragment_count
 
 
 class SQLFileParseError(SQLSpecError):

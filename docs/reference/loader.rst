@@ -36,15 +36,15 @@ with ``/* include: name */``, and mark fill points with ``/* slot: name */``. Se
 :ref:`Fragments and Slots <sql-fragments-and-slots>` for the syntax and the
 ``get_sql(name, **slots)`` call.
 
-.. autoclass:: SQLFragment
-   :members:
-   :show-inheritance:
-
 .. autoclass:: SlotDeclaration
    :members:
    :show-inheritance:
 
 .. autoclass:: sqlspec.exceptions.SQLSlotError
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.exceptions.SQLFragmentNotFoundError
    :members:
    :show-inheritance:
 

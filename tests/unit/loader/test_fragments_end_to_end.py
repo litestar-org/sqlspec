@@ -12,36 +12,6 @@ from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import SQL
 
-EFFORT_SQL = """\
--- fragment: decision_fact_ctes
-decisions AS (
-    SELECT d.id, d.workspace_id, d.strategy
-    FROM decision d
-    WHERE d.workspace_id = :workspace_id
-),
-classified AS (
-    SELECT id, workspace_id, CASE WHEN strategy = 'lift' THEN 'homogeneous' ELSE 'modernize' END AS journey
-    FROM decisions
-)
-
--- name: list_efforts
--- param: workspace_id str
--- slot: predicates = TRUE
--- slot: order_by = e.id
-WITH
-/* include: decision_fact_ctes */
-SELECT e.id, e.journey
-FROM classified e
-WHERE /* slot: predicates */
-ORDER BY /* slot: order_by */
-
--- name: count_efforts
--- param: workspace_id str
-WITH
-/* include: decision_fact_ctes */
-SELECT count(*) FROM classified e WHERE /* slot: predicates */
-"""
-
 SETUP_SQL = """\
 CREATE TABLE decision (id INTEGER PRIMARY KEY, workspace_id VARCHAR NOT NULL, strategy VARCHAR NOT NULL);
 INSERT INTO decision (id, workspace_id, strategy) VALUES
@@ -53,9 +23,9 @@ INSERT INTO decision (id, workspace_id, strategy) VALUES
 
 
 @pytest.fixture
-def spec(tmp_path: Path) -> SQLSpec:
+def spec(tmp_path: Path, effort_sql: str) -> SQLSpec:
     sql_path = tmp_path / "effort.sql"
-    sql_path.write_text(EFFORT_SQL)
+    sql_path.write_text(effort_sql)
     sql_spec = SQLSpec()
     sql_spec.load_sql_files(sql_path)
     return sql_spec
@@ -103,3 +73,17 @@ def test_sqlite_filled_query_executes(spec: SQLSpec, sqlite_session: Any) -> Non
 
 def test_duckdb_filled_query_executes(spec: SQLSpec, duckdb_session: Any) -> None:
     _assert_filled_queries_execute(spec, duckdb_session)
+
+
+def test_fill_ending_in_line_comment_keeps_following_sql(tmp_path: Path, spec: SQLSpec, sqlite_session: Any) -> None:
+    path = tmp_path / "commented.sql"
+    path.write_text(
+        "-- name: newest_first\n-- slot: p = TRUE -- default\nSELECT id FROM decision WHERE /* slot: p */ ORDER BY id DESC\n"
+    )
+    spec.load_sql_files(path)
+
+    default_rows = sqlite_session.select(spec.get_sql("newest_first"))
+    filled_rows = sqlite_session.select(spec.get_sql("newest_first", p="id < 3 -- only early rows"))
+
+    assert [row["id"] for row in default_rows] == [4, 3, 2, 1]
+    assert [row["id"] for row in filled_rows] == [2, 1]

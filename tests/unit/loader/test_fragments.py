@@ -5,37 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.exceptions import SQLFileParseError, SQLStatementNotFoundError
-from sqlspec.loader import SlotDeclaration, SQLFileLoader, SQLFragment
-
-EFFORT_SQL = """\
--- fragment: decision_fact_ctes
-decisions AS (
-    SELECT d.id, d.workspace_id, d.strategy
-    FROM decision d
-    WHERE d.workspace_id = :workspace_id
-),
-classified AS (
-    SELECT id, workspace_id, strategy AS journey
-    FROM decisions
-)
-
--- name: list_efforts
--- param: workspace_id str
--- slot: predicates = TRUE
--- slot: order_by = e.id
-WITH
-/* include: decision_fact_ctes */
-SELECT e.id, e.journey
-FROM classified e
-WHERE /* slot: predicates */
-ORDER BY /* slot: order_by */
-
--- name: count_efforts
-WITH
-/* include: decision_fact_ctes */
-SELECT count(*) FROM classified e WHERE /* slot: predicates */
-"""
+from sqlspec.exceptions import SQLFileParseError, SQLFragmentNotFoundError, SQLStatementNotFoundError
+from sqlspec.loader import SlotDeclaration, SQLFileLoader
 
 SHARED_FRAGMENT = """\
 -- fragment: active_users
@@ -55,9 +26,9 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
-def test_fragment_sections_split_from_statements(tmp_path: Path) -> None:
+def test_fragment_sections_split_from_statements(tmp_path: Path, effort_sql: str) -> None:
     loader = SQLFileLoader()
-    loader.load_sql(_write(tmp_path / "effort.sql", EFFORT_SQL))
+    loader.load_sql(_write(tmp_path / "effort.sql", effort_sql))
 
     assert loader.list_queries() == ["count_efforts", "list_efforts"]
     assert loader.list_fragments() == ["decision_fact_ctes"]
@@ -65,15 +36,6 @@ def test_fragment_sections_split_from_statements(tmp_path: Path) -> None:
     assert not loader.has_query("decision_fact_ctes")
     assert loader.get_fragment_text("decision_fact_ctes").startswith("decisions AS (")
     assert loader.get_fragment_text("decision_fact_ctes").endswith("FROM decisions\n)")
-
-
-def test_parse_statements_returns_fragments() -> None:
-    statements, fragments = SQLFileLoader._parse_statements(EFFORT_SQL, "effort.sql")
-
-    assert set(statements) == {"list_efforts", "count_efforts"}
-    assert set(fragments) == {"decision_fact_ctes"}
-    assert fragments["decision_fact_ctes"] == SQLFragment("decision_fact_ctes", fragments["decision_fact_ctes"].sql, 0)
-    assert statements["list_efforts"].has_includes is True
 
 
 def test_fragment_only_file_loads(tmp_path: Path) -> None:
@@ -104,8 +66,8 @@ def test_duplicate_fragment_raises(tmp_path: Path) -> None:
 def test_directive_on_fragment_raises(directive: str) -> None:
     content = f"-- fragment: filtered\n{directive}\nusers AS (SELECT id FROM users)\n"
 
-    with pytest.raises(SQLFileParseError, match="fragment"):
-        SQLFileLoader._parse_statements(content, "fragment.sql")
+    with pytest.raises(SQLFileParseError, match=r"Fragment 'filtered' cannot declare"):
+        SQLFileLoader._parse_statements(content, "section.sql")
 
 
 def test_no_fragment_file_unchanged(tmp_path: Path) -> None:
@@ -134,9 +96,9 @@ SELECT id FROM users /* keep */ ORDER BY id
     assert statements["get_user"].has_includes is False
 
 
-def test_slot_directive_parsed(tmp_path: Path) -> None:
+def test_slot_directive_parsed(tmp_path: Path, effort_sql: str) -> None:
     loader = SQLFileLoader()
-    loader.load_sql(_write(tmp_path / "effort.sql", EFFORT_SQL))
+    loader.load_sql(_write(tmp_path / "effort.sql", effort_sql))
 
     assert loader.get_query_slots("list_efforts") == (
         SlotDeclaration("predicates", "TRUE"),
@@ -154,9 +116,9 @@ def test_slot_default_keeps_trailing_comment() -> None:
     assert statements["q"].slots == (SlotDeclaration("order_by", "id DESC -- newest first"),)
 
 
-def test_undeclared_marker_is_required(tmp_path: Path) -> None:
+def test_undeclared_marker_is_required(tmp_path: Path, effort_sql: str) -> None:
     loader = SQLFileLoader()
-    loader.load_sql(_write(tmp_path / "effort.sql", EFFORT_SQL))
+    loader.load_sql(_write(tmp_path / "effort.sql", effort_sql))
 
     assert loader.get_query_slots("count_efforts") == (SlotDeclaration("predicates", None),)
 
@@ -277,11 +239,10 @@ def test_unknown_include_raises(tmp_path: Path) -> None:
         loader.get_query_text("count_active")
 
     loader.add_fragment("other", "SELECT 1")
-    with pytest.raises(SQLStatementNotFoundError, match=r"SQL fragment 'missing' not found") as exc_info:
+    with pytest.raises(SQLFragmentNotFoundError, match=r"SQL fragment 'missing' not found") as exc_info:
         loader.get_fragment_text("missing")
     assert "list_fragments()" in str(exc_info.value)
     assert "list_queries()" not in str(exc_info.value)
-    assert exc_info.value.fragment is True
 
 
 def test_namespaced_include_resolves(tmp_path: Path) -> None:
@@ -360,9 +321,9 @@ def test_add_fragment_duplicate_raises() -> None:
         loader.add_fragment("shared", "SELECT 2")
 
 
-def test_clear_cache_drops_fragments(tmp_path: Path) -> None:
+def test_clear_cache_drops_fragments(tmp_path: Path, effort_sql: str) -> None:
     loader = SQLFileLoader()
-    loader.load_sql(_write(tmp_path / "effort.sql", EFFORT_SQL))
+    loader.load_sql(_write(tmp_path / "effort.sql", effort_sql))
 
     loader.clear_cache()
 

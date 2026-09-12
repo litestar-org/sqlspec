@@ -25,6 +25,7 @@ from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
     SQLFileParseError,
+    SQLFragmentNotFoundError,
     SQLSlotError,
     SQLStatementNotFoundError,
     StorageOperationFailedError,
@@ -41,19 +42,18 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
-__all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader", "SQLFragment", "SlotDeclaration")
+__all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader", "SlotDeclaration")
 
 logger = get_logger("sqlspec.loader")
 
-QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
-
-FRAGMENT_NAME_PATTERN = re.compile(r"^\s*--\s*fragment\s*:\s*([\w-]+)\s*$", re.MULTILINE | re.IGNORECASE)
+SECTION_MARKER_PATTERN = re.compile(
+    r"^\s*--\s*(?:name\s*:\s*(?P<name>[\w-]+[^\w\s]*)|fragment\s*:\s*(?P<fragment>[\w-]+))\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 SLOT_DIRECTIVE_PATTERN = re.compile(
     r"^\s*--\s*slot\s*:\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*(?P<default>.*\S))?\s*$", re.IGNORECASE
 )
-
-SLOT_PREFIX_PATTERN = re.compile(r"^\s*--\s*slot\s*:", re.IGNORECASE)
 
 SLOT_COMMENT_PATTERN = re.compile(r"--\s*slot\s*:", re.IGNORECASE)
 
@@ -134,17 +134,6 @@ class SQLFragment:
         self.name = name
         self.sql = sql
         self.start_line = start_line
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SQLFragment):
-            return NotImplemented
-        return self.name == other.name and self.sql == other.sql
-
-    def __hash__(self) -> int:
-        return hash((self.name, self.sql))
-
-    def __repr__(self) -> str:
-        return f"SQLFragment(name={self.name!r}, sql={self.sql!r})"
 
 
 class NamedStatement:
@@ -527,7 +516,7 @@ class SQLFileLoader:
                     )
                 slots.append(SlotDeclaration(slot_name, slot_match.group("default")))
                 continue
-            if SLOT_PREFIX_PATTERN.match(stripped):
+            if SLOT_COMMENT_PATTERN.match(stripped):
                 raise SQLFileParseError(
                     file_path,
                     file_path,
@@ -565,7 +554,7 @@ class SQLFileLoader:
                     ),
                     line=base_line + body_start + body_text.count("\n", 0, start) + 1,
                 )
-        return dialect, tuple(params), "\n".join(raw_lines[body_start:]), tuple(slots)
+        return dialect, tuple(params), body_text, tuple(slots)
 
     @staticmethod
     def _check_declared_parameters(
@@ -646,20 +635,18 @@ class SQLFileLoader:
         statements: dict[str, NamedStatement] = {}
         fragments: dict[str, SQLFragment] = {}
 
-        section_matches: list[tuple[re.Match[str], bool]] = [
-            (match, False) for match in QUERY_NAME_PATTERN.finditer(content)
-        ]
-        section_matches.extend((match, True) for match in FRAGMENT_NAME_PATTERN.finditer(content))
+        section_matches = list(SECTION_MARKER_PATTERN.finditer(content))
         if not section_matches:
             return {}, {}
-        section_matches.sort(key=_section_match_start)
 
-        for i, (match, is_fragment) in enumerate(section_matches):
-            raw_statement_name = match.group(1).strip()
+        for i, match in enumerate(section_matches):
+            fragment_name = match.group("fragment")
+            is_fragment = fragment_name is not None
+            raw_statement_name = (fragment_name if is_fragment else match.group("name")).strip()
             statement_start_line = content[: match.start()].count("\n")
 
             start_pos = match.end()
-            end_pos = section_matches[i + 1][0].start() if i + 1 < len(section_matches) else len(content)
+            end_pos = section_matches[i + 1].start() if i + 1 < len(section_matches) else len(content)
 
             section_raw = content[start_pos:end_pos]
             statement_section = section_raw.strip()
@@ -710,7 +697,7 @@ class SQLFileLoader:
                 )
 
             slots = _merge_slot_markers(declared_slots, clean_sql)
-            has_includes = bool(_find_markers(clean_sql, INCLUDE_MARKER_PATTERN, "include"))
+            has_includes = bool(_include_markers(clean_sql))
             if not slots and not has_includes:
                 SQLFileLoader._check_declared_parameters(
                     clean_sql, declared_params, raw_statement_name, file_path, start_line=statement_start_line
@@ -1002,7 +989,7 @@ class SQLFileLoader:
         declared = tuple(parameters) if parameters else ()
         clean_sql = sql.strip()
         slots = _merge_slot_markers((), clean_sql)
-        has_includes = bool(_find_markers(clean_sql, INCLUDE_MARKER_PATTERN, "include"))
+        has_includes = bool(_include_markers(clean_sql))
         if not slots and not has_includes:
             self._check_declared_parameters(clean_sql, declared, name, "<directly added>")
 
@@ -1068,14 +1055,10 @@ class SQLFileLoader:
             Fragment SQL text with ``/* include: */`` markers replaced.
 
         Raises:
-            SQLStatementNotFoundError: If the fragment or an included fragment does not exist.
+            SQLFragmentNotFoundError: If the fragment or an included fragment does not exist.
             SQLFileParseError: If the includes form a cycle.
         """
-        safe_name = _normalize_query_name(name)
-        if safe_name not in self._fragments:
-            raise SQLStatementNotFoundError(
-                name=name, normalized_name=safe_name, query_count=len(self._fragments), fragment=True
-            )
+        safe_name = self._find_fragment_name(name, None)
         return self._resolve_includes(
             self._fragments[safe_name].sql, namespace=_namespace_of(safe_name), stack=(safe_name,)
         )
@@ -1423,7 +1406,7 @@ class SQLFileLoader:
             return cached_text
 
         resolved_text = self._resolve_includes(statement.sql, namespace=_namespace_of(safe_name), stack=())
-        marker_names = {match.group(1) for match in _find_markers(resolved_text, SLOT_MARKER_PATTERN, "slot")}
+        marker_names = {match.group(1) for match in _slot_markers(resolved_text)}
         for slot in statement.slots:
             if slot.name not in marker_names:
                 file_path = self._query_to_file.get(safe_name, "<directly added>")
@@ -1455,7 +1438,7 @@ class SQLFileLoader:
             SQLStatementNotFoundError: If an included fragment does not exist.
             SQLFileParseError: If the includes form a cycle.
         """
-        include_markers = _find_markers(text, INCLUDE_MARKER_PATTERN, "include")
+        include_markers = _include_markers(text)
         if not include_markers:
             return text
         parts: list[str] = []
@@ -1489,7 +1472,7 @@ class SQLFileLoader:
             The registered fragment name.
 
         Raises:
-            SQLStatementNotFoundError: If neither the raw nor the namespaced name is registered.
+            SQLFragmentNotFoundError: If neither the raw nor the namespaced name is registered.
         """
         normalized_name = _normalize_query_name(name)
         if normalized_name in self._fragments:
@@ -1498,9 +1481,7 @@ class SQLFileLoader:
             namespaced_name = f"{namespace}.{normalized_name}"
             if namespaced_name in self._fragments:
                 return namespaced_name
-        raise SQLStatementNotFoundError(
-            name=name, normalized_name=normalized_name, query_count=len(self._fragments), fragment=True
-        )
+        raise SQLFragmentNotFoundError(name=name, normalized_name=normalized_name, fragment_count=len(self._fragments))
 
 
 def _normalize_query_name(name: str) -> str:
@@ -1547,17 +1528,12 @@ def _substitute_slot_markers(text: str, fills: "dict[str, str]") -> str:
     """Replace every ``/* slot: name */`` marker in ``text`` with ``fills[name]``."""
     parts: list[str] = []
     last_end = 0
-    for match in _find_markers(text, SLOT_MARKER_PATTERN, "slot"):
+    for match in _slot_markers(text):
         parts.append(text[last_end : match.start()])
         parts.append(fills[match.group(1)])
         last_end = match.end()
     parts.append(text[last_end:])
     return "".join(parts)
-
-
-def _section_match_start(item: "tuple[re.Match[str], bool]") -> int:
-    """Return the start offset of a section marker match."""
-    return item[0].start()
 
 
 def _merge_slot_markers(declared: "tuple[SlotDeclaration, ...]", text: str) -> "tuple[SlotDeclaration, ...]":
@@ -1572,7 +1548,7 @@ def _merge_slot_markers(declared: "tuple[SlotDeclaration, ...]", text: str) -> "
     """
     known_names = {slot.name for slot in declared}
     required: list[SlotDeclaration] = []
-    for match in _find_markers(text, SLOT_MARKER_PATTERN, "slot"):
+    for match in _slot_markers(text):
         slot_name = match.group(1)
         if slot_name not in known_names:
             known_names.add(slot_name)
@@ -1627,8 +1603,22 @@ def _scan_sql_comments(text: str) -> "list[tuple[int, int, bool]]":
     return comments
 
 
-def _find_markers(text: str, pattern: "re.Pattern[str]", keyword: str) -> "list[re.Match[str]]":
-    """Find ``/* keyword: name */`` markers that are real block comments in SQL text.
+def _slot_markers(text: str) -> "list[re.Match[str]]":
+    """Find ``/* slot: name */`` markers that are real block comments in SQL text."""
+    if "slot" not in text or "/*" not in text:
+        return []
+    return _marker_comments(text, SLOT_MARKER_PATTERN)
+
+
+def _include_markers(text: str) -> "list[re.Match[str]]":
+    """Find ``/* include: name */`` markers that are real block comments in SQL text."""
+    if "include" not in text or "/*" not in text:
+        return []
+    return _marker_comments(text, INCLUDE_MARKER_PATTERN)
+
+
+def _marker_comments(text: str, pattern: "re.Pattern[str]") -> "list[re.Match[str]]":
+    """Match block comments in SQL text against a marker pattern.
 
     Marker-shaped text inside quoted strings, quoted identifiers, dollar-quoted bodies,
     or line comments is not a marker.
@@ -1636,13 +1626,10 @@ def _find_markers(text: str, pattern: "re.Pattern[str]", keyword: str) -> "list[
     Args:
         text: SQL text to scan.
         pattern: Pattern matching one complete marker comment.
-        keyword: Word that every marker contains, used to skip scanning text without markers.
 
     Returns:
         Marker matches in order of appearance.
     """
-    if keyword not in text or "/*" not in text:
-        return []
     markers: list[re.Match[str]] = []
     for start, end, is_block in _scan_sql_comments(text):
         if is_block:

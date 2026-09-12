@@ -275,7 +275,8 @@ uses, so they are recognized alongside the query's own placeholders.
   different values, or a slot parameter name that the query itself already uses
   raises :exc:`~sqlspec.exceptions.SQLSlotError`.
 - A slot value of any other type raises :exc:`TypeError`.
-- An unknown fragment raises :exc:`~sqlspec.exceptions.SQLStatementNotFoundError`.
+- An unknown fragment raises :exc:`~sqlspec.exceptions.SQLFragmentNotFoundError`, a
+  subclass of :exc:`~sqlspec.exceptions.SQLStatementNotFoundError`.
 - An include cycle, a duplicate fragment name, a directive on a fragment, a
   ``-- slot:`` line after the SQL has started, or a ``-- slot:`` default with no
   matching marker raises :exc:`~sqlspec.exceptions.SQLFileParseError`.
@@ -289,10 +290,8 @@ time. SQLSpec's statement cache is keyed on the final SQL text, so repeating the
 same fill still reuses compiled work. Loading or adding a fragment clears the
 cached text of every query that includes fragments.
 
-**Programmatic access.** ``spec.loader`` exposes ``add_fragment(name, sql)``,
-``has_fragment(name)``, ``list_fragments()``, ``get_fragment_text(name)`` (with
-includes resolved), and ``get_query_slots(name)``, which returns each slot as a
-:class:`~sqlspec.loader.SlotDeclaration`.
+**Programmatic access.** ``spec.loader`` adds, lists, and inspects fragments and
+reports a query's slots; see :class:`~sqlspec.loader.SQLFileLoader`.
 
 How Query Names Work
 --------------------

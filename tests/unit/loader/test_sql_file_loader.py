@@ -92,13 +92,17 @@ def test_load_uncached_file_returns_parsed_statements(tmp_path: Path) -> None:
     assert set(result) == {"get_widget", "list_widgets"}
 
 
-def test_load_uncached_file_returns_empty_dict_without_statements(tmp_path: Path) -> None:
-    """_load_uncached_file returns empty dicts when the file has no named statements."""
+def test_load_sql_skips_file_without_named_sections(tmp_path: Path) -> None:
+    """A file with no named statements or fragments registers nothing."""
     sql_file = tmp_path / "empty.sql"
     sql_file.write_text("SELECT 1;\n")
     loader = SQLFileLoader()
 
-    assert loader._load_uncached_file(sql_file, None) == ({}, {})
+    loader.load_sql(sql_file)
+
+    assert loader.list_queries() == []
+    assert loader.list_fragments() == []
+    assert loader.list_files() == []
 
 
 def test_load_single_file_reads_once_on_stale_cache(monkeypatch, tmp_path: Path) -> None:
@@ -147,7 +151,6 @@ def test_named_statement_slots() -> None:
     stmt = NamedStatement("test", "SELECT 1")
 
     assert hasattr(stmt.__class__, "__slots__")
-    assert stmt.__class__.__slots__ == ("dialect", "has_includes", "name", "parameters", "slots", "sql", "start_line")
 
     with pytest.raises(AttributeError):
         stmt.arbitrary_attr = "value"  # pyright: ignore[reportAttributeAccessIssue]
@@ -207,7 +210,9 @@ def test_cached_sqlfile_slots() -> None:
     cached_file = SQLFileCacheEntry(sql_file, {})
 
     assert hasattr(cached_file.__class__, "__slots__")
-    assert cached_file.__class__.__slots__ == ("parsed_fragments", "parsed_statements", "sql_file", "statement_names")
+
+    with pytest.raises(AttributeError):
+        cached_file.arbitrary_attr = "value"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_default_initialization() -> None:

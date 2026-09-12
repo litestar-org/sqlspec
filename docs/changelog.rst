@@ -60,22 +60,11 @@ Unreleased
 
 **Added:**
 
-* SQL files can share and customize SQL. A ``-- fragment: name`` section is
-  spliced into queries with ``/* include: name */``, across files and
-  namespaces. ``/* slot: name */`` marks a fill point, with an optional
-  ``-- slot: name = default`` directive. Fill slots with
-  ``spec.get_sql(name, **slots)`` using a string, a sqlglot expression, or a
-  ``SQL`` object whose named parameters are bound on the result. The loader adds
-  ``add_fragment()``, ``has_fragment()``, ``list_fragments()``,
-  ``get_fragment_text()``, and ``get_query_slots()``, and slot problems raise
-  ``SQLSlotError``. See :ref:`Fragments and Slots <sql-fragments-and-slots>`.
-
-  Compatibility: ``-- fragment:`` lines, ``-- slot:`` lines, and
-  ``/* include: */`` and ``/* slot: */`` block comments are now reserved in
-  ``.sql`` files. Marker text inside string literals and other comments is
-  ignored, but a prose comment such as ``-- Slot: morning`` in a query's leading
-  comment block becomes a slot declaration, and a ``-- slot:`` line after the
-  SQL has begun raises ``SQLFileParseError``.
+* SQL files can share SQL through ``-- fragment:`` sections spliced in with
+  ``/* include: name */``, and mark ``/* slot: name */`` fill points that
+  ``spec.get_sql(name, **slots)`` fills with a string, a sqlglot expression, or a
+  ``SQL`` object. These comment shapes are now reserved in ``.sql`` files; see
+  :ref:`sql-fragments-and-slots` for the syntax and compatibility notes.
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or
