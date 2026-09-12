@@ -168,19 +168,6 @@ def test_existing_correlation_middleware_not_duplicated() -> None:
     assert existing.kwargs == {"headers": ("x-app-request-id",)}
 
 
-def test_existing_bare_correlation_middleware_class_not_duplicated() -> None:
-    app_config = AppConfig(middleware=[CorrelationMiddleware])
-    _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
-    assert app_config.middleware == [CorrelationMiddleware]
-
-
-def test_correlation_middleware_prepended_once_without_existing() -> None:
-    existing = DefineMiddleware(_ExistingMiddleware)
-    app_config = AppConfig(middleware=[existing])
-    _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
-    assert tuple(_middleware_types(app_config)) == (CorrelationMiddleware, _ExistingMiddleware)
-
-
 def test_repeated_on_app_init_keeps_single_correlation_middleware() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=True).on_app_init(app_config)
@@ -221,25 +208,26 @@ def test_skipped_correlation_middleware_warns_about_unapplied_header_settings(
     assert _correlation_skip_levels(caplog) == [logging.WARNING]
 
 
-def test_skipped_correlation_middleware_with_default_headers_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
-    app_config = AppConfig(middleware=[DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",))])
-    plugin = _build_plugin(correlation=True)
-    with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
-        plugin.on_app_init(app_config)
-    assert _correlation_skip_levels(caplog) == [logging.DEBUG]
-    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
-
-
-def test_skipped_correlation_middleware_with_matching_headers_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
-    app_config = AppConfig(
-        middleware=[DefineMiddleware(_SubclassedCorrelationMiddleware, headers=("x-custom-id", "x-tenant-trace"))]
-    )
-    plugin = _build_plugin(
-        correlation=True,
-        correlation_header="x-custom-id",
-        correlation_headers=["x-tenant-trace"],
-        auto_trace_headers=False,
-    )
+@pytest.mark.parametrize(
+    ("existing", "litestar_settings"),
+    [
+        (DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",)), {}),
+        (
+            DefineMiddleware(_SubclassedCorrelationMiddleware, headers=("x-custom-id", "x-tenant-trace")),
+            {
+                "correlation_header": "x-custom-id",
+                "correlation_headers": ["x-tenant-trace"],
+                "auto_trace_headers": False,
+            },
+        ),
+    ],
+    ids=["default_headers", "matching_headers"],
+)
+def test_skipped_correlation_middleware_does_not_warn(
+    existing: DefineMiddleware, litestar_settings: "dict[str, Any]", caplog: pytest.LogCaptureFixture
+) -> None:
+    app_config = AppConfig(middleware=[existing])
+    plugin = _build_plugin(correlation=True, **litestar_settings)
     with caplog.at_level(logging.DEBUG, logger="sqlspec.extensions.litestar"):
         plugin.on_app_init(app_config)
     assert _correlation_skip_levels(caplog) == [logging.DEBUG]

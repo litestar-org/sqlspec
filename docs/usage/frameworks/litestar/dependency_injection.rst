@@ -103,16 +103,11 @@ Bringing Your Own DI
 --------------------
 
 Applications that use another dependency injection container can turn off the plugin's
-providers with ``disable_di`` and still let the plugin manage the connection pool with
-``manage_lifespan``. Both settings live in each config's ``extension_config["litestar"]``
-and apply to that config only.
-
-- ``disable_di`` (default ``False``) - when ``True``, the plugin registers no
-  ``session_key``, ``connection_key``, or ``pool_key`` dependencies and no
-  per-request commit or close handling.
-- ``manage_lifespan`` (default ``not disable_di``) - when ``True``, the plugin creates the
-  pool on application startup, stores it in application state under ``pool_key``, and
-  closes it on shutdown.
+dependency providers and per-request commit and close handling with ``disable_di`` and still
+let the plugin create the pool on startup, store it in application state under
+``pool_key``, and close it on shutdown with ``manage_lifespan``. Both settings live in each
+config's ``extension_config["litestar"]`` and apply to that config only; ``disable_di``
+defaults to ``False`` and ``manage_lifespan`` defaults to ``not disable_di``.
 
 .. list-table::
    :header-rows: 1
@@ -164,12 +159,9 @@ application and closed when it shuts down.
 
 .. note::
 
-   The request-scoped helpers depend on the plugin's per-request handler, which is not
-   registered when ``disable_di=True``. ``SQLSpecPlugin.provide_request_session()`` and
-   ``provide_request_connection()`` read a connection that handler's dependency providers
-   placed in the ASGI scope, and the ``_sync`` and ``_async`` variants open a connection
-   that the handler is expected to close. Neither works with ``disable_di=True``; open
-   sessions with the context-managed ``config.provide_session()`` instead.
+   ``SQLSpecPlugin.provide_request_session*()`` and ``provide_request_connection*()`` rely
+   on the plugin's dependency providers and per-request close handling, so they do not work
+   with ``disable_di=True``. Open sessions with the context-managed ``config.provide_session()`` instead.
 
 Config Lookup Outside App Construction
 --------------------------------------

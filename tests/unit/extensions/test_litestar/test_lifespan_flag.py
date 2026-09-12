@@ -50,29 +50,23 @@ async def _managed_pool_keys(app_config: AppConfig) -> "set[str]":
     return keys
 
 
-def test_disable_di_manage_lifespan_registers_lifespan_only() -> None:
-    app_config = _init_app({"disable_di": True, "manage_lifespan": True})
-    assert len(app_config.lifespan) == 1
-    assert app_config.dependencies == {}
-    assert app_config.before_send == []
-
-
-def test_defaults_unchanged() -> None:
-    disabled = _init_app({"disable_di": True})
-    assert disabled.lifespan == []
-    assert disabled.dependencies == {}
-
-    default = _init_app({})
-    assert len(default.lifespan) == 1
-    assert set(default.dependencies) == {"db_session_0", "db_connection_0", "db_pool_0"}
-    assert len(default.before_send) == 1
-
-
-def test_manage_lifespan_false_with_di() -> None:
-    app_config = _init_app({"disable_di": False, "manage_lifespan": False})
-    assert app_config.lifespan == []
-    assert set(app_config.dependencies) == {"db_session_0", "db_connection_0", "db_pool_0"}
-    assert len(app_config.before_send) == 1
+@pytest.mark.parametrize(
+    ("settings", "manages_lifespan", "registers_di"),
+    [
+        ({}, True, True),
+        ({"disable_di": True}, False, False),
+        ({"disable_di": True, "manage_lifespan": True}, True, False),
+        ({"disable_di": False, "manage_lifespan": False}, False, True),
+    ],
+    ids=["defaults", "disable_di", "disable_di_manage_lifespan", "manage_lifespan_false"],
+)
+def test_disable_di_and_manage_lifespan_combinations(
+    settings: "dict[str, Any]", manages_lifespan: bool, registers_di: bool
+) -> None:
+    app_config = _init_app(settings)
+    assert len(app_config.lifespan) == int(manages_lifespan)
+    assert set(app_config.dependencies) == ({"db_session_0", "db_connection_0", "db_pool_0"} if registers_di else set())
+    assert len(app_config.before_send) == int(registers_di)
 
 
 @pytest.mark.anyio
