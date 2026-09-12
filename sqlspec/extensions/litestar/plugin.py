@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from litestar.config.app import AppConfig
     from litestar.datastructures.state import State
     from litestar.openapi.spec import Schema
-    from litestar.types import ASGIApp, BeforeMessageSendHookHandler, Receive, Scope, Send
+    from litestar.types import ASGIApp, BeforeMessageSendHookHandler, Middleware, Receive, Scope, Send
     from litestar.typing import FieldDefinition
     from rich_click import Group
 
@@ -412,7 +412,17 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         new_middlewares: list[DefineMiddleware] = []
         if self._correlation_headers:
-            new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
+            if _has_correlation_middleware(app_config.middleware):
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "extension.init",
+                    framework="litestar",
+                    stage="correlation_middleware_skipped",
+                    reason="already_installed",
+                )
+            else:
+                new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
         if self._enable_sqlcommenter_middleware:
             new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
         if new_middlewares:
@@ -1077,6 +1087,18 @@ def _build_correlation_headers(*, primary: str, configured: list[str], auto_trac
     if auto_trace_headers:
         header_order.extend(TRACE_CONTEXT_FALLBACK_HEADERS)
     return tuple(_dedupe_headers(header_order))
+
+
+def _has_correlation_middleware(middleware: "Iterable[Middleware] | None") -> bool:
+    """Return whether the middleware stack already contains :class:`CorrelationMiddleware`.
+
+    Matches both the bare class and a :class:`litestar.middleware.DefineMiddleware` wrapping it.
+    """
+    return any(
+        entry is CorrelationMiddleware
+        or (isinstance(entry, DefineMiddleware) and entry.middleware is CorrelationMiddleware)
+        for entry in middleware or ()
+    )
 
 
 def _get_litestar_numpy_array_type() -> type[Any] | None:

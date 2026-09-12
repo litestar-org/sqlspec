@@ -154,3 +154,32 @@ def test_on_app_init_middleware_on_app_init_preserves_existing_middlewares() -> 
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
     assert _middleware_types(app_config)[:2] == [CorrelationMiddleware, SQLCommenterMiddleware]
     assert app_config.middleware[-1] is existing
+
+
+def test_existing_correlation_middleware_not_duplicated() -> None:
+    existing = DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",))
+    app_config = AppConfig(middleware=[DefineMiddleware(_ExistingMiddleware), existing])
+    _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
+    assert _middleware_types(app_config) == [SQLCommenterMiddleware, _ExistingMiddleware, CorrelationMiddleware]
+    assert app_config.middleware[-1] is existing
+    assert existing.kwargs == {"headers": ("x-app-request-id",)}
+
+
+def test_existing_bare_correlation_middleware_class_not_duplicated() -> None:
+    app_config = AppConfig(middleware=[CorrelationMiddleware])
+    _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
+    assert app_config.middleware == [CorrelationMiddleware]
+
+
+def test_correlation_middleware_prepended_once_without_existing() -> None:
+    existing = DefineMiddleware(_ExistingMiddleware)
+    app_config = AppConfig(middleware=[existing])
+    _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
+    assert _middleware_types(app_config) == [CorrelationMiddleware, _ExistingMiddleware]
+
+
+def test_repeated_on_app_init_keeps_single_correlation_middleware() -> None:
+    app_config = AppConfig()
+    _build_plugin(correlation=True).on_app_init(app_config)
+    _build_plugin(correlation=True).on_app_init(app_config)
+    assert _middleware_types(app_config) == [CorrelationMiddleware]
