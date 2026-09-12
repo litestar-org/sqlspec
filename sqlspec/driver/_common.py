@@ -30,7 +30,12 @@ from sqlspec.core import (
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
+from sqlspec.core.parameters import (
+    ParameterProcessor,
+    structural_fingerprint,
+    type_coercion_dispatcher,
+    value_fingerprint,
+)
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
     ForeignKeyMetadata,
@@ -63,7 +68,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import StatementProtocol
-from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.text import normalize_identifier
@@ -126,7 +130,6 @@ VERSION_GROUPS_MIN_FOR_PATCH = 2
 
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
-_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Any], ...], TypeDispatcher[Any]]" = {}
 
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_COLON.value,
@@ -1387,7 +1390,7 @@ class CommonDriverAttributesMixin:
         exact_converter = type_coercion_map.get(value_type)
         if exact_converter is not None:
             return exact_converter(value)
-        fallback_converter = _type_coercion_dispatcher(fallback_items).get(value)
+        fallback_converter = type_coercion_dispatcher(fallback_items).get(value)
         if fallback_converter is not None:
             return fallback_converter(value)
         return value
@@ -2028,7 +2031,7 @@ def parameter_value_needs_processing(
         return True
     if fallback_items is None:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-    return _type_coercion_dispatcher(fallback_items).get(value) is not None
+    return type_coercion_dispatcher(fallback_items).get(value) is not None
 
 
 def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
@@ -2149,17 +2152,6 @@ def type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tup
     if not type_coercion_map:
         return ()
     return tuple(type_coercion_map.items())
-
-
-def _type_coercion_dispatcher(fallback_items: "tuple[tuple[type, Any], ...]") -> "TypeDispatcher[Any]":
-    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
-    if dispatcher is not None:
-        return dispatcher
-
-    dispatcher = TypeDispatcher[Any]()
-    dispatcher.register_all(fallback_items)
-    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
-    return dispatcher
 
 
 def _callable_cache_key(func: Any) -> Any:

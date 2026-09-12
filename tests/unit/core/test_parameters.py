@@ -2494,3 +2494,15 @@ def test_build_conversion_plan_called_once_execute_many_preserve_original_params
     assert converter.build_conversion_plan_calls == 1
     assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
     assert result.parameters is rows
+
+
+def test_type_coercion_dispatcher_is_shared_for_equal_fallbacks() -> None:
+    from collections.abc import Sequence
+
+    from sqlspec.core.parameters import type_coercion_dispatcher
+    from sqlspec.driver import type_coercion_fallbacks
+
+    assert type_coercion_fallbacks(None) == ()
+    items = type_coercion_fallbacks({Sequence: tuple})
+    assert type_coercion_dispatcher(items) is type_coercion_dispatcher(tuple(items))
+    assert type_coercion_dispatcher(items).get([1]) is tuple

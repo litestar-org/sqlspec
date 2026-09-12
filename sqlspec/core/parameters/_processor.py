@@ -25,7 +25,7 @@ from sqlspec.core.parameters._types import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.dispatch import TypeDispatcher
 
-__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
+__all__ = ("ParameterProcessor", "structural_fingerprint", "type_coercion_dispatcher", "value_fingerprint")
 
 TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 
@@ -964,15 +964,10 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
     return ("many_scalar", first_type)
 
 
-def _type_coercion_fallbacks(
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-) -> "tuple[TypeCoercionFallback, ...]":
-    return tuple(type_coercion_map.items())
-
-
-def _type_coercion_dispatcher(
+def type_coercion_dispatcher(
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "TypeDispatcher[Callable[[Any], Any]]":
+    """Return the process-wide dispatcher registered for the fallback items."""
     dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
     if dispatcher is not None:
         return dispatcher
@@ -981,6 +976,12 @@ def _type_coercion_dispatcher(
     dispatcher.register_all(fallback_items)
     _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
     return dispatcher
+
+
+def _type_coercion_fallbacks(
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+) -> "tuple[TypeCoercionFallback, ...]":
+    return tuple(type_coercion_map.items())
 
 
 def _type_coercion(
@@ -992,7 +993,7 @@ def _type_coercion(
     exact_converter = type_coercion_map.get(value_type)
     if exact_converter is not None:
         return exact_converter(value)
-    fallback_converter = _type_coercion_dispatcher(fallback_items).get(value)
+    fallback_converter = type_coercion_dispatcher(fallback_items).get(value)
     if fallback_converter is not None:
         return fallback_converter(value)
     return value
