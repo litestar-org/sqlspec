@@ -698,4 +698,4 @@ def test_migration_sql_empty_statements() -> None:
     }
 
     result = runner._migration_sql(cast("LoadedMigrationMetadata", migration), "up")
-    assert result is None
+    assert result == []

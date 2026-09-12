@@ -377,6 +377,32 @@ description is read back from, and takes a string or a list of strings.
 
 See :class:`~sqlspec.config.MigrationTemplates` for the full override shape.
 
+Return Values in Python Migrations
+----------------------------------
+
+``up()`` and ``down()`` return either a string or an iterable of strings. Each
+statement is executed in order, and blank or whitespace-only statements are
+skipped. Returning anything else raises
+:class:`~sqlspec.migrations.MigrationLoadError`.
+
+Returning an empty list executes nothing, but the migration is still recorded
+in the tracking table and is not reported as pending again. This is the
+supported way to write a conditional migration that inspects the database and
+finds nothing to do:
+
+.. code-block:: python
+
+    def up(context: object | None = None) -> list[str]:
+        """Add the audit column only where it is missing."""
+        if _has_audit_column(context):
+            return []
+        return ["ALTER TABLE orders ADD COLUMN audited_at TIMESTAMP"]
+
+The same holds for ``down()``: an empty list reverses nothing and removes the
+tracking record. Omitting ``down()`` entirely is different -- it marks the
+migration irreversible, and a downgrade skips it with a warning rather than
+removing its record.
+
 Output and Logging
 ------------------
 
