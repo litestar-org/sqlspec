@@ -14,6 +14,16 @@ Unreleased
 
 **Fixed:**
 
+* DuckDB secrets declared in ``driver_features["secrets"]`` are created only when
+  missing, so a second connection to a shared database, such as the default shared
+  in-memory database, or a process restart with a stored persistent secret no longer
+  fails with ``secret already exists``, and concurrent connection setup no longer races.
+  Declared values are not applied to an existing secret unless ``replace=True`` is set,
+  for example after rotating credentials. An existing secret is compared on its type,
+  provider and the declared settings DuckDB does not redact, such as ``scope``,
+  ``key_id`` or ``endpoint``; settings the declaration omits are kept as stored. A
+  difference raises for ``required=True`` secrets and logs a warning otherwise.
+  (`#754 <https://github.com/litestar-org/sqlspec/issues/754>`_)
 * The ``litestar`` extra now requires ``litestar>=2.23.0``. The Litestar
   extension imports ``NamedDependency`` and ``SkipValidation``, which are not
   available in 2.22, so installs resolved to 2.22 failed on import.
