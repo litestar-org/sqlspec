@@ -34,6 +34,8 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   ADK store parity across SQL Server adapters, added an end-to-end SQL Server recipes guide
   (:doc:`/recipes/sql_server`), and registered ``mssql_python`` and ``pymssql`` across
   shared integration test suites for Google ADK, durable event queues, and Litestar session stores.
+  ADK migration ``0002`` provisions missing mssql-python memory tables and lookup indexes
+  for existing installations; downgrading that additive repair preserves memory data.
   (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
 
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
@@ -187,7 +189,7 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   ``MssqlPythonStore`` and ``PymssqlStore`` (``CONVERT(VARBINARY(MAX), ?)``), removed unsupported
   ``FOR UPDATE`` hints from ``PymssqlConfig.get_event_runtime_hints()`` for event queue polling,
   and corrected the documentation feature table and metadata to designate ``mssql-python`` as
-  a sync-only driver with native Arrow support.
+  a sync-only driver with Arrow support.
   (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
