@@ -137,22 +137,23 @@ def test_event_channel_rejects_retired_backend_with_migration_guidance(
         SyncEventChannel(config)
 
 
-def test_event_channel_honors_driver_feature_backend(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Adapter driver features select the backend when extension config does not."""
-    selected: list[str | None] = []
-
-    def capture_backend(config: Any, backend_name: str | None, settings: dict[str, Any], adapter_name: str) -> None:
-        selected.append(backend_name)
-
-    monkeypatch.setattr("sqlspec.extensions.events._channel.load_native_backend", capture_backend)
+def test_event_channel_honors_driver_feature_backend(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """An unavailable driver-feature backend reports the requested transport."""
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "test.db")}, driver_features={"events_backend": "notify"}
     )
-
     channel = SyncEventChannel(config)
 
     assert channel._backend_name == "poll_queue"
-    assert selected == ["notify"]
+    warnings = [record.__dict__["extra_fields"] for record in caplog.records if record.message == "event.listen"]
+    assert warnings == [
+        {
+            "adapter_name": "sqlite",
+            "backend_name": "notify",
+            "fallback_backend": "poll_queue",
+            "status": "backend_unavailable",
+        }
+    ]
 
 
 def test_event_extension_backend_takes_precedence_over_driver_feature(tmp_path) -> None:
@@ -463,27 +464,35 @@ def test_sync_table_listener_preserves_idle_poll_interval(
     monkeypatch: pytest.MonkeyPatch, tmp_path, select_for_update: bool
 ) -> None:
     """Stopping a long idle table poll wakes the listener without extra queries."""
-    from sqlspec.extensions.events._queue import SyncTableEventQueue
+    from sqlspec.migrations.commands import SyncMigrationCommands
 
-    config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
-    channel = SyncEventChannel(config)
     polled = threading.Event()
     polls: list[str] = []
 
-    def fetch_candidate(self, channel_name: str):
-        polls.append(channel_name)
-        polled.set()
-        return
+    def trace(statement: str) -> None:
+        if statement.startswith("SELECT") and "sqlspec_event_queue" in statement:
+            polls.append(statement)
+            polled.set()
 
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")},
+        migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
+        driver_features={"on_connection_create": lambda connection: connection.set_trace_callback(trace)},
+    )
+    SyncMigrationCommands(config).upgrade()
+    polls.clear()
+    polled.clear()
+    channel = SyncEventChannel(config)
     monkeypatch.setattr(channel._backend, "_select_for_update", select_for_update)
-    candidate_method = "_claim_locked_candidate" if select_for_update else "_fetch_candidate"
-    monkeypatch.setattr(SyncTableEventQueue, candidate_method, fetch_candidate)
     listener = channel.listen("test_channel", lambda _: None, poll_interval=10.0)
     try:
         assert polled.wait(timeout=1.0)
         # Several old 0.1-second polling windows must not trigger more queries.
         time.sleep(0.3)
-        assert polls == ["test_channel"]
+        assert len(polls) == 1
     finally:
         channel.stop_listener(listener.id)
+        config.close_pool()
     assert not listener.thread.is_alive()

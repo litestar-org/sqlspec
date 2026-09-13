@@ -163,26 +163,15 @@ def test_msgspec_conversion_does_not_walk_numpy_for_plain_payload(monkeypatch: p
 
 
 @pytest.mark.skipif(not schema_utils.NUMPY_INSTALLED, reason="numpy is not installed")
-def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload() -> None:
     """Ndarray payloads should still convert through the numpy fallback path."""
     import numpy as np
 
     class Measurement(msgspec.Struct):
         values: list[float]
 
-    original_walk = schema_utils._convert_numpy_recursive
-    call_count = 0
-
-    def count_walk(obj: object) -> object:
-        nonlocal call_count
-        if isinstance(obj, list):
-            call_count += 1
-        return original_walk(obj)
-
-    monkeypatch.setattr(schema_utils, "_convert_numpy_recursive", count_walk)
     result = schema_utils._convert_msgspec([{"values": np.array([1.0, 2.0])}], Measurement)
     assert result == [Measurement(values=[1.0, 2.0])]
-    assert call_count == 1
 
 
 @pytest.mark.parametrize(

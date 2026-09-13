@@ -74,6 +74,7 @@ from sqlspec.utils.type_guards import (
     resolve_row_format,
     supports_arrow_results,
 )
+from tests.conftest import is_compiled
 
 _UNSET = object()
 
@@ -761,6 +762,7 @@ def test_serializer_pipeline_reuses_entry() -> None:
     assert pipeline is same_pipeline
 
 
+@pytest.mark.skipif(is_compiled(), reason="mypyc direct calls bypass patched metrics globals")
 def test_serializer_metrics_track_hits_and_misses(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlspec.utils.serializers import _schema as schema_module
 

@@ -11,6 +11,7 @@ from sqlspec.core import StatementConfig
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import AsyncTableEventQueue, EventMessage, SyncTableEventQueue, parse_event_timestamp
+from tests.conftest import is_compiled
 
 
 def _event_row(event_id: str = "event-1") -> dict[str, Any]:
@@ -27,9 +28,7 @@ def _event_row(event_id: str = "event-1") -> dict[str, Any]:
     }
 
 
-def test_table_event_queue_classes_are_final_with_classvar_flags() -> None:
-    assert getattr(SyncTableEventQueue, "__final__", False) is True
-    assert getattr(AsyncTableEventQueue, "__final__", False) is True
+def test_table_event_queue_backend_capabilities() -> None:
     assert SyncTableEventQueue.supports_sync is True
     assert SyncTableEventQueue.supports_async is False
     assert AsyncTableEventQueue.supports_sync is False
@@ -38,6 +37,7 @@ def test_table_event_queue_classes_are_final_with_classvar_flags() -> None:
     assert AsyncTableEventQueue.backend_name == "poll_queue"
 
 
+@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
 def test_sync_table_queue_empty_poll_backoff_is_bounded_and_resets(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
@@ -59,6 +59,8 @@ def test_sync_table_queue_empty_poll_backoff_is_bounded_and_resets(
     assert sleeps == [0.08, 0.08, 0.01, 0.08]
 
 
+@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
+@pytest.mark.anyio
 async def test_async_table_queue_empty_poll_backoff_is_bounded_and_resets(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:

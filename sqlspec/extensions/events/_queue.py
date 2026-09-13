@@ -206,6 +206,7 @@ class _BaseTableEventQueue:
     def _hydrate_event(row: "dict[str, Any]", lease_expires_at: "datetime | None") -> EventMessage:
         payload_raw = row.get("payload_json")
         metadata_raw = row.get("metadata_json")
+        payload_obj: object
         if isinstance(payload_raw, dict):
             payload_obj = payload_raw
         elif payload_raw is not None:
