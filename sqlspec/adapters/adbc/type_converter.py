@@ -34,7 +34,15 @@ class ADBCOutputConverter:
         Returns:
             Converted value appropriate for the dialect.
         """
-        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb", "bigquery"}:
+        if self.dialect in {
+            "postgres",
+            "postgresql",
+            "pgvector",
+            "paradedb",
+            "pg_textsearch",
+            "pgtextsearch",
+            "bigquery",
+        }:
             return to_json(value)
         return value
 
@@ -51,7 +59,7 @@ class ADBCOutputConverter:
             Converted list parameter appropriate for the dialect.
         """
         items = list(value)
-        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb"}:
+        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch", "pgtextsearch"}:
             return [item if item is not None else None for item in items]
         return items
 

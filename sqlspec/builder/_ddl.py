@@ -77,8 +77,12 @@ CURRENT_TIME_KEYWORD = "CURRENT_TIME"
 
 
 def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | None") -> exp.DataType:
+    target_dialect = dialect
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    if norm_dialect in ("tsql", "mssql") and dtype.strip().upper().startswith("TIMESTAMP"):
+        target_dialect = None
     try:
-        return exp.DataType.build(dtype, dialect=dialect)
+        return exp.DataType.build(dtype, dialect=target_dialect)
     except ParseError as exc:
         msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
         raise SQLBuilderError(msg) from exc

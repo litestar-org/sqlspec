@@ -21,6 +21,7 @@ __all__ = (
     "close_sync_pool",
     "create_async_pool",
     "create_sync_pool",
+    "is_postgres_extension_active",
     "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
     "seed_runtime_driver_features",
@@ -59,6 +60,8 @@ def build_postgres_extension_probe_names(driver_features: "dict[str, Any] | None
         extensions.append("vector")
     if driver_features.get("enable_paradedb", False):
         extensions.append("pg_search")
+    if driver_features.get("enable_pg_textsearch", False):
+        extensions.append("pg_textsearch")
     return extensions
 
 
@@ -75,14 +78,40 @@ def resolve_postgres_extension_state(
     paradedb_available = bool(
         driver_features and driver_features.get("enable_paradedb", False) and "pg_search" in detected
     )
+    pg_textsearch_available = bool(
+        driver_features and driver_features.get("enable_pg_textsearch", False) and "pg_textsearch" in detected
+    )
+
+    active_extensions: set[str] = set()
+    if pgvector_available:
+        active_extensions.add("vector")
+    if paradedb_available:
+        active_extensions.add("pg_search")
+    if pg_textsearch_available:
+        active_extensions.add("pg_textsearch")
+
+    if driver_features is not None:
+        driver_features["active_extensions"] = active_extensions
 
     if statement_config.dialect == "postgres":
         if paradedb_available:
             statement_config = statement_config.replace(dialect="paradedb")
+        elif pg_textsearch_available:
+            statement_config = statement_config.replace(dialect="pg_textsearch")
         elif pgvector_available:
             statement_config = statement_config.replace(dialect="pgvector")
 
     return statement_config, pgvector_available, paradedb_available
+
+
+def is_postgres_extension_active(driver_features: "dict[str, Any] | None", extension: str) -> bool:
+    """Return True if the named PostgreSQL extension is active in driver_features."""
+    if driver_features is None:
+        return False
+    active = driver_features.get("active_extensions")
+    if isinstance(active, (set, frozenset, list, tuple)):
+        return extension in active
+    return False
 
 
 def resolve_runtime_statement_config(

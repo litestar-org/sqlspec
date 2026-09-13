@@ -135,7 +135,9 @@ def test_psqlpy_resolve_postgres_extension_state_promotes_paradedb() -> None:
 @pytest.mark.anyio
 async def test_psqlpy_enable_pgvector_detects_extension_and_promotes_dialect() -> None:
     """Psqlpy pgvector support should mean extension detection and dialect promotion."""
-    config = PsqlpyConfig(driver_features={"enable_pgvector": True, "enable_paradedb": False})
+    config = PsqlpyConfig(
+        driver_features={"enable_pgvector": True, "enable_paradedb": False, "enable_pg_textsearch": False}
+    )
     connection = _ExtensionConnection({"vector"})
 
     await config._ensure_connection(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
@@ -143,6 +145,22 @@ async def test_psqlpy_enable_pgvector_detects_extension_and_promotes_dialect() -
     assert connection.queries[0][1] == [["vector"]]
     assert config._pgvector_available is True  # pyright: ignore[reportPrivateUsage]
     assert config.statement_config.dialect == "pgvector"
+
+
+@pytest.mark.anyio
+async def test_psqlpy_enable_pg_textsearch_detects_extension_and_promotes_dialect() -> None:
+    """Psqlpy pg_textsearch support should mean extension detection and dialect promotion."""
+    config = PsqlpyConfig(
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": True}
+    )
+    connection = _ExtensionConnection({"pg_textsearch"})
+
+    assert config.pg_textsearch_available is False
+    await config._ensure_connection(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
+
+    assert connection.queries[0][1] == [["pg_textsearch"]]
+    assert config.pg_textsearch_available is True
+    assert config.statement_config.dialect == "pg_textsearch"
 
 
 @pytest.mark.anyio

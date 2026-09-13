@@ -21,6 +21,7 @@ from sqlspec.adapters.asyncpg.core import (
     build_connection_config,
     build_postgres_extension_probe_names,
     default_statement_config,
+    is_postgres_extension_active,
     register_json_codecs,
     register_pgvector_support,
     resolve_postgres_extension_state,
@@ -131,6 +132,10 @@ class AsyncpgDriverFeatures(TypedDict):
      switches to "paradedb" which supports search operators (@@@, &&&, etc.)
      and inherits all pgvector distance operators.
      Defaults to True. Independent of enable_pgvector.
+    enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
+     When enabled and the pg_textsearch extension is detected, the SQL dialect
+     switches to "pg_textsearch" which supports the BM25 <@> relevance ranking operator.
+     Defaults to True.
     enable_cloud_sql: Enable Google Cloud SQL connector integration.
      Requires cloud-sql-python-connector package.
      Defaults to False (explicit opt-in required).
@@ -175,6 +180,7 @@ class AsyncpgDriverFeatures(TypedDict):
     enable_json_codecs: NotRequired[bool]
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
+    enable_pg_textsearch: NotRequired[bool]
     enable_cloud_sql: NotRequired[bool]
     cloud_sql_instance: NotRequired[str]
     cloud_sql_enable_iam_auth: NotRequired[bool]
@@ -454,14 +460,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
-            adk_config = self.extension_config.get("adk", {})
-            bm25_enabled = bool(
-                isinstance(adk_config, dict)
-                and adk_config.get("enable_memory", True)
-                and adk_config.get("enable_bm25", False)
-            )
-            if bm25_enabled:
-                extensions.append("pg_textsearch")
             if extensions:
                 try:
                     results = await connection.fetch(
@@ -470,12 +468,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     detected_extensions = {r["extname"] for r in results}
                 except Exception as exc:
                     detected_extensions = set()
-                    if bm25_enabled:
-                        self._pg_textsearch_probe_error = exc
+                    self._pg_textsearch_probe_error = exc
             self.statement_config, self._pgvector_available, self._paradedb_available = (
                 resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
             )
-            self._pg_textsearch_available = "pg_textsearch" in detected_extensions if bm25_enabled else False
+            self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
         if self._pgvector_available:
             await register_pgvector_support(connection)
@@ -483,6 +480,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
+
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:

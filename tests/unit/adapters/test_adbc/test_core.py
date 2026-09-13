@@ -17,6 +17,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_column_names,
     resolve_many_rowcount,
 )
+from sqlspec.core import ParameterStyle
 from sqlspec.exceptions import (
     DeadlockError,
     OperationalError,
@@ -338,3 +339,21 @@ def test_base_type_coercion_map_replaces_getter_function() -> None:
     assert isinstance(adbc_core._BASE_TYPE_COERCION_MAP, dict)
     assert not hasattr(adbc_core, "_get_type_coercion_map")
     assert adbc_core.driver_profile is not None
+
+
+def test_pg_textsearch_retains_postgres_transaction_and_parameter_behavior() -> None:
+    executed: list[str] = []
+    cursor = SimpleNamespace(execute=lambda statement: executed.append(statement))
+    adbc_core.handle_postgres_rollback("pg_textsearch", cursor)
+    assert executed == ["ROLLBACK"]
+    assert adbc_core.normalize_postgres_empty_parameters("pg_textsearch", {}) is None
+    config = get_statement_config("pg_textsearch")
+    assert config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
+
+
+def test_pg_textsearch_class_and_instance_resolve_as_postgres_family() -> None:
+    from sqlspec.dialects import PGTextSearch
+
+    for dialect in (PGTextSearch, PGTextSearch()):
+        name = adbc_core.resolve_dialect_name(dialect)
+        assert adbc_core.is_postgres_dialect(name)
