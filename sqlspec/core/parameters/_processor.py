@@ -25,7 +25,14 @@ from sqlspec.core.parameters._types import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.dispatch import TypeDispatcher
 
-__all__ = ("ParameterProcessor", "structural_fingerprint", "type_coercion_dispatcher", "value_fingerprint")
+__all__ = (
+    "ParameterProcessor",
+    "apply_type_coercion",
+    "structural_fingerprint",
+    "type_coercion_dispatcher",
+    "type_coercion_fallbacks",
+    "value_fingerprint",
+)
 
 TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 
