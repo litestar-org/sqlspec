@@ -2,6 +2,7 @@
 """Unit tests for SQL factory functionality including parameter binding fixes and new features."""
 
 import math
+import warnings
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -543,12 +544,36 @@ def test_column_method() -> None:
 
 def test_dynamic_column_access() -> None:
     """Test dynamic column access via __getattr__."""
-    col = sql.name
+    with pytest.warns(DeprecationWarning):
+        col = sql.name
     assert col is not None
     assert hasattr(col, "like")
     assert hasattr(col, "in_")
-    test_col = sql.some_column_name
+    with pytest.warns(DeprecationWarning):
+        test_col = sql.some_column_name
     assert test_col is not None
+
+
+def test_dynamic_column_access_emits_deprecation_warning() -> None:
+    """Dynamic columns warn once with the explicit construction alternative."""
+    with pytest.warns(DeprecationWarning, match=r'sql\.column\("some_column_name"\)') as recorded:
+        col = sql.some_column_name
+    assert len(recorded) == 1
+    assert recorded[0].filename == __file__
+    assert isinstance(col, Column)
+    assert col.name == "some_column_name"
+    assert col.table is None
+
+
+def test_explicit_column_construction_emits_no_warning() -> None:
+    """Explicit factory methods and properties do not trigger deprecation."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert isinstance(sql.column("name"), Column)
+        assert isinstance(sql.column("name", "users"), Column)
+        sql.select("id").from_("users")
+        _ = sql.case_
+        _ = sql.dialect
 
 
 def test_raw_sql_parsing_error() -> None:
@@ -732,8 +757,10 @@ def test_window_function_multiple_partition_columns() -> None:
 
 def test_normal_column_access_preserved() -> None:
     """Test that normal column access still works after adding window functions."""
-    assert isinstance(sql.department, Column)
-    assert isinstance(sql.some_normal_column, Column)
+    with pytest.warns(DeprecationWarning):
+        assert isinstance(sql.department, Column)
+    with pytest.warns(DeprecationWarning):
+        assert isinstance(sql.some_normal_column, Column)
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
 
@@ -903,8 +930,10 @@ def test_backward_compatibility_preserved() -> None:
     query3 = sql.select("name", window_func).from_("employees")
     stmt3 = query3.build()
     assert "ROW_NUMBER" in stmt3.sql
-    assert isinstance(sql.users, Column)
-    assert isinstance(sql.posts, Column)
+    with pytest.warns(DeprecationWarning):
+        assert isinstance(sql.users, Column)
+    with pytest.warns(DeprecationWarning):
+        assert isinstance(sql.posts, Column)
 
 
 def test_case_as_method_type_annotation_fix() -> None:
@@ -2046,7 +2075,8 @@ def test_native_layout_wave3_sqlfactory_slots_preserve_dynamic_column_access() -
     factory = SQLFactory(dialect="postgres")
     assert not hasattr(factory, "__dict__")
     assert factory.dialect == "postgres"
-    column = sql.user_id
+    with pytest.warns(DeprecationWarning):
+        column = sql.user_id
     assert isinstance(column, Column)
     assert column.name == "user_id"
 

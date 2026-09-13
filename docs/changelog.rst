@@ -127,6 +127,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 * Unified ``sqlspec.extensions.litestar.LitestarConfig`` with ``sqlspec.config.LitestarConfig`` for
   consistent typing and schema export.
 
+**Deprecated:**
+
+* Dynamic column access on the ``sql`` factory (``sql.some_column``) now emits a
+  ``DeprecationWarning``. Use ``sql.column("some_column")`` or ``Column("some_column")``;
+  the dynamic form will be removed in the next major release.
+
 **Fixed:**
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
