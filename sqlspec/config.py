@@ -956,6 +956,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_migration_schemas: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
+    supports_reliable_rowcount: "ClassVar[bool]" = True
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     bind_key: "str | None"

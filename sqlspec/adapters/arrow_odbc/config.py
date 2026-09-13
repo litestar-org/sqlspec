@@ -137,6 +137,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     supports_native_row_streaming: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
+    supports_reliable_rowcount: "ClassVar[bool]" = False
     _connection_context_class: "ClassVar[type[ArrowOdbcConnectionContext]]" = ArrowOdbcConnectionContext
     _session_factory_class: "ClassVar[type[_ArrowOdbcSessionConnectionHandler]]" = _ArrowOdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[ArrowOdbcSessionContext]]" = ArrowOdbcSessionContext

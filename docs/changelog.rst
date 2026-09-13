@@ -14,6 +14,11 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 **Added:**
 
+* Added :attr:`~sqlspec.config.DatabaseConfigProtocol.supports_reliable_rowcount` capability
+  flag to configurations, indicating whether ``rows_affected`` can be trusted without re-querying
+  (defaults to ``True``; set to ``False`` for ADBC and arrow-odbc).
+  (`#773 <https://github.com/litestar-org/sqlspec/pull/773>`_)
+
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
   it fails; a failed commit is followed by a rollback attempt. A block entered while
