@@ -199,3 +199,15 @@ def test_alter_column_type_uses_target_dialect() -> None:
     assert "DATETIME2(6)" in builder.build(dialect="tsql").sql
     with pytest.raises(SQLBuilderError, match="Column 'a'"):
         builder.build()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "dtype"), [("mssql", "DATETIME2(6)"), ("mariadb", "INT"), ("cockroachdb", "INT8")]
+)
+def test_ddl_accepts_public_dialect_aliases(dialect: str, dtype: str) -> None:
+    builder = sql.create_table("t", dialect=dialect).column("a", dtype)
+    assert "CREATE TABLE" in builder.build().sql
+    assert "CREATE TABLE" in builder.to_statement().sql
+    builder = sql.create_table("t").column("a", dtype)
+    assert "CREATE TABLE" in builder.build(dialect=dialect).sql
+    assert "CREATE TABLE" in builder.to_statement(StatementConfig(dialect=dialect)).sql

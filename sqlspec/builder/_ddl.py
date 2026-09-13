@@ -12,8 +12,9 @@ from sqlglot.errors import ParseError
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
+from sqlspec.builder._parsing_utils import _normalize_dialect
 from sqlspec.builder._select import Select
-from sqlspec.core import SQL, SQLResult
+from sqlspec.core import SQL, SQLResult, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
@@ -21,7 +22,6 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder._column import ColumnExpression
-    from sqlspec.core import StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -249,7 +249,7 @@ class DDLBuilder(QueryBuilder):
         return SQLResult
 
     def _prepare_expression(self, dialect: "DialectType" = None) -> None:
-        target_dialect = dialect or self.dialect_name
+        target_dialect = _normalize_dialect(dialect or self.dialect)
         if self._expression is not None and target_dialect != self._expression_dialect:
             self._expression = None
         self._expression_dialect = target_dialect
@@ -258,11 +258,17 @@ class DDLBuilder(QueryBuilder):
 
     def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
         self._prepare_expression(dialect)
-        return super().build(dialect=dialect)
+        return super().build(dialect=self._expression_dialect)
 
     def to_statement(self, config: "StatementConfig | None" = None) -> SQL:
         """Build a SQL statement using the configured target dialect for column types."""
         self._prepare_expression(config.dialect if config is not None else None)
+        if self._expression_dialect is not None:
+            config = (
+                config.replace(dialect=self._expression_dialect)
+                if config is not None
+                else StatementConfig(dialect=self._expression_dialect)
+            )
         return super().to_statement(config)
 
 
