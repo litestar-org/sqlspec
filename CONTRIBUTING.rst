@@ -34,7 +34,7 @@ Guidelines for writing code
   - All code must be fully typed (enforced via `mypy <https://mypy.readthedocs.io/en/stable/>`_ and `pyright <https://microsoft.github.io/pyright/>`_). Avoid ``Any`` whenever possible.
   - Use PEP 585 built-in collection types (``dict``, ``list``, ``tuple``, ``set``) rather than their ``typing`` module equivalents.
   - Use PEP 604 union types (``T | None``), never ``Optional[T]`` or ``Union[T, None]``.
-  - Package modules must **not** import ``from __future__ import annotations``. Prek checks this using an AST-based local hook.
+  - Package modules must **not** import ``from __future__ import annotations``. This is enforced via Ruff rule ``TID251`` (banned API).
 
 - **Comments & Documentation**:
   - **Never use in-line comments in Python code**. If code requires explanation, document the rationale in the class or function docstring.
