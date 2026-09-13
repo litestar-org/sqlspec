@@ -13,12 +13,14 @@ import statistics
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import psycopg
 from psycopg import sql
+from psycopg.crdb import CrdbConnection
+from psycopg.rows import dict_row
 
 from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncConfig, CockroachPsycopgSyncDriver
 from sqlspec.storage import StorageRegistry, SyncStoragePipeline
@@ -74,7 +76,7 @@ def run_benchmark(sizes: list[int], warmup: int, iterations: int, poll_interval:
     backend = registry.get(alias)
     results: list[dict[str, Any]] = []
     try:
-        with psycopg.connect(dsn, autocommit=True) as connection:
+        with CrdbConnection.connect(dsn, autocommit=True, row_factory=dict_row) as connection:
             version = connection.execute("SELECT version()").fetchone()
             for size in sizes:
                 for native in (False, True):
@@ -107,7 +109,10 @@ def run_benchmark(sizes: list[int], warmup: int, iterations: int, poll_interval:
                             msg = "Export row count mismatch"
                             raise RuntimeError(msg)
                         sources = (
-                            [_append_uri(destination, str(name)) for name in exported.telemetry["extra"]["files"]]
+                            [
+                                _append_uri(destination, str(name))
+                                for name in cast("list[str]", exported.telemetry["extra"]["files"])
+                            ]
                             if native
                             else [destination]
                         )
@@ -132,9 +137,10 @@ def run_benchmark(sizes: list[int], warmup: int, iterations: int, poll_interval:
                                     table, source, file_format="parquet"
                                 ).telemetry["rows_processed"]
                             import_s = time.perf_counter() - started
-                            if imported_rows != size or connection.execute(
-                                sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
-                            ).fetchone() != (size,):
+                            counted = connection.execute(
+                                sql.SQL("SELECT count(*) AS n FROM {}").format(sql.Identifier(table))
+                            ).fetchone()
+                            if imported_rows != size or counted is None or counted["n"] != size:
                                 msg = "Import row count mismatch"
                                 raise RuntimeError(msg)
                         finally:
@@ -173,7 +179,7 @@ def run_benchmark(sizes: list[int], warmup: int, iterations: int, poll_interval:
                         "max_s": max(values),
                     })
         return {
-            "server_version": version[0] if version else None,
+            "server_version": version["version"] if version else None,
             "poll_interval_s": poll_interval,
             "probe_timeout_s": 0.25,
             "offline_measurement": "Observed failed-probe span only; polling and query latency bound resolution. Zero samples does not prove zero offline time.",
