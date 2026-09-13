@@ -209,3 +209,11 @@ def test_ddl_accepts_public_dialect_aliases(dialect: str, dtype: str) -> None:
     builder = sql.create_table("t").column("a", dtype)
     assert "CREATE TABLE" in builder.build(dialect=dialect).sql
     assert "CREATE TABLE" in builder.to_statement(StatementConfig(dialect=dialect)).sql
+
+
+def test_create_table_timestamp_on_tsql_renders_datetime2() -> None:
+    """Standard TIMESTAMP logical column type renders as DATETIME2 on T-SQL instead of ROWVERSION."""
+    builder = sql.create_table("t").column("applied_at", "TIMESTAMP", default="CURRENT_TIMESTAMP")
+    sql_text = builder.build(dialect="tsql").sql
+    assert "DATETIME2" in sql_text
+    assert "ROWVERSION" not in sql_text
