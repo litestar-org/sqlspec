@@ -153,8 +153,20 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 **Changed:**
 
+* Query builder validates dialect capabilities in ``build()`` and ``to_statement()`` instead of silently dropping unsupported clauses.
+  ``.for_update()`` and ``.for_share()`` raise ``SQLBuilderError`` on dialects without these locking clauses
+  (T-SQL, SQLite, DuckDB, BigQuery), and ``skip_locked=True`` validates against ``supports_skip_locked``.
+  ``.on_conflict()`` automatically transpiles to ``ON DUPLICATE KEY UPDATE`` for MySQL and MariaDB (with ``do_nothing()``
+  rewriting to self-assignment), while raising ``SQLBuilderError`` suggesting ``sql.merge()`` on dialects lacking native
+  upsert support (Oracle, T-SQL, BigQuery). Spanner supports native upserts and plain ``FOR UPDATE``;
+  PostgreSQL-mode upserts validate assignment restrictions. Oracle rejects shared locks, while MariaDB renders
+  ``LOCK IN SHARE MODE``. Query builder ``build()`` also normalizes dialect aliases
+  (``mssql`` to ``tsql``, ``mariadb`` to ``mysql``, and ``cockroachdb`` to ``postgres``).
+  (`#778 <https://github.com/litestar-org/sqlspec/pull/778>`_)
+
 * Decoupled the ``ParadeDB`` dialect so it inherits directly from ``Postgres`` rather than ``PGVector``,
   allowing clean independent combinations of vector search and BM25 extensions.
+
 * Standardized PostgreSQL extension detection across all adapters on a single first-connection probe
   via :func:`~sqlspec.core.config_runtime.build_postgres_extension_probe_names`, removing ad-hoc ADK
   probe branches.

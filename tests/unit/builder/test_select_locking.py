@@ -1,8 +1,11 @@
 """Unit tests for SELECT locking functionality (FOR UPDATE, FOR SHARE, etc)."""
 
+import re
+
 import pytest
 
 from sqlspec import sql
+from sqlspec.data_dictionary import DialectConfig, register_dialect
 from sqlspec.exceptions import SQLBuilderError
 
 
@@ -234,5 +237,96 @@ def test_complex_join_with_for_update_of() -> None:
     # Both tables should be mentioned in the OF clause
     assert "j" in sql_content
     assert "u" in sql_content
-    # Should contain the companies reference as well
     assert "c" in sql_content
+
+
+@pytest.mark.parametrize("dialect", ["tsql", "mssql", "sqlite", "duckdb", "bigquery"])
+@pytest.mark.parametrize("statement", [False, True])
+def test_for_update_raises_on_unsupported_dialects(dialect: str, statement: bool) -> None:
+    """Test FOR UPDATE raises SQLBuilderError on dialects without row lock support."""
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("*").from_("job").for_update()
+    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE"):
+        if statement:
+            query.to_statement(StatementConfig(dialect=dialect))
+        else:
+            query.build(dialect=dialect)
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "cockroachdb", "mariadb", "spanner", "spangres"])
+def test_for_update_supported_dialects(dialect: str) -> None:
+    """Test FOR UPDATE renders on dialects supporting row locks."""
+    query = sql.select("*").from_("job").for_update()
+    stmt = query.build(dialect=dialect)
+    assert "FOR UPDATE" in stmt.sql
+
+
+def test_skip_locked_flag_gate() -> None:
+    """Test SKIP LOCKED raises SQLBuilderError when supports_skip_locked is False."""
+    custom_config = DialectConfig(
+        name="custom_no_skip_locked",
+        feature_flags={"supports_for_update": True, "supports_skip_locked": False},
+        feature_versions={},
+        type_mappings={},
+        version_pattern=re.compile(r".*"),
+    )
+    register_dialect(custom_config)
+
+    query = sql.select("*").from_("job").for_update(skip_locked=True)
+    with pytest.raises(SQLBuilderError, match="does not support SKIP LOCKED"):
+        query.build(dialect="custom_no_skip_locked")
+
+
+@pytest.mark.parametrize("statement", [False, True])
+def test_oracle_for_share_rejected(statement: bool) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("job").for_share()
+    with pytest.raises(SQLBuilderError, match="does not support FOR SHARE"):
+        if statement:
+            query.to_statement(StatementConfig(dialect="oracle"))
+        else:
+            query.build(dialect="oracle")
+
+
+@pytest.mark.parametrize("statement", [False, True])
+def test_mariadb_shared_lock_rendering(statement: bool) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("job").for_share(skip_locked=True)
+    rendered = query.to_statement(StatementConfig(dialect="mariadb")) if statement else query.build(dialect="mariadb")
+    assert "LOCK IN SHARE MODE SKIP LOCKED" in rendered.sql
+    assert "FOR SHARE" in query.build(dialect="postgres").sql
+
+
+@pytest.mark.parametrize("dialect", ["spanner", "spangres"])
+def test_spanner_statement_locking(dialect: str) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("job").for_update()
+    assert "FOR UPDATE" in query.to_statement(StatementConfig(dialect=dialect)).sql
+    for locked_query in (
+        sql.select("id").from_("job").for_update(skip_locked=True),
+        sql.select("id").from_("job").for_update(nowait=True),
+        sql.select("id").from_("job").for_update(of="job"),
+        sql.select("id").from_("job").for_share(),
+    ):
+        with pytest.raises(SQLBuilderError, match="only plain FOR UPDATE"):
+            locked_query.build(dialect=dialect)
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "mariadb", "oracle"])
+def test_postgresql_key_lock_modes_rejected_elsewhere(dialect: str) -> None:
+    for query in (sql.select("id").from_("job").for_no_key_update(), sql.select("id").from_("job").for_key_share()):
+        with pytest.raises(SQLBuilderError, match="PostgreSQL key lock modes"):
+            query.build(dialect=dialect)
+
+
+def test_mariadb_rejects_lock_targets() -> None:
+    for query in (
+        sql.select("id").from_("job").for_update(of="job"),
+        sql.select("id").from_("job").for_share(of="job"),
+    ):
+        with pytest.raises(SQLBuilderError, match="do not support OF targets"):
+            query.build(dialect="mariadb")

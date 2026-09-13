@@ -1511,7 +1511,7 @@ class Select(
         assert self._expression is not None
         select_expr = cast("exp.Select", self._expression)
 
-        lock = exp.Lock(update=True, key=False)
+        lock = exp.Lock(update=True, key=True)
 
         current_locks = select_expr.args.get("locks", [])
         current_locks.append(lock)

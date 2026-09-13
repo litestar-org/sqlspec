@@ -15,7 +15,7 @@ from sqlspec.adapters.oracledb import (
     OracleSyncConfig,
     OracleSyncDriver,
 )
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLBuilderError
 
 pytestmark = pytest.mark.xdist_group("oracle")
 
@@ -102,7 +102,7 @@ async def test_for_share_locking_unsupported(oracle_family_session: OracleFamily
     )
     try:
         await _invoke(_method(oracle_family_session, "begin"))
-        with pytest.raises(SQLSpecError, match=r"ORA-02000.*missing COMPRESS or UPDATE keyword"):
+        with pytest.raises(SQLBuilderError, match="does not support FOR SHARE"):
             await _invoke(
                 _method(oracle_family_session, "select_one"),
                 sql.select("id", "name", "value").from_(table).where_eq("name", value).for_share(),

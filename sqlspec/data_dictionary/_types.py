@@ -1422,6 +1422,7 @@ class FeatureFlags(TypedDict, total=False):
     supports_interleaved_tables: bool
     supports_json: bool
     supports_maps: bool
+    supports_on_conflict: bool
     supports_partitioning: bool
     supports_prepared_statements: bool
     supports_resource_groups: bool

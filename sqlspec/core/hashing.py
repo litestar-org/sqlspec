@@ -257,7 +257,7 @@ def _expression_cache_fingerprint(
     settings: Any = None,
 ) -> str:
     components = (
-        hash(expr),
+        hash_expression(expr),
         parameter_signature,
         str(dialect) if dialect is not None else "default",
         _freeze_cache_value(schema),

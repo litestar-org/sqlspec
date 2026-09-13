@@ -6,6 +6,7 @@ import pytest
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.duckdb import DuckDBDriver
+from sqlspec.exceptions import SQLBuilderError
 from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("duckdb")
@@ -174,108 +175,16 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
     duckdb_session.execute_script("DROP TABLE constraint_test")
 
 
-def test_duckdb_for_update_locking(duckdb_session: DuckDBDriver) -> None:
-    """Test FOR UPDATE row locking with DuckDB (may have limited support)."""
-
-    # Setup test table
-    duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
-    duckdb_session.execute_script("""
-        CREATE TABLE test_table (
-            id INTEGER PRIMARY KEY,
-            name VARCHAR,
-            value INTEGER
-        )
-    """)
-
-    # Insert test data
-    duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duckdb_lock", 100))
-
-    try:
-        duckdb_session.begin()
-
-        # Test basic FOR UPDATE (DuckDB may have limited or no support)
-        result = duckdb_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "duckdb_lock").for_update()
-        )
-        assert result is not None
-        assert result["name"] == "duckdb_lock"
-        assert result["value"] == 100
-
-        duckdb_session.commit()
-    except Exception:
-        duckdb_session.rollback()
-        raise
-    finally:
-        duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
-
-
-def test_duckdb_for_update_nowait(duckdb_session: DuckDBDriver) -> None:
-    """Test FOR UPDATE NOWAIT with DuckDB."""
-
-    # Setup test table
-    duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
-    duckdb_session.execute_script("""
-        CREATE TABLE test_table (
-            id INTEGER PRIMARY KEY,
-            name VARCHAR,
-            value INTEGER
-        )
-    """)
-
-    # Insert test data
-    duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duckdb_nowait", 200))
-
-    try:
-        duckdb_session.begin()
-
-        # Test FOR UPDATE NOWAIT
-        result = duckdb_session.select_one(
-            sql.select("*").from_("test_table").where_eq("name", "duckdb_nowait").for_update(nowait=True)
-        )
-        assert result is not None
-        assert result["name"] == "duckdb_nowait"
-
-        duckdb_session.commit()
-    except Exception:
-        duckdb_session.rollback()
-        raise
-    finally:
-        duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
-
-
-def test_duckdb_for_share_locking(duckdb_session: DuckDBDriver) -> None:
-    """Test FOR SHARE row locking with DuckDB."""
-
-    # Setup test table
-    duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
-    duckdb_session.execute_script("""
-        CREATE TABLE test_table (
-            id INTEGER PRIMARY KEY,
-            name VARCHAR,
-            value INTEGER
-        )
-    """)
-
-    # Insert test data
-    duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duckdb_share", 300))
-
-    try:
-        duckdb_session.begin()
-
-        # Test FOR SHARE (DuckDB support may vary)
-        result = duckdb_session.select_one(
-            sql.select("id", "name", "value").from_("test_table").where_eq("name", "duckdb_share").for_share()
-        )
-        assert result is not None
-        assert result["name"] == "duckdb_share"
-        assert result["value"] == 300
-
-        duckdb_session.commit()
-    except Exception:
-        duckdb_session.rollback()
-        raise
-    finally:
-        duckdb_session.execute_script("DROP TABLE IF EXISTS test_table")
+@pytest.mark.parametrize("lock_method", ["for_update", "for_share", "for_update_nowait"])
+def test_duckdb_unsupported_lock_raises(duckdb_session: DuckDBDriver, lock_method: str) -> None:
+    """DuckDB rejects locking instead of executing an unlocked query."""
+    query = sql.select("*").from_("test_table")
+    if lock_method == "for_share":
+        query = query.for_share()
+    else:
+        query = query.for_update(nowait=lock_method == "for_update_nowait")
+    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE / row locking"):
+        duckdb_session.select_one(query)
 
 
 @requires_interpreted

@@ -44,6 +44,16 @@ Upserts (ON CONFLICT)
 Use ``.on_conflict()`` to handle insert conflicts. Chain ``.do_nothing()`` to skip
 conflicting rows, or ``.do_update(**columns)`` to update them.
 
+Dialects natively supporting ``ON CONFLICT`` (PostgreSQL, CockroachDB, SQLite, DuckDB, and Spanner)
+render standard ``ON CONFLICT`` syntax. For MySQL and MariaDB, the builder automatically
+transpiles ``.on_conflict().do_update()`` to ``ON DUPLICATE KEY UPDATE``, and ``.do_nothing()``
+to a no-op self-assignment (e.g., ``col = col``). This requires a conflict column or
+explicit insert columns. MySQL handles conflicts on any unique key, regardless of the
+requested conflict target; the no-op update can still fire update triggers. References
+to ``excluded.column`` in update expressions become ``VALUES(column)``. Dialects without native upsert clauses
+(Oracle, T-SQL / SQL Server, and BigQuery) raise :class:`~sqlspec.exceptions.SQLBuilderError`
+in both ``build()`` and ``to_statement()`` advising the use of :func:`sql.merge`.
+
 .. literalinclude:: /examples/builder/upsert.py
    :language: python
    :caption: ``upsert with on_conflict``
@@ -80,6 +90,20 @@ Joins
 
 Query Modifiers
 ---------------
+
+Row-level locking clauses such as ``.for_update()`` and ``.for_share()`` are validated against
+dialect capabilities at build time. On dialects without these locking clauses (T-SQL, SQLite,
+DuckDB, and BigQuery), building a locked query raises :class:`~sqlspec.exceptions.SQLBuilderError`.
+Oracle also rejects ``.for_share()``; MariaDB renders it as ``LOCK IN SHARE MODE``
+and rejects ``of=`` targets for all locking clauses. PostgreSQL key lock variants
+are rejected on other dialect families.
+Spanner supports plain ``FOR UPDATE`` in both SQL modes, but rejects shared locks,
+``SKIP LOCKED``, ``NOWAIT``, and ``OF`` modifiers. Its PostgreSQL mode requires conflict
+updates to assign every inserted column from the matching ``excluded`` column and
+does not accept conflict predicates or named constraints.
+Similarly, ``skip_locked=True`` is validated against the dialect's ``supports_skip_locked`` capability.
+The builder also normalizes common dialect aliases during build (e.g., ``mssql`` to ``tsql``,
+``mariadb`` to ``mysql``, and ``cockroachdb`` to ``postgres``).
 
 .. literalinclude:: /examples/builder/query_modifiers.py
    :language: python

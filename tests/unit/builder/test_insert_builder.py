@@ -383,3 +383,95 @@ def test_on_conflict_with_values_from() -> None:
     assert "DO UPDATE" in stmt.sql
     assert "name_1" in stmt.parameters
     assert stmt.parameters["name_1"] == "Updated"
+
+
+def test_on_conflict_mysql_transpiles() -> None:
+    """Test ON CONFLICT transpiles to ON DUPLICATE KEY UPDATE for MySQL and MariaDB."""
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
+    mysql_stmt = query.build(dialect="mysql")
+    assert "ON DUPLICATE KEY UPDATE" in mysql_stmt.sql
+    assert "ON CONFLICT" not in mysql_stmt.sql
+    assert "name" in mysql_stmt.sql
+
+    mariadb_stmt = query.build(dialect="mariadb")
+    assert "ON DUPLICATE KEY UPDATE" in mariadb_stmt.sql
+    assert "ON CONFLICT" not in mariadb_stmt.sql
+
+    nothing_query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_nothing()
+    nothing_mysql = nothing_query.build(dialect="mysql")
+    assert "ON DUPLICATE KEY UPDATE" in nothing_mysql.sql
+    assert "id = id" in nothing_mysql.sql or "`id` = `id`" in nothing_mysql.sql
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "tsql", "mssql", "bigquery"])
+def test_on_conflict_raises_oracle_tsql(dialect: str) -> None:
+    """Test ON CONFLICT raises SQLBuilderError mentioning sql.merge() on unsupported dialects."""
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
+    with pytest.raises(SQLBuilderError, match=r"sql\.merge\(\)"):
+        query.build(dialect=dialect)
+
+
+def test_on_conflict_postgres_unchanged() -> None:
+    """Test ON CONFLICT on postgres retains standard ON CONFLICT clause."""
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
+    stmt = query.build(dialect="postgres")
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "ON DUPLICATE KEY UPDATE" not in stmt.sql
+
+
+def test_to_statement_translates_conflict_without_mutating_builder() -> None:
+    from sqlspec.core import StatementConfig
+
+    query = (
+        sql
+        .insert("users")
+        .values(id=1, name="John")
+        .on_conflict("id")
+        .do_update(name=exp.column("name", table="excluded"))
+    )
+    original = query.build(dialect="postgres").sql
+    statement = query.to_statement(StatementConfig(dialect="mysql"))
+    assert "ON DUPLICATE KEY UPDATE" in statement.sql
+    assert "VALUES(" in statement.sql
+    assert "excluded" not in statement.sql.lower()
+    assert query.build(dialect="postgres").sql == original
+
+
+def test_to_statement_rejects_unsupported_conflict() -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.insert("users").values(id=1).on_conflict("id").do_nothing()
+    with pytest.raises(SQLBuilderError, match=r"sql\.merge\(\)"):
+        query.to_statement(StatementConfig(dialect="oracle"))
+
+
+def test_mysql_do_nothing_requires_known_column() -> None:
+    query = sql.insert("users").values(1).on_conflict().do_nothing()
+    with pytest.raises(SQLBuilderError, match="requires a conflict column"):
+        query.build(dialect="mysql")
+
+
+@pytest.mark.parametrize("argument", ["where", "index_predicate", "constraint"])
+def test_mysql_rejects_conflict_semantics_it_cannot_preserve(argument: str) -> None:
+    query = sql.insert("users").values(id=1).on_conflict("id").do_update(id=2)
+    conflict = query.get_insert_expression().args["conflict"]
+    conflict.set(argument, exp.to_identifier("restricted"))
+    with pytest.raises(SQLBuilderError, match="cannot preserve"):
+        query.build(dialect="mysql")
+
+
+@pytest.mark.parametrize("dialect", ["spanner", "spangres"])
+def test_spanner_native_conflicts(dialect: str) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.insert("users").values(id=1).on_conflict("id").do_nothing()
+    assert "ON CONFLICT" in query.to_statement(StatementConfig(dialect=dialect)).sql
+    query = sql.insert("users").values(id=1).on_conflict("id").do_update(id=exp.column("id", table="excluded"))
+    assert "DO UPDATE" in query.build(dialect=dialect).sql
+
+
+def test_spangres_rejects_non_insert_value_conflict_update() -> None:
+    query = sql.insert("users").values(id=1).on_conflict("id").do_update(id=2)
+    with pytest.raises(SQLBuilderError, match="require excluded column values"):
+        query.build(dialect="spangres")
