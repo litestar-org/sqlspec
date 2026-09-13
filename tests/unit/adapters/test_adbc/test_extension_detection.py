@@ -70,51 +70,65 @@ def test_build_postgres_extension_probe_names_filters_disabled_features() -> Non
 
 
 def test_detect_postgres_extensions_returns_tuple() -> None:
-    """detect_postgres_extensions returns (pgvector_available, paradedb_available)."""
+    """detect_postgres_extensions returns (pgvector_available, paradedb_available, pg_textsearch_available)."""
     cursor = _Cursor([("vector",)])
     connection = _Connection(cursor)
 
-    pgvector, paradedb = detect_postgres_extensions(connection, enable_pgvector=True, enable_paradedb=True)
+    pgvector, paradedb, pg_textsearch = detect_postgres_extensions(
+        connection, enable_pgvector=True, enable_paradedb=True, enable_pg_textsearch=True
+    )
     assert pgvector is True
     assert paradedb is False
+    assert pg_textsearch is False
     assert cursor.closed is True
 
 
 def test_detect_postgres_extensions_both_available() -> None:
-    """Both extensions detected when both present."""
-    connection = _Connection(_Cursor([("vector",), ("pg_search",)]))
+    """All extensions detected when present."""
+    connection = _Connection(_Cursor([("vector",), ("pg_search",), ("pg_textsearch",)]))
 
-    pgvector, paradedb = detect_postgres_extensions(connection, enable_pgvector=True, enable_paradedb=True)
+    pgvector, paradedb, pg_textsearch = detect_postgres_extensions(
+        connection, enable_pgvector=True, enable_paradedb=True, enable_pg_textsearch=True
+    )
     assert pgvector is True
     assert paradedb is True
+    assert pg_textsearch is True
 
 
 def test_detect_postgres_extensions_none_enabled() -> None:
-    """Returns (False, False) when both flags disabled."""
+    """Returns (False, False, False) when all flags disabled."""
     connection = _Connection(_Cursor([]))
 
-    pgvector, paradedb = detect_postgres_extensions(connection, enable_pgvector=False, enable_paradedb=False)
+    pgvector, paradedb, pg_textsearch = detect_postgres_extensions(
+        connection, enable_pgvector=False, enable_paradedb=False, enable_pg_textsearch=False
+    )
     assert pgvector is False
     assert paradedb is False
+    assert pg_textsearch is False
     assert connection.cursor_requested is False
 
 
 def test_detect_postgres_extensions_handles_error() -> None:
-    """Returns (False, False) on query failure."""
+    """Returns (False, False, False) on query failure."""
     cursor = _Cursor([], error=Exception("connection error"))
     connection = _Connection(cursor)
 
-    pgvector, paradedb = detect_postgres_extensions(connection, enable_pgvector=True, enable_paradedb=True)
+    pgvector, paradedb, pg_textsearch = detect_postgres_extensions(
+        connection, enable_pgvector=True, enable_paradedb=True, enable_pg_textsearch=True
+    )
     assert pgvector is False
     assert paradedb is False
+    assert pg_textsearch is False
     assert cursor.closed is True
 
 
 def test_adbc_config_initializes_extension_flags_to_none() -> None:
-    """AdbcConfig starts with _pgvector_available and _paradedb_available as None."""
+    """AdbcConfig starts with extension flags as None."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "sqlite"})
     assert config._pgvector_available is None  # pyright: ignore[reportPrivateUsage]
     assert config._paradedb_available is None  # pyright: ignore[reportPrivateUsage]
+    assert config._pg_textsearch_available is None  # pyright: ignore[reportPrivateUsage]
+    assert config.pg_textsearch_available is False
 
 
 def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
@@ -133,8 +147,20 @@ def test_adbc_config_update_dialect_for_extensions_pgvector() -> None:
     config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
     config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
     config._paradedb_available = False  # pyright: ignore[reportPrivateUsage]
+    config._pg_textsearch_available = False  # pyright: ignore[reportPrivateUsage]
     config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
     assert config.statement_config.dialect == "pgvector"
+
+
+def test_adbc_config_update_dialect_for_extensions_pg_textsearch() -> None:
+    """Dialect switches to pg_textsearch when pg_textsearch is available."""
+    config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
+    config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
+    config._paradedb_available = False  # pyright: ignore[reportPrivateUsage]
+    config._pg_textsearch_available = True  # pyright: ignore[reportPrivateUsage]
+    config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
+    assert config.statement_config.dialect == "pg_textsearch"
+    assert config.pg_textsearch_available is True
 
 
 def test_adbc_config_update_dialect_for_extensions_paradedb() -> None:
@@ -142,6 +168,7 @@ def test_adbc_config_update_dialect_for_extensions_paradedb() -> None:
     config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
     config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
     config._paradedb_available = True  # pyright: ignore[reportPrivateUsage]
+    config._pg_textsearch_available = True  # pyright: ignore[reportPrivateUsage]
     config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
     assert config.statement_config.dialect == "paradedb"
 

@@ -180,6 +180,19 @@ async def test_psycopg_async_bm25_probe_failure_is_preserved_without_callback_fa
     assert exc_info.value.__cause__ is probe_error
 
 
+def test_psycopg_pg_textsearch_available_property() -> None:
+    """pg_textsearch_available reflects detected extension state."""
+    connection = MagicMock()
+    connection.autocommit = True
+    connection.execute.return_value.fetchall.return_value = [("pg_textsearch",)]
+    config = PsycopgSyncConfig(driver_features={"enable_pgvector": False, "enable_paradedb": False})
+
+    assert config.pg_textsearch_available is False
+    config._configure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    assert config.pg_textsearch_available is True
+    assert config.statement_config.dialect == "pg_textsearch"
+
+
 def test_psycopg_numeric_placeholders_convert_to_pyformat() -> None:
     """Numeric placeholders should be rewritten for psycopg execution."""
 

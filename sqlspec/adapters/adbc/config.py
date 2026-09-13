@@ -12,6 +12,7 @@ from sqlspec.adapters.adbc.core import (
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
+    is_postgres_extension_active,
     resolve_dialect_from_config,
     resolve_dialect_name,
     resolve_driver_connect_func,
@@ -104,6 +105,10 @@ class AdbcDriverFeatures(TypedDict):
             When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
             on the first connection to check for the ``pg_search`` extension.
             Defaults to True. Independent of enable_pgvector.
+        enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
+            When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
+            on the first connection to check for the ``pg_textsearch`` extension.
+            Defaults to True.
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
             Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
@@ -124,6 +129,7 @@ class AdbcDriverFeatures(TypedDict):
     arrow_extension_types: NotRequired[bool]
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
+    enable_pg_textsearch: NotRequired[bool]
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -197,6 +203,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     __slots__ = (
         "_default_session_config",
         "_paradedb_available",
+        "_pg_textsearch_available",
         "_pgvector_available",
         "_resolved_dialect",
         "_user_connection_hook",
@@ -231,6 +238,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.connection_config = normalize_connection_config(connection_config)
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
+        self._pg_textsearch_available: bool | None = None
 
         self._resolved_dialect = resolve_dialect_from_config(self.connection_config)
 
@@ -288,7 +296,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def _update_dialect_for_extensions(self) -> None:
         """Update statement_config dialect based on detected extensions.
 
-        Priority: paradedb > pgvector > postgres (default).
+        Priority: paradedb > pg_textsearch > pgvector > postgres (default).
         Only switches when current dialect is ``postgres``.
         """
         current_dialect = self.statement_config.dialect or "postgres"
@@ -297,8 +305,15 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         if self._paradedb_available:
             self.statement_config = self.statement_config.replace(dialect="paradedb")
+        elif self._pg_textsearch_available:
+            self.statement_config = self.statement_config.replace(dialect="pg_textsearch")
         elif self._pgvector_available:
             self.statement_config = self.statement_config.replace(dialect="pgvector")
+
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
 
     def _detect_extensions_if_needed(self) -> None:
         """Detect postgres extensions on first call, caching results.
@@ -313,13 +328,17 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if not is_postgres_dialect(dialect):
             self._pgvector_available = False
             self._paradedb_available = False
+            self._pg_textsearch_available = False
             return
 
         connection = self.create_connection()
         try:
             probe_names = build_postgres_extension_probe_names(self.driver_features)
-            pgvector_available, paradedb_available = detect_postgres_extensions(
-                connection, enable_pgvector="vector" in probe_names, enable_paradedb="pg_search" in probe_names
+            pgvector_available, paradedb_available, pg_textsearch_available = detect_postgres_extensions(
+                connection,
+                enable_pgvector="vector" in probe_names,
+                enable_paradedb="pg_search" in probe_names,
+                enable_pg_textsearch="pg_textsearch" in probe_names,
             )
         finally:
             connection.close()
@@ -329,9 +348,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             detected_extensions.add("vector")
         if paradedb_available:
             detected_extensions.add("pg_search")
+        if pg_textsearch_available:
+            detected_extensions.add("pg_textsearch")
         self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
             self.statement_config, self.driver_features, detected_extensions
         )
+        self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":
         """Provide a connection context manager.

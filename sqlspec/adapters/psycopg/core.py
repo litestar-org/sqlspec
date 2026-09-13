@@ -17,6 +17,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
+    is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
@@ -75,6 +76,7 @@ __all__ = (
     "driver_profile",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
+    "is_postgres_extension_active",
     "pipeline_supported",
     "resolve_many_rowcount",
     "resolve_postgres_extension_state",
@@ -175,6 +177,7 @@ def apply_driver_features(
     features.setdefault("json_deserializer", deserializer)
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
+    features.setdefault("enable_pg_textsearch", True)
 
     parameter_config = _parameter_config(driver_profile, serializer, deserializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)
