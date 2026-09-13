@@ -152,6 +152,14 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 **Fixed:**
 
+* SQLite and aiosqlite adapters map primary key constraint violations (extended error code 1555
+  and ``SQLITE_CONSTRAINT_PRIMARYKEY``) to ``UniqueViolationError``.
+  (`#775 <https://github.com/litestar-org/sqlspec/pull/775>`_)
+
+* DuckDB adapter maps ``TransactionException`` update conflicts ("Conflict on update") to
+  ``SerializationConflictError``, and all other transaction failures to ``OperationalError``.
+  (`#775 <https://github.com/litestar-org/sqlspec/pull/775>`_)
+
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
   order. Assignments such as ``do_update(name=exp.column("name", table="excluded"))`` no longer render
   reversed. Conflict targets and update columns are quoted, allowing reserved words (e.g. ``order``, ``group``)

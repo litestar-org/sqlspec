@@ -68,6 +68,7 @@ _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
+SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
 SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
 SQLITE_CONSTRAINT_CHECK_CODE = 531
@@ -348,6 +349,12 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         error_name = None
     error_msg = str(error).lower()
 
+    if error_code in (SQLITE_CONSTRAINT_UNIQUE_CODE, SQLITE_CONSTRAINT_PRIMARYKEY_CODE) or error_name in (
+        "SQLITE_CONSTRAINT_UNIQUE",
+        "SQLITE_CONSTRAINT_PRIMARYKEY",
+    ):
+        return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
+
     # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
     # SQLITE_BUSY means another process has the database locked
     # SQLITE_LOCKED means another connection has the table/rows locked
@@ -385,8 +392,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
             return _create_aiosqlite_error(error, None, SQLParsingError, "SQL syntax error")
         return _create_aiosqlite_error(error, None, SQLSpecError, "database error")
 
-    if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
-        return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
     if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
         return _create_aiosqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
     if error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":

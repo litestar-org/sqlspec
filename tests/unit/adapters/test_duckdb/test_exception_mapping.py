@@ -21,6 +21,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -153,3 +154,43 @@ def test_handle_exception_propagates_non_native_error() -> None:
         with handler:
             raise KeyError("internal bug")
     assert handler.pending_exception is None
+
+
+def test_transaction_conflict_maps_to_serialization() -> None:
+    _, error = _make_native("TransactionException", "Conflict on update!")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, SerializationConflictError)
+    assert mapped.__cause__ is error
+    assert "DuckDB" in str(mapped)
+
+
+def test_other_transaction_exception_maps_to_operational() -> None:
+    _, error = _make_native("TransactionException", "other transaction error")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, OperationalError)
+    assert mapped.__cause__ is error
+    assert "DuckDB" in str(mapped)
+
+
+def test_create_mapped_exception_type_name_fallback_transaction_conflict() -> None:
+    class TransactionException(Exception):
+        pass
+
+    mapped = create_mapped_exception(TransactionException("Conflict on update!"))
+    assert isinstance(mapped, SerializationConflictError)
+
+
+def test_create_mapped_exception_type_name_fallback_transaction_other() -> None:
+    class TransactionException(Exception):
+        pass
+
+    mapped = create_mapped_exception(TransactionException("other error"))
+    assert isinstance(mapped, OperationalError)
+
+
+def test_create_mapped_exception_substring_fallback_conflict_on_update() -> None:
+    class _Generic(Exception):
+        pass
+
+    mapped = create_mapped_exception(_Generic("Conflict on update!"))
+    assert isinstance(mapped, SerializationConflictError)
