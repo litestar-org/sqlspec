@@ -9,6 +9,8 @@ from click.testing import CliRunner
 
 from sqlspec.cli import add_migration_commands
 
+__all__ = ("run_migration_quickstart",)
+
 
 def run_migration_quickstart() -> None:
     """Execute the standard migration workflow commands against a temporary SQLite database."""

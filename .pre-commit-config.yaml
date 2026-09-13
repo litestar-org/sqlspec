@@ -45,4 +45,3 @@ repos:
     hooks:
       - id: sphinx-lint
         args: ["--jobs", "1"]
-

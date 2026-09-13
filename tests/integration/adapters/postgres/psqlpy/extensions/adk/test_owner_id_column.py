@@ -22,9 +22,7 @@ def isolated_psqlpy_config(psqlpy_config: PsqlpyConfig) -> Generator[PsqlpyConfi
 
 
 @pytest.fixture
-async def psqlpy_store_with_fk(
-    isolated_psqlpy_config: PsqlpyConfig,
-) -> AsyncGenerator[PsqlpyADKStore, None]:
+async def psqlpy_store_with_fk(isolated_psqlpy_config: PsqlpyConfig) -> AsyncGenerator[PsqlpyADKStore, None]:
     """Create Psqlpy ADK store with owner_id_column configured."""
     isolated_psqlpy_config.extension_config = {
         "adk": {

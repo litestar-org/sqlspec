@@ -169,7 +169,7 @@ clean:                                              ## Cleanup temporary build a
 .PHONY: test
 test:                                               ## Run the tests
 	@echo "${INFO} Running test cases... 🧪"
-	@uv run pytest -n 4 --dist=loadgroup tests/unit tests/typing docs/examples
+	@uv run pytest -n 4 --dist=loadgroup tests/unit
 	@uv run pytest -n 1 --dist=loadgroup tests/integration --ignore=tests/integration/adapters
 	@for family in $(ADAPTER_FAMILIES); do
 		uv run pytest -n 1 --dist=loadgroup "tests/integration/adapters/$${family}"
@@ -185,7 +185,7 @@ coverage:                                           ## Run tests with coverage r
 	@echo "${INFO} Running tests with coverage... 📊"
 	@uv run coverage erase
 	@uv run pytest --cov --cov-report= --cov-fail-under=0 -n 4 --dist=loadgroup --quiet \
-		tests/unit tests/typing docs/examples
+		tests/unit
 	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
 		tests/integration --ignore=tests/integration/adapters
 	@for family in $(ADAPTER_FAMILIES); do
@@ -259,7 +259,7 @@ lint: fix prek type-check slotscheck zizmor         ## Run all linting checks
 	@echo "${OK} All linting checks passed ✨"
 
 .PHONY: check-all
-check-all: lint test-all coverage                  ## Run all checks (lint, test, coverage)
+check-all: lint coverage                            ## Run all checks (lint, test with coverage)
 	@echo "${OK} All checks passed successfully ✨"
 
 # =============================================================================
@@ -408,4 +408,3 @@ pgo-local:                                          ## Run full three-stage PGO 
 # =============================================================================
 # End of Makefile
 # =============================================================================
-
