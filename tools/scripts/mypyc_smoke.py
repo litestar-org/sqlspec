@@ -2,6 +2,7 @@
 
 import argparse
 import importlib
+import importlib.machinery
 import inspect
 import json
 import subprocess
@@ -13,7 +14,9 @@ from typing import Any, NamedTuple
 
 __all__ = ("SMOKE_IMPORTS", "SmokeImport", "is_compiled_module", "main", "run_construction_checks", "run_smoke")
 
-COMPILED_SUFFIXES = (".so", ".pyd")
+COMPILED_SUFFIXES: tuple[str, ...] = tuple(
+    dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".dylib", ".pyd"))
+)
 
 
 class SmokeImport(NamedTuple):

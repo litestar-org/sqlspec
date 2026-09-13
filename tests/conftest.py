@@ -1,3 +1,4 @@
+import importlib.machinery
 import logging
 import os
 import warnings
@@ -50,6 +51,11 @@ pytestmark = pytest.mark.anyio
 here = Path(__file__).parent
 
 
+COMPILED_EXTENSION_SUFFIXES: tuple[str, ...] = tuple(
+    dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".dylib", ".pyd"))
+)
+
+
 def is_compiled() -> bool:
     """Detect if sqlspec driver modules are mypyc-compiled.
 
@@ -59,9 +65,23 @@ def is_compiled() -> bool:
     try:
         from sqlspec.driver import _sync
 
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+        module_file = getattr(_sync, "__file__", None) or ""
+        return bool(module_file and module_file.endswith(COMPILED_EXTENSION_SUFFIXES))
     except ImportError:
         return False
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    """Report driver module origin and compilation status in pytest header."""
+    _ = config
+    try:
+        from sqlspec.driver import _sync
+
+        module_file = getattr(_sync, "__file__", None) or "unknown"
+        status = "compiled" if is_compiled() else "interpreted"
+        return [f"sqlspec driver: {status} ({module_file})"]
+    except ImportError as err:
+        return [f"sqlspec driver: unavailable ({err})"]
 
 
 requires_interpreted = pytest.mark.skipif(
@@ -139,23 +159,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
 
     skip_adbc = pytest.mark.skip(reason="Skip ADBC tests when running against mypyc-compiled modules.")
-    skip_compiled = pytest.mark.skip(
-        reason="Skip tests that rely on interpreted subclasses or mocks of compiled driver bases."
-    )
     for item in items:
-        item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
         if item.get_closest_marker("adbc") is not None:
             item.add_marker(skip_adbc)
-            continue
-        if (
-            "tests/unit/adapters/" in item_path
-            or "tests/unit/driver/" in item_path
-            or "tests/unit/extensions/" in item_path
-            or item_path.endswith("tests/unit/config/test_storage_capabilities.py")
-            or "tests/unit/observability/" in item_path
-        ):
-            item.add_marker(skip_compiled)
-            continue
 
 
 @pytest.fixture(scope="session", autouse=True)
