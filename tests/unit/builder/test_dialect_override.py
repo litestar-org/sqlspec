@@ -183,3 +183,26 @@ def test_to_sql_dialect_override_with_complex_query() -> None:
     assert "JOIN" in mysql_sql
     assert "WHERE" in postgres_sql
     assert "WHERE" in mysql_sql
+
+
+def test_mssql_alias_builds_tsql() -> None:
+    """Test dialect override 'mssql' normalizes to 'tsql' and renders identical T-SQL."""
+    query = sql.select("id", "name").from_("products").limit(10)
+    mssql_sql = query.build(dialect="mssql").sql
+    tsql_sql = query.build(dialect="tsql").sql
+    assert "TOP" in mssql_sql
+    assert mssql_sql == tsql_sql
+
+
+def test_mariadb_and_cockroachdb_dialect_aliases() -> None:
+    """Test dialect aliases for mariadb and cockroachdb render expected syntax."""
+    query = sql.select("id", "name").from_("products")
+    mariadb_sql = query.build(dialect="mariadb").sql
+    mysql_sql = query.build(dialect="mysql").sql
+    assert mariadb_sql == mysql_sql
+
+    cockroach_query = sql.select("id", "name").from_("products").for_update(skip_locked=True)
+    cockroach_sql = cockroach_query.build(dialect="cockroachdb").sql
+    postgres_sql = cockroach_query.build(dialect="postgres").sql
+    assert "FOR UPDATE SKIP LOCKED" in cockroach_sql
+    assert cockroach_sql == postgres_sql

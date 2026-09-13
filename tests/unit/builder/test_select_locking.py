@@ -1,8 +1,11 @@
 """Unit tests for SELECT locking functionality (FOR UPDATE, FOR SHARE, etc)."""
 
+import re
+
 import pytest
 
 from sqlspec import sql
+from sqlspec.data_dictionary import DialectConfig, register_dialect
 from sqlspec.exceptions import SQLBuilderError
 
 
@@ -234,5 +237,36 @@ def test_complex_join_with_for_update_of() -> None:
     # Both tables should be mentioned in the OF clause
     assert "j" in sql_content
     assert "u" in sql_content
-    # Should contain the companies reference as well
     assert "c" in sql_content
+
+
+@pytest.mark.parametrize("dialect", ["tsql", "mssql", "sqlite", "duckdb", "spanner", "bigquery"])
+def test_for_update_raises_on_unsupported_dialects(dialect: str) -> None:
+    """Test FOR UPDATE raises SQLBuilderError on dialects without row lock support."""
+    query = sql.select("*").from_("job").for_update()
+    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE"):
+        query.build(dialect=dialect)
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "cockroachdb", "mariadb"])
+def test_for_update_supported_dialects(dialect: str) -> None:
+    """Test FOR UPDATE renders on dialects supporting row locks."""
+    query = sql.select("*").from_("job").for_update()
+    stmt = query.build(dialect=dialect)
+    assert "FOR UPDATE" in stmt.sql
+
+
+def test_skip_locked_flag_gate() -> None:
+    """Test SKIP LOCKED raises SQLBuilderError when supports_skip_locked is False."""
+    custom_config = DialectConfig(
+        name="custom_no_skip_locked",
+        feature_flags={"supports_for_update": True, "supports_skip_locked": False},
+        feature_versions={},
+        type_mappings={},
+        version_pattern=re.compile(r".*"),
+    )
+    register_dialect(custom_config)
+
+    query = sql.select("*").from_("job").for_update(skip_locked=True)
+    with pytest.raises(SQLBuilderError, match="does not support SKIP LOCKED"):
+        query.build(dialect="custom_no_skip_locked")

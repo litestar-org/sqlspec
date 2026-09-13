@@ -35,12 +35,19 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
+from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
 from sqlspec.utils.uuids import uuid4
 
 __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
+
+DIALECT_BUILD_ALIASES: dict[str, str] = {
+    "mssql": "tsql",
+    "mariadb": "mysql",
+    "cockroachdb": "postgres",
+}
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
@@ -612,6 +619,32 @@ class QueryBuilder:
             final_expression = self._optimize_expression(final_expression)
 
         target_dialect = str(dialect) if dialect else self.dialect_name
+
+        if target_dialect:
+            try:
+                config = get_dialect_config(target_dialect)
+            except ValueError:
+                config = None
+
+            if config is not None and isinstance(final_expression, exp.Expr):
+                locks = list(final_expression.find_all(exp.Lock))
+                if locks:
+                    if config.get_feature_flag("supports_for_update") is False:
+                        self._raise_builder_error(
+                            f"Dialect '{target_dialect}' does not support FOR UPDATE / row locking."
+                        )
+                    if config.get_feature_flag("supports_skip_locked") is False:
+                        for lock in locks:
+                            if lock.args.get("wait") is False:
+                                self._raise_builder_error(
+                                    f"Dialect '{target_dialect}' does not support SKIP LOCKED."
+                                )
+
+        target_dialect = (
+            DIALECT_BUILD_ALIASES.get(target_dialect.lower(), target_dialect)
+            if target_dialect
+            else target_dialect
+        )
 
         try:
             if isinstance(final_expression, exp.Expr):
