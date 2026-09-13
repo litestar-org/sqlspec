@@ -1,24 +1,30 @@
 """Reusable mixins for INSERT/UPDATE/DELETE builders."""
 
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import extract_sql_object_expression
+from sqlspec.builder._parsing_utils import extract_expression, extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_dict
+
+if TYPE_CHECKING:
+    from sqlspec.builder._column import Column
+    from sqlspec.builder._expression_wrappers import ExpressionWrapper
+    from sqlspec.builder._select import Case
 
 __all__ = (
     "DeleteFromClauseMixin",
     "InsertFromSelectMixin",
     "InsertIntoClauseMixin",
     "InsertValuesMixin",
+    "ReturningClauseMixin",
     "UpdateFromClauseMixin",
     "UpdateSetClauseMixin",
     "UpdateTableClauseMixin",
@@ -443,4 +449,35 @@ class UpdateFromClauseMixin:
             from_table = from_clause.this
             from_table.append("joins", exp.Join(this=table_expr))
 
+        return self
+
+
+@trait
+class ReturningClauseMixin:
+    """Mixin providing RETURNING clause support for DML builders."""
+
+    __slots__ = ()
+
+    _expression: exp.Expr | None
+
+    def returning(self, *columns: "str | exp.Expr | Column | ExpressionWrapper | Case") -> Self:
+        """Add RETURNING clause to the DML statement.
+
+        Args:
+            *columns: Columns or expressions to return.
+
+        Returns:
+            The builder instance for method chaining.
+
+        Raises:
+            SQLBuilderError: If expression not initialized or not DML.
+        """
+        if self._expression is None:
+            msg = "Cannot add RETURNING: expression not initialized."
+            raise SQLBuilderError(msg)
+        if not isinstance(self._expression, (exp.Insert, exp.Update, exp.Delete)):
+            msg = "RETURNING only supported for INSERT, UPDATE, DELETE statements."
+            raise SQLBuilderError(msg)
+        returning_exprs = [extract_expression(col) for col in columns]
+        self._expression.set("returning", exp.Returning(expressions=returning_exprs))
         return self

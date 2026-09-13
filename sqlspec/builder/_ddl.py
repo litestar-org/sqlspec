@@ -14,7 +14,7 @@ from typing_extensions import Self
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import _normalize_dialect
 from sqlspec.builder._select import Select
-from sqlspec.core import SQL, SQLResult, StatementConfig
+from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
@@ -247,10 +247,6 @@ class DDLBuilder(QueryBuilder):
                 self._parameters[p_name] = p_value
 
         return select_expr
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        return SQLResult
 
     def _prepare_expression(self, dialect: "DialectType" = None) -> None:
         target_dialect = _normalize_dialect(dialect or self.dialect)

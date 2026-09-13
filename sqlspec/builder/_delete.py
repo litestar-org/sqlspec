@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING, Any
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._dml import DeleteFromClauseMixin
+from sqlspec.builder._dml import DeleteFromClauseMixin, ReturningClauseMixin
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
-from sqlspec.core import SQLResult
+from sqlspec.builder._select import WhereClauseMixin
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
@@ -43,15 +42,6 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
 
         if table:
             self.from_(table)
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        """Get the expected result type for DELETE operations.
-
-        Returns:
-            The ExecuteResult type for DELETE statements.
-        """
-        return SQLResult
 
     def _create_base_expression(self) -> "exp.Delete":
         """Create a new sqlglot Delete expression.

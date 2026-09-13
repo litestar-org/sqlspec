@@ -69,38 +69,7 @@ if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
 
 
-__all__ = (
-    "AlterTable",
-    "Case",
-    "Column",
-    "CommentOn",
-    "CreateIndex",
-    "CreateMaterializedView",
-    "CreateSchema",
-    "CreateTable",
-    "CreateTableAsSelect",
-    "CreateView",
-    "Delete",
-    "DropIndex",
-    "DropMaterializedView",
-    "DropSchema",
-    "DropTable",
-    "DropView",
-    "Explain",
-    "Insert",
-    "Merge",
-    "RenameTable",
-    "SQLFactory",
-    "Select",
-    "Truncate",
-    "Update",
-    "Values",
-    "WindowFunctionBuilder",
-    "build_copy_from_statement",
-    "build_copy_statement",
-    "build_copy_to_statement",
-    "sql",
-)
+__all__ = ("SQLFactory", "build_copy_from_statement", "build_copy_statement", "build_copy_to_statement", "sql")
 
 logger = get_logger("sqlspec.builder.factory")
 
@@ -135,59 +104,6 @@ SQL_STARTERS = {
     "VACUUM",
     "COPY",
 }
-
-
-def _fingerprint_sql(sql: str) -> str:
-    digest = hashlib.sha256(sql.encode("utf-8", errors="replace")).hexdigest()
-    return digest[:12]
-
-
-def _normalize_copy_dialect(dialect: DialectType | None) -> str:
-    if dialect is None:
-        return "postgres"
-    if isinstance(dialect, str):
-        return dialect
-    return str(dialect)
-
-
-def _to_copy_schema(table: str, columns: "Sequence[str] | None") -> exp.Expr:
-    base = exp.table_(table)
-    if not columns:
-        return base
-    column_nodes = [exp.column(column_name) for column_name in columns]
-    return exp.Schema(this=base, expressions=column_nodes)
-
-
-def _build_copy_expression(
-    *, direction: str, table: str, location: str, columns: "Sequence[str] | None", options: "Mapping[str, Any] | None"
-) -> exp.Copy:
-    copy_args: dict[str, Any] = {"this": _to_copy_schema(table, columns), "files": [exp.Literal.string(location)]}
-
-    if direction == "from":
-        copy_args["kind"] = True
-    elif direction == "to":
-        copy_args["kind"] = False
-
-    if options:
-        params: list[exp.CopyParameter] = []
-        for key, value in options.items():
-            identifier = exp.Var(this=str(key).upper())
-            value_expression: exp.Expr
-            if isinstance(value, bool):
-                value_expression = exp.Boolean(this=value)
-            elif value is None:
-                value_expression = exp.null()
-            elif isinstance(value, (int, float)):
-                value_expression = exp.Literal.number(value)
-            elif isinstance(value, (list, tuple)):
-                elements = [exp.Literal.string(str(item)) for item in value]
-                value_expression = exp.Array(expressions=elements)
-            else:
-                value_expression = exp.Literal.string(str(value))
-            params.append(exp.CopyParameter(this=identifier, expression=value_expression))
-        copy_args["params"] = params
-
-    return exp.Copy(**copy_args)
 
 
 def build_copy_statement(
@@ -295,15 +211,7 @@ class SQLFactory:
             msg = f"Failed to parse SQL: {e}"
             raise SQLBuilderError(msg) from e
         actual_type = type(parsed_expr).__name__.upper()
-        expr_type_map = {
-            "SELECT": "SELECT",
-            "INSERT": "INSERT",
-            "UPDATE": "UPDATE",
-            "DELETE": "DELETE",
-            "MERGE": "MERGE",
-            "WITH": "WITH",
-        }
-        actual_type_str = expr_type_map.get(actual_type, actual_type)
+        actual_type_str = actual_type
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
@@ -1606,6 +1514,59 @@ class SQLFactory:
             over_args["order"] = normalized_order
 
         return FunctionExpression(exp.Window(this=func_expr, **over_args))
+
+
+def _fingerprint_sql(sql: str) -> str:
+    digest = hashlib.sha256(sql.encode("utf-8", errors="replace")).hexdigest()
+    return digest[:12]
+
+
+def _normalize_copy_dialect(dialect: DialectType | None) -> str:
+    if dialect is None:
+        return "postgres"
+    if isinstance(dialect, str):
+        return dialect
+    return str(dialect)
+
+
+def _to_copy_schema(table: str, columns: "Sequence[str] | None") -> exp.Expr:
+    base = exp.table_(table)
+    if not columns:
+        return base
+    column_nodes = [exp.column(column_name) for column_name in columns]
+    return exp.Schema(this=base, expressions=column_nodes)
+
+
+def _build_copy_expression(
+    *, direction: str, table: str, location: str, columns: "Sequence[str] | None", options: "Mapping[str, Any] | None"
+) -> exp.Copy:
+    copy_args: dict[str, Any] = {"this": _to_copy_schema(table, columns), "files": [exp.Literal.string(location)]}
+
+    if direction == "from":
+        copy_args["kind"] = True
+    elif direction == "to":
+        copy_args["kind"] = False
+
+    if options:
+        params: list[exp.CopyParameter] = []
+        for key, value in options.items():
+            identifier = exp.Var(this=str(key).upper())
+            value_expression: exp.Expr
+            if isinstance(value, bool):
+                value_expression = exp.Boolean(this=value)
+            elif value is None:
+                value_expression = exp.null()
+            elif isinstance(value, (int, float)):
+                value_expression = exp.Literal.number(value)
+            elif isinstance(value, (list, tuple)):
+                elements = [exp.Literal.string(str(item)) for item in value]
+                value_expression = exp.Array(expressions=elements)
+            else:
+                value_expression = exp.Literal.string(str(value))
+            params.append(exp.CopyParameter(this=identifier, expression=value_expression))
+        copy_args["params"] = params
+
+    return exp.Copy(**copy_args)
 
 
 sql = SQLFactory()

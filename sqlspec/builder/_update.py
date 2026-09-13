@@ -10,11 +10,15 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._dml import UpdateFromClauseMixin, UpdateSetClauseMixin, UpdateTableClauseMixin
+from sqlspec.builder._dml import (
+    ReturningClauseMixin,
+    UpdateFromClauseMixin,
+    UpdateSetClauseMixin,
+    UpdateTableClauseMixin,
+)
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import build_join_clause
-from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
-from sqlspec.core import SQLResult
+from sqlspec.builder._select import WhereClauseMixin
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
@@ -55,11 +59,6 @@ class Update(
 
         if table:
             self.table(table)
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        """Return the expected result type for this builder."""
-        return SQLResult
 
     def _create_base_expression(self) -> exp.Update:
         """Create a base UPDATE expression.

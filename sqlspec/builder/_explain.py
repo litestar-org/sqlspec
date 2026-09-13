@@ -4,7 +4,7 @@ Provides a fluent interface for building EXPLAIN statements with
 dialect-aware SQL generation.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import trait
 from sqlglot import Dialect, exp
@@ -42,7 +42,12 @@ SQLITE_DIALECTS = frozenset({"sqlite"})
 DUCKDB_DIALECTS = frozenset({"duckdb"})
 ORACLE_DIALECTS = frozenset({"oracle"})
 BIGQUERY_DIALECTS = frozenset({"bigquery"})
-SPANNER_DIALECTS = frozenset({"spanner"})
+_MYSQL_FORMAT_MAP: Final[dict[ExplainFormat, str]] = {
+    ExplainFormat.JSON: "JSON",
+    ExplainFormat.TREE: "TREE",
+    ExplainFormat.TRADITIONAL: "TRADITIONAL",
+    ExplainFormat.TEXT: "TRADITIONAL",
+}
 
 
 def normalize_dialect_name(dialect: "DialectType | None") -> str | None:
@@ -124,13 +129,7 @@ def build_mysql_explain(statement_sql: str, options: "ExplainOptions") -> str:
         return f"EXPLAIN ANALYZE {statement_sql}"
 
     if options.format is not None:
-        format_map = {
-            ExplainFormat.JSON: "JSON",
-            ExplainFormat.TREE: "TREE",
-            ExplainFormat.TRADITIONAL: "TRADITIONAL",
-            ExplainFormat.TEXT: "TRADITIONAL",
-        }
-        fmt = format_map.get(options.format, "TRADITIONAL")
+        fmt = _MYSQL_FORMAT_MAP.get(options.format, "TRADITIONAL")
         return f"EXPLAIN FORMAT = {fmt} {statement_sql}"
 
     return f"EXPLAIN {statement_sql}"
@@ -255,8 +254,6 @@ def build_explain_sql(statement_sql: str, options: "ExplainOptions", dialect: "D
         return build_oracle_explain(statement_sql, options)
     if dialect_name in BIGQUERY_DIALECTS:
         return build_bigquery_explain(statement_sql, options)
-    if dialect_name in SPANNER_DIALECTS:
-        return build_generic_explain(statement_sql, options)
 
     return build_generic_explain(statement_sql, options)
 

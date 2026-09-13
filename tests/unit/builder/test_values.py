@@ -130,14 +130,6 @@ def test_values_as_and_set_columns() -> None:
         val.set_columns("only_one")
 
 
-def test_values_expected_result_type() -> None:
-    """Test expected result type property."""
-    from sqlspec.core import SQLResult
-
-    val = Values([(1, "a")])
-    assert val._expected_result_type == SQLResult
-
-
 def test_values_alias_without_columns() -> None:
     """Test Values with alias but without column list."""
     val = Values([(1, "a")], alias="v")

@@ -31,7 +31,8 @@ from sqlspec.builder._parsing_utils import (
     parse_table_expression,
     to_expression,
 )
-from sqlspec.core import SQL, ParameterStyle, SQLResult
+from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core.query_modifiers import expr_eq, expr_gt, expr_gte, expr_lt, expr_lte, expr_neq, expr_not_like
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -59,7 +60,6 @@ __all__ = (
     "LimitOffsetClauseMixin",
     "OrderByClauseMixin",
     "PivotClauseMixin",
-    "ReturningClauseMixin",
     "Select",
     "SelectClauseMixin",
     "SetOperationMixin",
@@ -84,30 +84,6 @@ def is_explicitly_quoted(identifier: Any) -> bool:
     )
 
 
-def _expr_eq(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.EQ(this=col, expression=placeholder)
-
-
-def _expr_neq(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.NEQ(this=col, expression=placeholder)
-
-
-def _expr_gt(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.GT(this=col, expression=placeholder)
-
-
-def _expr_gte(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.GTE(this=col, expression=placeholder)
-
-
-def _expr_lt(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.LT(this=col, expression=placeholder)
-
-
-def _expr_lte(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.LTE(this=col, expression=placeholder)
-
-
 def _expr_like_exp(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
     return exp.Like(this=col, expression=placeholder)
 
@@ -116,25 +92,21 @@ def _expr_like_method(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.E
     return cast("exp.Expr", col.like(placeholder))
 
 
-def _expr_not_like(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.Not(this=exp.Like(this=col, expression=placeholder))
-
-
 def _expr_ilike(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
     return cast("exp.Expr", col.ilike(placeholder))
 
 
 _SIMPLE_OPERATOR_MAP: dict[str, Any] = {
-    "=": _expr_eq,
-    "==": _expr_eq,
-    "!=": _expr_neq,
-    "<>": _expr_neq,
-    ">": _expr_gt,
-    ">=": _expr_gte,
-    "<": _expr_lt,
-    "<=": _expr_lte,
+    "=": expr_eq,
+    "==": expr_eq,
+    "!=": expr_neq,
+    "<>": expr_neq,
+    ">": expr_gt,
+    ">=": expr_gte,
+    "<": expr_lt,
+    "<=": expr_lte,
     "LIKE": _expr_like_exp,
-    "NOT LIKE": _expr_not_like,
+    "NOT LIKE": expr_not_like,
 }
 
 
@@ -440,24 +412,6 @@ class LimitOffsetClauseMixin:
 
 
 @trait
-class ReturningClauseMixin:
-    __slots__ = ()
-
-    _expression: exp.Expr | None
-
-    def returning(self, *columns: Union[str, exp.Expr, "Column", "ExpressionWrapper", Case]) -> Self:
-        if self._expression is None:
-            msg = "Cannot add RETURNING: expression not initialized."
-            raise SQLBuilderError(msg)
-        if not isinstance(self._expression, (exp.Insert, exp.Update, exp.Delete)):
-            msg = "RETURNING only supported for INSERT, UPDATE, DELETE statements."
-            raise SQLBuilderError(msg)
-        returning_exprs = [extract_expression(col) for col in columns]
-        self._expression.set("returning", exp.Returning(expressions=returning_exprs))
-        return self
-
-
-@trait
 class WhereClauseMixin:
     __slots__ = ()
 
@@ -524,22 +478,7 @@ class WhereClauseMixin:
         return exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)])
 
     def _handle_not_in_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
-        builder = cast("SQLBuilderProtocol", self)
-        if has_parameter_builder(value) or isinstance(value, exp.Expr):
-            subquery_expr = self._normalize_subquery_expression(value, builder)
-            return exp.Not(this=exp.In(this=column_exp, expressions=[subquery_expr]))
-        if is_iterable_parameters(value):
-            placeholders = []
-            for index, element in enumerate(value):
-                name_seed = column_name if len(value) == 1 else f"{column_name}_{index + 1}"
-                param_name = builder._next_parameter_name(name_seed)
-                _, param_name = builder.add_parameter(element, name=param_name)
-                placeholders.append(exp.Placeholder(this=param_name))
-            return exp.Not(this=exp.In(this=column_exp, expressions=placeholders))
-
-        param_name = builder._next_parameter_name(column_name)
-        _, param_name = builder.add_parameter(value, name=param_name)
-        return exp.Not(this=exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)]))
+        return exp.Not(this=self._handle_in_operator(column_exp, value, column_name=column_name))
 
     def _handle_is_operator(self, column_exp: exp.Expr, value: Any) -> exp.Expr:
         value_expr = exp.Null() if value is None else exp.convert(value)
@@ -689,7 +628,7 @@ class WhereClauseMixin:
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expr:
         if len(condition) == PAIR_LENGTH:
             column, value = condition
-            return self._create_parameterized_condition(column, value, _expr_eq)
+            return self._create_parameterized_condition(column, value, expr_eq)
 
         if len(condition) != TRIPLE_LENGTH:
             msg = f"Condition tuple must have 2 or 3 elements, got {len(condition)}"
@@ -873,22 +812,22 @@ class WhereClauseMixin:
         return exp.Not(this=self._build_exists_condition(subquery))
 
     def where_eq(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._build_comparison_condition(column, value, _expr_eq))
+        return self.where(self._build_comparison_condition(column, value, expr_eq))
 
     def where_neq(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._build_comparison_condition(column, value, _expr_neq))
+        return self.where(self._build_comparison_condition(column, value, expr_neq))
 
     def where_lt(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._build_comparison_condition(column, value, _expr_lt))
+        return self.where(self._build_comparison_condition(column, value, expr_lt))
 
     def where_lte(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._build_comparison_condition(column, value, _expr_lte))
+        return self.where(self._build_comparison_condition(column, value, expr_lte))
 
     def where_gt(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._build_comparison_condition(column, value, _expr_gt))
+        return self.where(self._build_comparison_condition(column, value, expr_gt))
 
     def where_gte(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._build_comparison_condition(column, value, _expr_gte))
+        return self.where(self._build_comparison_condition(column, value, expr_gte))
 
     def where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
         return self.where(self._build_between_condition(column, low, high))
@@ -897,7 +836,7 @@ class WhereClauseMixin:
         return self.where(self._build_like_condition(column, pattern, escape))
 
     def where_not_like(self, column: str | exp.Column, pattern: str) -> Self:
-        return self.where(self._build_comparison_condition(column, pattern, _expr_not_like))
+        return self.where(self._build_comparison_condition(column, pattern, expr_not_like))
 
     def where_ilike(self, column: str | exp.Column, pattern: str) -> Self:
         return self.where(self._build_comparison_condition(column, pattern, _expr_ilike))
@@ -932,22 +871,22 @@ class WhereClauseMixin:
         return self.where(or_condition)
 
     def or_where_eq(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, value, _expr_eq))
+        return self._combine_with_or(self._build_comparison_condition(column, value, expr_eq))
 
     def or_where_neq(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, value, _expr_neq))
+        return self._combine_with_or(self._build_comparison_condition(column, value, expr_neq))
 
     def or_where_lt(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, value, _expr_lt))
+        return self._combine_with_or(self._build_comparison_condition(column, value, expr_lt))
 
     def or_where_lte(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, value, _expr_lte))
+        return self._combine_with_or(self._build_comparison_condition(column, value, expr_lte))
 
     def or_where_gt(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, value, _expr_gt))
+        return self._combine_with_or(self._build_comparison_condition(column, value, expr_gt))
 
     def or_where_gte(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, value, _expr_gte))
+        return self._combine_with_or(self._build_comparison_condition(column, value, expr_gte))
 
     def or_where_between(self, column: str | exp.Column, low: Any, high: Any) -> Self:
         return self._combine_with_or(self._build_between_condition(column, low, high))
@@ -956,7 +895,7 @@ class WhereClauseMixin:
         return self._combine_with_or(self._build_like_condition(column, pattern, escape))
 
     def or_where_not_like(self, column: str | exp.Column, pattern: str) -> Self:
-        return self._combine_with_or(self._build_comparison_condition(column, pattern, _expr_not_like))
+        return self._combine_with_or(self._build_comparison_condition(column, pattern, expr_not_like))
 
     def or_where_ilike(self, column: str | exp.Column, pattern: str) -> Self:
         return self._combine_with_or(self._build_comparison_condition(column, pattern, _expr_ilike))
@@ -1270,15 +1209,6 @@ class Select(
 
         if columns:
             self.select(*columns)
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        """Get the expected result type for SELECT operations.
-
-        Returns:
-            type: The SelectResult type.
-        """
-        return SQLResult
 
     def _create_base_expression(self) -> exp.Select:
         """Create base SELECT expression."""
