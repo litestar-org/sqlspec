@@ -108,9 +108,10 @@ Unreleased
   of JSON values to the target column types read from the data dictionary, and, on
   PostgreSQL, resetting serial and identity sequences past the loaded ids. Table and
   column names are matched exactly. Generated columns are skipped on export and
-  load where column types are read (not SQL Server or Oracle). The loader does not
-  commit. Exporting orders rows by primary key (or by every column), writes files
-  atomically, and replaces the table's other fixture files in the directory.
+  load where column metadata is read (PostgreSQL family, MySQL, DuckDB, SQLite). The
+  loader does not commit. Exporting orders rows by primary key (or by every column),
+  writes files atomically, and replaces the table's other fixture files in the
+  directory.
   See :doc:`/usage/testing`.
   (`#766 <https://github.com/litestar-org/sqlspec/issues/766>`_)
 * SQL files can share SQL through ``-- fragment:`` sections spliced in with
