@@ -22,6 +22,7 @@ from sqlspec.migrations.utils import (
     _get_system_username,
     create_migration_file,
     get_author,
+    resolve_migration_schema,
     resolve_tracker_schema,
 )
 from sqlspec.utils.text import quote_identifier
@@ -427,3 +428,19 @@ def test_get_author_invalid_callable_path() -> None:
 def test_get_author_invalid_mode() -> None:
     with pytest.raises(TemplateValidationError):
         get_author({"mode": "unknown"})
+
+
+def test_resolve_migration_schema_prefers_file_directive() -> None:
+    """Migration-level schema directive takes precedence over default schema."""
+    migration = {"schema": "tenant"}
+    config = {"default_schema": "public"}
+    assert resolve_migration_schema(migration, config) == "tenant"
+
+
+def test_resolve_migration_schema_falls_back_to_default_schema() -> None:
+    """Fallback to configured default schema when migration has no directive."""
+    migration = {"schema": None}
+    config = {"default_schema": "public"}
+    assert resolve_migration_schema(migration, config) == "public"
+    assert resolve_migration_schema({}, config) == "public"
+    assert resolve_migration_schema({}, {}) is None

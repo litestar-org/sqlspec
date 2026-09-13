@@ -23,6 +23,7 @@ __all__ = (
     "get_author",
     "resolve_default_schema",
     "resolve_extension_migrations_path",
+    "resolve_migration_schema",
     "resolve_tracker_schema",
 )
 
@@ -46,6 +47,28 @@ def resolve_default_schema(migration_config: "Mapping[str, Any] | None") -> str 
     if isinstance(default_schema, str) and default_schema:
         return default_schema
     return None
+
+
+def resolve_migration_schema(
+    migration: "Mapping[str, Any]",
+    migration_config: "Mapping[str, Any] | None",
+) -> str | None:
+    """Resolve the active schema for a migration.
+
+    Prefers the per-migration schema directive if present, falling back to the
+    default schema configured for migrations.
+
+    Args:
+        migration: Loaded migration metadata mapping.
+        migration_config: Migration configuration mapping.
+
+    Returns:
+        The resolved schema name, or ``None`` if neither is set.
+    """
+    migration_schema = migration.get("schema")
+    if isinstance(migration_schema, str) and migration_schema:
+        return migration_schema
+    return resolve_default_schema(migration_config)
 
 
 def resolve_tracker_schema(migration_config: "Mapping[str, Any] | None") -> str | None:

@@ -180,7 +180,9 @@ class MigrationConfig(TypedDict):
     """Name of the table used to track applied migrations. Defaults to 'ddl_migrations'."""
 
     default_schema: NotRequired[str]
-    """Schema applied to migration sessions before user migration SQL runs, when supported by the adapter."""
+    """Schema applied to migration sessions before user migration SQL runs, when supported by the adapter.
+    Can be overridden on individual migration files via the ``-- schema: <name>`` directive.
+    """
 
     version_table_schema: NotRequired[str]
     """Schema that stores the migration tracking table. Defaults to default_schema when omitted."""
