@@ -72,8 +72,7 @@ Writing and running tests
   - Use unit tests (`tests/unit/`) for code that does not need a database (parsing, config normalization, parameter formatting).
   - Review the `test placement guide <https://github.com/litestar-org/sqlspec/blob/main/tests/README.md>`_ for detailed fixture conventions.
 - **Integration Resources**:
-  - Integration tests use ``pytest-databases`` fixtures.
-  - Run database containers locally before running integration tests if testing locally (e.g. via ``make infra-up``).
+  - Integration tests use ``pytest-databases`` fixtures to provision and manage database containers automatically.
 - **Coverage Requirements**:
   - The repository-wide coverage floor is temporarily 76%.
   - Every new commit must keep changed-code coverage at or above **90%**.
