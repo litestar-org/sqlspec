@@ -120,7 +120,7 @@ def test_bigquery_json_results_match_capabilities() -> None:
     from sqlspec.adapters.bigquery.core import collect_rows
 
     schema = [SchemaField("payload", "JSON")]
-    row = _row_tuple_from_json({"f": [{"v": '{"key": "value"}'}]}, schema)
+    row = _row_tuple_from_json({"f": [{"v": '{"key": "value"}'}]}, schema)  # type: ignore[no-untyped-call]
     rows, columns = collect_rows([row], schema)
     assert BigQueryConfig.type_coercion_capabilities.json_columns_decoded is True
     assert columns == ["payload"]

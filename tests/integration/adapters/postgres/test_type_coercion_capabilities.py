@@ -126,8 +126,7 @@ async def test_psqlpy_json_columns_match_capabilities(psqlpy_config: "PsqlpyConf
     assert psqlpy_config.type_coercion_capabilities.json_columns_decoded is True
     async with psqlpy_config.provide_session() as driver:
         row = await driver.select_one(
-            "SELECT $1::json AS payload, $2::jsonb AS binary_payload",
-            ({"key": "value"}, {"count": 42}),
+            "SELECT $1::json AS payload, $2::jsonb AS binary_payload", ({"key": "value"}, {"count": 42})
         )
         assert row["payload"] == {"key": "value"}
         assert row["binary_payload"] == {"count": 42}

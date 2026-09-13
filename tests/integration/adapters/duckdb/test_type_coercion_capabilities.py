@@ -29,7 +29,8 @@ def test_duckdb_type_coercion_capabilities_observed() -> None:
                 "CREATE TABLE test_coercion (id INTEGER PRIMARY KEY, ts TIMESTAMPTZ, payload JSON, uid VARCHAR);"
             )
             driver.execute(
-                "INSERT INTO test_coercion (id, ts, payload, uid) VALUES (?, ?, ?, ?)", [1, test_dt, test_json, test_uuid]
+                "INSERT INTO test_coercion (id, ts, payload, uid) VALUES (?, ?, ?, ?)",
+                [1, test_dt, test_json, test_uuid],
             )
             row = driver.select_one("SELECT ts, payload, uid FROM test_coercion WHERE id = ?", [1])
             assert row is not None
