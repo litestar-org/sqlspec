@@ -35,7 +35,7 @@ def test_update_from_select_builder_matrix() -> None:
     assert stmt_tsql.parameters["a"] == 1
 
 
-@pytest.mark.parametrize("dialect", ["oracle", "mysql", "mariadb", "spanner", "bigquery"])
+@pytest.mark.parametrize("dialect", ["oracle", "mysql", "mariadb", "spanner"])
 def test_update_from_raises_oracle_mysql(dialect: str) -> None:
     """Test UPDATE FROM raises SQLBuilderError on unsupported dialects."""
     subquery = sql.select("id").from_("t").limit(1)
@@ -95,3 +95,23 @@ def test_update_from_select_expression_is_parenthesized() -> None:
     assert expression is not None
     assert isinstance(expression.args["from_"].this, exp.Subquery)
     assert source.args.get("alias") is None
+
+
+def test_bigquery_update_from_is_supported() -> None:
+    query = sql.update("t").set(a=1).from_("source", alias="s").where("t.id = s.id")
+    assert "FROM" in query.build(dialect="bigquery").sql
+    assert "FROM" in query.to_statement(StatementConfig(dialect="bigquery")).sql
+
+
+@pytest.mark.parametrize(("major", "expected"), [(19, False), (23, True)])
+def test_oracle_update_from_runtime_capability(major: int, expected: bool) -> None:
+    from sqlspec.data_dictionary import VersionInfo
+    from sqlspec.data_dictionary.dialects.oracle.config import ORACLE_CONFIG, resolve_oracle_feature_flag
+
+    assert resolve_oracle_feature_flag(
+        ORACLE_CONFIG,
+        VersionInfo(major, 0, 0),
+        "supports_update_from",
+        compatible_major=major,
+        is_autonomous=False,
+    ) is expected

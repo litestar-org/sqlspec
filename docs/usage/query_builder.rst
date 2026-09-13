@@ -92,13 +92,13 @@ Dialect Support Matrix
      - Raises ``SQLBuilderError``; use multi-table join update or MERGE
    * - Oracle
      - No
-     - Raises ``SQLBuilderError``; use MERGE statement
+     - Builder conservatively raises ``SQLBuilderError``; use MERGE or raw SQL on Oracle 23+
    * - Spanner
      - No
      - Raises ``SQLBuilderError``
    * - BigQuery
-     - No
-     - Raises ``SQLBuilderError``; use MERGE statement
+     - Yes
+     - Native ``UPDATE ... FROM``; a ``WHERE`` condition is required
 
 Upserts (ON CONFLICT)
 ---------------------

@@ -31,6 +31,7 @@ ORACLE_MIN_JSON_NATIVE_VERSION: Final[int] = 21
 ORACLE_MIN_JSON_NATIVE_COMPATIBLE: Final[int] = 20
 ORACLE_MIN_JSON_BLOB_VERSION: Final[int] = 12
 ORACLE_MIN_OSON_VERSION: Final[int] = 19
+ORACLE_MIN_UPDATE_FROM_VERSION: Final[int] = 23
 
 ORACLE_JSON_STORAGE_NATIVE: Final[str] = "json"
 ORACLE_JSON_STORAGE_BLOB_JSON: Final[str] = "blob_json"
@@ -202,6 +203,8 @@ def resolve_oracle_feature_flag(
         return bool(version_info and is_autonomous)
     if version_info is None:
         return False
+    if feature == "supports_update_from":
+        return version_info.major >= ORACLE_MIN_UPDATE_FROM_VERSION
     if feature == "supports_native_json":
         return oracle_supports_native_json(version_info.major, compatible_major)
     if feature == "supports_oson_blob":

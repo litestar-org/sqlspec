@@ -188,3 +188,9 @@ def test_values_rejects_row_width_changes_between_calls() -> None:
 def test_values_rejects_empty_mapping() -> None:
     with pytest.raises(SQLBuilderError, match="at least one column"):
         sql.values([{}])
+
+
+def test_values_rebuild_preserves_cte_parameters() -> None:
+    query = sql.values([(1,)], columns=["id"]).with_cte("c", sql.select("id").from_("t").where_eq("id", 2))
+    query.add_rows([(3,)])
+    assert sorted(query.build().parameters.values()) == [1, 2, 3]

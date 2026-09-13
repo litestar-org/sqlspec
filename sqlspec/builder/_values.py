@@ -178,7 +178,14 @@ class Values(QueryBuilder):
 
     def _rebuild_expression(self) -> None:
         """Rebuild the underlying sqlglot expression and parameter bindings."""
+        cte_parameters = {
+            str(placeholder.this): self._parameters[str(placeholder.this)]
+            for cte in self._with_ctes.values()
+            for placeholder in cte.find_all(exp.Placeholder)
+            if str(placeholder.this) in self._parameters
+        }
         self._parameters.clear()
+        self._parameters.update(cte_parameters)
         self._parameter_name_counters.clear()
         self._parameter_counter = 0
 
