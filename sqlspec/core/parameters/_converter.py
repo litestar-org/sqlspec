@@ -532,6 +532,20 @@ class ParameterConverter:
         # Fallback for non-standard parameters - return None
         return None
 
+    @staticmethod
+    def _format_literal(param_value: object | None) -> str:
+        """Format a parameter value as a SQL literal string."""
+        if param_value is None:
+            return "NULL"
+        if isinstance(param_value, str):
+            escaped = param_value.replace("'", "''")
+            return f"'{escaped}'"
+        if isinstance(param_value, bool):
+            return "TRUE" if param_value else "FALSE"
+        if isinstance(param_value, (int, float)):
+            return str(param_value)
+        return f"'{param_value!s}'"
+
     def _embed_static_parameters(
         self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
     ) -> "tuple[str, None]":
@@ -548,22 +562,33 @@ class ParameterConverter:
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
+        sql_len = len(sql)
+        is_well_formed = True
+        prev_end = 0
+        for param in param_info:
+            p_len = len(param.placeholder_text)
+            if param.position < prev_end or param.position + p_len > sql_len:
+                is_well_formed = False
+                break
+            prev_end = param.position + p_len
+
+        if is_well_formed:
+            segments: list[str] = []
+            last_start = sql_len
+            for param in reversed(param_info):
+                param_value = self._parameter_value(parameters, param, unique_params)
+                literal = self._format_literal(param_value)
+                placeholder_end = param.position + len(param.placeholder_text)
+                segments.extend((sql[placeholder_end:last_start], literal))
+                last_start = param.position
+            segments.append(sql[:last_start])
+            segments.reverse()
+            return "".join(segments), None
+
         static_sql = sql
         for param in reversed(param_info):
             param_value = self._parameter_value(parameters, param, unique_params)
-
-            if param_value is None:
-                literal = "NULL"
-            elif isinstance(param_value, str):
-                escaped = param_value.replace("'", "''")
-                literal = f"'{escaped}'"
-            elif isinstance(param_value, bool):
-                literal = "TRUE" if param_value else "FALSE"
-            elif isinstance(param_value, (int, float)):
-                literal = str(param_value)
-            else:
-                literal = f"'{param_value!s}'"
-
+            literal = self._format_literal(param_value)
             static_sql = (
                 static_sql[: param.position] + literal + static_sql[param.position + len(param.placeholder_text) :]
             )

@@ -2700,3 +2700,11 @@ def test_characterize_static_reverse_evaluation(converter: ParameterConverter) -
     types_params = {"a": None, "b": True, "c": 42, "d": 3.14, "e": "it's"}
     (result_types, _) = converter.convert_placeholder_style(types_sql, types_params, ParameterStyle.STATIC)
     assert result_types == "SELECT NULL, TRUE, 42, 3.14, 'it''s'"
+
+    malformed_sql = "SELECT :a, :b"
+    malformed_info = [
+        ParameterInfo(name="a", style=ParameterStyle.NAMED_COLON, position=7, ordinal=0, placeholder_text=":a"),
+        ParameterInfo(name="b", style=ParameterStyle.NAMED_COLON, position=5, ordinal=1, placeholder_text=":b"),
+    ]
+    (fallback_sql, _) = converter._embed_static_parameters(malformed_sql, {"a": 1, "b": 2}, malformed_info)
+    assert fallback_sql is not None
