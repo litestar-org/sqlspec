@@ -1,11 +1,11 @@
 """Dialect unit tests for the ParadeDB (PostgreSQL + pgvector + pg_search) dialect."""
 
 from sqlglot import parse_one
+from sqlglot.dialects.postgres import Postgres
 
 import sqlspec.dialects.postgres._paradedb  # noqa: F401
 from sqlspec.dialects.postgres._operators import PARADEDB_OPERATOR_TOKENS, PGVECTOR_OPERATOR_TOKENS
-from sqlspec.dialects.postgres._paradedb import ParadeDBTokenizer
-from sqlspec.dialects.postgres._pgvector import PGVectorTokenizer
+from sqlspec.dialects.postgres._paradedb import ParadeDB, ParadeDBTokenizer
 
 
 def _render(sql: str) -> str:
@@ -101,8 +101,12 @@ def test_prox_regex() -> None:
     assert "@@@" in rendered
 
 
-def test_paradedb_keywords_inherits_from_pgvector() -> None:
-    assert ParadeDBTokenizer.KEYWORDS == {**PGVectorTokenizer.KEYWORDS, **PARADEDB_OPERATOR_TOKENS}
+def test_paradedb_keywords_inherits_from_postgres_and_extensions() -> None:
+    assert ParadeDBTokenizer.KEYWORDS == {
+        **Postgres.Tokenizer.KEYWORDS,
+        **PARADEDB_OPERATOR_TOKENS,
+        **PGVECTOR_OPERATOR_TOKENS,
+    }
 
 
 def test_paradedb_keywords_contains_paradedb_operators() -> None:
@@ -115,5 +119,9 @@ def test_paradedb_keywords_contains_pgvector_operators() -> None:
         assert operator in ParadeDBTokenizer.KEYWORDS
 
 
-def test_paradedb_tokenizer_inherits_from_pgvector_tokenizer() -> None:
-    assert issubclass(ParadeDBTokenizer, PGVectorTokenizer)
+def test_paradedb_tokenizer_inherits_from_postgres_tokenizer() -> None:
+    assert issubclass(ParadeDBTokenizer, Postgres.Tokenizer)
+
+
+def test_paradedb_subclasses_postgres() -> None:
+    assert issubclass(ParadeDB, Postgres)

@@ -7,6 +7,8 @@ pure-Python sqlglot and sqlglot[c], whose compiled generator classes reject
 interpreted subclasses.
 """
 
+from typing import Final
+
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.generators.postgres import PostgresGenerator
@@ -19,15 +21,19 @@ from sqlspec.builder._vector_distance import (
 )
 from sqlspec.dialects.postgres._operators import is_postgres_extension_operator, postgres_extension_operator
 
-__all__ = ("PGVectorGenerator", "ParadeDBGenerator")
+__all__ = ("PGTextSearchGenerator", "PGVectorGenerator", "ParadeDBGenerator")
 
 _BASE_OPERATOR_TRANSFORM = Postgres.Generator.TRANSFORMS[exp.Operator]
+_POSTGRES_EXTENSION_DIALECT_NAMES: Final[frozenset[str]] = frozenset(
+    {"Postgres", "PGVector", "ParadeDB", "PGTextSearch"}
+)
 
 
 def _postgres_extension_operator_sql(generator: PostgresGenerator, expression: exp.Operator) -> str:
-    dialect_class = getattr(generator.dialect, "__class__", None)
+    dialect = generator.dialect
+    dialect_class = getattr(dialect, "__class__", None)
     dialect_name = dialect_class.__name__ if dialect_class else None
-    if dialect_name in {"PGVector", "ParadeDB"}:
+    if isinstance(dialect, Postgres) or (dialect_name and dialect_name in _POSTGRES_EXTENSION_DIALECT_NAMES):
         if is_vector_distance_expression(expression):
             return render_vector_distance_postgres(
                 generator.sql(expression, "this"),
@@ -52,5 +58,6 @@ PostgresGenerator.TRANSFORMS[exp.Operator] = _postgres_extension_operator_sql
 
 invalidate_generator_dispatch(PostgresGenerator)
 
+PGTextSearchGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]
 PGVectorGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]
 ParadeDBGenerator = PostgresGenerator  # pyright: ignore[reportAssignmentType]

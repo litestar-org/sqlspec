@@ -161,6 +161,7 @@ sqlspec = "sqlspec.__main__:run_cli"
 
 [project.entry-points."sqlglot.dialects"]
 paradedb = "sqlspec.dialects.postgres:ParadeDB"
+pg_textsearch = "sqlspec.dialects.postgres:PGTextSearch"
 pgvector = "sqlspec.dialects.postgres:PGVector"
 spangres = "sqlspec.dialects.spanner:Spangres"
 spanner = "sqlspec.dialects.spanner:Spanner"
