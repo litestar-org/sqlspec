@@ -32,6 +32,7 @@ MYSQL_ROW_LOCKING_CASE_IDS = {
     "asyncmy-async",
     "mysqlconnector-async",
     "mysqlconnector-sync",
+    "pymssql-sync",
     "pymysql-sync",
 }
 DATA_DICTIONARY_CASE_IDS = {
@@ -50,9 +51,11 @@ DEFAULT_SCHEMA_MIGRATION_CASE_IDS = {
     "adbc-postgres-sync",
     "asyncpg-async",
     "duckdb-sync",
+    "mssql_python-sync",
     "psqlpy-async",
     "psycopg-async",
     "psycopg-sync",
+    "pymssql-sync",
 }
 MIGRATION_LIFECYCLE_CASE_IDS = {
     "adbc-postgres-sync",
@@ -62,6 +65,7 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
     "asyncmy-async",
     "asyncpg-async",
     "duckdb-sync",
+    "mssql_python-sync",
     "mysqlconnector-async",
     "oracledb-async",
     "oracledb-sync",
