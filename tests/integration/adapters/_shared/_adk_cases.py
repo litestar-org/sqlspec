@@ -104,6 +104,13 @@ ADK_STORE_CASES = (
         "arrow_odbc",
         marks=(MSSQL_MARK, MSSQL_XDIST_MARK, ARROW_ODBC_MARK, pytest.mark.anyio),
     ),
+    AdkStoreCase(
+        "mssql-python",
+        "adk_store_mssql_python",
+        "mssql_python",
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK, pytest.mark.anyio),
+    ),
+    AdkStoreCase("pymssql", "adk_store_pymssql", "pymssql", marks=(MSSQL_MARK, MSSQL_XDIST_MARK, pytest.mark.anyio)),
 )
 
 ADK_STORE_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in ADK_STORE_CASES)
