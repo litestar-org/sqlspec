@@ -54,6 +54,7 @@ ORACLE_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_for_update": True,
     "supports_skip_locked": True,
     "supports_on_conflict": False,
+    "supports_update_from": False,
 }
 
 ORACLE_TYPE_MAPPINGS: dict[str, str] = {

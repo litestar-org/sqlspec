@@ -25,6 +25,7 @@ COCKROACHDB_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_skip_locked": True,
     "supports_crdb_internal_metadata": False,
     "supports_on_conflict": True,
+    "supports_update_from": True,
 }
 
 COCKROACHDB_TYPE_MAPPINGS: dict[str, str] = {

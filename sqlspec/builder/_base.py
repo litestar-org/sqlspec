@@ -13,6 +13,8 @@ from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import RULES, optimize
+from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
+from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
 from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
@@ -38,7 +40,7 @@ from sqlspec.core.hashing import _expression_cache_fingerprint
 from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, has_with_method, is_expression
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, is_expression
 from sqlspec.utils.uuids import uuid4
 
 __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
@@ -316,13 +318,13 @@ class QueryBuilder:
             return base_expression
 
         final_expression: exp.Expr = base_expression
-        if has_with_method(final_expression):
-            for alias, cte_node in self._with_ctes.items():
-                final_expression = cast("Any", final_expression).with_(alias, as_=cte_node.args["this"], copy=False)
-            return cast("exp.Expr", final_expression)
-
-        if "with_" in type(final_expression).arg_types:
+        existing_with = final_expression.args.get("with_")
+        if existing_with is None:
             final_expression.set("with_", exp.With(expressions=list(self._with_ctes.values())))
+        else:
+            for cte_node in self._with_ctes.values():
+                if cte_node not in existing_with.expressions:
+                    existing_with.append("expressions", cte_node)
 
         return final_expression
 
@@ -337,34 +339,41 @@ class QueryBuilder:
             simplify_expressions=self.simplify_expressions,
         )
 
-    def _resolve_cte_query(self, alias: str, query: "QueryBuilder | exp.Select | str") -> exp.Select:
-        """Resolve a CTE query into a Select expression with merged parameters."""
-        if isinstance(query, QueryBuilder):
-            query_expr = query.get_expression()
+    def _resolve_cte_query(
+        self, alias: str, query: "QueryBuilder | exp.Select | exp.Values | str | Any"
+    ) -> exp.Expr:
+        """Resolve a CTE query into a Select or Values expression with merged parameters."""
+        if isinstance(query, QueryBuilder) or hasattr(query, "get_expression"):
+            query_expr = (
+                query._build_final_expression(copy=True)
+                if hasattr(query, "_build_final_expression")
+                else query.get_expression()
+            )
             if query_expr is None:
                 self._raise_cte_query_error(alias, "query builder has no expression")
-            if not isinstance(query_expr, exp.Select):
-                self._raise_cte_query_error(alias, f"expression must be a Select, got {type(query_expr).__name__}")
+            if not isinstance(query_expr, (exp.Select, exp.Values)):
+                self._raise_cte_query_error(
+                    alias, f"expression must be a Select or Values, got {type(query_expr).__name__}"
+                )
             cte_select_expression = query_expr.copy()
-            param_mapping = self._merge_cte_parameters(alias, query.parameters)
-            updated_expression = self._update_placeholders(cte_select_expression, param_mapping)
-            if not isinstance(updated_expression, exp.Select):  # pragma: no cover
-                msg = "CTE placeholder update produced non-select expression"
-                raise SQLBuilderError(msg)
-            return updated_expression
+            if hasattr(query, "parameters"):
+                param_mapping = self._merge_cte_parameters(alias, query.parameters)
+                if param_mapping:
+                    cte_select_expression = self._update_placeholders(cte_select_expression, param_mapping)
+            return cte_select_expression
 
         if isinstance(query, str):
             try:
                 parsed_expression = sqlglot.parse_one(query, read=self.dialect_name)
             except SQLGlotParseError as e:  # pragma: no cover
                 self._raise_cte_parse_error(e)
-            if not isinstance(parsed_expression, exp.Select):
+            if not isinstance(parsed_expression, (exp.Select, exp.Values)):
                 self._raise_cte_query_error(
-                    alias, f"query string must parse to SELECT, got {type(parsed_expression).__name__}"
+                    alias, f"query string must parse to SELECT or VALUES, got {type(parsed_expression).__name__}"
                 )
             return parsed_expression
 
-        if isinstance(query, exp.Select):
+        if isinstance(query, (exp.Select, exp.Values)):
             return query
 
         self._raise_cte_query_error(alias, f"invalid query type: {type(query).__name__}")
@@ -579,13 +588,21 @@ class QueryBuilder:
         )
         return f"builder:{fingerprint}"
 
-    def with_cte(self: Self, alias: str, query: "QueryBuilder | exp.Select | str") -> Self:
+    def with_cte(
+        self: Self,
+        alias: str,
+        query: "QueryBuilder | exp.Select | exp.Values | str | Any",
+        recursive: bool = False,
+        columns: "list[str] | None" = None,
+    ) -> Self:
         """Adds a Common Table Expression (CTE) to the query.
 
         Args:
             alias: The alias for the CTE.
             query: The CTE query, which can be another QueryBuilder instance,
-                a raw SQL string, or a sqlglot Select expression.
+                a raw SQL string, or a sqlglot Select or Values expression.
+            recursive: Whether the CTE is recursive.
+            columns: Optional list of column aliases for the CTE.
 
         Returns:
             Self: The current builder instance for method chaining.
@@ -594,8 +611,35 @@ class QueryBuilder:
             self._raise_builder_error(f"CTE with alias '{alias}' already exists.")
 
         cte_select_expression = self._resolve_cte_query(alias, query)
-        self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
+        if columns:
+            alias_node: exp.Expr = exp.TableAlias(
+                this=exp.to_identifier(alias),
+                columns=[exp.to_identifier(c) for c in columns],
+            )
+        else:
+            alias_node = exp.to_table(alias)
+        self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=alias_node)
         return self
+
+    def with_(
+        self: Self,
+        alias: str,
+        query: "QueryBuilder | exp.Select | exp.Values | str | Any",
+        recursive: bool = False,
+        columns: "list[str] | None" = None,
+    ) -> Self:
+        """Alias for with_cte for parity across builders.
+
+        Args:
+            alias: The alias for the CTE.
+            query: The CTE query expression or builder.
+            recursive: Whether the CTE is recursive.
+            columns: Optional list of column aliases for the CTE.
+
+        Returns:
+            Self: The current builder instance for method chaining.
+        """
+        return self.with_cte(alias, query, recursive=recursive, columns=columns)
 
     def build(self, dialect: DialectType = None) -> "BuiltQuery":
         """Builds the SQL query string and parameters.
@@ -812,6 +856,9 @@ class QueryBuilder:
             excluded_rules.add(_pushdown_predicates_rule)
         if not self.simplify_expressions:
             excluded_rules.add(_simplify_rule)
+        if expression.args.get("with_") is not None or self._with_ctes:
+            excluded_rules.add(_eliminate_ctes_rule)
+            excluded_rules.add(_merge_subqueries_rule)
 
         rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
 

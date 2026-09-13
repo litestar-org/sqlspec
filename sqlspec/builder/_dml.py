@@ -352,27 +352,62 @@ class UpdateFromClauseMixin:
     def set_expression(self, expression: exp.Expr) -> None: ...
 
     def from_(self, table: str | exp.Expr | Any, alias: str | None = None) -> Self:
+        """Add a table or subquery to the UPDATE statement's FROM clause.
+
+        Args:
+            table: Target table name, expression, or builder instance.
+            alias: Optional alias for the source table or subquery.
+
+        Returns:
+            The current builder instance for method chaining.
+
+        Raises:
+            SQLBuilderError: If called on a non-UPDATE expression or with an unsupported table type.
+        """
         current_expr = self.get_expression()
         if current_expr is None or not isinstance(current_expr, exp.Update):
             msg = "Cannot add FROM clause to non-UPDATE expression. Set the main table first."
             raise SQLBuilderError(msg)
 
-        assert current_expr is not None
         table_expr: exp.Expr
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
-        elif isinstance(table, SQLBuilderProtocol):
-            subquery_params = table.parameters
-            if subquery_params:
-                builder_with_params = cast("SQLBuilderProtocol", self)
-                for param_name, param_value in subquery_params.items():
-                    builder_with_params.add_parameter(param_value, name=param_name)
-            raw_expression = table.get_expression()
-            subquery_source = raw_expression if isinstance(raw_expression, exp.Expr) else exp.select()
-            subquery_exp = exp.paren(subquery_source)
-            table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
         elif isinstance(table, exp.Expr):
             table_expr = exp.alias_(table, alias) if alias else table
+        elif (
+            hasattr(table, "build")
+            or hasattr(table, "to_statement")
+            or hasattr(table, "get_expression")
+            or hasattr(table, "_expression")
+        ):
+            raw_expression = None
+            if hasattr(table, "_build_final_expression"):
+                raw_expression = table._build_final_expression(copy=True)
+            elif hasattr(table, "get_expression"):
+                raw_expression = table.get_expression()
+            elif hasattr(table, "_expression"):
+                raw_expression = table._expression
+
+            if raw_expression is None:
+                msg = "Subquery builder has no expression to include in FROM clause."
+                raise SQLBuilderError(msg)
+
+            subquery_copy = raw_expression.copy() if hasattr(raw_expression, "copy") else raw_expression
+            base_builder = cast("QueryBuilder", self)
+            subquery_params = getattr(table, "parameters", {})
+            if subquery_params and isinstance(subquery_params, dict):
+                param_mapping = base_builder._merge_cte_parameters(alias or "subquery", subquery_params)
+                if param_mapping:
+                    subquery_copy = base_builder._update_placeholders(subquery_copy, param_mapping)
+
+            if isinstance(subquery_copy, exp.Values):
+                table_expr = (
+                    exp.alias_(subquery_copy, alias)
+                    if alias and not subquery_copy.args.get("alias")
+                    else subquery_copy
+                )
+            else:
+                table_expr = exp.Subquery(this=subquery_copy, alias=alias)
         else:
             msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)
