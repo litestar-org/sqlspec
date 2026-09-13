@@ -3,10 +3,17 @@
 import sqlite3
 
 from sqlspec.adapters.aiosqlite.core import create_mapped_exception
-from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError
+from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError, UniqueViolationError
 
 
 class _SqliteError(sqlite3.OperationalError):
+    def __init__(self, message: str, code: int | None = None, name: str | None = None) -> None:
+        super().__init__(message)
+        self.sqlite_errorcode = code
+        self.sqlite_errorname = name
+
+
+class _SqliteIntegrityError(sqlite3.IntegrityError):
     def __init__(self, message: str, code: int | None = None, name: str | None = None) -> None:
         super().__init__(message)
         self.sqlite_errorcode = code
@@ -96,3 +103,17 @@ def test_readonly_text_heuristic_maps_to_permission_denied() -> None:
 def test_permission_denied_text_heuristic_maps_to_permission_denied() -> None:
     result = create_mapped_exception(sqlite3.OperationalError("permission denied: cannot open /etc/passwd"))
     assert isinstance(result, PermissionDeniedError)
+
+
+def test_primary_key_code_maps_to_unique_violation() -> None:
+    err = _SqliteIntegrityError("UNIQUE constraint failed: t.id", 1555, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, UniqueViolationError)
+    assert result.__cause__ is err
+
+
+def test_primary_key_error_name_maps_to_unique_violation() -> None:
+    err = _SqliteIntegrityError("UNIQUE constraint failed: t.id", None, "SQLITE_CONSTRAINT_PRIMARYKEY")
+    result = create_mapped_exception(err)
+    assert isinstance(result, UniqueViolationError)
+    assert result.__cause__ is err

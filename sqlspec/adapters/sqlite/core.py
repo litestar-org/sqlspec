@@ -59,6 +59,7 @@ __all__ = (
 )
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
+SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
 SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
 SQLITE_CONSTRAINT_CHECK_CODE = 531
@@ -377,7 +378,10 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_sqlite_error(error, None, SQLSpecError, "database error")
 
     # Constraint violations (check extended error codes first)
-    if error_code == SQLITE_CONSTRAINT_UNIQUE_CODE or error_name == "SQLITE_CONSTRAINT_UNIQUE":
+    if error_code in (SQLITE_CONSTRAINT_UNIQUE_CODE, SQLITE_CONSTRAINT_PRIMARYKEY_CODE) or error_name in (
+        "SQLITE_CONSTRAINT_UNIQUE",
+        "SQLITE_CONSTRAINT_PRIMARYKEY",
+    ):
         return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
     if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
         return _create_sqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
