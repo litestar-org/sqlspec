@@ -201,9 +201,7 @@ def test_alter_column_type_uses_target_dialect() -> None:
         builder.build()
 
 
-@pytest.mark.parametrize(
-    ("dialect", "dtype"), [("mssql", "DATETIME2(6)"), ("mariadb", "INT"), ("cockroachdb", "INT8")]
-)
+@pytest.mark.parametrize(("dialect", "dtype"), [("mssql", "DATETIME2(6)"), ("mariadb", "INT"), ("cockroachdb", "INT8")])
 def test_ddl_accepts_public_dialect_aliases(dialect: str, dtype: str) -> None:
     builder = sql.create_table("t", dialect=dialect).column("a", dtype)
     assert "CREATE TABLE" in builder.build().sql
