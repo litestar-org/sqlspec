@@ -47,6 +47,12 @@ Tables
 Column and Constraint Definitions
 =================================
 
+Column definitions parse column data types using the builder's effective dialect
+(or the target dialect specified in :meth:`~sqlspec.builder._ddl.DDLBuilder.build`).
+When switching dialects on a builder, column types are re-parsed for the target
+dialect. If a data type cannot be parsed for the target dialect, an
+:class:`~sqlspec.exceptions.SQLBuilderError` is raised naming the failing column.
+
 .. autoclass:: sqlspec.builder._ddl.ColumnDefinition
    :members:
    :show-inheritance:

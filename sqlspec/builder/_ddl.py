@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
+from sqlglot.errors import ParseError
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._select import Select
 from sqlspec.core import SQL, SQLResult
+from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
 
 if TYPE_CHECKING:
@@ -73,9 +75,15 @@ CURRENT_DATE_KEYWORD = "CURRENT_DATE"
 CURRENT_TIME_KEYWORD = "CURRENT_TIME"
 
 
-def build_column_expression(col: "ColumnDefinition") -> "exp.Expr":
+def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | None" = None) -> "exp.Expr":
     """Build SQLGlot expression for a column definition."""
-    col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=exp.DataType.build(col.dtype))
+    try:
+        data_type = exp.DataType.build(col.dtype, dialect=dialect)
+    except ParseError as exc:
+        msg = f"Column {col.name!r}: cannot parse type {col.dtype!r} for dialect {dialect!r}"
+        raise SQLBuilderError(msg) from exc
+
+    col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=data_type)
 
     constraints: list[exp.ColumnConstraint] = []
 
@@ -193,11 +201,12 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
 class DDLBuilder(QueryBuilder):
     """Base class for DDL builders (CREATE, DROP, ALTER, etc)."""
 
-    __slots__ = ()
+    __slots__ = ("_expression_dialect",)
 
     def __init__(self, dialect: "DialectType" = None) -> None:
         super().__init__(dialect=dialect)
         self._expression: exp.Expr | None = None
+        self._expression_dialect: DialectType | None = None
 
     def _create_base_expression(self) -> exp.Expr:
         msg = "Subclasses must implement _create_base_expression."
@@ -237,6 +246,10 @@ class DDLBuilder(QueryBuilder):
         return SQLResult
 
     def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
+        target_dialect = dialect or self.dialect_name
+        if self._expression is not None and target_dialect != self._expression_dialect:
+            self._expression = None
+        self._expression_dialect = target_dialect
         if self._expression is None:
             self._expression = self._create_base_expression()
         return super().build(dialect=dialect)
@@ -591,9 +604,10 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         """Create the SQLGlot expression for CREATE TABLE."""
         self._require(self._columns or self._like_table, "Table must have at least one column or use LIKE clause")
 
+        effective_dialect = self._expression_dialect or self.dialect_name
         column_defs: list[exp.Expr] = []
         for col in self._columns:
-            col_expr = build_column_expression(col)
+            col_expr = build_column_expression(col, dialect=effective_dialect)
             column_defs.append(col_expr)
 
         for constraint in self._constraints:
@@ -1461,7 +1475,8 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
         if op_type == "ADD COLUMN":
             if not op.column_definition:
                 self._raise_builder_error("Column definition required for ADD COLUMN")
-            return build_column_expression(op.column_definition)
+            effective_dialect = self._expression_dialect or self.dialect_name
+            return build_column_expression(op.column_definition, dialect=effective_dialect)
 
         if op_type == "DROP COLUMN":
             return exp.Drop(tables=[exp.to_identifier(op.column_name)], kind="COLUMN", exists=True)

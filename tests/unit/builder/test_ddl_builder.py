@@ -135,3 +135,41 @@ def test_create_index_where_accepts_expression() -> None:
     )
     assert "WHERE" in result.sql.upper()
     assert "NULL" in result.sql.upper()
+
+
+def test_create_table_parses_types_with_target_dialect() -> None:
+    """Target dialect should allow dialect-specific column types to parse."""
+    result = sql.create_table("t").column("a", "DATETIME2(6)").build(dialect="tsql")
+    assert "DATETIME2(6)" in result.sql
+
+
+def test_unparseable_type_raises_builder_error() -> None:
+    """Unparseable column types raise SQLBuilderError naming the column."""
+    with pytest.raises(SQLBuilderError) as exc_info:
+        sql.create_table("t").column("a", "DATETIME2(6)").build()
+    assert "'a'" in str(exc_info.value)
+
+
+def test_rebuild_for_other_dialect() -> None:
+    """Switching dialect on the same builder re-parses and raises if unparseable."""
+    builder = sql.create_table("t").column("a", "TIMESTAMPTZ")
+    pg_result = builder.build(dialect="postgres")
+    assert "TIMESTAMPTZ" in pg_result.sql.upper() or "TIMESTAMP" in pg_result.sql.upper()
+
+    tsql_result = builder.build(dialect="tsql")
+    assert "DATETIMEOFFSET" in tsql_result.sql.upper() or "TIMESTAMP" in tsql_result.sql.upper()
+
+    raising_builder = sql.create_table("t").column("a", "DATETIME2(6)")
+    assert "DATETIME2(6)" in raising_builder.build(dialect="tsql").sql
+    with pytest.raises(SQLBuilderError) as exc_info:
+        raising_builder.build()
+    assert "'a'" in str(exc_info.value)
+
+
+def test_alter_table_add_column_with_target_dialect() -> None:
+    """AlterTable add_column parses column types with target dialect."""
+    result = sql.alter_table("t").add_column("b", "NVARCHAR(MAX)").build(dialect="tsql")
+    assert "NVARCHAR(MAX)" in result.sql
+
+    dt2_result = sql.alter_table("t").add_column("b", "DATETIME2(6)").build(dialect="tsql")
+    assert "DATETIME2(6)" in dt2_result.sql
