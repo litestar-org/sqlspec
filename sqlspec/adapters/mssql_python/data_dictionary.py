@@ -98,11 +98,12 @@ class _MssqlDataDictionaryMixin:
         """Return the dialect configuration for this data dictionary."""
         return get_dialect_config(type(self).dialect)
 
-    def resolve_schema(self, schema: str | None) -> str | None:
-        """Return a schema name using dialect defaults when missing."""
+    def resolve_connection_schema(self, driver: Any, schema: str | None) -> str | None:
+        """Resolve the schema to introspect, defaulting to the connection's current schema."""
         if schema is not None:
             return schema
-        return self.get_dialect_config().default_schema
+        current_schema = driver.select_value_or_none(self.get_domain_query("schemas", "current"))
+        return str(current_schema) if current_schema else self.get_dialect_config().default_schema
 
     def list_available_features(self) -> list[str]:
         """List available feature flags for this dialect."""
@@ -201,7 +202,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
 
     def get_tables(self, driver: "MssqlPythonDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered = cast(
             "list[TableMetadata]",
@@ -221,7 +222,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get column information for a table or schema."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return cast(
@@ -245,7 +246,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get index metadata for a table or schema."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return cast(
@@ -269,7 +270,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign key metadata."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return cast(
@@ -304,7 +305,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
     ) -> DDLResult:
         """Generate SQL Server table DDL from sys catalog rows."""
         _ = include_dependencies, prefer_native, redact
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         columns = driver.select(
             self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
         )

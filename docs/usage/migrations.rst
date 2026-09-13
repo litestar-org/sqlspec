@@ -228,6 +228,34 @@ raises ``MigrationError`` before any DDL is issued.
        are uppercased, mixed-case and quoted names are preserved.
    * - ``duckdb``
      - ``SET search_path``. Validates against ``information_schema.schemata``.
+   * - ``mssql_python``, ``pymssql``
+     - ``ALTER USER [<user>] WITH DEFAULT_SCHEMA = [<schema>]`` for the
+       connected database user (``USER_NAME()``). Validates against
+       ``sys.schemas``. The previous default schema is restored after each
+       migration (a failed transactional migration rolls the switch back).
+       SQL Server refuses to alter the default schema of the ``dbo`` database
+       user (what ``sa`` maps to), so connect with a dedicated login. Because
+       the restore is committed, a failed non-transactional migration on a
+       connection with autocommit disabled also commits the statements that
+       succeeded before the failure.
+
+Per-migration schema directives
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Individual migration files can override the target schema by declaring a schema
+directive:
+
+.. code-block:: sql
+
+    -- schema: analytics
+    -- name: create-reports-table
+    CREATE TABLE reports (
+        id INT PRIMARY KEY,
+        title NVARCHAR(255)
+    );
+
+When applied, the runner switches to the requested schema for that specific
+migration and restores the session schema afterward.
 
 .. list-table:: Not supported
    :header-rows: 1
@@ -244,9 +272,6 @@ raises ``MigrationError`` before any DDL is issued.
    * - ``adbc`` (non-PostgreSQL dialects, including SQL Server)
      - No portable per-session schema setter. Configure the default schema at
        the user or login level in the database.
-   * - ``mssql_python``
-     - SQL Server resolves the default schema from the login. Set it with
-       ``ALTER USER ... WITH DEFAULT_SCHEMA = ...``.
    * - ``bigquery``
      - Cross-dataset DDL requires fully qualified
        ``project.dataset.table`` references; there is no session-scoped default

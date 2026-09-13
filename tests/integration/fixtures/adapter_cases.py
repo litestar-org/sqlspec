@@ -1511,6 +1511,60 @@ def migration_config_oracle_async(oracle_23ai_service: OracleService) -> Callabl
     return make
 
 
+@pytest.fixture
+def migration_config_mssql_python(mssql_python_migration_connection_config: dict[str, Any]) -> Callable[..., Any]:
+    """Build mssql-python sync configs for migration contract tests."""
+
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> MssqlPythonConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return MssqlPythonConfig(
+            connection_config=dict(mssql_python_migration_connection_config), migration_config=migration_config
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_pymssql(mssql_migration_connection_config: dict[str, Any]) -> Callable[..., Any]:
+    """Build pymssql sync configs for migration contract tests."""
+
+    def make(
+        *,
+        script_location: str,
+        version_table_name: str,
+        suffix: str,
+        default_schema: str | None = None,
+        version_table_schema: str | None = None,
+    ) -> PymssqlConfig:
+        migration_config: dict[str, Any] = {
+            "script_location": script_location,
+            "version_table_name": version_table_name,
+        }
+        if default_schema is not None:
+            migration_config["default_schema"] = default_schema
+        if version_table_schema is not None:
+            migration_config["version_table_schema"] = version_table_schema
+        return PymssqlConfig(
+            connection_config=dict(mssql_migration_connection_config), migration_config=migration_config
+        )
+
+    return make
+
+
 def _resolve_migration_case(request: pytest.FixtureRequest, case: MigrationCase) -> MigrationCaseContext:
     return MigrationCaseContext(case=case, make_config=request.getfixturevalue(case.factory_fixture))
 

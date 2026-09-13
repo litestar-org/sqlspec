@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from sqlspec.core import SQL
+from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import _load_migration_sql, get_migration_loader
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner")
 
 logger = get_logger("sqlspec.migrations.runner")
+
+_SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
+_SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 
 class _CachedMigrationMetadata:
@@ -360,6 +364,15 @@ class BaseMigrationRunner:
         if transactional_match:
             transactional = transactional_match.group(1).lower() == "true"
 
+        schema_match = _SCHEMA_DIRECTIVE_PATTERN.search(content)
+        schema = None
+        if schema_match:
+            candidate_schema = schema_match.group(1)
+            if not _SCHEMA_IDENTIFIER_PATTERN.fullmatch(candidate_schema):
+                msg = f"Invalid schema directive '{candidate_schema}' in migration {file_path.name}"
+                raise MigrationError(msg)
+            schema = candidate_schema
+
         metadata = cast(
             "LoadedMigrationMetadata",
             {
@@ -369,6 +382,7 @@ class BaseMigrationRunner:
                 "checksum": checksum,
                 "content": content,
                 "transactional": transactional,
+                "schema": schema,
             },
         )
         self._metadata_cache[cache_key] = _CachedMigrationMetadata(
@@ -483,11 +497,18 @@ class BaseMigrationRunner:
         migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))
 
-    def _resolve_default_schema(self) -> str | None:
-        """Return the configured default schema for migration execution."""
+    def _resolve_migration_schema(self, migration: "LoadedMigrationMetadata") -> str | None:
+        """Return the migration's schema directive when present, otherwise the configured default."""
         config = self.context.config if self.context else None
-        migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
-        return _resolve_default_schema(migration_config)
+        directive_schema = migration.get("schema")
+        if directive_schema is None:
+            migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
+            return _resolve_default_schema(migration_config)
+        if not getattr(config, "supports_migration_schemas", False):
+            adapter = type(config).__name__ if config else "Adapter"
+            msg = f"{adapter} does not support migration schema directives; schema={directive_schema!r}"
+            raise MigrationError(msg)
+        return directive_schema
 
     def _resolve_use_transaction(self, migration: "LoadedMigrationMetadata", use_transaction: "bool | None") -> bool:
         """Resolve the effective transaction flag for a migration."""
@@ -688,11 +709,16 @@ class SyncMigrationRunner(BaseMigrationRunner):
         driver: "SyncDriverAdapterBase",
         sql_list: list[str],
         *,
+        migration: "LoadedMigrationMetadata",
         use_transaction: bool,
         on_success: "Callable[[int], None] | None",
         start_time: float,
     ) -> int:
-        default_schema = self._resolve_default_schema()
+        default_schema = self._resolve_migration_schema(migration)
+        directive_schema = migration.get("schema")
+        if directive_schema is not None and not driver.has_schema(directive_schema):
+            msg = f"Migration schema '{directive_schema}' does not exist"
+            raise MigrationError(msg)
         if use_transaction:
             driver.begin()
             if default_schema:
@@ -704,6 +730,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
             if on_success:
                 on_success(execution_time)
             driver.commit()
+            if default_schema:
+                driver.reset_migration_session_schema()
             return execution_time
 
         try:
@@ -753,7 +781,12 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         try:
             execution_time = self._execute_migration_sql(
-                driver, upgrade_sql_list, use_transaction=use_transaction, on_success=on_success, start_time=start_time
+                driver,
+                upgrade_sql_list,
+                migration=migration,
+                use_transaction=use_transaction,
+                on_success=on_success,
+                start_time=start_time,
             )
         except Exception as exc:
             if use_transaction:
@@ -799,6 +832,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
             execution_time = self._execute_migration_sql(
                 driver,
                 downgrade_sql_list,
+                migration=migration,
                 use_transaction=use_transaction,
                 on_success=on_success,
                 start_time=start_time,
@@ -932,11 +966,16 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         driver: "AsyncDriverAdapterBase",
         sql_list: list[str],
         *,
+        migration: "LoadedMigrationMetadata",
         use_transaction: bool,
         on_success: "Callable[[int], Awaitable[None]] | None",
         start_time: float,
     ) -> int:
-        default_schema = self._resolve_default_schema()
+        default_schema = self._resolve_migration_schema(migration)
+        directive_schema = migration.get("schema")
+        if directive_schema is not None and not await driver.has_schema(directive_schema):
+            msg = f"Migration schema '{directive_schema}' does not exist"
+            raise MigrationError(msg)
         if use_transaction:
             await driver.begin()
             if default_schema:
@@ -948,6 +987,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             if on_success:
                 await on_success(execution_time)
             await driver.commit()
+            if default_schema:
+                await driver.reset_migration_session_schema()
             return execution_time
 
         try:
@@ -997,7 +1038,12 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         try:
             execution_time = await self._execute_migration_sql(
-                driver, upgrade_sql_list, use_transaction=use_transaction, on_success=on_success, start_time=start_time
+                driver,
+                upgrade_sql_list,
+                migration=migration,
+                use_transaction=use_transaction,
+                on_success=on_success,
+                start_time=start_time,
             )
         except Exception as exc:
             if use_transaction:
@@ -1043,6 +1089,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             execution_time = await self._execute_migration_sql(
                 driver,
                 downgrade_sql_list,
+                migration=migration,
                 use_transaction=use_transaction,
                 on_success=on_success,
                 start_time=start_time,

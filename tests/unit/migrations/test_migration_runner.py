@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 import pytest
 
 from sqlspec.core import SQL
+from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations import runner as runner_module
 from sqlspec.migrations.base import LoadedMigrationMetadata
@@ -28,6 +29,7 @@ from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 
 class _RunnerConfig:
     supports_transactional_ddl = True
+    supports_migration_schemas = True
 
     def __init__(self, migration_config: dict[str, Any]) -> None:
         self.migration_config = migration_config
@@ -41,10 +43,17 @@ class _AsyncMigrationLoader:
         return ["DROP TABLE example"]
 
 
-def _migration(file_path: Path, loader: Any) -> LoadedMigrationMetadata:
+def _migration(file_path: Path, loader: Any, schema: str | None = None) -> LoadedMigrationMetadata:
     return cast(
         "LoadedMigrationMetadata",
-        {"version": "0001", "file_path": file_path, "loader": loader, "has_upgrade": True, "has_downgrade": True},
+        {
+            "version": "0001",
+            "file_path": file_path,
+            "loader": loader,
+            "has_upgrade": True,
+            "has_downgrade": True,
+            "schema": schema,
+        },
     )
 
 
@@ -1533,3 +1542,118 @@ def down() -> list[str]:
     migration = await runner.load_migration(migration_file)
 
     assert migration["has_downgrade"] is True
+
+
+def test_load_metadata_parses_schema_directive(tmp_path: Path) -> None:
+    """Load metadata should extract the schema directive from SQL comments."""
+    migration_file = tmp_path / "0001_directive.sql"
+    migration_file.write_text(
+        """-- schema: custom_schema
+-- transactional: true
+-- name: migrate-0001-up
+CREATE TABLE foo (id INT);
+""".strip()
+    )
+    runner = _sync_runner(tmp_path, {})
+    metadata = runner._load_metadata(migration_file)
+    assert metadata["schema"] == "custom_schema"
+
+
+def test_load_metadata_leaves_schema_none_without_directive(tmp_path: Path) -> None:
+    """Load metadata should have schema as None when no directive is present."""
+    migration_file = tmp_path / "0001_no_directive.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {})
+    metadata = runner._load_metadata(migration_file)
+    assert metadata["schema"] is None
+
+
+def test_load_metadata_rejects_invalid_schema_directive(tmp_path: Path) -> None:
+    """Load metadata should raise MigrationError for invalid schema names."""
+    migration_file = tmp_path / "0001_bad_schema.sql"
+    migration_file.write_text(
+        """-- schema: bad-schema;
+-- name: migrate-0001-up
+CREATE TABLE foo (id INT);
+""".strip()
+    )
+    runner = _sync_runner(tmp_path, {})
+    with pytest.raises(MigrationError, match="Invalid schema directive"):
+        runner._load_metadata(migration_file)
+
+
+def test_sync_execute_upgrade_prefers_migration_schema_directive(tmp_path: Path) -> None:
+    """Migration schema directive overrides configured default schema."""
+    migration_file = tmp_path / "0001_override.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {"default_schema": "configured_schema"})
+    driver = Mock()
+    driver.has_schema.return_value = True
+
+    migration = _migration(migration_file, _AsyncMigrationLoader(), schema="directive_schema")
+    runner.execute_upgrade(driver, migration, use_transaction=True)
+
+    driver.has_schema.assert_called_once_with("directive_schema")
+    driver.set_migration_session_schema.assert_called_once_with("directive_schema")
+
+
+def test_sync_execute_upgrade_resets_schema_after_commit(tmp_path: Path) -> None:
+    """Migration schema session should be reset after transaction commit."""
+    migration_file = tmp_path / "0001_schema.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
+    driver = Mock()
+    driver.has_schema.return_value = True
+
+    migration = _migration(migration_file, _AsyncMigrationLoader(), schema="tenant")
+    runner.execute_upgrade(driver, migration, use_transaction=True)
+
+    commit_index = driver.mock_calls.index(call.commit())
+    reset_index = driver.mock_calls.index(call.reset_migration_session_schema())
+    assert reset_index > commit_index
+
+
+def test_sync_execute_upgrade_rejects_missing_directive_schema(tmp_path: Path) -> None:
+    """Execution fails when directive schema does not exist in database."""
+    migration_file = tmp_path / "0001_missing.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _sync_runner(tmp_path, {})
+    driver = Mock()
+    driver.has_schema.return_value = False
+
+    migration = _migration(migration_file, _AsyncMigrationLoader(), schema="missing_schema")
+    with pytest.raises(MigrationError, match="Migration schema 'missing_schema' does not exist"):
+        runner.execute_upgrade(driver, migration, use_transaction=True)
+
+    driver.has_schema.assert_called_once_with("missing_schema")
+
+
+def test_sync_execute_upgrade_rejects_directive_when_adapter_lacks_support(tmp_path: Path) -> None:
+    """Execution fails when adapter does not support migration schemas."""
+    migration_file = tmp_path / "0001_unsupported.sql"
+    _write_basic_sql(migration_file, "0001")
+    config = _RunnerConfig({})
+    config.supports_migration_schemas = False
+    context = MigrationContext(config=config)
+    runner = SyncMigrationRunner(tmp_path, {}, context, {})
+    driver = Mock()
+
+    migration = _migration(migration_file, _AsyncMigrationLoader(), schema="directive_schema")
+    with pytest.raises(MigrationError, match="does not support migration schema directives"):
+        runner.execute_upgrade(driver, migration, use_transaction=True)
+
+
+@pytest.mark.anyio
+async def test_async_execute_downgrade_prefers_migration_schema_directive(tmp_path: Path) -> None:
+    """Async downgrade prioritizes migration schema directive over default schema."""
+    migration_file = tmp_path / "0001_override.sql"
+    _write_basic_sql(migration_file, "0001")
+    runner = _async_runner(tmp_path, {"default_schema": "configured_schema"})
+    driver = AsyncMock()
+    driver.has_schema.return_value = True
+
+    migration = _migration(migration_file, _AsyncMigrationLoader(), schema="directive_schema")
+    await runner.execute_downgrade(driver, migration, use_transaction=True)
+
+    driver.has_schema.assert_awaited_once_with("directive_schema")
+    driver.set_migration_session_schema.assert_called_once_with("directive_schema")

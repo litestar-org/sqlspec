@@ -50,9 +50,11 @@ DEFAULT_SCHEMA_MIGRATION_CASE_IDS = {
     "adbc-postgres-sync",
     "asyncpg-async",
     "duckdb-sync",
+    "mssql-python-sync",
     "psqlpy-async",
     "psycopg-async",
     "psycopg-sync",
+    "pymssql-sync",
 }
 MIGRATION_LIFECYCLE_CASE_IDS = {
     "adbc-postgres-sync",
@@ -62,12 +64,14 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
     "asyncmy-async",
     "asyncpg-async",
     "duckdb-sync",
+    "mssql-python-sync",
     "mysqlconnector-async",
     "oracledb-async",
     "oracledb-sync",
     "psqlpy-async",
     "psycopg-async",
     "psycopg-sync",
+    "pymssql-sync",
     "pymysql-sync",
     "sqlite-sync",
 }
