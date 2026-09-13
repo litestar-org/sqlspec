@@ -12,6 +12,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.aiosqlite import core as aiosqlite_core
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite import core as sqlite_core
+from sqlspec.exceptions import SQLBuilderError
 from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -299,24 +300,12 @@ async def test_schema_operations(sqlite_family_driver: "SQLiteFamilyDriver") -> 
 
 
 @pytest.mark.parametrize(
-    ("lock_method", "lock_kwargs", "unsupported_clause"),
-    (
-        ("for_update", {}, "FOR UPDATE"),
-        ("for_share", {}, "FOR SHARE"),
-        ("for_update", {"skip_locked": True}, "FOR UPDATE"),
-    ),
+    ("lock_method", "lock_kwargs"), (("for_update", {}), ("for_share", {}), ("for_update", {"skip_locked": True}))
 )
-async def test_unsupported_lock_clause_is_stripped(
-    sqlite_family_driver: "SQLiteFamilyDriver", lock_method: str, lock_kwargs: "dict[str, Any]", unsupported_clause: str
+async def test_unsupported_lock_clause_raises(
+    sqlite_family_driver: "SQLiteFamilyDriver", lock_method: str, lock_kwargs: "dict[str, Any]"
 ) -> None:
-    prefix = _prefix(sqlite_family_driver)
-    name = f"{prefix}-{lock_method}"
-    await _invoke(
-        _method(sqlite_family_driver, "execute"), "INSERT INTO test_table (name, value) VALUES (?, ?)", (name, 100)
-    )
-    query = sql.select("*").from_("test_table").where_eq("name", name)
+    query = sql.select("*").from_("test_table")
     query = cast("Any", getattr(query, lock_method))(**lock_kwargs)
-    statement = query.build()
-    assert unsupported_clause not in statement.sql
-    result = await _invoke(_method(sqlite_family_driver, "execute"), query)
-    assert result.get_data()[0]["name"] == name
+    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE / row locking"):
+        await _invoke(_method(sqlite_family_driver, "execute"), query)

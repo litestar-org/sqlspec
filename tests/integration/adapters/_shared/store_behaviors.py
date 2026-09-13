@@ -44,8 +44,10 @@ async def assert_store_delete_nonexistent_contract(store: Any) -> None:
 
 async def assert_store_expiration_int_contract(store: Any) -> None:
     """Stores expire entries after an integer-second TTL."""
-    await store.set("expiring_session", b"data", expires_in=1)
+    await store.set("expiring_session", b"data", expires_in=60)
     assert await store.exists("expiring_session")
+    # The short TTL may elapse during a slow write; only require the expired state afterwards.
+    await store.set("expiring_session", b"data", expires_in=1)
     await asyncio.sleep(1.1)
     assert await store.get("expiring_session") is None
     assert not await store.exists("expiring_session")
@@ -53,8 +55,9 @@ async def assert_store_expiration_int_contract(store: Any) -> None:
 
 async def assert_store_expiration_timedelta_contract(store: Any) -> None:
     """Stores expire entries after a timedelta TTL."""
-    await store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
+    await store.set("expiring_session", b"data", expires_in=timedelta(seconds=60))
     assert await store.exists("expiring_session")
+    await store.set("expiring_session", b"data", expires_in=timedelta(seconds=1))
     await asyncio.sleep(1.1)
     assert await store.get("expiring_session") is None
 

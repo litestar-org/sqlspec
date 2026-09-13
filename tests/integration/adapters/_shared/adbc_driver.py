@@ -3,13 +3,14 @@
 The contract suite owns CRUD, parameter styles, execute_many, execute_script,
 sequential StatementStack execution, SQLResult helpers, mapped errors, bulk
 operations, and multi-backend consistency. This module keeps ADBC-specific
-StatementStack continue-on-error recovery and exact SQLite lock SQL generation.
+StatementStack continue-on-error recovery and SQLite locking rejection.
 """
 
 import pytest
 
-from sqlspec import SQLResult, StatementStack, sql
+from sqlspec import StatementStack, sql
 from sqlspec.adapters.adbc import AdbcDriver
+from sqlspec.exceptions import SQLBuilderError
 from tests.conftest import requires_interpreted
 
 
@@ -38,49 +39,13 @@ def test_adbc_postgresql_statement_stack_continue_on_error(adbc_postgresql_sessi
 
 @pytest.mark.xdist_group("sqlite")
 @pytest.mark.adbc
-def test_adbc_for_update_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
-    """SQLite-backed ADBC strips unsupported FOR UPDATE while preserving the query."""
-    adbc_sqlite_session.execute("INSERT INTO test_table_adbc (name, value) VALUES (?, ?)", ("adbc_lock", 100))
-
-    query = sql.select("*").from_("test_table_adbc").where_eq("name", "adbc_lock").for_update()
-    stmt = query.build()
-
-    assert "FOR UPDATE" not in stmt.sql
-    assert "SELECT" in stmt.sql
-
-    result = adbc_sqlite_session.execute(query)
-    assert isinstance(result, SQLResult)
-    assert result.get_data()[0]["name"] == "adbc_lock"
-
-
-@pytest.mark.xdist_group("sqlite")
-@pytest.mark.adbc
-def test_adbc_for_share_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
-    """SQLite-backed ADBC strips unsupported FOR SHARE while preserving the query."""
-    adbc_sqlite_session.execute("INSERT INTO test_table_adbc (name, value) VALUES (?, ?)", ("adbc_share", 200))
-
-    query = sql.select("*").from_("test_table_adbc").where_eq("name", "adbc_share").for_share()
-    stmt = query.build()
-
-    assert "FOR SHARE" not in stmt.sql
-    assert "SELECT" in stmt.sql
-
-    result = adbc_sqlite_session.execute(query)
-    assert isinstance(result, SQLResult)
-    assert result.get_data()[0]["name"] == "adbc_share"
-
-
-@pytest.mark.xdist_group("sqlite")
-@pytest.mark.adbc
-def test_adbc_for_update_skip_locked_generates_sql(adbc_sqlite_session: AdbcDriver) -> None:
-    """SQLite-backed ADBC can compile a SKIP LOCKED builder path without backend locking support."""
-    adbc_sqlite_session.execute("INSERT INTO test_table_adbc (name, value) VALUES (?, ?)", ("adbc_skip", 300))
-
-    query = sql.select("*").from_("test_table_adbc").where_eq("name", "adbc_skip").for_update(skip_locked=True)
-    stmt = query.build()
-
-    assert stmt.sql is not None
-
-    result = adbc_sqlite_session.execute(query)
-    assert isinstance(result, SQLResult)
-    assert result.get_data()[0]["name"] == "adbc_skip"
+@pytest.mark.parametrize("lock_method", ["for_update", "for_share", "for_update_skip_locked"])
+def test_adbc_unsupported_lock_raises(adbc_sqlite_session: AdbcDriver, lock_method: str) -> None:
+    """SQLite-backed ADBC rejects locking instead of executing an unlocked query."""
+    query = sql.select("*").from_("test_table_adbc")
+    if lock_method == "for_share":
+        query = query.for_share()
+    else:
+        query = query.for_update(skip_locked=lock_method == "for_update_skip_locked")
+    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE / row locking"):
+        adbc_sqlite_session.execute(query)
