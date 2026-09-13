@@ -323,6 +323,33 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def rollback(self) -> None:
         """Rollback transaction - BigQuery doesn't support transactions."""
 
+    def create_savepoint(self, name: str) -> None:
+        """Raise because BigQuery does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "BigQuery does not support savepoints."
+        raise NotImplementedError(msg)
+
+    def release_savepoint(self, name: str) -> None:
+        """Raise because BigQuery does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "BigQuery does not support savepoints."
+        raise NotImplementedError(msg)
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Raise because BigQuery does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "BigQuery does not support savepoints."
+        raise NotImplementedError(msg)
+
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create context manager for cursor management.
 

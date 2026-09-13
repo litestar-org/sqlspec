@@ -18,6 +18,78 @@ Example
    :dedent: 4
    :no-upgrade:
 
+Transaction Blocks
+==================
+
+``transaction()`` wraps a block in a transaction on the driver's connection.
+Entering the block calls ``begin()`` and yields the same driver. A normal exit
+commits; an exception rolls back and propagates to the caller. If the commit
+itself fails, the block attempts a rollback and then raises the commit error.
+
+The block calls the adapter's own ``begin()``, ``commit()``, and ``rollback()``,
+so it follows each database's transaction model. When the connection already has
+an open transaction, whether started by ``begin()`` or implicitly by an earlier
+statement as SQLite does in its default mode or a connection with autocommit
+disabled does, the block joins it instead of calling ``begin()``. Exiting the block
+commits or rolls back that whole transaction, including work done before the block.
+
+.. code-block:: python
+
+    async with config.provide_session() as session:
+        async with session.transaction():
+            await session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+            await session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+
+.. code-block:: python
+
+    with config.provide_session() as session:
+        with session.transaction():
+            session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+            session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+
+Nested blocks
+-------------
+
+A ``transaction()`` block entered inside another ``transaction()`` block on the
+same driver, or inside a service's ``begin_transaction()`` block that uses the
+driver, does not begin or commit. It runs in a savepoint instead: a normal exit
+releases the savepoint, and an exception rolls back to it and propagates. The
+enclosing block stays open and decides whether the work is committed. A service
+``begin_transaction()`` block inside a ``transaction()`` block nests the same way.
+
+.. code-block:: python
+
+    from sqlspec.exceptions import UniqueViolationError
+
+    with session.transaction():
+        session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+        try:
+            with session.transaction():
+                session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+        except UniqueViolationError:
+            pass
+
+Nesting needs savepoint support. When the adapter cannot create a savepoint,
+entering a nested block raises ``ImproperConfigurationError`` and the enclosing
+block stays usable. DuckDB and ADBC connections to DuckDB, BigQuery, or Snowflake
+report missing savepoint support. BigQuery has no transactions, so its
+``begin()``, ``commit()``, and ``rollback()`` do nothing, and Spanner commits or
+rolls back only sessions opened for writes; neither supports savepoints, so nested
+blocks are not supported on either.
+
+Isolation settings
+------------------
+
+``transaction()`` takes no isolation-level argument. Apply isolation or other
+transaction settings with ``execute_script`` as the first statement inside the
+block, using the syntax your database supports:
+
+.. code-block:: python
+
+    async with session.transaction():
+        await session.execute_script("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        await session.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", 10, 1)
+
 Base Driver Classes
 ===================
 

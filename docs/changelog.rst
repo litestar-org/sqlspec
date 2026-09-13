@@ -34,6 +34,21 @@ Unreleased
 * The ``litestar`` extra now requires ``litestar>=2.23.0``. The Litestar
   extension imports ``NamedDependency`` and ``SkipValidation``, which are not
   available in 2.22, so installs resolved to 2.22 failed on import.
+* ``PymssqlDriver.begin()`` no longer issues ``BEGIN TRANSACTION`` on a connection
+  with autocommit disabled, where pymssql already holds an open transaction. The
+  extra nesting level kept ``commit()`` from making the work durable. On an
+  autocommit connection, ``commit()`` and ``rollback()`` now end the transaction
+  that ``begin()`` opened with T-SQL, because pymssql ignores those calls under
+  autocommit.
+* The psqlpy driver tracks transactions opened with ``begin()`` itself. It
+  previously read psqlpy's coroutine-returning ``in_transaction()`` as always true,
+  so statement stacks never opened their own transaction.
+* DuckDB, BigQuery, Spanner, and ADBC connections to DuckDB, BigQuery, or
+  Snowflake raise ``NotImplementedError`` from the savepoint methods instead of
+  sending ``SAVEPOINT`` statements those databases reject. Oracle's
+  ``release_savepoint()`` only validates the name, because Oracle has no
+  ``RELEASE SAVEPOINT`` statement.
+
 * The Litestar plugin registers its correlation and SQLCommenter middleware at the
   outermost position of the middleware stack instead of the innermost one. Requests
   rejected by application middleware such as authentication or session handling now carry
@@ -97,6 +112,19 @@ Unreleased
   queue depth and dropped message count. ``AsyncEventChannel`` and
   ``SyncEventChannel`` also expose ``backend_name`` and ``metrics_snapshot()``.
   (`#756 <https://github.com/litestar-org/sqlspec/issues/756>`_)
+* Sync and async drivers provide ``transaction()``, a context manager that begins a
+  transaction, commits when the block succeeds, and rolls back and re-raises when
+  it fails; a failed commit is followed by a rollback attempt. A block entered while
+  the connection already has an open transaction joins it and ends it on exit. A
+  block entered inside another ``transaction()`` or service ``begin_transaction()``
+  block on the same driver uses a savepoint instead of committing. Services allow nested
+  ``begin_transaction()`` blocks the same way: an inner block runs in a savepoint
+  on the same session, so a failure such as a unique violation undoes only the
+  inner work and the outer block can still commit. Adapters without savepoint
+  support raise ``ImproperConfigurationError`` when a block is nested.
+  Services also expose ``config``, the configuration they were built from, or
+  ``None`` when built from a session. See :doc:`/reference/driver` and
+  :doc:`/recipes/service_layer`.
 
 * Services can now open a short session for each query. Pass ``config=`` and,
   if needed, ``loader=``. Use ``session=`` to borrow a driver or

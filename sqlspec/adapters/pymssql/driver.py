@@ -117,7 +117,7 @@ class PymssqlStreamSource:
 class PymssqlDriver(SyncDriverAdapterBase):
     """SQL Server database driver using pymssql."""
 
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_transaction_active")
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_explicit_transaction", "_transaction_active")
     dialect = "tsql"
 
     def __init__(
@@ -135,6 +135,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._transaction_active = False
+        self._explicit_transaction = False
 
     def dispatch_execute(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -178,9 +179,19 @@ class PymssqlDriver(SyncDriverAdapterBase):
         )
 
     def begin(self) -> None:
+        """Begin a transaction on the connection.
+
+        A connection with autocommit disabled already holds an open transaction that
+        ``commit()`` and ``rollback()`` end. An autocommit connection issues
+        ``BEGIN TRANSACTION``, and the matching ``commit()`` or ``rollback()`` ends it
+        with T-SQL because pymssql ignores those calls under autocommit.
+        """
         try:
-            with PymssqlCursor(self.connection) as cursor:
-                cursor.execute("BEGIN TRANSACTION")
+            explicit = bool(self.connection.autocommit_state)
+            if explicit:
+                with PymssqlCursor(self.connection) as cursor:
+                    cursor.execute("BEGIN TRANSACTION")
+            self._explicit_transaction = explicit
             self._transaction_active = True
         except _pymssql_error_type() as exc:
             msg = f"Failed to begin SQL Server transaction: {exc}"
@@ -188,7 +199,12 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
     def commit(self) -> None:
         try:
-            self.connection.commit()
+            if self._explicit_transaction:
+                with PymssqlCursor(self.connection) as cursor:
+                    cursor.execute("IF @@TRANCOUNT > 0 COMMIT TRANSACTION")
+            else:
+                self.connection.commit()
+            self._explicit_transaction = False
             self._transaction_active = False
         except _pymssql_error_type() as exc:
             msg = f"Failed to commit SQL Server transaction: {exc}"
@@ -196,7 +212,12 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
     def rollback(self) -> None:
         try:
-            self.connection.rollback()
+            if self._explicit_transaction:
+                with PymssqlCursor(self.connection) as cursor:
+                    cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+            else:
+                self.connection.rollback()
+            self._explicit_transaction = False
             self._transaction_active = False
         except _pymssql_error_type() as exc:
             msg = f"Failed to rollback SQL Server transaction: {exc}"

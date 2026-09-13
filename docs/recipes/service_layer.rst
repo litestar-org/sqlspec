@@ -125,11 +125,59 @@ Outside a config service's transaction, ``session`` and ``driver`` raise
 ``rollback()`` also require an available session. Use ``begin_transaction()``
 or pass a driver explicitly with ``session=`` for manual control.
 
-Config services do not allow nested transaction blocks. Tasks and threads can
-use the same service, within the adapter's concurrency limits. A child
-task cannot implicitly reuse its parent's transaction, even after that
-transaction exits. Start independent work outside the parent's transaction
-context, or pass a session whose use you control.
+Tasks and threads can use the same service, within the adapter's concurrency
+limits. A child task of a config service cannot implicitly reuse its parent's
+transaction, even after that transaction exits. Start independent work outside
+the parent's transaction context, or pass a session whose use you control.
+
+Nested Transaction Blocks
+=========================
+
+A ``begin_transaction()`` block entered inside another block on the same service
+runs in a savepoint on the outer session; no second session is acquired. When the
+inner block raises, only its work is rolled back and the exception propagates, so
+the outer block can catch it and keep using the session. This lets an insert that
+may hit a unique constraint run without aborting the surrounding transaction:
+
+.. code-block:: python
+
+    from sqlspec.exceptions import UniqueViolationError
+
+    async with service.begin_transaction() as session:
+        try:
+            async with service.begin_transaction():
+                await session.execute("INSERT INTO users (email) VALUES ($1)", email)
+        except UniqueViolationError:
+            pass
+        user = await service.get_one("SELECT id, email FROM users WHERE email = $1", email)
+
+The outer block commits everything that was not rolled back; if the outer block
+raises, work from inner blocks that succeeded is rolled back with it. Nesting works
+the same way for services built from a session, including a block entered inside
+the session's own ``transaction()`` block. When a service built from a session enters
+its outermost block while that session already has an open transaction, for example
+after an earlier statement, the block joins that transaction instead of calling
+``begin()``, and exiting the block commits or rolls back all of it, including the
+earlier work. If the outer commit fails, the block
+attempts a rollback before raising the commit error. Adapters without savepoint
+support raise ``ImproperConfigurationError`` when a nested block is entered.
+
+A nested block must run in the task or thread that entered the outer block. Entering
+``begin_transaction()`` from another task or thread while the outer block is active
+raises ``ImproperConfigurationError`` instead of starting a second transaction on the
+same session. The outer block itself may be entered and exited in different tasks or
+threads, as happens with framework dependencies that run in a thread pool.
+
+Services expose ``config``, the configuration they were built from, so a service
+can construct a collaborating service without reaching into private state:
+
+.. code-block:: python
+
+    audit = AuditService(config=users.config)
+
+``audit`` is a separate service with its own sessions and transactions. It does not
+join a transaction that ``users`` has open; pass ``session=`` to run its helpers on
+that session instead.
 
 Domain Services with a Caller-Owned Session
 ==========================================

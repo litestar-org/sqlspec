@@ -4,9 +4,10 @@ import logging
 from abc import abstractmethod
 from inspect import isawaitable
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, cast, final, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast, final, overload
 
 from mypy_extensions import mypyc_attr
+from typing_extensions import Self
 
 from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
@@ -39,6 +40,7 @@ from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from types import TracebackType
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -66,6 +68,7 @@ __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncPoolConnec
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
 _AsyncResultT = TypeVar("_AsyncResultT")
+_AsyncDriverT = TypeVar("_AsyncDriverT", bound="AsyncDriverAdapterBase")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -522,6 +525,32 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     async def rollback_to_savepoint(self, name: str) -> None:
         """Roll back the current transaction to a previously created savepoint."""
         await self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
+
+    def transaction(self) -> "_AsyncDriverTransaction[Self]":
+        """Return a context manager that wraps a block in a transaction.
+
+        Entering the block calls ``begin()`` and yields this driver. A normal exit
+        calls ``commit()``; an exception calls ``rollback()`` and propagates. A
+        failed commit is followed by a rollback attempt before the commit error
+        propagates. When the connection already has an open transaction, the block
+        joins it instead of calling ``begin()`` and commits it on exit. Inside
+        another ``transaction()`` or service ``begin_transaction()`` block on this
+        driver, the block runs in a savepoint instead and leaves the outer
+        transaction open.
+        Isolation settings are applied with ``execute_script`` inside the block.
+
+        Example:
+            .. code-block:: python
+
+                async with session.transaction():
+                    await session.execute(
+                        "INSERT INTO items (id) VALUES (?)", 1
+                    )
+
+        Returns:
+            A context manager yielding this driver.
+        """
+        return _AsyncDriverTransaction(self)
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
@@ -2179,3 +2208,73 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect),
             warnings=(f"{self.dialect} DDL extraction is not implemented",),
         )
+
+
+class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
+    """Context manager that commits on success and rolls back on error.
+
+    Inside another SQLSpec transaction block on the same driver, the block runs in
+    a savepoint that is released on success and rolled back to on error.
+    """
+
+    __slots__ = ("_driver", "_entered", "_savepoint")
+
+    def __init__(self, driver: "_AsyncDriverT") -> None:
+        self._driver = driver
+        self._savepoint: str | None = None
+        self._entered = False
+
+    async def __aenter__(self) -> "_AsyncDriverT":
+        driver = self._driver
+        depth = driver._transaction_depth
+        if depth > 0:
+            name = f"sqlspec_sp_{depth}"
+            try:
+                await driver.create_savepoint(name)
+            except NotImplementedError as exc:
+                msg = f"{type(driver).__name__} does not support the savepoints used by nested transaction blocks."
+                error = ImproperConfigurationError(msg)
+                error.__cause__ = exc
+                raise error from exc
+            self._savepoint = name
+        else:
+            try:
+                in_transaction = driver._connection_in_transaction()
+            except NotImplementedError:
+                in_transaction = False
+            if not in_transaction:
+                await driver.begin()
+        driver._transaction_depth = depth + 1
+        self._entered = True
+        return driver
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"
+    ) -> "Literal[False]":
+        driver = self._driver
+        savepoint = self._savepoint
+        entered = self._entered
+        self._savepoint = None
+        self._entered = False
+        try:
+            if savepoint is not None:
+                if exc_type is None:
+                    await driver.release_savepoint(savepoint)
+                else:
+                    await driver.rollback_to_savepoint(savepoint)
+                return False
+            if exc_type is not None:
+                await driver.rollback()
+                return False
+            try:
+                await driver.commit()
+            except BaseException:
+                try:
+                    await driver.rollback()
+                except Exception:
+                    logger.debug("Rollback after a failed commit also failed", exc_info=True)
+                raise
+            return False
+        finally:
+            if entered and driver._transaction_depth > 0:
+                driver._transaction_depth -= 1

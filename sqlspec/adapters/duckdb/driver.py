@@ -260,6 +260,33 @@ class DuckDBDriver(SyncDriverAdapterBase):
         finally:
             self._transaction_active = False
 
+    def create_savepoint(self, name: str) -> None:
+        """Raise because DuckDB does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "DuckDB does not support savepoints."
+        raise NotImplementedError(msg)
+
+    def release_savepoint(self, name: str) -> None:
+        """Raise because DuckDB does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "DuckDB does not support savepoints."
+        raise NotImplementedError(msg)
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Raise because DuckDB does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "DuckDB does not support savepoints."
+        raise NotImplementedError(msg)
+
     def set_migration_session_schema(self, schema: str) -> None:
         """Set DuckDB search_path for migration SQL."""
         self.connection.execute(f"SET search_path = {quote_identifier(schema)}")

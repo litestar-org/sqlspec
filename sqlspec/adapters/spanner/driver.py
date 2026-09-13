@@ -253,6 +253,33 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             writer = cast("_SpannerWriteProtocol", self.connection)
             writer.rollback()
 
+    def create_savepoint(self, name: str) -> None:
+        """Raise because Spanner does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "Spanner does not support savepoints."
+        raise NotImplementedError(msg)
+
+    def release_savepoint(self, name: str) -> None:
+        """Raise because Spanner does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "Spanner does not support savepoints."
+        raise NotImplementedError(msg)
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Raise because Spanner does not support savepoints.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        msg = "Spanner does not support savepoints."
+        raise NotImplementedError(msg)
+
     def with_cursor(self, connection: "SpannerConnection") -> "SpannerSyncCursor":
         return SpannerSyncCursor(connection)
 

@@ -5,6 +5,7 @@ from typing import Any, cast
 import pytest
 
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.exceptions import TransactionError
 
 
 class _FakeSyncConnection:
@@ -54,3 +55,22 @@ async def test_oracle_async_connection_in_transaction_tracks_begin_commit_rollba
     assert driver._connection_in_transaction() is True
     await driver.rollback()
     assert driver._connection_in_transaction() is False
+
+
+def test_oracle_sync_release_savepoint_validates_without_sql() -> None:
+    """Oracle has no RELEASE SAVEPOINT statement, so release only validates the name."""
+    driver = OracleSyncDriver(cast("Any", _FakeSyncConnection()))
+
+    driver.release_savepoint("sqlspec_sp_1")
+    with pytest.raises(TransactionError):
+        driver.release_savepoint("sp; DROP TABLE users")
+
+
+@pytest.mark.anyio
+async def test_oracle_async_release_savepoint_validates_without_sql() -> None:
+    """Oracle has no RELEASE SAVEPOINT statement, so release only validates the name."""
+    driver = OracleAsyncDriver(cast("Any", _FakeAsyncConnection()))
+
+    await driver.release_savepoint("sqlspec_sp_1")
+    with pytest.raises(TransactionError):
+        await driver.release_savepoint("sp; DROP TABLE users")
