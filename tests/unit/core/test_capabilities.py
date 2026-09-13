@@ -109,3 +109,19 @@ def test_arrow_odbc_datetime_binding_preserves_microseconds() -> None:
     assert parameters is not None
     assert isinstance(parameters[0], str)
     assert datetime.fromisoformat(parameters[0]) == value
+
+
+def test_bigquery_json_results_match_capabilities() -> None:
+    """The BigQuery SDK decodes JSON before SQLSpec collects result rows."""
+    from google.cloud.bigquery import SchemaField
+    from google.cloud.bigquery._helpers import _row_tuple_from_json
+
+    from sqlspec.adapters.bigquery import BigQueryConfig
+    from sqlspec.adapters.bigquery.core import collect_rows
+
+    schema = [SchemaField("payload", "JSON")]
+    row = _row_tuple_from_json({"f": [{"v": '{"key": "value"}'}]}, schema)
+    rows, columns = collect_rows([row], schema)
+    assert BigQueryConfig.type_coercion_capabilities.json_columns_decoded is True
+    assert columns == ["payload"]
+    assert rows[0][0] == {"key": "value"}

@@ -180,7 +180,7 @@ means the parameter pipeline preserves the Python value for the driver.
      - Yes
      - Native
      - Microsecond
-     -
+     - Yes
      - Native
    * - sqlite
      - Yes
@@ -279,7 +279,7 @@ means the parameter pipeline preserves the Python value for the driver.
      - Yes
      - Native
      - Microsecond
-     -
+     - Yes
      - Text
    * - spanner
      - Yes

@@ -200,7 +200,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
     supports_native_parquet_import: ClassVar[bool] = True
     supports_native_row_streaming: ClassVar[bool] = True
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
-        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="native"
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=True, uuid_binding="native"
     )
     _connection_context_class: "ClassVar[type[PsqlpyConnectionContext]]" = PsqlpyConnectionContext
     _session_factory_class: "ClassVar[type[_PsqlpySessionFactory]]" = _PsqlpySessionFactory

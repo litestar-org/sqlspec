@@ -8,6 +8,7 @@ import pytest
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg import AsyncpgConfig
+    from sqlspec.adapters.psqlpy import PsqlpyConfig
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 
 pytestmark = pytest.mark.xdist_group("postgres")
@@ -118,3 +119,15 @@ async def test_psycopg_async_type_coercion_capabilities_observed(psycopg_async_c
             assert raw_uid == test_uuid
         finally:
             await driver.execute_script(TEARDOWN_SQL)
+
+
+async def test_psqlpy_json_columns_match_capabilities(psqlpy_config: "PsqlpyConfig") -> None:
+    """Native JSON and JSONB results are already decoded by psqlpy."""
+    assert psqlpy_config.type_coercion_capabilities.json_columns_decoded is True
+    async with psqlpy_config.provide_session() as driver:
+        row = await driver.select_one(
+            "SELECT $1::json AS payload, $2::jsonb AS binary_payload",
+            ({"key": "value"}, {"count": 42}),
+        )
+        assert row["payload"] == {"key": "value"}
+        assert row["binary_payload"] == {"count": 42}
