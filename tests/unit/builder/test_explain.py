@@ -1505,11 +1505,11 @@ def test_explain_postgres_all_false_booleans():
     assert "TIMING FALSE" in result
 
 
-def test_explain_builder_has_slots():
-    """Test Explain uses __slots__ for memory efficiency."""
+def test_explain_builder_has_no_instance_dict():
+    """Explain instances carry no per-instance __dict__."""
     explain = Explain("SELECT 1")
 
-    assert hasattr(type(explain), "__slots__")
+    assert not hasattr(explain, "__dict__")
 
 
 def test_normalize_dialect_name_with_dialect_object():

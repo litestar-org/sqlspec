@@ -6,14 +6,19 @@ Used to communicate API changes and migration paths to users.
 
 import functools
 import inspect
+import os
+import sys
 import types
 from collections.abc import Callable
+from pathlib import Path
 from typing import Generic, Literal, cast
 from warnings import warn
 
 from typing_extensions import ParamSpec, TypeVar
 
 __all__ = ("deprecated", "warn_deprecation")
+
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1]) + os.sep
 
 
 T = TypeVar("T")
@@ -30,9 +35,8 @@ def warn_deprecation(
     alternative: str | None = None,
     info: str | None = None,
     pending: bool = False,
-    stacklevel: int = 2,
 ) -> None:
-    """Warn about a call to a deprecated function.
+    """Warn about a call to a deprecated function, attributed to the first caller outside SQLSpec.
 
     Args:
         version: SQLSpec version where the deprecation will occur
@@ -42,7 +46,6 @@ def warn_deprecation(
         info: Additional information
         pending: Use :class:`warnings.PendingDeprecationWarning` instead of :class:`warnings.DeprecationWarning`
         kind: Type of the deprecated thing
-        stacklevel: Warning stacklevel to report the correct caller site.
     """
     parts = []
 
@@ -70,7 +73,21 @@ def warn_deprecation(
     text = ". ".join(parts)  # pyright: ignore[reportUnknownArgumentType]
     warning_class = PendingDeprecationWarning if pending else DeprecationWarning
 
-    warn(text, warning_class, stacklevel=stacklevel)
+    warn(text, warning_class, stacklevel=_external_stacklevel())
+
+
+def _external_stacklevel() -> int:
+    """Count Python frames from the caller of warn_deprecation up to the first frame outside the package.
+
+    Compiled frames do not appear in the interpreter stack, so the count adapts to
+    interpreted and mypyc builds alike.
+    """
+    stacklevel = 1
+    frame: types.FrameType | None = sys._getframe(1)
+    while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE_ROOT):
+        stacklevel += 1
+        frame = frame.f_back
+    return stacklevel
 
 
 def deprecated(

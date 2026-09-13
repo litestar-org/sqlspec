@@ -932,7 +932,6 @@ class SQLFactory:
             removal_in="1.0.0",
             alternative=f'sql.column("{name}")',
             info="Dynamic attribute access builds a Column for any name, including typos",
-            stacklevel=3,
         )
         return Column(name)
 

@@ -50,6 +50,7 @@ from sqlspec.core.parameters import _types
 from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
+from tests.conftest import requires_patchable_internals
 
 try:
     from sqlspec.adapters.asyncpg.core import driver_profile as asyncpg_driver_profile
@@ -1150,6 +1151,7 @@ def test_process_execute_many_named_to_positional(processor: "ParameterProcessor
     assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
 
 
+@requires_patchable_internals
 def test_validate_parameter_alignment_reuses_execute_many_expected_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     """execute_many alignment should compute placeholder identifiers once per batch."""
     profile = ParameterProfile([
@@ -1823,7 +1825,7 @@ def test_positional_parameter_output_type_narrowing(converter: ParameterConverte
     assert result_dict == (1, 2, 3)
 
 
-def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
+def test_convert_placeholder_style_skips_sort_for_position_ordered_params(
     converter: ParameterConverter, monkeypatch: Any
 ) -> None:
     """Position-ordered parameter metadata should not pay an extra sorted() pass."""
@@ -1838,7 +1840,7 @@ def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
     assert converted_sql == "SELECT $1, $2, $3"
 
 
-def test_convert_placeholders_to_style_sorts_unsafely_ordered_params_as_fallback(converter: ParameterConverter) -> None:
+def test_convert_placeholder_style_sorts_unsafely_ordered_params_as_fallback(converter: ParameterConverter) -> None:
     """Manually unordered parameter metadata should still be normalized correctly."""
     sql = "SELECT :a, :b, :c"
     param_info = converter.validator.extract_parameters(sql)

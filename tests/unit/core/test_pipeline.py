@@ -8,6 +8,7 @@ from sqlspec.core import SQL, get_pipeline_metrics, reset_pipeline_registry
 from sqlspec.core._pipeline import StatementPipelineRegistry
 from sqlspec.core.parameters import ParameterConverter, ParameterValidator
 from sqlspec.core.statement import StatementConfig
+from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
 def test_record_pipeline_metrics_constant_is_bool() -> None:
@@ -33,6 +34,7 @@ def test_os_getenv_not_called_during_metrics() -> None:
     mock_getenv.assert_not_called()
 
 
+@requires_patchable_internals
 def test_record_pipeline_metrics_patch_controls_metrics_output() -> None:
     with patch.object(pipeline_module, "_RECORD_PIPELINE_METRICS", True):
         reset_pipeline_registry()
@@ -81,6 +83,7 @@ def test_fingerprint_cache_does_not_mutate_unfrozen_config() -> None:
     assert config._fingerprint_cache is None
 
 
+@requires_interpreted
 def test_fingerprint_uses_config_hash_plus_unhashed_parameter_discriminators() -> None:
     """Parameter converter type and parameter-level transformer identity remain discriminators."""
     registry = StatementPipelineRegistry()

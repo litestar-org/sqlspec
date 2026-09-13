@@ -8,6 +8,7 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
+from tests.conftest import is_compiled
 
 
 @pytest.mark.parametrize("name", ["rollup", "cube"])
@@ -37,6 +38,10 @@ def test_group_by_factory_grouping_sets_preserves_grand_total(columns: tuple[str
 def test_grouping_sets_rejects_bare_string(grouping_sets: Callable[..., Any]) -> None:
     """A bare string is rejected instead of being iterated character by character."""
     invalid_columns = cast("tuple[str, ...]", "ab")
+    if is_compiled():
+        with pytest.raises(TypeError, match="tuple, list"):
+            grouping_sets(invalid_columns)
+        return
     with pytest.raises(SQLBuilderError, match="tuple or list"):
         grouping_sets(invalid_columns)
 
