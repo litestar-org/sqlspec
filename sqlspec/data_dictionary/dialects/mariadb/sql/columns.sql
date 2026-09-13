@@ -15,6 +15,7 @@ SELECT
     character_set_name,
     collation_name,
     column_key,
+    column_key = 'PRI' AS is_primary,
     extra,
     generation_expression,
     column_comment

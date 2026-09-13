@@ -27,13 +27,24 @@ SELECT
         WHERE uq.conrelid = c.oid
           AND uq.contype = 'u'
           AND a.attnum = ANY(uq.conkey)
-    ) AS is_unique
+    ) AS is_unique,
+    pg_catalog.pg_get_serial_sequence(
+        pg_catalog.quote_ident(n.nspname) || '.' || pg_catalog.quote_ident(c.relname), a.attname
+    )::text AS sequence_name
 FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
 LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-WHERE n.nspname = :schema_name
+WHERE n.nspname = COALESCE(
+    :schema_name::text,
+    (
+        SELECT rn.nspname::text
+        FROM pg_catalog.pg_class rc
+        JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+        WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+    )
+)
   AND (:table_name::text IS NULL OR c.relname = :table_name)
   AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
   AND a.attnum > 0

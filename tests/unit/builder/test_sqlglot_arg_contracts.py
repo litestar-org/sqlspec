@@ -30,7 +30,9 @@ KNOWN_SET_SITES: frozenset[tuple[str, str, str]] = frozenset({
     ("sqlspec/adapters/bigquery/core.py", "statement_values", "expressions"),
     ("sqlspec/adapters/duckdb/core.py", "part", "quoted"),
     ("sqlspec/builder/_base.py", "final_expression", "with_"),
+    ("sqlspec/builder/_base.py", "expression", "conflict"),
     ("sqlspec/builder/_base.py", "node", "quoted"),
+    ("sqlspec/builder/_base.py", "optimized", "conflict"),
     ("sqlspec/builder/_dml.py", "current_expr", "expression"),
     ("sqlspec/builder/_dml.py", "current_expr", "expressions"),
     ("sqlspec/builder/_dml.py", "current_expr", "from_"),
@@ -76,6 +78,7 @@ KNOWN_SET_SITES: frozenset[tuple[str, str, str]] = frozenset({
     ("sqlspec/driver/_common.py", "subquery_expr", "limit"),
     ("sqlspec/driver/_common.py", "subquery_expr", "offset"),
     ("sqlspec/driver/_common.py", "subquery_expr", "order"),
+    ("sqlspec/utils/fixtures.py", "insert_expression", "conflict"),
 })
 
 

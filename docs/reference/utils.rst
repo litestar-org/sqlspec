@@ -88,4 +88,4 @@ Fixture Files
 =============
 
 .. automodule:: sqlspec.utils.fixtures
-   :members: open_fixture_sync, open_fixture_async, write_fixture_sync, write_fixture_async
+   :members: open_fixture_sync, open_fixture_async, write_fixture_sync, write_fixture_async, load_table_fixtures_sync, load_table_fixtures_async, export_table_fixtures_sync, export_table_fixtures_async

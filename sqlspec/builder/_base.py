@@ -13,8 +13,10 @@ from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import RULES, optimize
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
 from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
+from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
 from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
@@ -675,6 +677,10 @@ class QueryBuilder:
     def _optimize_expression(self, expression: exp.Expr, *, force: bool = False) -> exp.Expr:
         """Apply SQLGlot optimizations to the expression.
 
+        The ``ON CONFLICT`` / ``ON DUPLICATE KEY UPDATE`` clause of an INSERT only receives
+        identifier normalization and quoting, so each ``SET`` assignment keeps its target
+        column on the left.
+
         Args:
             expression: The expression to optimize
             force: Optimize even when the builder-level toggle is disabled.
@@ -687,6 +693,10 @@ class QueryBuilder:
 
         if not self.optimize_joins and not self.optimize_predicates and not self.simplify_expressions:
             return expression
+
+        conflict = expression.args.get("conflict") if isinstance(expression, exp.Insert) else None
+        if isinstance(conflict, exp.OnConflict):
+            return self._optimize_insert_with_conflict(expression, conflict, force=force)
 
         optimizer_settings = {
             "optimize_joins": self.optimize_joins,
@@ -724,6 +734,34 @@ class QueryBuilder:
             return expression
         else:
             return optimized
+
+    def _optimize_insert_with_conflict(
+        self, expression: exp.Expr, conflict: exp.OnConflict, *, force: bool
+    ) -> exp.Expr:
+        """Optimize an INSERT without its conflict clause, then attach the clause with quoted identifiers.
+
+        Args:
+            expression: The INSERT expression owning ``conflict``.
+            conflict: The INSERT's ``ON CONFLICT`` / ``ON DUPLICATE KEY UPDATE`` clause.
+            force: Optimize even when the builder-level toggle is disabled.
+
+        Returns:
+            The optimized INSERT with the normalized and quoted conflict clause, or the
+            original INSERT with its clause unchanged when optimization fails.
+        """
+        expression.set("conflict", None)
+        try:
+            optimized = self._optimize_expression(expression, force=force)
+        finally:
+            expression.set("conflict", conflict)
+        if optimized is expression:
+            return expression
+        dialect_name = self.dialect_name
+        quoted_conflict = _quote_identifiers_rule(
+            _normalize_identifiers_rule(conflict.copy(), dialect=dialect_name), dialect=dialect_name
+        )
+        optimized.set("conflict", quoted_conflict)
+        return optimized
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
