@@ -889,6 +889,10 @@ class QueryBuilder:
         if cached_optimized is not None:
             return cast("exp.Expr", cached_optimized).copy()
 
+        # Qualification drops VALUES CTE column aliases without projecting replacements.
+        if any(isinstance(cte.this, exp.Values) and cte.alias_column_names for cte in expression.find_all(exp.CTE)):
+            return expression
+
         excluded_rules = set()
         if not self.optimize_joins:
             excluded_rules.add(_optimize_joins_rule)

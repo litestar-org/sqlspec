@@ -87,3 +87,10 @@ async def test_select_from_values_with_alias_override(
     query = sql.select("renamed.id", "renamed.name").from_(source, alias="renamed").order_by("renamed.id")
 
     assert (await asyncpg_async_driver.execute(query)).data == [("first", "alice"), ("second", "bob")]
+
+
+async def test_select_from_values_cte_preserves_column_names(asyncpg_async_driver: AsyncpgDriver) -> None:
+    source = sql.values([("first", "alice"), ("second", "bob")], columns=["id", "name"])
+    query = sql.select("id", "name").from_("v").with_cte("v", source).order_by("id")
+
+    assert (await asyncpg_async_driver.execute(query)).data == [("first", "alice"), ("second", "bob")]

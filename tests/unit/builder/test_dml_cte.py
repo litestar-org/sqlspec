@@ -1,6 +1,9 @@
 """Unit tests for CTE rendering on UPDATE and DELETE statements."""
 
+from types import SimpleNamespace
+
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
@@ -91,3 +94,34 @@ def test_recursive_cte_flag_is_rendered(operation: str) -> None:
         query = query.set(a=1)
     query = query.with_cte("c", sql.select("id").from_("source"), recursive=True)
     assert query.build(dialect="postgres").sql.startswith("WITH RECURSIVE")
+
+
+@pytest.mark.parametrize("final_expression", [False, True])
+def test_cte_accepts_expression_provider_with_bound_values(final_expression: bool) -> None:
+    expression = exp.values([(exp.Placeholder(this="id"),)], alias="original", columns=["id"])
+    source = SimpleNamespace(get_expression=lambda: expression, parameters={"id": 7}, _columns=["id"])
+    if final_expression:
+        source._build_final_expression = lambda **kwargs: expression.copy()
+    query = sql.select("id").from_("v").with_cte("v", source)
+    built = query.build(dialect="postgres")
+
+    assert built.parameters == {"v_id": 7}
+    assert '"v"("id") AS' in built.sql
+    assert "original" not in built.sql
+    assert expression.alias == "original"
+
+
+@pytest.mark.parametrize("expression", [None, exp.delete("t")])
+def test_cte_rejects_invalid_expression_provider(expression: exp.Expr | None) -> None:
+    source = SimpleNamespace(get_expression=lambda: expression)
+    with pytest.raises(SQLBuilderError, match="CTE 'invalid'"):
+        sql.select("*").with_cte("invalid", source)
+
+
+def test_cte_preserves_existing_parsed_with_clause() -> None:
+    query = sql.select("WITH original AS (SELECT 1 AS id) SELECT id FROM original")
+    query.with_cte("additional", sql.select(exp.Literal.number(2).as_("id")))
+    first = query.build(dialect="postgres").sql
+    assert first.count('"original" AS (') == 1
+    assert first.count('"additional" AS (') == 1
+    assert query.build(dialect="postgres").sql == first

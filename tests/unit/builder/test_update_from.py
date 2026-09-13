@@ -1,5 +1,7 @@
 """Unit tests for UPDATE ... FROM clause support and dialect validation."""
 
+from types import SimpleNamespace
+
 import pytest
 from sqlglot import exp
 
@@ -114,3 +116,48 @@ def test_oracle_update_from_runtime_capability(major: int, expected: bool) -> No
         )
         is expected
     )
+
+
+@pytest.mark.parametrize("getter", [False, True])
+def test_update_from_expression_provider_preserves_parameters(getter: bool) -> None:
+    expression = exp.select("id").from_("source").where(exp.column("id").eq(exp.Placeholder(this="id")))
+    source = SimpleNamespace(parameters={"id": 7}, alias="candidate")
+    if getter:
+        source.get_expression = lambda: expression
+    else:
+        source._expression = expression
+    query = sql.update("target").set(id=8).from_(source).where("target.id = candidate.id")
+    built = query.build(dialect="postgres")
+
+    assert built.parameters == {"id": 8, "candidate_id": 7}
+    assert 'AS "candidate"' in built.sql
+    placeholder = expression.find(exp.Placeholder)
+    assert placeholder is not None
+    assert placeholder.name == "id"
+
+
+@pytest.mark.parametrize("expression", [None, exp.delete("source")])
+def test_update_from_rejects_invalid_expression_provider(expression: exp.Expr | None) -> None:
+    source = SimpleNamespace(get_expression=lambda: expression)
+    with pytest.raises(SQLBuilderError, match=r"no expression|must be SELECT"):
+        sql.update("target").set(id=1).from_(source)
+
+
+@pytest.mark.parametrize("source_alias", [None, "original"])
+def test_update_from_values_alias_preserves_columns(source_alias: str | None) -> None:
+    values = sql.values([(1, "updated")], alias=source_alias, columns=["id", "name"])
+    query = sql.update("target").set(name=exp.column("name", table="v")).from_(values, alias="v")
+    built = query.build(dialect="postgres")
+
+    assert 'AS "v"("id", "name")' in built.sql
+    assert built.parameters == {"v_id": 1, "v_name": "updated"}
+    assert values.alias_name == source_alias
+
+
+def test_update_from_subquery_provider_replaces_alias() -> None:
+    expression = exp.select("id").from_("source").subquery("original")
+    source = SimpleNamespace(get_expression=lambda: expression)
+    query = sql.update("target").set(id=1).from_(source, alias="candidate")
+
+    assert 'AS "candidate"' in query.build(dialect="postgres").sql
+    assert expression.alias == "original"
