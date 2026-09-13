@@ -189,515 +189,427 @@ class AsyncReadable:
         return "async"
 
 
-def test_is_readable_accepts_sync_read_method() -> None:
-    assert is_readable(SyncReadable()) is True
+@pytest.mark.parametrize(
+    ("target", "guard", "expected"),
+    [
+        pytest.param(SyncReadable(), is_readable, True, id="sync_readable_with_is_readable"),
+        pytest.param(SyncReadable(), is_async_readable, False, id="sync_readable_with_is_async_readable"),
+        pytest.param(AsyncReadable(), is_async_readable, True, id="async_readable_with_is_async_readable"),
+    ],
+)
+def test_readable_guards(target: Any, guard: Any, expected: bool) -> None:
+    """Validate readable and async readable protocol guards."""
+    assert guard(target) is expected
 
 
-def test_is_async_readable_rejects_sync_read_method() -> None:
-    assert is_async_readable(SyncReadable()) is False
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(SampleDataclass(name="test", age=25), True, id="instance"),
+        pytest.param(SampleDataclass, False, id="class"),
+        pytest.param("not a dataclass", False, id="string"),
+        pytest.param(42, False, id="integer"),
+        pytest.param({}, False, id="dict"),
+    ],
+)
+def test_is_dataclass_instance(value: Any, expected: bool) -> None:
+    """Validate is_dataclass_instance returns True for dataclass instances only."""
+    assert is_dataclass_instance(value) is expected
 
 
-def test_is_async_readable_accepts_async_read_method() -> None:
-    assert is_async_readable(AsyncReadable()) is True
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(SampleDataclass, True, id="class"),
+        pytest.param(SampleDataclass(name="test", age=25), True, id="instance"),
+        pytest.param("not a dataclass", False, id="string"),
+        pytest.param(42, False, id="integer"),
+        pytest.param({}, False, id="dict"),
+    ],
+)
+def test_is_dataclass(value: Any, expected: bool) -> None:
+    """Validate is_dataclass returns True for dataclass classes and instances."""
+    assert is_dataclass(value) is expected
 
 
-def test_is_dataclass_instance_with_valid_dataclass() -> None:
-    """Test is_dataclass_instance returns True for dataclass instances."""
+@pytest.mark.parametrize(
+    ("target", "field_name", "expected"),
+    [
+        pytest.param(SampleDataclass(name="test", age=25), "name", True, id="existing_field_name"),
+        pytest.param(SampleDataclass(name="test", age=25), "age", True, id="existing_field_age"),
+        pytest.param(SampleDataclass(name="test", age=25), "nonexistent", False, id="missing_field"),
+        pytest.param("not a dataclass", "any_field", False, id="non_dataclass"),
+    ],
+)
+def test_is_dataclass_with_field(target: Any, field_name: str, expected: bool) -> None:
+    """Validate is_dataclass_with_field returns True when field exists on dataclass."""
+    assert is_dataclass_with_field(target, field_name) is expected
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name", "expected"),
+    [
+        pytest.param(SampleDataclass(name="test", age=25), "nonexistent", True, id="missing_field"),
+        pytest.param(SampleDataclass(name="test", age=25), "name", False, id="existing_field"),
+        pytest.param("not a dataclass", "any_field", False, id="non_dataclass"),
+    ],
+)
+def test_is_dataclass_without_field(target: Any, field_name: str, expected: bool) -> None:
+    """Validate is_dataclass_without_field returns True when field is absent from dataclass."""
+    assert is_dataclass_without_field(target, field_name) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param({}, True, id="empty_dict"),
+        pytest.param({"key": "value"}, True, id="populated_dict"),
+        pytest.param("not a dict", False, id="string"),
+        pytest.param([], False, id="list"),
+        pytest.param(42, False, id="integer"),
+    ],
+)
+def test_is_dict(value: Any, expected: bool) -> None:
+    """Validate is_dict returns True for dictionaries only."""
+    assert is_dict(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name", "expected"),
+    [
+        pytest.param({"name": "test", "age": 25}, "name", True, id="existing_key_name"),
+        pytest.param({"name": "test", "age": 25}, "age", True, id="existing_key_age"),
+        pytest.param({"name": "test"}, "nonexistent", False, id="missing_key"),
+        pytest.param("not a dict", "any_key", False, id="non_dict"),
+    ],
+)
+def test_is_dict_with_field(target: Any, field_name: str, expected: bool) -> None:
+    """Validate is_dict_with_field returns True when key exists in dictionary."""
+    assert is_dict_with_field(target, field_name) is expected
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name", "expected"),
+    [
+        pytest.param({"name": "test"}, "nonexistent", True, id="missing_key"),
+        pytest.param({"name": "test", "age": 25}, "name", False, id="existing_key"),
+        pytest.param("not a dict", "any_key", False, id="non_dict"),
+    ],
+)
+def test_is_dict_without_field(target: Any, field_name: str, expected: bool) -> None:
+    """Validate is_dict_without_field returns True when key is absent from dictionary."""
+    assert is_dict_without_field(target, field_name) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param({}, True, id="empty_dict"),
+        pytest.param({"col1": "value1", "col2": "value2"}, True, id="populated_dict"),
+        pytest.param("not a dict", False, id="string"),
+        pytest.param([], False, id="list"),
+        pytest.param(42, False, id="integer"),
+    ],
+)
+def test_is_dict_row(value: Any, expected: bool) -> None:
+    """Validate is_dict_row returns True for dictionaries representing row data."""
+    assert is_dict_row(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("guard", "args"),
+    [
+        pytest.param(is_pydantic_model, ("not a model",), id="model_string"),
+        pytest.param(is_pydantic_model, ({},), id="model_dict"),
+        pytest.param(is_pydantic_model_with_field, ("not a model", "field"), id="with_field_string"),
+        pytest.param(is_pydantic_model_without_field, ("not a model", "field"), id="without_field_string"),
+    ],
+)
+def test_pydantic_model_fallback_guards(guard: Any, args: tuple[Any, ...]) -> None:
+    """Validate pydantic guard behavior when handling non-pydantic inputs."""
+    assert guard(*args) is False
+
+
+@pytest.mark.parametrize(
+    ("guard", "args"),
+    [
+        pytest.param(is_msgspec_struct, ("not a struct",), id="struct_string"),
+        pytest.param(is_msgspec_struct, ({},), id="struct_dict"),
+        pytest.param(is_msgspec_struct_with_field, ("not a struct", "field"), id="with_field_string"),
+        pytest.param(is_msgspec_struct_without_field, ("not a struct", "field"), id="without_field_string"),
+    ],
+)
+def test_msgspec_struct_fallback_guards(guard: Any, args: tuple[Any, ...]) -> None:
+    """Validate msgspec guard behavior when handling non-struct inputs."""
+    assert guard(*args) is False
+
+
+@pytest.mark.parametrize(
+    ("guard", "args"),
+    [
+        pytest.param(is_attrs_instance, ("not attrs",), id="instance_string"),
+        pytest.param(is_attrs_instance, ({},), id="instance_dict"),
+        pytest.param(is_attrs_schema, ("not attrs",), id="schema_string"),
+        pytest.param(is_attrs_schema, (dict,), id="schema_dict_type"),
+        pytest.param(is_attrs_instance_with_field, ("not attrs", "field"), id="with_field_string"),
+        pytest.param(is_attrs_instance_without_field, ("not attrs", "field"), id="without_field_string"),
+    ],
+)
+def test_attrs_fallback_guards(guard: Any, args: tuple[Any, ...]) -> None:
+    """Validate attrs guard behavior when handling non-attrs inputs."""
+    assert guard(*args) is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(SampleDataclass(name="test", age=25), True, id="dataclass_instance"),
+        pytest.param("not a schema", False, id="string"),
+        pytest.param(42, False, id="integer"),
+        pytest.param([], False, id="list"),
+    ],
+)
+def test_is_schema(value: Any, expected: bool) -> None:
+    """Validate is_schema returns True for schema objects and False otherwise."""
+    assert is_schema(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(SampleDataclass(name="test", age=25), True, id="schema_dataclass"),
+        pytest.param({"key": "value"}, True, id="dict"),
+        pytest.param("not schema or dict", False, id="string"),
+        pytest.param(42, False, id="integer"),
+    ],
+)
+def test_is_schema_or_dict(value: Any, expected: bool) -> None:
+    """Validate is_schema_or_dict returns True for schemas and dicts."""
+    assert is_schema_or_dict(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected_with", "expected_without"),
+    [pytest.param("name", False, True, id="existing_name"), pytest.param("nonexistent", False, True, id="nonexistent")],
+)
+def test_is_schema_field_guards_with_dataclass(field_name: str, expected_with: bool, expected_without: bool) -> None:
+    """Validate schema field guards on dataclass instances."""
     instance = SampleDataclass(name="test", age=25)
-    assert is_dataclass_instance(instance) is True
-
-
-def test_is_dataclass_instance_with_dataclass_class() -> None:
-    """Test is_dataclass_instance returns False for dataclass classes."""
-    assert is_dataclass_instance(SampleDataclass) is False
-
-
-def test_is_dataclass_instance_with_non_dataclass() -> None:
-    """Test is_dataclass_instance returns False for non-dataclass objects."""
-    assert is_dataclass_instance("not a dataclass") is False
-    assert is_dataclass_instance(42) is False
-    assert is_dataclass_instance({}) is False
-
-
-def test_is_dataclass_with_dataclass_class() -> None:
-    """Test is_dataclass returns True for dataclass classes."""
-    assert is_dataclass(SampleDataclass) is True
-
-
-def test_is_dataclass_with_dataclass_instance() -> None:
-    """Test is_dataclass returns True for dataclass instances."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_dataclass(instance) is True
-
-
-def test_is_dataclass_with_non_dataclass() -> None:
-    """Test is_dataclass returns False for non-dataclass objects."""
-    assert is_dataclass("not a dataclass") is False
-    assert is_dataclass(42) is False
-    assert is_dataclass({}) is False
-
-
-def test_is_dataclass_with_field_existing_field() -> None:
-    """Test is_dataclass_with_field returns True when field exists."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_dataclass_with_field(instance, "name") is True
-    assert is_dataclass_with_field(instance, "age") is True
-
-
-def test_is_dataclass_with_field_missing_field() -> None:
-    """Test is_dataclass_with_field returns False when field doesn't exist."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_dataclass_with_field(instance, "nonexistent") is False
-
-
-def test_is_dataclass_with_field_non_dataclass() -> None:
-    """Test is_dataclass_with_field returns False for non-dataclass objects."""
-    assert is_dataclass_with_field("not a dataclass", "any_field") is False
-
-
-def test_is_dataclass_without_field_missing_field() -> None:
-    """Test is_dataclass_without_field returns True when field doesn't exist."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_dataclass_without_field(instance, "nonexistent") is True
-
-
-def test_is_dataclass_without_field_existing_field() -> None:
-    """Test is_dataclass_without_field returns False when field exists."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_dataclass_without_field(instance, "name") is False
-
-
-def test_is_dataclass_without_field_non_dataclass() -> None:
-    """Test is_dataclass_without_field returns False for non-dataclass objects."""
-    assert is_dataclass_without_field("not a dataclass", "any_field") is False
-
-
-def test_is_dict_with_dictionary() -> None:
-    """Test is_dict returns True for dictionaries."""
-    assert is_dict({}) is True
-    assert is_dict({"key": "value"}) is True
-
-
-def test_is_dict_with_non_dictionary() -> None:
-    """Test is_dict returns False for non-dictionary objects."""
-    assert is_dict("not a dict") is False
-    assert is_dict([]) is False
-    assert is_dict(42) is False
-
-
-def test_is_dict_with_field_existing_key() -> None:
-    """Test is_dict_with_field returns True when key exists."""
-    data = {"name": "test", "age": 25}
-    assert is_dict_with_field(data, "name") is True
-    assert is_dict_with_field(data, "age") is True
-
-
-def test_is_dict_with_field_missing_key() -> None:
-    """Test is_dict_with_field returns False when key doesn't exist."""
-    data = {"name": "test"}
-    assert is_dict_with_field(data, "nonexistent") is False
-
-
-def test_is_dict_with_field_non_dict() -> None:
-    """Test is_dict_with_field returns False for non-dict objects."""
-    assert is_dict_with_field("not a dict", "any_key") is False
-
-
-def test_is_dict_without_field_missing_key() -> None:
-    """Test is_dict_without_field returns True when key doesn't exist."""
-    data = {"name": "test"}
-    assert is_dict_without_field(data, "nonexistent") is True
-
-
-def test_is_dict_without_field_existing_key() -> None:
-    """Test is_dict_without_field returns False when key exists."""
-    data = {"name": "test", "age": 25}
-    assert is_dict_without_field(data, "name") is False
-
-
-def test_is_dict_without_field_non_dict() -> None:
-    """Test is_dict_without_field returns False for non-dict objects."""
-    assert is_dict_without_field("not a dict", "any_key") is False
-
-
-def test_is_dict_row_with_dictionary() -> None:
-    """Test is_dict_row returns True for dictionaries (row data)."""
-    assert is_dict_row({}) is True
-    assert is_dict_row({"col1": "value1", "col2": "value2"}) is True
-
-
-def test_is_dict_row_with_non_dictionary() -> None:
-    """Test is_dict_row returns False for non-dictionary objects."""
-    assert is_dict_row("not a dict") is False
-    assert is_dict_row([]) is False
-    assert is_dict_row(42) is False
-
-
-def test_is_pydantic_model_when_not_installed() -> None:
-    """Test is_pydantic_model returns False when pydantic not available."""
-    assert is_pydantic_model("not a model") is False
-    assert is_pydantic_model({}) is False
-
-
-def test_is_pydantic_model_with_field_when_not_installed() -> None:
-    """Test is_pydantic_model_with_field returns False when pydantic not available."""
-    assert is_pydantic_model_with_field("not a model", "field") is False
-
-
-def test_is_pydantic_model_without_field_when_not_installed() -> None:
-    """Test is_pydantic_model_without_field returns False when pydantic not available."""
-    assert is_pydantic_model_without_field("not a model", "field") is False
-
-
-def test_is_msgspec_struct_when_not_installed() -> None:
-    """Test is_msgspec_struct returns False when msgspec not available."""
-    assert is_msgspec_struct("not a struct") is False
-    assert is_msgspec_struct({}) is False
-
-
-def test_is_msgspec_struct_with_field_when_not_installed() -> None:
-    """Test is_msgspec_struct_with_field returns False when msgspec not available."""
-    assert is_msgspec_struct_with_field("not a struct", "field") is False
-
-
-def test_is_msgspec_struct_without_field_when_not_installed() -> None:
-    """Test is_msgspec_struct_without_field returns False when msgspec not available."""
-    assert is_msgspec_struct_without_field("not a struct", "field") is False
-
-
-def test_is_attrs_instance_when_not_installed() -> None:
-    """Test is_attrs_instance returns False when attrs not available."""
-    assert is_attrs_instance("not attrs") is False
-    assert is_attrs_instance({}) is False
-
-
-def test_is_attrs_schema_when_not_installed() -> None:
-    """Test is_attrs_schema returns False when attrs not available."""
-    assert is_attrs_schema("not attrs") is False
-    assert is_attrs_schema(dict) is False
-
-
-def test_is_attrs_instance_with_field_when_not_installed() -> None:
-    """Test is_attrs_instance_with_field returns False when attrs not available."""
-    assert is_attrs_instance_with_field("not attrs", "field") is False
-
-
-def test_is_attrs_instance_without_field_when_not_installed() -> None:
-    """Test is_attrs_instance_without_field returns False when attrs not available."""
-    assert is_attrs_instance_without_field("not attrs", "field") is False
-
-
-def test_is_schema_with_dataclass() -> None:
-    """Test is_schema returns True for dataclass instances."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_schema(instance) is True
-
-
-def test_is_schema_with_non_schema() -> None:
-    """Test is_schema returns False for non-schema objects."""
-    assert is_schema("not a schema") is False
-    assert is_schema(42) is False
-    assert is_schema([]) is False
-
-
-def test_is_schema_or_dict_with_schema() -> None:
-    """Test is_schema_or_dict returns True for schema objects."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_schema_or_dict(instance) is True
-
-
-def test_is_schema_or_dict_with_dict() -> None:
-    """Test is_schema_or_dict returns True for dictionaries."""
-    assert is_schema_or_dict({"key": "value"}) is True
-
-
-def test_is_schema_or_dict_with_neither() -> None:
-    """Test is_schema_or_dict returns False for non-schema, non-dict objects."""
-    assert is_schema_or_dict("not schema or dict") is False
-    assert is_schema_or_dict(42) is False
-
-
-def test_is_schema_with_field_with_dataclass() -> None:
-    """Test is_schema_with_field works with dataclass fields."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_schema_with_field(instance, "name") is False
-    assert is_schema_with_field(instance, "nonexistent") is False
-
-
-def test_is_schema_without_field_with_dataclass() -> None:
-    """Test is_schema_without_field works with dataclass fields."""
-    instance = SampleDataclass(name="test", age=25)
-    assert is_schema_without_field(instance, "nonexistent") is True
-    assert is_schema_without_field(instance, "name") is True
-
-
-def test_is_schema_or_dict_with_field_combined() -> None:
-    """Test is_schema_or_dict_with_field works with both schemas and dicts."""
-    instance = SampleDataclass(name="test", age=25)
-    data = {"name": "test", "age": 25}
-    assert is_schema_or_dict_with_field(instance, "name") is False
-    assert is_schema_or_dict_with_field(data, "name") is True
-    assert is_schema_or_dict_with_field(instance, "nonexistent") is False
-    assert is_schema_or_dict_with_field(data, "nonexistent") is False
-
-
-def test_is_schema_or_dict_without_field_combined() -> None:
-    """Test is_schema_or_dict_without_field works with both schemas and dicts."""
-    instance = SampleDataclass(name="test", age=25)
-    data = {"name": "test", "age": 25}
-    assert is_schema_or_dict_without_field(instance, "nonexistent") is True
-    assert is_schema_or_dict_without_field(data, "nonexistent") is True
-    assert is_schema_or_dict_without_field(instance, "name") is True
-    assert is_schema_or_dict_without_field(data, "name") is False
-
-
-def test_is_iterable_parameters_with_list() -> None:
-    """Test is_iterable_parameters returns True for lists."""
-    assert is_iterable_parameters([1, 2, 3]) is True
-    assert is_iterable_parameters([]) is True
-
-
-def test_is_iterable_parameters_with_tuple() -> None:
-    """Test is_iterable_parameters returns True for tuples."""
-    assert is_iterable_parameters((1, 2, 3)) is True
-    assert is_iterable_parameters(()) is True
-
-
-def test_is_iterable_parameters_with_string() -> None:
-    """Test is_iterable_parameters returns False for strings."""
-    assert is_iterable_parameters("string") is False
-    assert is_iterable_parameters("") is False
-
-
-def test_is_iterable_parameters_with_bytes() -> None:
-    """Test is_iterable_parameters returns False for bytes."""
-    assert is_iterable_parameters(b"bytes") is False
-    assert is_iterable_parameters(b"") is False
-
-
-def test_is_iterable_parameters_with_dict() -> None:
-    """Test is_iterable_parameters returns False for dictionaries."""
-    assert is_iterable_parameters({"key": "value"}) is False
-    assert is_iterable_parameters({}) is False
-
-
-def test_is_iterable_parameters_with_non_iterable() -> None:
-    """Test is_iterable_parameters returns False for non-iterable objects."""
-    assert is_iterable_parameters(42) is False
-    assert is_iterable_parameters(None) is False
-
-
-def test_is_dto_data_when_litestar_not_installed() -> None:
-    """Test is_dto_data returns False when litestar not available."""
-    assert is_dto_data("not dto data") is False
-    assert is_dto_data({}) is False
-
-
-def test_is_expression_with_mock() -> None:
-    """Test is_expression with mock SQLGlot expressions."""
-    mock_expr = cast("exp.Expr", MockSQLGlotExpression())
-    result = is_expression(mock_expr)
-    assert isinstance(result, bool)
-
-
-def test_is_expression_with_non_expression() -> None:
-    """Test is_expression returns False for non-expression objects."""
-    assert is_expression("not an expression") is False
-    assert is_expression(42) is False
-    assert is_expression({}) is False
-
-
-def test_get_node_this_with_this_attribute() -> None:
-    """Test get_node_this returns this attribute when present."""
-    node = cast("exp.Expr", MockSQLGlotExpression(this="test_value"))
-    assert get_node_this(node) == "test_value"
-
-
-def test_get_node_this_without_this_attribute() -> None:
-    """Test get_node_this returns default when this attribute missing."""
-    node = cast("exp.Expr", MockSQLGlotExpression())
-    assert get_node_this(node, "default") == "default"
-    assert get_node_this(node) is None
-
-
-def test_has_this_attribute_with_attribute() -> None:
-    """Test has_this_attribute returns True when this exists."""
-    node = cast("exp.Expr", MockSQLGlotExpression(this="test_value"))
-    assert has_this_attribute(node) is True
-
-
-def test_has_this_attribute_without_attribute() -> None:
-    """Test has_this_attribute returns False when this doesn't exist."""
-    node = cast("exp.Expr", MockSQLGlotExpression())
-    assert has_this_attribute(node) is False
-
-
-def test_get_node_expressions_with_expressions() -> None:
-    """Test get_node_expressions returns expressions when present."""
-    expressions = ["expr1", "expr2"]
-    node = cast("exp.Expression", MockSQLGlotExpression(expressions=expressions))
-    assert get_node_expressions(node) == expressions
-
-
-def test_get_node_expressions_without_expressions() -> None:
-    """Test get_node_expressions returns default when expressions missing."""
-    node = cast("exp.Expression", MockSQLGlotExpression())
-    assert get_node_expressions(node, "default") == "default"
-    assert get_node_expressions(node) is None
-
-
-def test_has_expressions_attribute_with_attribute() -> None:
-    """Test has_expressions_attribute returns True when expressions exists."""
-    node = cast("exp.Expression", MockSQLGlotExpression(expressions=["expr1"]))
-    assert has_expressions_attribute(node) is True
-
-
-def test_has_expressions_attribute_without_attribute() -> None:
-    """Test has_expressions_attribute returns False when expressions doesn't exist."""
-    node = cast("exp.Expression", MockSQLGlotExpression())
-    assert has_expressions_attribute(node) is False
-
-
-def test_get_literal_parent_with_parent() -> None:
-    """Test get_literal_parent returns parent when present."""
-    parent = "parent_node"
-    literal = cast("exp.Expression", MockLiteral(parent=parent))
-    assert get_literal_parent(literal) == parent
-
-
-def test_get_literal_parent_without_parent() -> None:
-    """Test get_literal_parent returns default when parent missing."""
-    literal = cast("exp.Expression", MockLiteral())
-    assert get_literal_parent(literal, "default") == "default"
-    assert get_literal_parent(literal) is None
-
-
-def test_has_parent_attribute_with_attribute() -> None:
-    """Test has_parent_attribute returns True when parent exists."""
-    literal = cast("exp.Expression", MockLiteral(parent="parent_node"))
-    assert has_parent_attribute(literal) is True
-
-
-def test_has_parent_attribute_without_attribute() -> None:
-    """Test has_parent_attribute returns False when parent doesn't exist."""
-    literal = cast("exp.Expression", MockLiteral())
-    assert has_parent_attribute(literal) is False
-
-
-def test_is_string_literal_with_string_flag() -> None:
-    """Test is_string_literal returns True when is_string is True."""
-    literal = cast("exp.Literal", MockLiteral(is_string=True))
-    assert is_string_literal(literal) is True
-
-
-def test_is_string_literal_without_string_flag() -> None:
-    """Test is_string_literal handles missing is_string attribute."""
-    literal = cast("exp.Literal", MockLiteral(this="string_value"))
-    assert is_string_literal(literal) is True
-
-
-def test_is_string_literal_with_non_string_this() -> None:
-    """Test is_string_literal returns False for non-string this."""
-    literal = cast("exp.Literal", MockLiteral(this=42))
-    assert is_string_literal(literal) is False
-
-
-def test_is_number_literal_with_number_flag() -> None:
-    """Test is_number_literal returns True when is_number is True."""
-    literal = cast("exp.Literal", MockLiteral(is_number=True))
-    assert is_number_literal(literal) is True
-
-
-def test_is_number_literal_without_number_flag() -> None:
-    """Test is_number_literal handles missing is_number attribute."""
-    literal = cast("exp.Literal", MockLiteral(this="123"))
-    assert is_number_literal(literal) is True
-
-
-def test_is_number_literal_with_non_number_this() -> None:
-    """Test is_number_literal returns False for non-numeric this."""
-    literal = cast("exp.Literal", MockLiteral(this="not_a_number"))
-    assert is_number_literal(literal) is False
-
-
-def test_get_param_style_and_name_with_attributes() -> None:
-    """Test get_param_style_and_name returns style and name when present."""
-    param = MockParameterProtocol(style="named", name="test_param")
-    (style, name) = get_param_style_and_name(param)
-    assert style == "named"
-    assert name == "test_param"
-
-
-def test_get_param_style_and_name_without_attributes() -> None:
-    """Test get_param_style_and_name returns None, None when attributes missing."""
-    param = object()
-    (style, name) = get_param_style_and_name(param)
-    assert style is None
-    assert name is None
-
-
-def test_get_value_attribute_with_value() -> None:
-    """Test get_value_attribute returns value when present."""
-    obj = MockValueWrapper("test_value")
-    assert get_value_attribute(obj) == "test_value"
-
-
-def test_get_value_attribute_without_value() -> None:
-    """Test get_value_attribute returns object when value missing."""
-    obj = "no_value_attribute"
-    assert get_value_attribute(obj) == "no_value_attribute"
-
-
-def test_get_initial_expression_with_attribute() -> None:
-    """Test get_initial_expression returns expression when present."""
+    assert is_schema_with_field(instance, field_name) is expected_with
+    assert is_schema_without_field(instance, field_name) is expected_without
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name", "expected_with", "expected_without"),
+    [
+        pytest.param(SampleDataclass(name="test", age=25), "name", False, True, id="dataclass_existing_field"),
+        pytest.param({"name": "test", "age": 25}, "name", True, False, id="dict_existing_field"),
+        pytest.param(SampleDataclass(name="test", age=25), "nonexistent", False, True, id="dataclass_missing_field"),
+        pytest.param({"name": "test", "age": 25}, "nonexistent", False, True, id="dict_missing_field"),
+    ],
+)
+def test_is_schema_or_dict_field_guards(
+    target: Any, field_name: str, expected_with: bool, expected_without: bool
+) -> None:
+    """Validate schema or dict field presence guards across schemas and dicts."""
+    assert is_schema_or_dict_with_field(target, field_name) is expected_with
+    assert is_schema_or_dict_without_field(target, field_name) is expected_without
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param([1, 2, 3], True, id="populated_list"),
+        pytest.param([], True, id="empty_list"),
+        pytest.param((1, 2, 3), True, id="populated_tuple"),
+        pytest.param((), True, id="empty_tuple"),
+        pytest.param("string", False, id="populated_string"),
+        pytest.param("", False, id="empty_string"),
+        pytest.param(b"bytes", False, id="populated_bytes"),
+        pytest.param(b"", False, id="empty_bytes"),
+        pytest.param({"key": "value"}, False, id="populated_dict"),
+        pytest.param({}, False, id="empty_dict"),
+        pytest.param(42, False, id="integer"),
+        pytest.param(None, False, id="none"),
+    ],
+)
+def test_is_iterable_parameters(value: Any, expected: bool) -> None:
+    """Validate is_iterable_parameters returns True for lists and tuples only."""
+    assert is_iterable_parameters(value) is expected
+
+
+@pytest.mark.parametrize("value", [pytest.param("not dto data", id="string"), pytest.param({}, id="dict")])
+def test_is_dto_data_when_litestar_not_installed(value: Any) -> None:
+    """Validate is_dto_data returns False for non-DTO data."""
+    assert is_dto_data(value) is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(exp.var("x"), True, id="sqlglot_expression"),
+        pytest.param(cast("exp.Expr", MockSQLGlotExpression()), False, id="mock_expression"),
+        pytest.param("not an expression", False, id="string"),
+        pytest.param(42, False, id="integer"),
+        pytest.param({}, False, id="dict"),
+    ],
+)
+def test_is_expression(value: Any, expected: bool) -> None:
+    """Validate is_expression returns True for SQLGlot expressions only."""
+    assert is_expression(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("node", "expected_this", "expected_has"),
+    [
+        pytest.param(cast("exp.Expr", MockSQLGlotExpression(this="test_value")), "test_value", True, id="with_this"),
+        pytest.param(cast("exp.Expr", MockSQLGlotExpression()), None, False, id="without_this"),
+    ],
+)
+def test_node_this_helpers(node: Any, expected_this: Any, expected_has: bool) -> None:
+    """Validate get_node_this and has_this_attribute behavior."""
+    assert get_node_this(node) == expected_this
+    if expected_this is None:
+        assert get_node_this(node, "default") == "default"
+    assert has_this_attribute(node) is expected_has
+
+
+@pytest.mark.parametrize(
+    ("node", "expected_expressions", "expected_has"),
+    [
+        pytest.param(
+            cast("exp.Expression", MockSQLGlotExpression(expressions=["expr1", "expr2"])),
+            ["expr1", "expr2"],
+            True,
+            id="with_expressions",
+        ),
+        pytest.param(cast("exp.Expression", MockSQLGlotExpression()), None, False, id="without_expressions"),
+    ],
+)
+def test_node_expressions_helpers(node: Any, expected_expressions: Any, expected_has: bool) -> None:
+    """Validate get_node_expressions and has_expressions_attribute behavior."""
+    assert get_node_expressions(node) == expected_expressions
+    if expected_expressions is None:
+        assert get_node_expressions(node, "default") == "default"
+    assert has_expressions_attribute(node) is expected_has
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected_parent", "expected_has"),
+    [
+        pytest.param(cast("exp.Expression", MockLiteral(parent="parent_node")), "parent_node", True, id="with_parent"),
+        pytest.param(cast("exp.Expression", MockLiteral()), None, False, id="without_parent"),
+    ],
+)
+def test_literal_parent_helpers(literal: Any, expected_parent: Any, expected_has: bool) -> None:
+    """Validate get_literal_parent and has_parent_attribute behavior."""
+    assert get_literal_parent(literal) == expected_parent
+    if expected_parent is None:
+        assert get_literal_parent(literal, "default") == "default"
+    assert has_parent_attribute(literal) is expected_has
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected"),
+    [
+        pytest.param(cast("exp.Literal", MockLiteral(is_string=True)), True, id="string_flag"),
+        pytest.param(cast("exp.Literal", MockLiteral(this="string_value")), True, id="string_this"),
+        pytest.param(cast("exp.Literal", MockLiteral(this="")), True, id="empty_string_this"),
+        pytest.param(cast("exp.Literal", MockLiteral(this=42)), False, id="non_string_this"),
+    ],
+)
+def test_is_string_literal(literal: Any, expected: bool) -> None:
+    """Validate is_string_literal with various mock literal configurations."""
+    assert is_string_literal(literal) is expected
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected"),
+    [
+        pytest.param(cast("exp.Literal", MockLiteral(is_number=True)), True, id="number_flag"),
+        pytest.param(cast("exp.Literal", MockLiteral(this="123")), True, id="numeric_string_this"),
+        pytest.param(cast("exp.Literal", MockLiteral(this="0")), True, id="zero_string_this"),
+        pytest.param(cast("exp.Literal", MockLiteral(this="not_a_number")), False, id="non_numeric_this"),
+    ],
+)
+def test_is_number_literal(literal: Any, expected: bool) -> None:
+    """Validate is_number_literal with various mock literal configurations."""
+    assert is_number_literal(literal) is expected
+
+
+@pytest.mark.parametrize(
+    ("param", "expected_style", "expected_name"),
+    [
+        pytest.param(
+            MockParameterProtocol(style="named", name="test_param"), "named", "test_param", id="with_attributes"
+        ),
+        pytest.param(object(), None, None, id="without_attributes"),
+    ],
+)
+def test_get_param_style_and_name(param: Any, expected_style: "str | None", expected_name: "str | None") -> None:
+    """Validate get_param_style_and_name with and without protocol attributes."""
+    style, name = get_param_style_and_name(param)
+    assert style == expected_style
+    assert name == expected_name
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        pytest.param(MockValueWrapper("test_value"), "test_value", id="with_value"),
+        pytest.param("no_value_attribute", "no_value_attribute", id="without_value"),
+    ],
+)
+def test_get_value_attribute(target: Any, expected: Any) -> None:
+    """Validate get_value_attribute returns wrapped value or original object."""
+    assert get_value_attribute(target) == expected
+
+
+@pytest.mark.parametrize(
+    ("has_initial", "expected_match"),
+    [
+        pytest.param(True, True, id="with_initial_expression"),
+        pytest.param(False, False, id="without_initial_expression"),
+    ],
+)
+def test_get_initial_expression(has_initial: bool, expected_match: bool) -> None:
+    """Validate get_initial_expression extracts initial_expression if present."""
     mock_expr = MockSQLGlotExpression()
 
     class MockContext:
         def __init__(self) -> None:
-            self.initial_expression = mock_expr
+            if has_initial:
+                self.initial_expression = mock_expr
 
     context = MockContext()
-    assert cast("object", get_initial_expression(context)) is cast("object", mock_expr)
+    result = get_initial_expression(context)
+    if expected_match:
+        assert cast("object", result) is cast("object", mock_expr)
+    else:
+        assert result is None
 
 
-def test_get_initial_expression_without_attribute() -> None:
-    """Test get_initial_expression returns None when attribute missing."""
-    context = object()
-    assert get_initial_expression(context) is None
+@pytest.mark.parametrize(
+    ("expr", "expected"),
+    [
+        pytest.param(cast("exp.Expression", MockSQLGlotExpression(args={"limit": "10"})), True, id="with_limit"),
+        pytest.param(cast("exp.Expression", MockSQLGlotExpression(args={"other": "value"})), False, id="without_limit"),
+        pytest.param(None, False, id="none"),
+        pytest.param(cast("exp.Expression", object()), False, id="without_args"),
+    ],
+)
+def test_expression_has_limit(expr: Any, expected: bool) -> None:
+    """Validate expression_has_limit across various expression shapes."""
+    assert expression_has_limit(expr) is expected
 
 
-def test_expression_has_limit_with_limit() -> None:
-    """Test expression_has_limit returns True when limit in args."""
-    expr = cast("exp.Expression", MockSQLGlotExpression(args={"limit": "10"}))
-    assert expression_has_limit(expr) is True
-
-
-def test_expression_has_limit_without_limit() -> None:
-    """Test expression_has_limit returns False when no limit in args."""
-    expr = cast("exp.Expression", MockSQLGlotExpression(args={"other": "value"}))
-    assert expression_has_limit(expr) is False
-
-
-def test_expression_has_limit_with_none() -> None:
-    """Test expression_has_limit returns False for None expression."""
-    assert expression_has_limit(None) is False
-
-
-def test_expression_has_limit_without_args() -> None:
-    """Test expression_has_limit handles missing args attribute."""
-    expr = cast("exp.Expression", object())
-    assert expression_has_limit(expr) is False
-
-
-def test_is_copy_statement_with_none() -> None:
-    """Test is_copy_statement returns False for None."""
-    assert is_copy_statement(None) is False
-
-
-def test_is_copy_statement_with_non_expression() -> None:
-    """Test is_copy_statement returns False for non-expression objects."""
-    assert is_copy_statement("not an expression") is False
-    assert is_copy_statement(42) is False
+@pytest.mark.parametrize(
+    "value",
+    [pytest.param(None, id="none"), pytest.param("not an expression", id="string"), pytest.param(42, id="integer")],
+)
+def test_is_copy_statement_non_expression(value: Any) -> None:
+    """Validate is_copy_statement returns False for non-expression objects."""
+    assert is_copy_statement(value) is False
 
 
 def test_extract_dataclass_fields_basic() -> None:
@@ -905,13 +817,19 @@ def test_multiple_type_guards_chain() -> None:
         assert is_iterable_parameters([1, 2, 3]) is True
 
 
-def test_type_guards_with_none() -> None:
-    """Test type guards handle None gracefully."""
-    assert is_dict(None) is False
-    assert is_dataclass(None) is False
-    assert is_schema(None) is False
-    assert is_expression(None) is False
-    assert is_iterable_parameters(None) is False
+@pytest.mark.parametrize(
+    "guard_func",
+    [
+        pytest.param(is_dict, id="is_dict"),
+        pytest.param(is_dataclass, id="is_dataclass"),
+        pytest.param(is_schema, id="is_schema"),
+        pytest.param(is_expression, id="is_expression"),
+        pytest.param(is_iterable_parameters, id="is_iterable_parameters"),
+    ],
+)
+def test_type_guards_with_none(guard_func: Any) -> None:
+    """Validate that type guards handle None gracefully by returning False."""
+    assert guard_func(None) is False
 
 
 def test_type_guards_with_empty_containers() -> None:
@@ -972,25 +890,32 @@ class MockMsgspecStructWithoutConfig(msgspec.Struct):
     test_name: str = "test"
 
 
-def test_get_msgspec_rename_config_with_camel_rename() -> None:
-    """Test get_msgspec_rename_config returns 'camel' for camel rename config."""
-    schema_type = MockMsgspecStructWithCamelRename
-    result = get_msgspec_rename_config(schema_type)
-    assert result == "camel"
+class _InvalidConfigStructString:
+    __struct_config__ = "not a dict"
 
 
-def test_get_msgspec_rename_config_with_kebab_rename() -> None:
-    """Test get_msgspec_rename_config returns 'kebab' for kebab rename config."""
-    schema_type = MockMsgspecStructWithKebabRename
-    result = get_msgspec_rename_config(schema_type)
-    assert result == "kebab"
+class _InvalidConfigStructNone:
+    __struct_config__ = None
 
 
-def test_get_msgspec_rename_config_with_pascal_rename() -> None:
-    """Test get_msgspec_rename_config returns 'pascal' for pascal rename config."""
-    schema_type = MockMsgspecStructWithPascalRename
-    result = get_msgspec_rename_config(schema_type)
-    assert result == "pascal"
+@pytest.mark.parametrize(
+    ("schema_type", "expected"),
+    [
+        pytest.param(MockMsgspecStructWithCamelRename, "camel", id="camel"),
+        pytest.param(MockMsgspecStructWithKebabRename, "kebab", id="kebab"),
+        pytest.param(MockMsgspecStructWithPascalRename, "pascal", id="pascal"),
+        pytest.param(MockMsgspecStructWithoutRename, None, id="without_rename"),
+        pytest.param(MockMsgspecStructWithoutConfig, None, id="without_struct_config"),
+        pytest.param(SampleDataclass, None, id="dataclass"),
+        pytest.param(dict, None, id="dict"),
+        pytest.param(list, None, id="list"),
+        pytest.param(_InvalidConfigStructString, None, id="invalid_config_string"),
+        pytest.param(_InvalidConfigStructNone, None, id="invalid_config_none"),
+    ],
+)
+def test_get_msgspec_rename_config(schema_type: Any, expected: "str | None") -> None:
+    """Validate get_msgspec_rename_config handles configured and unconfigured types."""
+    assert get_msgspec_rename_config(schema_type) == expected
 
 
 def test_get_msgspec_rename_config_caches_per_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1012,71 +937,6 @@ def test_get_msgspec_rename_config_caches_per_type(monkeypatch: pytest.MonkeyPat
     assert call_count == 1
 
 
-def test_is_typed_dict_with_typeddict_class() -> None:
-    """Test is_typed_dict returns True for TypedDict classes."""
-    assert is_typed_dict(SampleTypedDict) is True
-
-
-def test_is_typed_dict_with_typeddict_instance() -> None:
-    """Test is_typed_dict returns False for TypedDict instances (they are dicts)."""
-    sample_data: SampleTypedDict = {"name": "test", "age": 25, "optional_field": "value"}
-    assert is_typed_dict(sample_data) is False
-
-
-def test_is_typed_dict_with_non_typeddict() -> None:
-    """Test is_typed_dict returns False for non-TypedDict types."""
-    assert is_typed_dict(dict) is False
-    assert is_typed_dict(SampleDataclass) is False
-    assert is_typed_dict(str) is False
-    assert is_typed_dict(42) is False
-    assert is_typed_dict({}) is False
-
-
-def test_is_typed_dict_with_regular_dict() -> None:
-    """Test is_typed_dict returns False for regular dict instances."""
-    assert is_typed_dict({"key": "value"}) is False
-
-
-def test_get_msgspec_rename_config_without_rename() -> None:
-    """Test get_msgspec_rename_config returns None when no rename config."""
-    schema_type = MockMsgspecStructWithoutRename
-    result = get_msgspec_rename_config(schema_type)
-    assert result is None
-
-
-def test_get_msgspec_rename_config_without_struct_config() -> None:
-    """Test get_msgspec_rename_config returns None when no __struct_config__."""
-    schema_type = MockMsgspecStructWithoutConfig
-    result = get_msgspec_rename_config(schema_type)
-    assert result is None
-
-
-def test_get_msgspec_rename_config_with_non_msgspec_class() -> None:
-    """Test get_msgspec_rename_config returns None for non-msgspec classes."""
-    result = get_msgspec_rename_config(SampleDataclass)
-    assert result is None
-    result = get_msgspec_rename_config(dict)
-    assert result is None
-    result = get_msgspec_rename_config(list)
-    assert result is None
-
-
-def test_get_msgspec_rename_config_with_invalid_config_structure() -> None:
-    """Test get_msgspec_rename_config handles invalid config structures."""
-
-    class InvalidConfigStruct:
-        __struct_config__ = "not a dict"
-
-    result = get_msgspec_rename_config(InvalidConfigStruct)
-    assert result is None
-
-    class InvalidConfigStruct2:
-        __struct_config__ = None
-
-    result = get_msgspec_rename_config(InvalidConfigStruct2)
-    assert result is None
-
-
 def test_get_msgspec_rename_config_performance() -> None:
     """Test get_msgspec_rename_config performs efficiently."""
     schema_type = MockMsgspecStructWithCamelRename
@@ -1085,50 +945,68 @@ def test_get_msgspec_rename_config_performance() -> None:
         assert result == "camel"
 
 
-def test_supports_arrow_results_with_protocol_implementation() -> None:
-    """Test supports_arrow_results with object implementing SupportsArrowResults."""
-
-    class MockDriverWithArrow:
-        def select_to_arrow(
-            self,
-            statement,
-            /,
-            *parameters,
-            statement_config=None,
-            return_format="table",
-            native_only=False,
-            batch_size=None,
-            arrow_schema=None,
-            **kwargs,
-        ):
-            pass
-
-    driver = MockDriverWithArrow()
-    assert supports_arrow_results(driver) is True
-
-
-def test_supports_arrow_results_without_protocol_implementation() -> None:
-    """Test supports_arrow_results with object not implementing protocol."""
-
-    class MockDriverWithoutArrow:
-        def execute(self, sql):
-            pass
-
-    driver = MockDriverWithoutArrow()
-    assert supports_arrow_results(driver) is False
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        pytest.param(SampleTypedDict, True, id="typed_dict_class"),
+        pytest.param(
+            cast("SampleTypedDict", {"name": "test", "age": 25, "optional_field": "value"}),
+            False,
+            id="typed_dict_instance",
+        ),
+        pytest.param(dict, False, id="dict_type"),
+        pytest.param(SampleDataclass, False, id="dataclass_type"),
+        pytest.param(str, False, id="str_type"),
+        pytest.param(42, False, id="integer"),
+        pytest.param({}, False, id="empty_dict"),
+        pytest.param({"key": "value"}, False, id="dict_instance"),
+    ],
+)
+def test_is_typed_dict(target: Any, expected: bool) -> None:
+    """Validate is_typed_dict distinguishes TypedDict classes from instances and other types."""
+    assert is_typed_dict(target) is expected
 
 
-def test_supports_arrow_results_with_none() -> None:
-    """Test supports_arrow_results with None."""
-    assert supports_arrow_results(None) is False
+class MockDriverWithArrow:
+    """Mock driver implementing SupportsArrowResults protocol."""
+
+    def select_to_arrow(
+        self,
+        statement: Any,
+        /,
+        *parameters: Any,
+        statement_config: Any = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: Any = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        pass
 
 
-def test_supports_arrow_results_with_primitive_types() -> None:
-    """Test supports_arrow_results with primitive types."""
-    assert supports_arrow_results("string") is False
-    assert supports_arrow_results(42) is False
-    assert supports_arrow_results([1, 2, 3]) is False
-    assert supports_arrow_results({"key": "value"}) is False
+class MockDriverWithoutArrow:
+    """Mock driver not implementing SupportsArrowResults protocol."""
+
+    def execute(self, sql: Any) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        pytest.param(MockDriverWithArrow(), True, id="supports_arrow"),
+        pytest.param(MockDriverWithoutArrow(), False, id="missing_arrow_method"),
+        pytest.param(None, False, id="none"),
+        pytest.param("string", False, id="string"),
+        pytest.param(42, False, id="integer"),
+        pytest.param([1, 2, 3], False, id="list"),
+        pytest.param({"key": "value"}, False, id="dict"),
+    ],
+)
+def test_supports_arrow_results(target: Any, expected: bool) -> None:
+    """Validate supports_arrow_results against protocol-compliant and non-compliant objects."""
+    assert supports_arrow_results(target) is expected
 
 
 def test_typing_module_supported_schema_model_includes_mapping() -> None:
