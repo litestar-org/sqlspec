@@ -432,8 +432,12 @@ def test_to_statement_checks_unsupported_locking(dialect: str) -> None:
 def test_to_statement_translates_conflict_without_mutating_builder() -> None:
     from sqlspec.core import StatementConfig
 
-    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(
-        name=exp.column("name", table="excluded")
+    query = (
+        sql
+        .insert("users")
+        .values(id=1, name="John")
+        .on_conflict("id")
+        .do_update(name=exp.column("name", table="excluded"))
     )
     original = query.build(dialect="postgres").sql
     statement = query.to_statement(StatementConfig(dialect="mysql"))
@@ -454,4 +458,13 @@ def test_to_statement_rejects_unsupported_conflict() -> None:
 def test_mysql_do_nothing_requires_known_column() -> None:
     query = sql.insert("users").values(1).on_conflict().do_nothing()
     with pytest.raises(SQLBuilderError, match="requires a conflict column"):
+        query.build(dialect="mysql")
+
+
+@pytest.mark.parametrize("argument", ["where", "index_predicate", "constraint"])
+def test_mysql_rejects_conflict_semantics_it_cannot_preserve(argument: str) -> None:
+    query = sql.insert("users").values(id=1).on_conflict("id").do_update(id=2)
+    conflict = query.get_insert_expression().args["conflict"]
+    conflict.set(argument, exp.to_identifier("restricted"))
+    with pytest.raises(SQLBuilderError, match="cannot preserve"):
         query.build(dialect="mysql")

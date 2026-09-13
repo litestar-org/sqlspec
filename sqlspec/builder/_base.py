@@ -635,9 +635,7 @@ class QueryBuilder:
             err_msg = f"Error generating SQL from expression: {e!s}"
             self._raise_builder_error(err_msg, e)
 
-        return BuiltQuery(
-            sql=sql_string, parameters=self._parameters.copy(), dialect=target_dialect
-        )
+        return BuiltQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=target_dialect)
 
     def _build_dialect(self, dialect: DialectType = None) -> str | None:
         resolved = dialect or self.dialect
@@ -672,6 +670,8 @@ class QueryBuilder:
         for conflict in expression.find_all(exp.OnConflict):
             if conflict.args.get("duplicate"):
                 continue
+            if any(conflict.args.get(key) for key in ("where", "index_predicate", "constraint")):
+                self._raise_builder_error("MySQL cannot preserve ON CONFLICT predicates or named constraints.")
             assignments = conflict.args.get("expressions")
             if str(conflict.args.get("action", "")).upper() == "DO NOTHING":
                 keys = conflict.args.get("conflict_keys")
