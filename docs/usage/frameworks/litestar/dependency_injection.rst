@@ -86,18 +86,84 @@ sync DuckDB for ETL operations:
        )
    )
 
+   from typing import Any
+
    @get("/report")
-   async def report(db: AsyncpgDriver, etl_db: DuckDBDriver) -> dict:
+   async def report(db: AsyncpgDriver, etl_db: DuckDBDriver) -> dict[str, Any]:
        # Async query to primary PostgreSQL
        users = await db.select("SELECT * FROM users")
        # Sync query to DuckDB ETL database
        metrics = etl_db.select("SELECT * FROM analytics")
-       return {"users": users.all(), "metrics": metrics.all()}
+       return {"users": users, "metrics": metrics}
 
    app = Litestar(
        route_handlers=[report],
        plugins=[SQLSpecPlugin(sqlspec=sqlspec)]  # Single plugin handles all configs
    )
+
+Bringing Your Own DI
+--------------------
+
+Applications that use another dependency injection container can turn off the plugin's
+dependency providers and per-request commit and close handling with ``disable_di`` and still
+let the plugin create the pool on startup, store it in application state under
+``pool_key``, and close it on shutdown with ``manage_lifespan``. Both settings live in each
+config's ``extension_config["litestar"]`` and apply to that config only; ``disable_di``
+defaults to ``False`` and ``manage_lifespan`` defaults to ``not disable_di``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Settings
+     - Dependencies
+     - Pool lifespan
+   * - defaults
+     - registered
+     - managed
+   * - ``disable_di=True``
+     - not registered
+     - not managed
+   * - ``disable_di=True, manage_lifespan=True``
+     - not registered
+     - managed
+   * - ``manage_lifespan=False``
+     - registered
+     - not managed
+
+With ``disable_di=True`` and ``manage_lifespan=True``, your own providers open sessions
+from the pool the plugin started:
+
+.. code-block:: python
+
+   from collections.abc import AsyncIterator
+
+   from litestar import Litestar
+   from sqlspec import SQLSpec
+   from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+   from sqlspec.extensions.litestar import SQLSpecPlugin
+
+   sqlspec = SQLSpec()
+   config = sqlspec.add_config(
+       AsyncpgConfig(
+           connection_config={"dsn": "postgresql://app:secret@localhost:5432/app"},
+           extension_config={"litestar": {"disable_di": True, "manage_lifespan": True}},
+       )
+   )
+
+   async def provide_session() -> AsyncIterator[AsyncpgDriver]:
+       async with config.provide_session() as session:
+           yield session
+
+   app = Litestar(route_handlers=[], plugins=[SQLSpecPlugin(sqlspec=sqlspec)])
+
+Register ``provide_session`` with your container; the pool is open for the lifetime of the
+application and closed when it shuts down.
+
+.. note::
+
+   ``SQLSpecPlugin.provide_request_session*()`` and ``provide_request_connection*()`` rely
+   on the plugin's dependency providers and per-request close handling, so they do not work
+   with ``disable_di=True``. Open sessions with the context-managed ``config.provide_session()`` instead.
 
 Config Lookup Outside App Construction
 --------------------------------------
@@ -206,7 +272,7 @@ This pattern enables querying PostgreSQL tables directly from DuckDB SQL:
 .. code-block:: python
 
    @get("/sync-users")
-   def sync_users(etl_db: DuckDBDriver) -> dict:
+   def sync_users(etl_db: DuckDBDriver) -> dict[str, int]:
        # Query PostgreSQL via DuckDB's postgres extension
        result = etl_db.execute(
            "INSERT INTO local_users SELECT * FROM pg.users RETURNING *"

@@ -90,9 +90,11 @@ Using filters in a Litestar handler:
 
 .. code-block:: python
 
-    from litestar import Litestar, get
+    from litestar import get
+    from sqlspec import sql
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
     from sqlspec.core import FilterTypes
-    from sqlspec.extensions.litestar.providers import FilterConfig, create_filter_dependencies
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
@@ -161,21 +163,30 @@ base classes ``SQLSpecAsyncService`` and ``SQLSpecSyncService`` in ``sqlspec.ser
 
 .. code-block:: python
 
+    from dataclasses import dataclass
+    from sqlspec import sql
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
+    from sqlspec.core import OffsetPagination, StatementFilter
     from sqlspec.service import SQLSpecAsyncService
-    from sqlspec.core.filters import LimitOffsetFilter
 
-    class UserService(SQLSpecAsyncService):
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    class UserService(SQLSpecAsyncService[AsyncpgDriver]):
         async def list_users(self, filters: list[StatementFilter]) -> OffsetPagination[User]:
             query = sql.select("*").from_("users")
             return await self.paginate(query, *filters, schema_type=User)
 
-    async def some_handler(db_session: AsyncDriver, filters: list[StatementFilter]):
+    async def some_handler(db_session: AsyncpgDriver, filters: list[StatementFilter]) -> OffsetPagination[User]:
         service = UserService(db_session)
-        page = await service.list_users(filters)
-        return page  # Returns OffsetPagination container
+        return await service.list_users(filters)
 
 Related Guides
 --------------
 
 - :doc:`drivers_and_querying` for ``select_with_total`` and query methods.
 - :doc:`query_builder` for building queries with ``.where()`` clauses.
+- :doc:`/recipes/service_layer` for building robust application service layers.
+- :doc:`/reference/core/filters` for the core filter classes and parameters API.

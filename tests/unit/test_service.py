@@ -18,6 +18,8 @@ pytestmark = pytest.mark.anyio
 
 async def test_async_begin_transaction_commits_on_success() -> None:
     session = AsyncMock()
+    session._transaction_depth = 0
+    session._connection_in_transaction = MagicMock(return_value=False)
     service: SQLSpecAsyncService = SQLSpecAsyncService(session)
 
     async with service.begin_transaction() as bound:
@@ -30,6 +32,8 @@ async def test_async_begin_transaction_commits_on_success() -> None:
 
 async def test_async_begin_transaction_rolls_back_and_propagates() -> None:
     session = AsyncMock()
+    session._transaction_depth = 0
+    session._connection_in_transaction = MagicMock(return_value=False)
     service: SQLSpecAsyncService = SQLSpecAsyncService(session)
 
     with pytest.raises(ValueError, match="boom"):
@@ -43,6 +47,8 @@ async def test_async_begin_transaction_rolls_back_and_propagates() -> None:
 
 def test_sync_begin_transaction_commits_on_success() -> None:
     session = MagicMock()
+    session._transaction_depth = 0
+    session._connection_in_transaction.return_value = False
     service: SQLSpecSyncService = SQLSpecSyncService(session)
 
     with service.begin_transaction() as bound:
@@ -55,6 +61,8 @@ def test_sync_begin_transaction_commits_on_success() -> None:
 
 def test_sync_begin_transaction_rolls_back_and_propagates() -> None:
     session = MagicMock()
+    session._transaction_depth = 0
+    session._connection_in_transaction.return_value = False
     service: SQLSpecSyncService = SQLSpecSyncService(session)
 
     with pytest.raises(ValueError, match="boom"):

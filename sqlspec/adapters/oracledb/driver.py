@@ -69,6 +69,7 @@ from sqlspec.driver import (
     describe_stack_statement,
     hash_stack_operations,
 )
+from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -526,6 +527,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
         finally:
             self._transaction_active = False
+
+    def release_savepoint(self, name: str) -> None:
+        """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
+        validate_savepoint_name(name)
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set Oracle CURRENT_SCHEMA for migration SQL."""
@@ -1241,6 +1246,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
         finally:
             self._transaction_active = False
+
+    async def release_savepoint(self, name: str) -> None:
+        """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
+        validate_savepoint_name(name)
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set Oracle CURRENT_SCHEMA for migration SQL."""

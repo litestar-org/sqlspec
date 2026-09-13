@@ -4,6 +4,10 @@ import contextlib
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlsplit
+
+from sqlglot import Dialect, exp, parse
+from sqlglot.errors import ParseError
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -28,6 +32,8 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from sqlspec.storage import ResolvedStorageTarget, StorageDestination, SyncStoragePipeline
+
 
 __all__ = (
     "apply_driver_features",
@@ -45,6 +51,289 @@ __all__ = (
 
 _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+
+
+def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:
+    """Wrap one compiled query in COPY with a separately bound filename."""
+    if file_format not in {"parquet", "csv"}:
+        return None
+    try:
+        statements = parse(sql, read="duckdb")
+    except ParseError:
+        return None
+    if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+        return None
+    options = [exp.CopyParameter(this=exp.Var(this="FORMAT"), expression=exp.Var(this=file_format.upper()))]
+    if file_format == "csv":
+        options.append(exp.CopyParameter(this=exp.Var(this="HEADER"), expression=exp.Boolean(this=True)))
+    return exp.Copy(this=exp.Subquery(this=statements[0]), kind=False, files=[exp.Placeholder()], params=options).sql(
+        dialect="duckdb"
+    )
+
+
+def _build_storage_read_sql(table: str, uri: str, file_format: str) -> str | None:
+    """Build a single-object reader with a validated, quoted target identifier."""
+    if file_format != "parquet" or any(char in uri for char in "*?[]"):
+        return None
+    try:
+        targets = Dialect.get_or_raise("duckdb").parse_into(exp.Table, table)
+    except ParseError as exc:
+        msg = "Native storage import requires one qualified table identifier."
+        raise ValueError(msg) from exc
+    if (
+        len(targets) != 1
+        or not isinstance(targets[0], exp.Table)
+        or any(key not in {"this", "db", "catalog"} and value for key, value in targets[0].args.items())
+        or any(not isinstance(part, exp.Identifier) for part in targets[0].parts)
+    ):
+        msg = "Native storage import requires one qualified table identifier."
+        raise ValueError(msg)
+    target = targets[0]
+    for part in target.parts:
+        part.set("quoted", True)
+    reader = exp.Anonymous(
+        this="read_parquet",
+        expressions=[
+            exp.Placeholder(),
+            exp.Kwarg(this=exp.Var(this="hive_partitioning"), expression=exp.Boolean(this=False)),
+        ],
+    )
+    return exp.Insert(this=target, expression=exp.select("*").from_(reader)).sql(dialect="duckdb")
+
+
+def _resolve_native_storage_target(
+    pipeline: "SyncStoragePipeline",
+    destination: "StorageDestination",
+    driver_features: "Mapping[str, Any]",
+    *,
+    write: bool,
+) -> "ResolvedStorageTarget | None":
+    """Resolve explicit provider aliases without changing the native address.
+
+    Azure destinations resolve with the account name taken from the successful
+    native secret, and that account name is not treated as a backend option
+    because the provisioned secret owns the credentials.
+    """
+    from sqlspec.storage import ResolvedStorageTarget
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    protocols = driver_features.get("_duckdb_storage_protocols", ())
+    if not driver_features.get("_duckdb_storage_extensions") and not protocols:
+        return None
+    original = str(destination)
+    if "?" in original or "#" in original:
+        return None
+    scheme, separator, suffix = original.partition("://")
+    if separator and scheme != "alias" and scheme in protocols:
+        return ResolvedStorageTarget(original, scheme)
+    if not separator or scheme not in {"alias", "s3", "gs", "gcs", "r2", "az", "azure", "abfss", "http", "https"}:
+        return None
+    normalized = {"gcs": "gs", "r2": "s3"}.get(scheme)
+    resolved_input = f"{normalized}://{suffix}" if normalized else original
+    resolver_options: dict[str, Any] = {}
+    if scheme in {"az", "azure", "abfss"}:
+        for secret in driver_features.get("_duckdb_storage_secrets", ()):
+            if secret.get("secret_type", "").lower() != "azure" or (
+                secret.get("scope") and not original.startswith(secret["scope"])
+            ):
+                continue
+            values = {key.lower(): value for key, value in secret.get("value", {}).items()}
+            account = values.get("account_name")
+            if not account:
+                connection_parts = dict(
+                    item.split("=", 1) for item in str(values.get("connection_string", "")).split(";") if "=" in item
+                )
+                account = connection_parts.get("AccountName")
+            if account:
+                resolver_options["account_name"] = account
+                break
+        if not resolver_options:
+            return None
+    target = pipeline.resolve_destination(resolved_input, storage_options=resolver_options or None)
+    backend_key = suffix.partition("/")[0].strip() if scheme == "alias" else resolved_input
+    backend = pipeline.registry.get(backend_key, **resolver_options)
+    options: Mapping[str, Any] | None = None
+    if type(backend) is ObStoreBackend:
+        options = backend.store_options
+    elif type(backend) is FSSpecBackend:
+        options = backend.fs.storage_options
+    if resolver_options:
+        options = {}
+    if normalized:
+        target = ResolvedStorageTarget(original, scheme)
+    if "?" in target.uri or "#" in target.uri:
+        return None
+    if target.protocol in protocols and options is not None and not options:
+        return target
+    if not _native_storage_eligible(target.uri, target.protocol, options, driver_features, write=write):
+        return None
+    return target
+
+
+def _native_storage_eligible(
+    uri: str,
+    protocol: str,
+    backend_options: "Mapping[str, Any] | None",
+    driver_features: "Mapping[str, Any]",
+    *,
+    write: bool,
+) -> bool:
+    """Require completed provisioning and equivalent, understood backend settings.
+
+    Unknown credentials or options keep the existing storage path. This check
+    performs no SQL or I/O and never classifies an execution error for retry.
+    """
+    provider_type = {
+        "s3": "s3",
+        "gs": "gcs",
+        "gcs": "gcs",
+        "r2": "r2",
+        "az": "azure",
+        "azure": "azure",
+        "abfss": "azure",
+    }.get(protocol)
+    extension = "azure" if provider_type == "azure" else "httpfs"
+    if backend_options is None or extension not in driver_features.get("_duckdb_storage_extensions", ()):
+        return False
+    if protocol in {"http", "https"}:
+        return not write and not backend_options
+    if provider_type is None:
+        return False
+
+    secrets = driver_features.get("_duckdb_storage_secrets", ())
+    matching = [
+        secret
+        for secret in secrets
+        if secret.get("secret_type", "").lower() == provider_type
+        and (not secret.get("scope") or uri.startswith(secret["scope"]))
+    ]
+    if not matching:
+        return False
+    matching.sort(key=lambda secret: len(secret.get("scope") or ""), reverse=True)
+    selected = matching[0]
+    if len(matching) > 1 and len(selected.get("scope") or "") == len(matching[1].get("scope") or ""):
+        return False
+    provider = selected.get("provider", "config").lower()
+    native = {key.lower(): value for key, value in selected.get("value", {}).items()}
+    if not backend_options:
+        return provider in {"config", "credential_chain", "managed_identity", "service_principal"}
+    if provider != "config":
+        return False
+    if provider_type == "azure":
+        return _azure_storage_options_match(backend_options, native)
+    return _s3_storage_options_match(backend_options, native, provider_type)
+
+
+def _s3_storage_options_match(
+    backend_options: "Mapping[str, Any]", native: "Mapping[str, Any]", provider_type: str
+) -> bool:
+    """Compare static credentials and endpoint options for S3-compatible providers."""
+    if native.keys() - {
+        "key_id",
+        "secret",
+        "session_token",
+        "region",
+        "endpoint",
+        "url_style",
+        "use_ssl",
+        "account_id",
+    }:
+        return False
+
+    options: dict[str, Any] = {}
+    for key, value in backend_options.items():
+        normalized = key.removeprefix("aws_")
+        if normalized in options and options[normalized] != value:
+            return False
+        options[normalized] = value
+    client = options.pop("client_options", {})
+    if not isinstance(client, dict) or client.keys() - {"allow_http"}:
+        return False
+    if "allow_http" in client:
+        if "allow_http" in options and options["allow_http"] != client["allow_http"]:
+            return False
+        options["allow_http"] = client["allow_http"]
+    if options.keys() - {
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "region",
+        "endpoint",
+        "virtual_hosted_style_request",
+        "allow_http",
+    }:
+        return False
+    if not options.get("access_key_id") or not options.get("secret_access_key"):
+        return False
+    if any(
+        options.get(source) != native.get(target)
+        for source, target in (
+            ("access_key_id", "key_id"),
+            ("secret_access_key", "secret"),
+            ("session_token", "session_token"),
+        )
+    ):
+        return False
+    if options.get("region", "us-east-1") != native.get("region", "us-east-1"):
+        return False
+    style = "vhost" if options.get("virtual_hosted_style_request", False) else "path"
+    if native.get("url_style", "vhost" if provider_type == "s3" else "path") != style:
+        return False
+    native_endpoint = native.get("endpoint")
+    if native_endpoint is None and provider_type == "gcs":
+        native_endpoint = "storage.googleapis.com"
+    elif native_endpoint is None and provider_type == "r2" and native.get("account_id"):
+        native_endpoint = f"{native['account_id']}.r2.cloudflarestorage.com"
+    endpoint = options.get("endpoint")
+    if endpoint is None:
+        return not native_endpoint and native.get("use_ssl", True) is True
+    if not isinstance(endpoint, str) or not endpoint:
+        return False
+    parsed = urlsplit(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path not in {"", "/"}:
+        return False
+    if parsed.query or parsed.fragment or parsed.username or parsed.password:
+        return False
+    if native_endpoint != parsed.netloc or native.get("use_ssl", True) != (parsed.scheme == "https"):
+        return False
+    return not (parsed.scheme == "http" and options.get("allow_http") is not True)
+
+
+def _azure_storage_options_match(options: "Mapping[str, Any]", native: "Mapping[str, Any]") -> bool:
+    """Recognize matching standard Azure account keys or a connection string."""
+    if set(options) == {"connection_string"}:
+        return bool(options["connection_string"] == native.get("connection_string"))
+    normalized: dict[str, Any] = {}
+    for key, value in options.items():
+        key = key.removeprefix("azure_storage_").removeprefix("azure_")
+        if key in normalized and normalized[key] != value:
+            return False
+        normalized[key] = value
+    if normalized.keys() - {"account_name", "access_key"}:
+        return False
+    connection_string = native.get("connection_string")
+    if not isinstance(connection_string, str) or native.keys() - {"connection_string", "account_name"}:
+        return False
+    parts: dict[str, str] = {}
+    for item in connection_string.split(";"):
+        if not item:
+            continue
+        key, separator, value = item.partition("=")
+        if not separator or key in parts:
+            return False
+        parts[key] = value
+    if parts.keys() - {"DefaultEndpointsProtocol", "AccountName", "AccountKey", "EndpointSuffix"}:
+        return False
+    return (
+        parts.get("DefaultEndpointsProtocol", "https") == "https"
+        and parts.get("EndpointSuffix", "core.windows.net") == "core.windows.net"
+        and bool(normalized.get("account_name"))
+        and bool(normalized.get("access_key"))
+        and normalized.get("account_name") == parts.get("AccountName")
+        and normalized.get("access_key") == parts.get("AccountKey")
+        and native.get("account_name", parts.get("AccountName")) == parts.get("AccountName")
+    )
 
 
 def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":

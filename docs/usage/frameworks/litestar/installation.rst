@@ -121,9 +121,9 @@ Install SQLSpec with the Litestar extra and a database adapter.
 Requirements
 ------------
 
-- **Python 3.9+**
-- **Litestar 2.0+**
-- A compatible async database adapter
+- **Python 3.10+**
+- **Litestar 2.23+**
+- A compatible database adapter (async recommended for web request concurrency)
 
 Next Steps
 ----------

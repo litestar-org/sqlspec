@@ -48,7 +48,7 @@ def test_spanner_native_types_round_trip_through_read_session(spanner_session: S
 
 def test_spanner_date_parameter_allows_emulator_datetime_return(spanner_session: SpannerSyncDriver) -> None:
     """Spanner emulator may return DATE parameters as datetime-like objects."""
-    result = spanner_session.select_value("SELECT @value", {"value": date(2024, 12, 25)})
+    result = spanner_session.select_value("SELECT @value", value=date(2024, 12, 25))
 
     assert result.year == 2024
     assert result.month == 12
@@ -64,18 +64,21 @@ def test_spanner_null_parameters_round_trip_through_write_and_read_sessions(
     with spanner_config.provide_write_session() as session:
         result = session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "Null Test", "email": None, "age": None},
+            id=user_id,
+            name="Null Test",
+            email=None,
+            age=None,
         )
         assert result.rows_affected == 1
 
     with spanner_config.provide_read_session() as session:
-        row = session.select_one(f"SELECT name, email, age FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one(f"SELECT name, email, age FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row["name"] == "Null Test"
         assert row["email"] is None
         assert row["age"] is None
 
     with spanner_config.provide_write_session() as session:
-        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
 
 
 def test_spanner_array_parameter_with_unnest_uses_read_and_write_sessions(
@@ -88,19 +91,22 @@ def test_spanner_array_parameter_with_unnest_uses_read_and_write_sessions(
         for index, user_id in enumerate(user_ids):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": user_id, "name": f"Array Test {index}", "email": f"arr{index}@example.com", "age": 20},
+                id=user_id,
+                name=f"Array Test {index}",
+                email=f"arr{index}@example.com",
+                age=20,
             )
 
     with spanner_config.provide_read_session() as session:
         rows = session.select(
-            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name", {"ids": user_ids}
+            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name", ids=user_ids
         )
 
     assert [row["name"] for row in rows] == ["Array Test 0", "Array Test 1", "Array Test 2"]
 
     with spanner_config.provide_write_session() as session:
         for user_id in user_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
 
 
 def test_spanner_parameterized_limit_uses_native_parameter_syntax(
@@ -113,17 +119,20 @@ def test_spanner_parameterized_limit_uses_native_parameter_syntax(
         for index, user_id in enumerate(user_ids):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": user_id, "name": f"Limit Test {index}", "email": f"limit{index}@example.com", "age": index},
+                id=user_id,
+                name=f"Limit Test {index}",
+                email=f"limit{index}@example.com",
+                age=index,
             )
 
     with spanner_config.provide_read_session() as session:
         rows = session.select(
             f"SELECT name FROM {test_users_table} WHERE name LIKE 'Limit Test%' ORDER BY age LIMIT @row_limit",
-            {"row_limit": 3},
+            row_limit=3,
         )
 
     assert [row["name"] for row in rows] == ["Limit Test 0", "Limit Test 1", "Limit Test 2"]
 
     with spanner_config.provide_write_session() as session:
         for user_id in user_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)

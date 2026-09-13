@@ -57,7 +57,7 @@ def test_starlette_manual_commit_mode() -> None:
         async def create_table(request: Request) -> Response:
             session = db_ext.get_session(request)
             await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Alice"})
+            await session.execute("INSERT INTO test (name) VALUES (:name)", name="Alice")
             connection = db_ext.get_connection(request)
             await connection.commit()
             return JSONResponse({"created": True})
@@ -94,7 +94,7 @@ def test_starlette_autocommit_mode() -> None:
         async def create_table(request: Request) -> Response:
             session = db_ext.get_session(request)
             await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Bob"})
+            await session.execute("INSERT INTO test (name) VALUES (:name)", name="Bob")
             return JSONResponse({"created": True})
 
         async def get_data(request: Request) -> Response:
@@ -129,7 +129,7 @@ def test_starlette_autocommit_rolls_back_on_error() -> None:
         async def create_table(request: Request) -> Response:
             session = db_ext.get_session(request)
             await session.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await session.execute("INSERT INTO test (name) VALUES (:name)", {"name": "Charlie"})
+            await session.execute("INSERT INTO test (name) VALUES (:name)", name="Charlie")
             return JSONResponse({"error": "Failed"}, status_code=500)
 
         async def get_data(request: Request) -> Response:

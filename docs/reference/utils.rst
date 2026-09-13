@@ -3,9 +3,11 @@ Utility Functions
 =================
 
 SQLSpec exposes small, reusable helpers for runtime type narrowing, configuration,
-identifier generation, optional dependency loading, sync/async interoperation,
-deprecation, and fixture files. These modules are supported public APIs; import
-helpers from their defining ``sqlspec.utils`` module.
+identifier generation, text and identifier formatting, serialization, schema
+conversion, correlation tracking, optional dependency loading, sync/async
+interoperation, deprecation, and fixture files. The modules and members
+documented on this page are supported public APIs; import helpers from their
+defining ``sqlspec.utils`` module.
 
 Type Guards
 ===========
@@ -26,6 +28,38 @@ UUIDs and Compact Identifiers
 =============================
 
 .. automodule:: sqlspec.utils.uuids
+   :members:
+
+The most common generators, ``uuid4``, ``uuid6``, ``uuid7``, and ``nanoid``, are
+also importable from the top-level ``sqlspec`` package.
+
+Text and Identifiers
+====================
+
+.. automodule:: sqlspec.utils.text
+   :members:
+
+Serialization
+=============
+
+.. automodule:: sqlspec.utils.serializers
+   :members:
+
+.. py:data:: DEFAULT_TYPE_ENCODERS
+
+   Default mapping of Python types to JSON encoder functions; ``type_encoders``
+   passed to a serializer are merged over it.
+
+Schema Conversion
+=================
+
+.. automodule:: sqlspec.utils.schema
+   :members: to_schema, to_value_type, transform_dict_keys
+
+Correlation Tracking
+====================
+
+.. automodule:: sqlspec.utils.correlation
    :members:
 
 Module and Optional Dependency Loading
@@ -54,4 +88,4 @@ Fixture Files
 =============
 
 .. automodule:: sqlspec.utils.fixtures
-   :members: open_fixture_sync, open_fixture_async, write_fixture_sync, write_fixture_async
+   :members: open_fixture_sync, open_fixture_async, write_fixture_sync, write_fixture_async, load_table_fixtures_sync, load_table_fixtures_async, export_table_fixtures_sync, export_table_fixtures_async

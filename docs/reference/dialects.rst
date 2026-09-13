@@ -66,19 +66,22 @@ Extends PGVector with ParadeDB pg_search operators:
    * - Operator
      - Description
    * - ``@@@``
-     - BM25 full-text search
+     - BM25 full-text search / complex query expressions
    * - ``&&&``
-     - Boolean AND search
+     - Conjunction match (all tokenized terms must match)
    * - ``|||``
-     - Boolean OR search
+     - Disjunction match (any tokenized term matches)
    * - ``===``
-     - Exact term match
+     - Exact term match (no tokenization of right-hand side)
    * - ``###``
-     - Score/rank retrieval
+     - Exact phrase match (token order and position enforced)
    * - ``##``
-     - Snippet/highlight retrieval
+     - Proximity match in any order (``'a' ## n ## 'b'``)
    * - ``##>``
-     - Snippet/highlight with options
+     - Ordered proximity match (left term must appear first)
+
+Scoring and snippets in ParadeDB are standard SQL functions (``pdb.score()``,
+``pdb.snippet()``), so they require no custom operator syntax.
 
 Spanner
 =======

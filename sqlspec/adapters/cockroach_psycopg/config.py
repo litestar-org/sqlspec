@@ -51,6 +51,17 @@ def _validate_driver_features(driver_features: "CockroachPsycopgDriverFeatures |
         raise ImproperConfigurationError(msg)
 
 
+def _validate_native_storage_autocommit(connection_config: "dict[str, Any]", driver_features: "dict[str, Any]") -> None:
+    if not driver_features.get("enable_native_storage"):
+        return
+    autocommit = connection_config.get("autocommit")
+    if autocommit is None:
+        autocommit = connection_config.get("kwargs", {}).get("autocommit")
+    if autocommit is not True:
+        msg = "enable_native_storage requires connection_config autocommit=True."
+        raise ImproperConfigurationError(msg)
+
+
 class CockroachPsycopgConnectionConfig(TypedDict):
     """CockroachDB connection parameters."""
 
@@ -97,15 +108,47 @@ class CockroachPsycopgPoolConfig(CockroachPsycopgConnectionConfig):
     kwargs: NotRequired["dict[str, Any]"]
 
 
+class _NativeStorageCSVOptions(TypedDict):
+    """Explicit CSV conventions; no header or NULL marker is inferred."""
+
+    nullas: NotRequired[str]
+    nullif: NotRequired[str]
+    skip: NotRequired[int]
+
+
+def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
+    if "native_storage_csv_options" not in driver_features:
+        return
+    options = driver_features["native_storage_csv_options"]
+    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
+        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
+        raise ImproperConfigurationError(msg)
+    for key in ("nullas", "nullif"):
+        if key in options and not isinstance(options[key], str):
+            msg = "native_storage_csv_options nullas and nullif must be strings."
+            raise ImproperConfigurationError(msg)
+    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
+        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
+        raise ImproperConfigurationError(msg)
+    driver_features["native_storage_csv_options"] = dict(options)
+
+
 class CockroachPsycopgDriverFeatures(TypedDict):
     """CockroachDB driver feature configuration.
 
+    enable_native_storage: Opt in to server-side storage operations. Exports create
+     generated files under a prefix; imports temporarily take the table offline.
+    native_storage_csv_options: Explicit nullas/nullif markers and skip count.
+     Export is headerless; native CSV import requires an explicit skip count.
+     Markers must not occur as literal data. No NULL marker is inferred.
     on_connection_create: Callback executed when a connection is acquired from pool.
      For sync: Callable[[CockroachSyncConnection], None]
      For async: Callable[[CockroachAsyncConnection], Awaitable[None]]
      Called after internal setup.
     """
 
+    enable_native_storage: NotRequired[bool]
+    native_storage_csv_options: NotRequired[_NativeStorageCSVOptions]
     enable_auto_retry: NotRequired[bool]
     max_retries: NotRequired[int]
     retry_delay_base_ms: NotRequired[float]
@@ -210,6 +253,9 @@ class CockroachPsycopgSyncConfig(
         _validate_driver_features(driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        driver_features.setdefault("enable_native_storage", False)
+        _validate_native_storage_options(driver_features)
+        _validate_native_storage_autocommit(connection_config, driver_features)
         driver_features.setdefault("enable_auto_retry", True)
 
         # Extract user connection hook before storing driver_features
@@ -419,6 +465,9 @@ class CockroachPsycopgAsyncConfig(
         _validate_driver_features(driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
+        driver_features.setdefault("enable_native_storage", False)
+        _validate_native_storage_options(driver_features)
+        _validate_native_storage_autocommit(connection_config, driver_features)
         driver_features.setdefault("enable_auto_retry", True)
 
         # Extract user connection hook before storing driver_features

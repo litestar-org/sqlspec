@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.62.2"
+version = "0.63.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -48,7 +48,7 @@ duckdb = ["duckdb", "pytz"]
 fastapi = ["fastapi"]
 flask = ["flask"]
 fsspec = ["fsspec"]
-litestar = ["litestar>=2.22.0"]
+litestar = ["litestar>=2.23.0"]
 msgspec = ["msgspec"]
 mssql-python = ["mssql-python>=1.7"]
 mypyc = ["sqlglot[c]>=30.13.0"]
@@ -330,7 +330,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.62.2"
+current_version = "0.63.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

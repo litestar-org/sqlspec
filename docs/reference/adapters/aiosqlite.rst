@@ -12,6 +12,42 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqliteConnectionParams
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqlitePoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqliteDriverFeatures
+   :members:
+   :show-inheritance:
+
+User-Defined Functions and Extensions
+=====================================
+
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqliteFunctionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqliteCollationConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqliteAggregateConfig
+   :members:
+   :show-inheritance:
+
 Driver
 ======
 
@@ -22,7 +58,7 @@ Driver
 Connection Pool
 ===============
 
-.. autoclass:: sqlspec.adapters.aiosqlite.pool.AiosqliteConnectionPool
+.. autoclass:: sqlspec.adapters.aiosqlite.AiosqliteConnectionPool
    :members:
    :show-inheritance:
 

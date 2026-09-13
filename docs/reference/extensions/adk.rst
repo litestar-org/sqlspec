@@ -89,3 +89,51 @@ Configuration
 .. autoclass:: sqlspec.extensions.adk.ADKConfig
    :members:
    :show-inheritance:
+
+Session Listing & Ordering
+==========================
+
+.. autodata:: sqlspec.extensions.adk.SessionOrderBy
+
+.. autofunction:: sqlspec.extensions.adk.normalize_session_list_options
+
+Retention Helpers
+=================
+
+.. autoclass:: sqlspec.extensions.adk.PruneReport
+   :members:
+   :show-inheritance:
+
+.. autofunction:: sqlspec.extensions.adk.prune_sessions
+
+.. autofunction:: sqlspec.extensions.adk.prune_sessions_sync
+
+.. autofunction:: sqlspec.extensions.adk.prune_events
+
+.. autofunction:: sqlspec.extensions.adk.prune_events_sync
+
+.. autofunction:: sqlspec.extensions.adk.prune_memory
+
+.. autofunction:: sqlspec.extensions.adk.prune_memory_sync
+
+.. autofunction:: sqlspec.extensions.adk.prune_user_state
+
+.. autofunction:: sqlspec.extensions.adk.prune_user_state_sync
+
+.. autofunction:: sqlspec.extensions.adk.prune_artifacts
+
+.. autofunction:: sqlspec.extensions.adk.prune_artifacts_sync
+
+Session Converters
+==================
+
+.. automodule:: sqlspec.extensions.adk.converters
+   :members:
+   :undoc-members:
+
+Memory Converters
+=================
+
+.. automodule:: sqlspec.extensions.adk.memory.converters
+   :members:
+   :undoc-members:

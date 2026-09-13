@@ -40,14 +40,24 @@ Async Configuration
    :members:
    :show-inheritance:
 
-Shared Configuration
-====================
+Connection Parameters
+=====================
 
-.. autoclass:: sqlspec.adapters.psycopg.config.PsycopgConnectionParams
+.. autoclass:: sqlspec.adapters.psycopg.PsycopgConnectionParams
    :members:
    :show-inheritance:
 
-.. autoclass:: sqlspec.adapters.psycopg.config.PsycopgPoolParams
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.psycopg.PsycopgPoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.psycopg.PsycopgDriverFeatures
    :members:
    :show-inheritance:
 

@@ -121,6 +121,38 @@ def test_postgres_data_dictionary_normalizes_identifier_binds() -> None:
     assert kwargs["table_name"] == "widgets"
 
 
+def test_postgres_family_sync_columns_resolve_unqualified_tables_through_search_path() -> None:
+    """PostgreSQL-family column lookups for a table without a schema bind no schema name."""
+    for dictionary_type in (PsycopgSyncDataDictionary, CockroachPsycopgSyncDataDictionary):
+        mock_driver = Mock(spec=SyncDriverAdapterBase)
+        mock_driver.select.return_value = []
+
+        dictionary_type().get_columns(mock_driver, table='"MixedItems"')
+
+        _, kwargs = mock_driver.select.call_args
+        assert kwargs["schema_name"] is None
+        assert kwargs["table_name"] == "MixedItems"
+
+
+async def test_postgres_family_async_columns_resolve_unqualified_tables_through_search_path() -> None:
+    """Async PostgreSQL-family column lookups for a table without a schema bind no schema name."""
+    for dictionary_type in (
+        AsyncpgDataDictionary,
+        PsycopgAsyncDataDictionary,
+        PsqlpyDataDictionary,
+        CockroachAsyncpgDataDictionary,
+        CockroachPsycopgAsyncDataDictionary,
+    ):
+        mock_driver = Mock()
+        mock_driver.select = AsyncMock(return_value=[])
+
+        await dictionary_type().get_columns(mock_driver, table="widgets")
+
+        _, kwargs = mock_driver.select.call_args
+        assert kwargs["schema_name"] is None
+        assert kwargs["table_name"] == "widgets"
+
+
 def test_oracle_data_dictionary_normalizes_lowercase_schema_and_preserves_mixed_case_table() -> None:
     """Oracle metadata lookups should normalize lowercase users without flattening mixed-case names."""
     mock_driver = Mock(spec=SyncDriverAdapterBase)

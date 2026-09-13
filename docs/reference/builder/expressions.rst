@@ -72,14 +72,14 @@ Base Classes
 Parsing Utilities
 =================
 
-.. autofunction:: sqlspec.builder.extract_expression
+.. autofunction:: extract_expression
 
-.. autofunction:: sqlspec.builder.parse_column_expression
+.. autofunction:: parse_column_expression
 
-.. autofunction:: sqlspec.builder.parse_condition_expression
+.. autofunction:: parse_condition_expression
 
-.. autofunction:: sqlspec.builder.parse_order_expression
+.. autofunction:: parse_order_expression
 
-.. autofunction:: sqlspec.builder.parse_table_expression
+.. autofunction:: parse_table_expression
 
-.. autofunction:: sqlspec.builder.to_expression
+.. autofunction:: to_expression

@@ -50,6 +50,7 @@ Every contract is the cross product of three things:
 | `_adk_cases.py` / `adk_behaviors.py` | Google ADK session-store contract cases and behaviors. |
 | `_events_cases.py` / `events_behaviors.py` | Event-queue store and native PostgreSQL LISTEN/NOTIFY contract cases and behaviors. |
 | `_store_cases.py` / `store_behaviors.py` | Litestar session-store contract cases and behaviors. |
+| `transaction_behaviors.py` | Nested transaction block behaviors used by the nested transactions suite. |
 | `_migration_cases.py` / `migration_behaviors.py` | Migration contract cases and behaviors. |
 
 ### Shared test templates
@@ -70,6 +71,7 @@ Every contract is the cross product of three things:
 | `suite_exceptions_contract.py` | Exception translation (gated by `supports_exception_translation`). |
 | `suite_storage_bridge_contract.py` / `suite_storage_bridge_rustfs_contract.py` | Storage bridge round-trips (local and RustFS/S3). |
 | `suite_migrations_contract.py` | Migration apply/rollback (gated by `supports_migrations`). |
+| `suite_nested_transactions_contract.py` | Nested `begin_transaction()` and `transaction()` blocks through savepoints, or a clear error when `supports_savepoints` is off (gated by `supports_transactions`). |
 | `suite_adk_store_contract.py` / `suite_events_queue_contract.py` / `suite_listen_notify_contract.py` / `suite_litestar_store_contract.py` | Extension store contracts (ADK / events queue / native PostgreSQL LISTEN/NOTIFY / Litestar). |
 | `suite_extra_assertions_proof_contract.py` | Proves the extra-assertion registry mechanism end-to-end (`driver_basics:noop`). |
 

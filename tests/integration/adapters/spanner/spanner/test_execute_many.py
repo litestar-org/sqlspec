@@ -33,7 +33,7 @@ def test_execute_many_basic_insert(spanner_config: SpannerSyncConfig, test_users
 
     with spanner_config.provide_session() as session:
         rows = session.select(
-            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name", {"ids": user_ids}
+            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name", ids=user_ids
         )
         assert len(rows) == 5
         names = [r["name"] for r in rows]
@@ -42,7 +42,7 @@ def test_execute_many_basic_insert(spanner_config: SpannerSyncConfig, test_users
 
     with spanner_config.provide_write_session() as session:
         for uid in user_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": uid})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)
 
 
 def test_execute_many_update(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -53,7 +53,10 @@ def test_execute_many_update(spanner_config: SpannerSyncConfig, test_users_table
         for i, uid in enumerate(user_ids):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": uid, "name": f"Original {i}", "email": f"orig{i}@example.com", "age": 30 + i},
+                id=uid,
+                name=f"Original {i}",
+                email=f"orig{i}@example.com",
+                age=30 + i,
             )
 
     update_params = [{"id": uid, "name": f"Updated {i}", "age": 40 + i} for i, uid in enumerate(user_ids)]
@@ -66,7 +69,7 @@ def test_execute_many_update(spanner_config: SpannerSyncConfig, test_users_table
 
     with spanner_config.provide_session() as session:
         rows = session.select(
-            f"SELECT id, name, age FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY age", {"ids": user_ids}
+            f"SELECT id, name, age FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY age", ids=user_ids
         )
         assert len(rows) == 3
         assert rows[0]["name"] == "Updated 0"
@@ -76,7 +79,7 @@ def test_execute_many_update(spanner_config: SpannerSyncConfig, test_users_table
 
     with spanner_config.provide_write_session() as session:
         for uid in user_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": uid})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)
 
 
 def test_execute_many_delete(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -87,7 +90,10 @@ def test_execute_many_delete(spanner_config: SpannerSyncConfig, test_users_table
         for i, uid in enumerate(user_ids):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": uid, "name": f"ToDelete {i}", "email": f"del{i}@example.com", "age": 25 + i},
+                id=uid,
+                name=f"ToDelete {i}",
+                email=f"del{i}@example.com",
+                age=25 + i,
             )
 
     delete_params = [{"id": uid} for uid in user_ids[:2]]
@@ -97,12 +103,12 @@ def test_execute_many_delete(spanner_config: SpannerSyncConfig, test_users_table
         assert result.rows_affected == 2
 
     with spanner_config.provide_session() as session:
-        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", {"ids": user_ids})
+        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
         assert len(rows) == 2
 
     with spanner_config.provide_write_session() as session:
         for uid in user_ids[2:]:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": uid})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)
 
 
 def test_execute_many_large_batch(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -143,11 +149,11 @@ def test_execute_many_single_item(spanner_config: SpannerSyncConfig, test_users_
         assert result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one(f"SELECT name FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one(f"SELECT name FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row["name"] == "Single"
 
     with spanner_config.provide_write_session() as session:
-        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
 
 
 def test_execute_many_requires_write_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -177,16 +183,14 @@ def test_execute_many_mixed_values(spanner_config: SpannerSyncConfig, test_users
         assert result.rows_affected == 3
 
     with spanner_config.provide_session() as session:
-        rows = session.select(
-            f"SELECT id, name, age FROM {test_users_table} WHERE id IN UNNEST(@ids)", {"ids": user_ids}
-        )
+        rows = session.select(f"SELECT id, name, age FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
         assert len(rows) == 3
         ages = sorted([r["age"] for r in rows])
         assert ages == [18, 45, 99]
 
     with spanner_config.provide_write_session() as session:
         for uid in user_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": uid})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)
 
 
 def test_execute_many_consecutive_batches(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -216,10 +220,10 @@ def test_execute_many_consecutive_batches(spanner_config: SpannerSyncConfig, tes
 
     with spanner_config.provide_session() as session:
         all_ids = batch1_ids + batch2_ids
-        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", {"ids": all_ids})
+        rows = session.select(f"SELECT id FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=all_ids)
         assert len(rows) == 6
 
     with spanner_config.provide_write_session() as session:
         all_ids = batch1_ids + batch2_ids
         for uid in all_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": uid})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)

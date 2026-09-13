@@ -57,7 +57,7 @@ def test_event_channel_publish_and_ack_sync(tmp_path) -> None:
     assert message.payload["action"] == "refresh"
     channel.ack(message.event_id)
     with config.provide_session() as driver:
-        row = driver.select_one("SELECT status FROM app_events WHERE event_id = :event_id", {"event_id": event_id})
+        row = driver.select_one("SELECT status FROM app_events WHERE event_id = :event_id", event_id=event_id)
     assert row["status"] == "acked"
     snapshot = spec.telemetry_snapshot()
     assert snapshot.get("SqliteConfig.events.publish") == pytest.approx(1.0)
@@ -296,3 +296,50 @@ async def test_channel_nack_guard_async_event_channel_nack_delegates_when_suppor
     channel._backend = backend
     await channel.nack("event-1")
     assert backend.nacked == ["event-1"]
+
+
+def test_metrics_snapshot_public(tmp_path) -> None:
+    """The sync channel exposes recorded event metrics without private access."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "events_metrics.db")},
+        migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
+    )
+    SyncMigrationCommands(config).upgrade()
+    channel = SyncEventChannel(config)
+
+    channel.publish("notifications", {"action": "refresh"})
+
+    snapshot = channel.metrics_snapshot()
+    assert snapshot["SqliteConfig.events.publish"] == pytest.approx(1.0)
+    assert all(isinstance(value, float) for value in snapshot.values())
+    config.close_pool()
+
+
+async def test_metrics_snapshot_public_async(tmp_path) -> None:
+    """The async channel exposes recorded event metrics without private access."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "events_metrics_async.db")},
+        migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
+    )
+    await AsyncMigrationCommands(config).upgrade()
+    channel = AsyncEventChannel(config)
+
+    await channel.publish("notifications", {"action": "refresh"})
+
+    snapshot = channel.metrics_snapshot()
+    assert snapshot["AiosqliteConfig.events.publish"] == pytest.approx(1.0)
+    assert all(isinstance(value, float) for value in snapshot.values())
+    await config.close_pool()
+
+
+def test_backend_name_public(tmp_path) -> None:
+    """Both channel classes report the resolved backend kind."""
+    sync_channel = SyncEventChannel(SqliteConfig(connection_config={"database": str(tmp_path / "sync.db")}))
+    async_channel = AsyncEventChannel(AiosqliteConfig(connection_config={"database": str(tmp_path / "async.db")}))
+
+    assert sync_channel.backend_name == "poll_queue"
+    assert async_channel.backend_name == "poll_queue"

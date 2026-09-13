@@ -77,7 +77,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -93,6 +93,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsqlpyDataDictionary | None = None
+        self._transaction_active = False
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CORE DISPATCH METHODS
@@ -205,6 +206,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except PsqlpyDatabaseError as e:
             msg = f"Failed to begin psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction_active = True
 
     async def commit(self) -> None:
         """Commit the current transaction."""
@@ -214,6 +216,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except PsqlpyDatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
+        finally:
+            self._transaction_active = False
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -223,6 +227,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         except PsqlpyDatabaseError as e:
             msg = f"Failed to rollback psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
+        finally:
+            self._transaction_active = False
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
@@ -461,8 +467,12 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return await self._execute_cached_statement(direct_statement)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction."""
-        return bool(self.connection.in_transaction())
+        """Check if connection is in transaction.
+
+        psqlpy's ``in_transaction()`` is a coroutine, so its truth value cannot be read
+        synchronously; the state is tracked via a flag toggled in begin/commit/rollback.
+        """
+        return self._transaction_active
 
 
 register_driver_profile("psqlpy", driver_profile)

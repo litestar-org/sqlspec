@@ -337,10 +337,11 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
             )
 
         table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="columns")
         return driver.select(
             _cockroach_domain_sql("columns", "by_schema"),
-            schema_name=schema_name,
+            schema_name=table_schema_name,
             table_name=table_name,
             schema_type=ColumnMetadata,
         )
@@ -574,10 +575,11 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
             )
 
         table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="columns")
         return await driver.select(
             _cockroach_domain_sql("columns", "by_schema"),
-            schema_name=schema_name,
+            schema_name=table_schema_name,
             table_name=table_name,
             schema_type=ColumnMetadata,
         )

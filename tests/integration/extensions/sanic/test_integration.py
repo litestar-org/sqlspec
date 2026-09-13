@@ -66,13 +66,13 @@ def test_sanic_autocommit_commits_success_and_rolls_back_error_status() -> None:
         async def setup(request: Request):
             db = plugin.get_session(request, "db")
             await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "committed"})
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="committed")
             return response.json({"created": True})
 
         @app.post("/insert-error")
         async def insert_error(request: Request):
             db = plugin.get_session(request, "db")
-            await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "rolled-back"})
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="rolled-back")
             return response.json({"error": "failed"}, status=500)
 
         @app.get("/data")
@@ -110,13 +110,13 @@ def test_sanic_autocommit_rolls_back_on_exception_response() -> None:
         async def setup(request: Request):
             db = plugin.get_session(request, "db")
             await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "committed"})
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="committed")
             return response.json({"created": True})
 
         @app.post("/explode")
         async def explode(request: Request):
             db = plugin.get_session(request, "db")
-            await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "rolled-back"})
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="rolled-back")
             msg = "request failed"
             raise RuntimeError(msg)
 
@@ -225,8 +225,8 @@ def test_sanic_multi_database_sessions() -> None:
             products_db = plugin.get_session(request, "products_db")
             await users_db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
             await products_db.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)")
-            await users_db.execute("INSERT INTO users (name) VALUES (:name)", {"name": "Alice"})
-            await products_db.execute("INSERT INTO products (name) VALUES (:name)", {"name": "Widget"})
+            await users_db.execute("INSERT INTO users (name) VALUES (:name)", name="Alice")
+            await products_db.execute("INSERT INTO products (name) VALUES (:name)", name="Widget")
             return response.json({"created": True})
 
         @app.get("/counts")

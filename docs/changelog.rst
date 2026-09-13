@@ -12,77 +12,197 @@ Recent Updates
 Unreleased
 ----------
 
-**Fixed:**
-
-* The Litestar plugin registers its correlation and SQLCommenter middleware at the
-  outermost position of the middleware stack instead of the innermost one. Requests
-  rejected by application middleware such as authentication or session handling now carry
-  a correlation ID in logs and error hooks, and application middleware keeps its original
-  relative order. (`#729 <https://github.com/litestar-org/sqlspec/issues/729>`_)
-* A migration whose ``up()`` returns an empty list is now recorded in the
-  tracking table instead of being reported as applied and then staying pending
-  forever (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_). An
-  empty list is the supported no-op for conditional migrations; omitting
-  ``down()`` still marks a migration irreversible.
-
-* ``Select.group_by()`` accepts the ``sql.rollup()``, ``sql.cube()``, and
-  ``sql.grouping_sets()`` factory expressions directly. The factory helpers and
-  the ``group_by_rollup()``, ``group_by_cube()``, and
-  ``group_by_grouping_sets()`` methods now build the same expressions, and each
-  grouping set must be a tuple or list of columns; a bare string raises
-  ``SQLBuilderError`` instead of producing incorrect SQL.
-
-* MySQL adapters accept either ``local_infile=True`` or
-  ``allow_local_infile=True`` to enable eligible native bulk loads. A separate
-  bulk-load opt-in is no longer required; set
-  ``enable_local_infile_bulk_load=False`` to retain ``executemany``.
-
-* ``sqlspec.extensions.litestar.LitestarConfig`` now exposes the complete plugin
-  configuration, including ``session_table=True``, through the same type as
-  ``sqlspec.config.LitestarConfig``.
-
-* ``PymssqlConfig`` and ``MssqlPythonConfig`` construct again when SQLSpec is
-  installed from a compiled wheel. Both raised
-  ``TypeError: interpreted classes cannot inherit from compiled`` while setting
-  up their migration tracker.
-  (`#747 <https://github.com/litestar-org/sqlspec/issues/747>`_)
-
 **Deprecated:**
 
 * Dynamic column access on the ``sql`` factory (``sql.some_column``) now emits a
   ``DeprecationWarning``. Use ``sql.column("some_column")`` or ``Column("some_column")``;
   the dynamic form will be removed in the next major release.
 
-**Removed:**
-
-* Removed the undocumented ``sqlspec.exceptions.wrap_exceptions`` helper,
-  superseded by the typed per-adapter exception handlers.
+v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
+---------------------------------------------------------------------------------------------------
 
 **Added:**
 
-* Services can now open a short session for each query. Pass ``config=`` and,
-  if needed, ``loader=``. Use ``session=`` to borrow a driver or
-  ``begin_transaction()`` to keep several calls in one transaction. Existing
-  code that passes a driver still works. See :doc:`/recipes/service_layer`.
+* Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
+  transaction, commits when the block succeeds, and rolls back and re-raises when
+  it fails; a failed commit is followed by a rollback attempt. A block entered while
+  the connection already has an open transaction joins it and ends it on exit. A
+  block entered inside another ``transaction()`` or service ``begin_transaction()``
+  block on the same driver uses a savepoint instead of committing. Services allow nested
+  ``begin_transaction()`` blocks the same way: an inner block runs in a savepoint
+  on the same session, so a failure such as a unique violation undoes only the
+  inner work and the outer block can still commit. Adapters without savepoint
+  support (DuckDB, BigQuery, Spanner, and ADBC to DuckDB/BigQuery/Snowflake) raise
+  ``ImproperConfigurationError`` when a block is nested. Services also expose public
+  ``service.config``, the configuration they were built from (or ``None`` when built from a session),
+  enabling construction of collaborating services without accessing private attributes.
+  See :doc:`/reference/driver` and :doc:`/recipes/service_layer`.
+  (`#765 <https://github.com/litestar-org/sqlspec/issues/765>`_)
 
-* Storage pipelines expose ``resolve_destination()``, returning a
-  ``ResolvedStorageTarget(uri, protocol)`` without opening a database session.
-  Direct remote URIs retain their address, alias paths resolve relative to the
-  configured backend, and local paths become absolute. Backend options come
-  only from the method's explicit ``storage_options`` argument, not pipeline
-  writer defaults.
+* Table data fixtures in :mod:`sqlspec.utils.fixtures` load and export table datasets with
+  ``load_table_fixtures_sync`` / ``load_table_fixtures_async`` and
+  ``export_table_fixtures_sync`` / ``export_table_fixtures_async``. Each table uses
+  a single ``<table>.json`` or ``<table>.jsonl`` file (with optional gzip compression). Loading
+  supports table subsets, explicit dependency ordering, batched inserts, upserts on
+  ``conflict_keys`` (``ON CONFLICT ... DO UPDATE`` on PostgreSQL-family, SQLite, and DuckDB;
+  ``ON DUPLICATE KEY UPDATE`` on MySQL), automatic type coercion against live data dictionary
+  metadata, and PostgreSQL identity/serial sequence resynchronization (``resync_sequences=True``).
+  Generated columns are excluded from export and omitted on load. Table and column identifiers
+  are quoted for exact-case and reserved-word compatibility.
+  See :doc:`/usage/testing`.
+  (`#766 <https://github.com/litestar-org/sqlspec/issues/766>`_)
 
-**Breaking changes:**
+* SQL file loader supports reusable SQL sections via ``-- fragment: name`` directives spliced
+  with ``/* include: name */``, and dynamic fill points via ``/* slot: name */`` comments.
+  Slots accept default fallbacks via ``-- slot: name = default`` and can be populated at load time
+  via ``loader.get_sql(name, **slots)`` or ``spec.get_sql(name, **slots)`` using strings,
+  sqlglot expressions, or ``SQL`` instances with parameter merging.
+  See :ref:`sql-fragments-and-slots`.
+  (`#763 <https://github.com/litestar-org/sqlspec/issues/763>`_)
 
-* Removed the unimplemented driver methods ``stage_artifact()``,
-  ``flush_staging_artifacts()``, and ``get_storage_job()``, and the exported
-  ``StorageLoadRequest`` and ``StagedArtifact`` types. Retain the
-  ``StorageBridgeJob`` returned by a storage operation instead of looking it up.
-* Removed pipeline ``allocate_staging_artifacts()`` and
-  ``cleanup_staging_artifacts()``, the ``requires_staging_for_load`` and
-  ``staging_protocols`` capability settings, and the unused
-  ``storage_bridge.partitions_created`` diagnostic counter. Working storage
-  import, export, and per-operation partition telemetry remain available.
+* DuckDB transfers object-store data natively without materializing Python Arrow tables.
+  ``load_from_storage`` issues ``INSERT INTO ... SELECT * FROM read_parquet(...)`` for remote Parquet,
+  and ``select_to_storage`` issues ``COPY (...) TO ...`` for Parquet and CSV. Requests incompatible
+  with native engine execution fall back transparently to Arrow streaming.
+  (`#752 <https://github.com/litestar-org/sqlspec/pull/752>`_)
+
+* CockroachDB adapters (asyncpg and psycopg) introduce opt-in native storage transfers via
+  ``enable_native_storage=True`` in driver features. ``select_to_storage`` executes server-side
+  ``EXPORT INTO``, returning generated destination filenames in telemetry, and ``load_from_storage``
+  executes server-side ``IMPORT INTO`` for remote Parquet and CSV files with configurable
+  ``native_storage_csv_options`` (``nullas``, ``nullif``, ``skip``).
+  (`#753 <https://github.com/litestar-org/sqlspec/pull/753>`_)
+
+* BigQuery adapter supports direct query exports to cloud object storage.
+  (`#746 <https://github.com/litestar-org/sqlspec/pull/746>`_)
+
+* Data dictionary column metadata provides expanded introspection attributes:
+  ``is_primary`` on DuckDB, MySQL, and CockroachDB; ``identity_generation`` and
+  ``sequence_name`` on PostgreSQL and CockroachDB; ``column_type``, ``column_key``, and
+  ``extra`` on MySQL; and ``is_generated`` on DuckDB. On PostgreSQL and CockroachDB,
+  ``get_columns(table=...)`` without an explicit schema resolves tables through the session
+  ``search_path`` instead of defaulting to ``public``.
+
+* ``SQLSpecChannelsBackend`` provides preflight payload budget validation and Prometheus metrics
+  for PostgreSQL ``NOTIFY`` envelopes. ``measure(data)`` returns the UTF-8 encoded envelope size,
+  ``fits(data)`` verifies compliance against ``notify_budget`` (derived from ``MAX_NOTIFY_BYTES``),
+  and ``metrics_snapshot()`` aggregates channel database metrics with queue depth and dropped message
+  counts. ``AsyncEventChannel`` and ``SyncEventChannel`` also expose ``backend_name`` and
+  ``metrics_snapshot()``.
+  (`#756 <https://github.com/litestar-org/sqlspec/issues/756>`_)
+
+* Litestar plugin registers a default exception handler for :class:`~sqlspec.exceptions.IntegrityError`
+  and subclasses (e.g. unique constraint violations), returning an HTTP 409 Conflict response with generic
+  detail ``"Conflict"`` to prevent internal schema text from leaking. In autocommit mode, this error status
+  automatically triggers a request transaction rollback.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+
+* Litestar extension introduces the ``manage_lifespan`` configuration option, governing whether the plugin
+  initializes and disposes driver connection pools during application startup and shutdown. Defaults to the
+  inverse of ``disable_di``, allowing external dependency injection containers to reuse SQLSpec pool lifecycles.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+
+* Top-level ``sqlspec`` package exports identifier generators ``uuid4``, ``uuid6``, ``uuid7``, and
+  ``nanoid``. :mod:`sqlspec.extensions.litestar` exports ``CorrelationMiddleware`` and
+  ``TRACE_CONTEXT_FALLBACK_HEADERS``. Reference documentation now includes supported public APIs in
+  ``sqlspec.utils.text``, ``sqlspec.utils.serializers``, ``sqlspec.utils.correlation``, and
+  ``sqlspec.utils.schema``.
+  (`#758 <https://github.com/litestar-org/sqlspec/issues/758>`_)
+
+* Service layer allows constructing instances directly from database configurations via
+  ``service = Service(config=config)``, opening short-lived sessions per query.
+  (`#745 <https://github.com/litestar-org/sqlspec/pull/745>`_)
+
+* Storage pipelines provide :meth:`resolve_destination`, returning a ``ResolvedStorageTarget(uri, protocol)``
+  without requiring an active database session.
+
+**Changed:**
+
+* Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
+  :meth:`~sqlspec.driver.SyncDriverAdapterBase.select`, etc.) enforce keyword argument parameter passing
+  (``execute(sql, a=1, b=2)`` or ``execute(sql, **params)``). Passing positional dictionary literals
+  is prohibited across documentation, examples, and internal extensions to take advantage of the driver
+  fast-path parameter dispatch.
+
+* The Litestar extension now requires ``litestar>=2.23.0``.
+
+* Litestar plugin registers correlation and SQLCommenter middleware at the outermost position of the
+  middleware stack, ensuring requests rejected by upstream authentication or guard handlers retain
+  correlation headers in logs and error responses.
+
+* Litestar plugin automatically deduplicates ``CorrelationMiddleware`` when already configured in the
+  application middleware stack, logging diagnostics if configured header settings differ.
+
+* Unified ``sqlspec.extensions.litestar.LitestarConfig`` with ``sqlspec.config.LitestarConfig`` for
+  consistent typing and schema export.
+
+**Fixed:**
+
+* Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
+  order. Assignments such as ``do_update(name=exp.column("name", table="excluded"))`` no longer render
+  reversed. Conflict targets and update columns are quoted, allowing reserved words (e.g. ``order``, ``group``)
+  to be used as column names.
+
+* Executing a ``SQL`` object that already carries bound named parameters with additional keyword arguments
+  merges both sets, with execute-time arguments overriding matching names. Previously, pre-bound parameters
+  were dropped.
+  (`#762 <https://github.com/litestar-org/sqlspec/issues/762>`_)
+
+* DuckDB secrets declared in ``driver_features["secrets"]`` issue ``CREATE [PERSISTENT] SECRET IF NOT EXISTS``
+  by default. Existing secrets matching type, provider, and unredacted settings are reused, avoiding connection
+  setup race conditions on shared in-memory databases. Setting ``replace=True`` issues ``CREATE OR REPLACE``
+  for credential rotation.
+  (`#754 <https://github.com/litestar-org/sqlspec/issues/754>`_)
+
+* ``PymssqlDriver.begin()`` no longer issues duplicate ``BEGIN TRANSACTION`` on connections with autocommit
+  disabled, ensuring transaction work commits durably. On autocommit connections, ``commit()`` and ``rollback()``
+  correctly finalize T-SQL transactions.
+
+* The psqlpy driver correctly tracks transaction state initiated with ``begin()``, avoiding false positives
+  from coroutine-returning transaction inspections.
+
+* Adapters without savepoint support (DuckDB, BigQuery, Spanner, Snowflake) raise ``ImproperConfigurationError``
+  when attempting nested transaction blocks instead of sending unsupported DDL. Oracle skips unsupported
+  ``RELEASE SAVEPOINT`` statements.
+
+* Litestar routes raising ``NotFoundError`` preserve headers added by route middleware and avoid duplicate
+  ``after_exception`` hook invocations.
+  (`#760 <https://github.com/litestar-org/sqlspec/issues/760>`_)
+
+* Migration tracker records empty ``up()`` statement executions in the schema tracking table, preventing
+  no-op migrations from remaining in pending state indefinitely.
+  (`#748 <https://github.com/litestar-org/sqlspec/issues/748>`_)
+
+* Migration squashing accepts all documented version range identifier formats.
+  (`#743 <https://github.com/litestar-org/sqlspec/pull/743>`_)
+
+* Compiled wheel installations for ``PymssqlConfig`` and ``MssqlPythonConfig`` permit interpreted tracker
+  subclasses under mypyc without raising inheritance TypeErrors.
+  (`#747 <https://github.com/litestar-org/sqlspec/issues/747>`_)
+
+* Query builder ``Select.group_by()`` accepts ``sql.rollup()``, ``sql.cube()``, and ``sql.grouping_sets()``
+  factory expressions directly. Grouping set inputs must be tuples or lists of columns; bare strings raise
+  ``SQLBuilderError``.
+
+* MySQL bulk loading accepts ``local_infile=True`` or ``allow_local_infile=True`` without requiring an
+  isolated bulk-load feature flag.
+
+* Storage obstore backend corrects glob matching, prefix listing, and ensures resolved paths remain strictly
+  contained within the backend root directory.
+  (`#736 <https://github.com/litestar-org/sqlspec/pull/736>`_, `#737 <https://github.com/litestar-org/sqlspec/pull/737>`_)
+
+* Resolved Sphinx autodoc forward reference errors during documentation builds for ``ExecutionResult``
+  NamedTuple type hints.
+
+**Removed:**
+
+* Retracted experimental storage staging methods (:meth:`stage_artifact`, :meth:`flush_staging_artifacts`,
+  :meth:`get_storage_job`, :meth:`allocate_staging_artifacts`, :meth:`cleanup_staging_artifacts`) and related
+  staging capability options in favor of direct storage pipeline execution.
+  (`#740 <https://github.com/litestar-org/sqlspec/pull/740>`_)
+
+* Removed undocumented ``sqlspec.exceptions.wrap_exceptions`` helper, superseded by typed per-adapter exception
+  handlers.
 
 v0.62.2 - Litestar config lookup diagnostics
 ---------------------------------------------

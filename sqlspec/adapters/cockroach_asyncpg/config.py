@@ -22,6 +22,7 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
@@ -90,14 +91,46 @@ class CockroachAsyncpgPoolConfig(CockroachAsyncpgConnectionConfig):
     extra: NotRequired["dict[str, Any]"]
 
 
+class _NativeStorageCSVOptions(TypedDict):
+    """Explicit CSV conventions; no header or NULL marker is inferred."""
+
+    nullas: NotRequired[str]
+    nullif: NotRequired[str]
+    skip: NotRequired[int]
+
+
+def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
+    if "native_storage_csv_options" not in driver_features:
+        return
+    options = driver_features["native_storage_csv_options"]
+    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
+        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
+        raise ImproperConfigurationError(msg)
+    for key in ("nullas", "nullif"):
+        if key in options and not isinstance(options[key], str):
+            msg = "native_storage_csv_options nullas and nullif must be strings."
+            raise ImproperConfigurationError(msg)
+    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
+        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
+        raise ImproperConfigurationError(msg)
+    driver_features["native_storage_csv_options"] = dict(options)
+
+
 class CockroachAsyncpgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB AsyncPG adapter.
 
+    enable_native_storage: Opt in to server-side storage operations. Exports create
+     generated files under a prefix; imports temporarily take the table offline.
+    native_storage_csv_options: Explicit nullas/nullif markers and skip count.
+     Export is headerless; native CSV import requires an explicit skip count.
+     Markers must not occur as literal data. No NULL marker is inferred.
     on_connection_create: Async callback executed when a connection is acquired from pool.
      Receives the raw asyncpg connection for low-level driver configuration.
      Called after internal setup (JSON codecs, pgvector registration).
     """
 
+    enable_native_storage: NotRequired[bool]
+    native_storage_csv_options: NotRequired[_NativeStorageCSVOptions]
     enable_auto_retry: NotRequired[bool]
     max_retries: NotRequired[int]
     retry_delay_base_ms: NotRequired[float]
@@ -183,6 +216,8 @@ class CockroachAsyncpgConfig(
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         driver_features["enable_pgvector"] = raw_enable_pgvector
 
+        driver_features.setdefault("enable_native_storage", False)
+        _validate_native_storage_options(driver_features)
         driver_features.setdefault("enable_auto_retry", True)
 
         # Extract user connection hook before storing driver_features

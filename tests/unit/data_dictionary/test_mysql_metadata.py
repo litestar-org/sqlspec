@@ -4,6 +4,8 @@ from importlib import import_module
 from typing import Any, cast
 
 import pytest
+import sqlglot
+from sqlglot import exp
 
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
@@ -188,3 +190,18 @@ def test_mysql_system_metadata_returns_rows_when_opted_in() -> None:
     assert result.capability.support == MetadataSupport.SUPPORTED
     assert result.rows == ({"table_schema": "shop", "table_name": "orders", "rows_fetched": 5},)
     assert "sys.schema_table_statistics" in driver.statements[-1]
+
+
+def test_mariadb_columns_derive_primary_key_flag_from_column_key() -> None:
+    """MariaDB column metadata projects ``is_primary`` from the ``column_key`` value."""
+    columns = DataDictionaryLoader().get_domain_query_text("mariadb", "columns", "by_schema")
+
+    assert columns is not None
+    select = sqlglot.parse_one(columns, read="mysql")
+    assert isinstance(select, exp.Select)
+    projections = {
+        projection.alias_or_name: projection.this.sql(dialect="mysql")
+        for projection in select.selects
+        if isinstance(projection, exp.Alias)
+    }
+    assert projections["is_primary"] == "column_key = 'PRI'"

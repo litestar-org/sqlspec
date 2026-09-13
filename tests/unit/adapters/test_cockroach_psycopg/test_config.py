@@ -8,7 +8,7 @@ Tests cover:
 - Connection config normalization
 """
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -23,6 +23,75 @@ from sqlspec.adapters.cockroach_psycopg import (
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.exceptions import ImproperConfigurationError
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_cockroach_psycopg_native_storage_defaults_off(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig],
+) -> None:
+    assert config_type().driver_features["enable_native_storage"] is False
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_cockroach_psycopg_native_storage_options_reach_driver(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig],
+) -> None:
+    options = {"nullas": "NULL", "nullif": "NULL", "skip": 0}
+    config = config_type(
+        connection_config={"autocommit": True},
+        driver_features={"enable_native_storage": True, "native_storage_csv_options": options},
+    )
+    driver = config.driver_type(connection=cast("Any", object()), driver_features=config.driver_features)
+    assert driver.driver_features["enable_native_storage"] is True
+    assert driver.driver_features["native_storage_csv_options"] == options
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+@pytest.mark.parametrize(
+    "connection_config", [{}, {"autocommit": False}, {"autocommit": False, "kwargs": {"autocommit": True}}]
+)
+def test_cockroach_psycopg_native_storage_requires_autocommit(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig], connection_config: dict[str, Any]
+) -> None:
+    with pytest.raises(ImproperConfigurationError, match="autocommit=True"):
+        config_type(connection_config=connection_config, driver_features={"enable_native_storage": True})
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+@pytest.mark.parametrize(
+    "connection_config",
+    [
+        {"kwargs": {"autocommit": True}},
+        {"extra": {"autocommit": True}},
+        {"autocommit": True, "kwargs": {"autocommit": False}},
+    ],
+)
+def test_cockroach_psycopg_native_storage_honors_effective_autocommit(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig], connection_config: dict[str, Any]
+) -> None:
+    config = config_type(connection_config=connection_config, driver_features={"enable_native_storage": True})
+    assert config.driver_features["enable_native_storage"] is True
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+@pytest.mark.parametrize(
+    "options",
+    [None, [], {"invalid": "fragment"}, {"nullas": 1}, {"nullif": None}, {"skip": -1}, {"skip": True}, {"skip": "1"}],
+)
+def test_cockroach_psycopg_native_storage_rejects_invalid_csv_options(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig], options: Any
+) -> None:
+    with pytest.raises(ImproperConfigurationError, match="native_storage_csv_options"):
+        config_type(driver_features={"native_storage_csv_options": options})
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+@pytest.mark.parametrize("options", [{}, {"skip": 1}, {"nullas": ""}, {"nullif": ""}])
+def test_cockroach_psycopg_native_storage_preserves_explicit_csv_options(
+    config_type: type[CockroachPsycopgSyncConfig] | type[CockroachPsycopgAsyncConfig], options: dict[str, Any]
+) -> None:
+    config = config_type(driver_features={"native_storage_csv_options": options})
+    assert config.driver_features["native_storage_csv_options"] == options
 
 
 class _SyncPoolSpy:

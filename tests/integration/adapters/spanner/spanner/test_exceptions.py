@@ -51,25 +51,31 @@ def test_unique_violation_duplicate_key(spanner_config: SpannerSyncConfig, test_
     with spanner_config.provide_write_session() as session:
         session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "First", "email": "first@example.com", "age": 25},
+            id=user_id,
+            name="First",
+            email="first@example.com",
+            age=25,
         )
 
     with spanner_config.provide_write_session() as session:
         with pytest.raises(UniqueViolationError):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": user_id, "name": "Duplicate", "email": "dup@example.com", "age": 30},
+                id=user_id,
+                name="Duplicate",
+                email="dup@example.com",
+                age=30,
             )
 
     with spanner_config.provide_write_session() as session:
-        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
 
 
 def test_invalid_parameter_type(spanner_config: SpannerSyncConfig) -> None:
     """Test that invalid parameter type raises SQLParsingError."""
     with spanner_config.provide_session() as session:
         with pytest.raises(SQLParsingError):
-            session.select_value("SELECT @num + 1", {"num": "not_a_number"})
+            session.select_value("SELECT @num + 1", num="not_a_number")
 
 
 def test_execute_many_in_read_only_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -91,7 +97,7 @@ def test_select_one_no_results(spanner_config: SpannerSyncConfig, test_users_tab
 
     with spanner_config.provide_session() as session:
         with pytest.raises(SQLSpecNotFoundError):
-            session.select_one(f"SELECT * FROM {test_users_table} WHERE id = @id", {"id": "definitely-does-not-exist"})
+            session.select_one(f"SELECT * FROM {test_users_table} WHERE id = @id", id="definitely-does-not-exist")
 
 
 def test_invalid_column_name(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -105,8 +111,7 @@ def test_update_nonexistent_row_no_error(spanner_config: SpannerSyncConfig, test
     """Test that UPDATE on non-existent row succeeds with 0 rows affected."""
     with spanner_config.provide_write_session() as session:
         result = session.execute(
-            f"UPDATE {test_users_table} SET name = @name WHERE id = @id",
-            {"id": "nonexistent-id", "name": "Should Not Exist"},
+            f"UPDATE {test_users_table} SET name = @name WHERE id = @id", id="nonexistent-id", name="Should Not Exist"
         )
         assert result.rows_affected == 0
 
@@ -114,5 +119,5 @@ def test_update_nonexistent_row_no_error(spanner_config: SpannerSyncConfig, test
 def test_delete_nonexistent_row_no_error(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
     """Test that DELETE on non-existent row succeeds with 0 rows affected."""
     with spanner_config.provide_write_session() as session:
-        result = session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": "nonexistent-id"})
+        result = session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id="nonexistent-id")
         assert result.rows_affected == 0

@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 from collections import OrderedDict
+from collections.abc import Mapping
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
 
@@ -36,6 +37,7 @@ from sqlspec.core.parameters import (
     type_coercion_dispatcher,
     value_fingerprint,
 )
+from sqlspec.core.result._base import RowFormat
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
     ForeignKeyMetadata,
@@ -87,7 +89,6 @@ if TYPE_CHECKING:
 
     from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
-    from sqlspec.core.result._base import RowFormat
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.storage import (
@@ -181,17 +182,17 @@ class ExecutionResult(NamedTuple):
     cursor_result: Any
     rowcount_override: int | None
     special_data: Any
-    selected_data: "list[Any] | None"
-    column_names: "list[str] | None"
+    selected_data: list[Any] | None
+    column_names: list[str] | None
     data_row_count: int | None
     statement_count: int | None
     successful_statements: int | None
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
-    row_format: "RowFormat" = "dict"
+    row_format: RowFormat = "dict"
     last_inserted_id: int | str | None = None
-    column_types: "dict[str, str] | None" = None
+    column_types: dict[str, str] | None = None
 
 
 def describe_stack_statement(statement: "StatementProtocol | str") -> str:
@@ -609,6 +610,7 @@ class CommonDriverAttributesMixin:
         "_stmt_cache_enabled",
         "_stmt_cache_max_size",
         "_stmt_cache_rebind_processor",
+        "_transaction_depth",
         "connection",
         "driver_features",
         "statement_config",
@@ -637,6 +639,7 @@ class CommonDriverAttributesMixin:
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
         self._observability = observability
+        self._transaction_depth = 0
         self._statement_cache: OrderedDict[str, SQL] = OrderedDict()
         self._stmt_cache_max_size = self._statement_cache_size()
         self._stmt_cache = QueryCache(self._stmt_cache_max_size)
@@ -1314,6 +1317,23 @@ class CommonDriverAttributesMixin:
     ) -> "SQL":
         declared = sql_statement.declared_parameters
         if data_parameters or kwargs:
+            bound_named = sql_statement.named_parameters
+            extra_mapping = data_parameters[0] if len(data_parameters) == 1 else None
+            if (
+                bound_named
+                and not sql_statement.positional_parameters
+                and (not data_parameters or isinstance(extra_mapping, Mapping))
+            ):
+                merged_named = dict(bound_named)
+                if isinstance(extra_mapping, Mapping):
+                    merged_named.update(extra_mapping)
+                return SQL(
+                    sql_statement.raw_expression or sql_statement.raw_sql,
+                    merged_named,
+                    statement_config=statement_config,
+                    declared_parameters=declared,
+                    **kwargs,
+                )
             merged_parameters = (
                 (*sql_statement.positional_parameters, *tuple(data_parameters))
                 if data_parameters

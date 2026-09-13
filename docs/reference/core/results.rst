@@ -11,7 +11,7 @@ result wrappers, providing helpers like ``all()``, ``one()``, ``scalar()``,
 StatementResult
 ===============
 
-.. autoclass:: sqlspec.core.result._base.StatementResult
+.. autoclass:: StatementResult
    :members:
    :show-inheritance:
 
@@ -32,14 +32,14 @@ ArrowResult
 DMLResult
 =========
 
-.. autoclass:: sqlspec.core.result._base.DMLResult
+.. autoclass:: DMLResult
    :members:
    :show-inheritance:
 
 EmptyResult
 ===========
 
-.. autoclass:: sqlspec.core.result._base.EmptyResult
+.. autoclass:: EmptyResult
    :members:
    :show-inheritance:
 
@@ -53,8 +53,10 @@ StackResult
 Factory Functions
 =================
 
-.. autofunction:: sqlspec.core.result.create_sql_result
+.. autofunction:: create_sql_result
 
-.. autofunction:: sqlspec.core.result.create_arrow_result
+.. autofunction:: create_arrow_result
 
-.. autofunction:: sqlspec.core.result.build_arrow_result_from_table
+.. autofunction:: build_arrow_result_from_table
+
+.. autofunction:: build_arrow_result_from_reader

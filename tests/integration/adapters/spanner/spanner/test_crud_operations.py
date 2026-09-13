@@ -29,7 +29,7 @@ def test_select_string(spanner_session: SpannerSyncDriver) -> None:
 
 def test_select_with_parameters(spanner_session: SpannerSyncDriver) -> None:
     """Test SELECT with parameterized query."""
-    result = spanner_session.select_value("SELECT @value", {"value": 42})
+    result = spanner_session.select_value("SELECT @value", value=42)
     assert result == 42
 
 
@@ -40,20 +40,23 @@ def test_insert_through_session(spanner_config: SpannerSyncConfig, test_users_ta
     with spanner_config.provide_write_session() as session:
         result = session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "Test User", "email": "test@example.com", "age": 30},
+            id=user_id,
+            name="Test User",
+            email="test@example.com",
+            age=30,
         )
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one(f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one(f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row is not None
         assert row["name"] == "Test User"
         assert row["email"] == "test@example.com"
         assert row["age"] == 30
 
     with spanner_config.provide_write_session() as session:
-        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
 
 
 def test_update_through_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -63,25 +66,30 @@ def test_update_through_session(spanner_config: SpannerSyncConfig, test_users_ta
     with spanner_config.provide_write_session() as session:
         session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "Original Name", "email": "original@example.com", "age": 25},
+            id=user_id,
+            name="Original Name",
+            email="original@example.com",
+            age=25,
         )
 
     with spanner_config.provide_write_session() as session:
         result = session.execute(
             f"UPDATE {test_users_table} SET name = @name, age = @age WHERE id = @id",
-            {"id": user_id, "name": "Updated Name", "age": 35},
+            id=user_id,
+            name="Updated Name",
+            age=35,
         )
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one(f"SELECT name, age FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one(f"SELECT name, age FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row is not None
         assert row["name"] == "Updated Name"
         assert row["age"] == 35
 
     with spanner_config.provide_write_session() as session:
-        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
 
 
 def test_delete_through_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -91,20 +99,23 @@ def test_delete_through_session(spanner_config: SpannerSyncConfig, test_users_ta
     with spanner_config.provide_write_session() as session:
         session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "To Delete", "email": "delete@example.com", "age": 40},
+            id=user_id,
+            name="To Delete",
+            email="delete@example.com",
+            age=40,
         )
 
     with spanner_config.provide_session() as session:
-        row = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row is not None
 
     with spanner_config.provide_write_session() as session:
-        result = session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        result = session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row is None
 
 
@@ -115,32 +126,35 @@ def test_full_crud_cycle(spanner_config: SpannerSyncConfig, test_users_table: st
     with spanner_config.provide_write_session() as session:
         insert_result = session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "CRUD Test", "email": "crud@example.com", "age": 30},
+            id=user_id,
+            name="CRUD Test",
+            email="crud@example.com",
+            age=30,
         )
         assert insert_result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one(f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one(f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row["name"] == "CRUD Test"
         assert row["email"] == "crud@example.com"
         assert row["age"] == 30
 
     with spanner_config.provide_write_session() as session:
         update_result = session.execute(
-            f"UPDATE {test_users_table} SET name = @name WHERE id = @id", {"id": user_id, "name": "Updated CRUD"}
+            f"UPDATE {test_users_table} SET name = @name WHERE id = @id", id=user_id, name="Updated CRUD"
         )
         assert update_result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one(f"SELECT name FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one(f"SELECT name FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row["name"] == "Updated CRUD"
 
     with spanner_config.provide_write_session() as session:
-        delete_result = session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        delete_result = session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
         assert delete_result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
-        row = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        row = session.select_one_or_none(f"SELECT id FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row is None
 
 
@@ -152,13 +166,16 @@ def test_select_multiple_rows(spanner_config: SpannerSyncConfig, test_users_tabl
         for i, uid in enumerate(user_ids):
             result = session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": uid, "name": f"User {i}", "email": f"user{i}@example.com", "age": 20 + i},
+                id=uid,
+                name=f"User {i}",
+                email=f"user{i}@example.com",
+                age=20 + i,
             )
             assert result.rows_affected == 1
 
     with spanner_config.provide_session() as session:
         results = session.select(
-            f"SELECT id, name FROM {test_users_table} WHERE age >= @min_age ORDER BY age", {"min_age": 20}
+            f"SELECT id, name FROM {test_users_table} WHERE age >= @min_age ORDER BY age", min_age=20
         )
         assert len(results) >= 3
         names = [r["name"] for r in results if r["name"].startswith("User ")]
@@ -168,7 +185,7 @@ def test_select_multiple_rows(spanner_config: SpannerSyncConfig, test_users_tabl
 
     with spanner_config.provide_write_session() as session:
         for uid in user_ids:
-            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": uid})
+            session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)
 
 
 def test_result_metadata(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
@@ -178,7 +195,10 @@ def test_result_metadata(spanner_config: SpannerSyncConfig, test_users_table: st
     with spanner_config.provide_write_session() as session:
         result = session.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": user_id, "name": "Metadata Test", "email": "meta@example.com", "age": 28},
+            id=user_id,
+            name="Metadata Test",
+            email="meta@example.com",
+            age=28,
         )
 
         assert isinstance(result, SQLResult)
@@ -187,7 +207,7 @@ def test_result_metadata(spanner_config: SpannerSyncConfig, test_users_table: st
 
     with spanner_config.provide_session() as session:
         select_result = session.execute(
-            f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", {"id": user_id}
+            f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", id=user_id
         )
 
         assert isinstance(select_result, SQLResult)
@@ -198,4 +218,4 @@ def test_result_metadata(spanner_config: SpannerSyncConfig, test_users_table: st
         assert "name" in select_result.column_names
 
     with spanner_config.provide_write_session() as session:
-        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", {"id": user_id})
+        session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)

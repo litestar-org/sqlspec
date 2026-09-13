@@ -75,6 +75,27 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.spanner.SpannerConnectionParams
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.spanner.SpannerPoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.spanner.SpannerDriverFeatures
+   :members:
+   :show-inheritance:
+
 Custom Dialects
 ================
 

@@ -17,6 +17,7 @@ def litestar_extension_config() -> ExtensionConfigs:
         "enable_sqlcommenter_middleware": True,
         "extra_commit_statuses": {201},
         "extra_rollback_statuses": {409},
+        "manage_lifespan": True,
         "migrations_path": "migrations",
         "pool_key": "pool",
         "session_key": "session",

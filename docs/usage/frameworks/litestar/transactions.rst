@@ -2,19 +2,27 @@
 Transactions
 =============
 
-The SQLSpec plugin supports two transaction modes: **autocommit** and **manual commit**.
-Choose the mode that fits your application's error handling and rollback requirements.
+The SQLSpec plugin supports three transaction commit modes: ``manual``,
+``autocommit``, and ``autocommit_include_redirect``.
 
 Commit Modes
 ------------
 
-**Autocommit (default)**
-   Each statement commits automatically. Use this for read-heavy workloads or when
-   you don't need atomic multi-statement operations.
+``manual`` (default)
+   SQLSpec manages connection lifecycle and cleanup at response completion, but leaves
+   transaction control to your application logic. Use this when handlers need explicit
+   commits or multi-step error recovery.
 
-**Manual Commit**
-   You control when to commit or rollback. Use this for write operations that must
-   succeed or fail together.
+``autocommit``
+   SQLSpec automatically commits transactions for successful HTTP responses (status
+   codes 200–299) and issues a rollback for client or server errors (status codes 400+)
+   or unhandled exceptions.
+
+``autocommit_include_redirect``
+   Extends ``autocommit`` behavior to also commit transactions when the response is a
+   redirect (status codes 200–399).
+
+Configure the commit mode under ``extension_config["litestar"]``:
 
 .. literalinclude:: /examples/frameworks/litestar/commit_modes.py
    :language: python
@@ -24,31 +32,106 @@ Commit Modes
    :dedent: 4
    :no-upgrade:
 
-Rollback on Error
------------------
+Custom Status Codes
+-------------------
 
-In manual mode, uncaught exceptions trigger an automatic rollback before the response
-is sent. This keeps your database consistent when handlers fail.
+You can customize which HTTP statuses trigger commits or rollbacks using
+``extra_commit_statuses`` and ``extra_rollback_statuses``:
 
 .. code-block:: python
 
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+   config = AsyncpgConfig(
+       connection_config={"dsn": "postgresql://localhost/app"},
+       extension_config={
+           "litestar": {
+               "commit_mode": "autocommit",
+               "extra_rollback_statuses": {409},
+               "extra_commit_statuses": {207},
+           }
+       },
+   )
+
+Manual Transactions in Handlers
+-------------------------------
+
+In ``manual`` mode, handlers control transaction boundaries directly on the injected driver.
+The recommended approach is to wrap operations in ``async with db_session.transaction():``,
+which commits on exit and rolls back on exception:
+
+.. code-block:: python
+
+   from litestar import post
+   from pydantic import BaseModel
+   from sqlspec.adapters.asyncpg import AsyncpgDriver
+
+
+   class TransferRequest(BaseModel):
+       from_account: int
+       to_account: int
+       amount: int
+
+
    @post("/transfer")
-   async def transfer(db: AsyncSession, data: TransferRequest) -> dict:
-       await db.execute(
-           "UPDATE accounts SET balance = balance - :amount WHERE id = :from_id",
-           amount=data.amount,
-           from_id=data.from_account,
-       )
-       await db.execute(
-           "UPDATE accounts SET balance = balance + :amount WHERE id = :to_id",
-           amount=data.amount,
-           to_id=data.to_account,
-       )
-       await db.commit()  # Both updates succeed or both rollback
+   async def transfer(db_session: AsyncpgDriver, data: TransferRequest) -> dict[str, str]:
+       async with db_session.transaction():
+           await db_session.execute(
+               "UPDATE accounts SET balance = balance - :amount WHERE id = :from_id",
+               amount=data.amount,
+               from_id=data.from_account,
+           )
+           await db_session.execute(
+               "UPDATE accounts SET balance = balance + :amount WHERE id = :to_id",
+               amount=data.amount,
+               to_id=data.to_account,
+           )
        return {"status": "transferred"}
 
-Nested Transactions
--------------------
+You can also call ``await db_session.begin()``, ``await db_session.commit()``, and
+``await db_session.rollback()`` directly for manual control.
 
-Use savepoints for nested transaction scopes. SQLSpec translates ``begin_nested()``
-to savepoints on databases that support them.
+Savepoints and Nested Transactions
+----------------------------------
+
+Nested ``transaction()`` blocks automatically run in savepoints: an inner block rolls
+back only its own work if it fails, allowing the outer transaction to continue:
+
+.. code-block:: python
+
+   from sqlspec.exceptions import UniqueViolationError
+
+   async with db_session.transaction():
+       await db_session.execute("INSERT INTO audit_log (event) VALUES (:event)", event="attempt")
+       try:
+           async with db_session.transaction():
+               await db_session.execute("INSERT INTO users (email) VALUES (:email)", email=data.email)
+       except UniqueViolationError:
+           pass
+
+Adapters without savepoint support (DuckDB, BigQuery, Spanner, and ADBC connections to
+DuckDB, BigQuery, or Snowflake) raise ``ImproperConfigurationError`` when a nested block
+is entered.
+
+Drivers also provide explicit low-level savepoint methods:
+
+.. code-block:: python
+
+   await db_session.create_savepoint("sp1")
+   try:
+       await db_session.execute("INSERT INTO audit_log (event) VALUES (:event)", event="processed")
+       await db_session.release_savepoint("sp1")
+   except Exception:
+       await db_session.rollback_to_savepoint("sp1")
+
+Error Handling and 409 Conflict
+-------------------------------
+
+When a database operation raises :class:`~sqlspec.exceptions.IntegrityError` (such as a unique
+constraint or foreign key violation), ``SQLSpecPlugin`` automatically translates it to an
+HTTP 409 Conflict response with generic detail ``"Conflict"``. In ``autocommit`` mode,
+this error status triggers an automatic rollback of the request transaction.
+
+Custom handlers registered on the application or router for :class:`~sqlspec.exceptions.IntegrityError`
+take precedence, while broader handlers (e.g. for :class:`~sqlspec.exceptions.SQLSpecError` or status 500)
+receive the original exception.

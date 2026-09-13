@@ -118,6 +118,14 @@ class DuckDBExtensionConfig(TypedDict):
     required: NotRequired[bool]
     """When True, install/load failure raises instead of best-effort WARNING."""
 
+    storage_protocols: NotRequired[Sequence[str]]
+    """Additional URI schemes handled by this extension's configured filesystem.
+
+    Addresses using these schemes are passed unchanged to DuckDB after the
+    extension loads. DuckDB owns credential selection and reports transfer
+    errors. Registered Python filesystems are discovered automatically.
+    """
+
 
 class DuckDBSecretConfig(TypedDict):
     """DuckDB secret configuration for AI/API integrations."""
@@ -126,10 +134,10 @@ class DuckDBSecretConfig(TypedDict):
     """Type of secret."""
 
     name: str
-    """Name of the secret."""
+    """Name of the secret. DuckDB matches secret names case-insensitively."""
 
     value: NotRequired["dict[str, Any]"]
-    """Secret configuration values."""
+    """Secret configuration values, applied only when the secret is created or ``replace`` is set."""
 
     provider: NotRequired[str]
     """Secret provider, such as config or credential_chain."""
@@ -140,8 +148,16 @@ class DuckDBSecretConfig(TypedDict):
     persistent: NotRequired[bool]
     """Persist the secret to DuckDB's configured secret directory."""
 
+    replace: NotRequired[bool]
+    """When True, overwrite an existing secret of the same name, such as after rotating credentials. Default False."""
+
     required: NotRequired[bool]
-    """When True, secret-creation failure raises (and is verified). Default best-effort."""
+    """When True, raise instead of skipping the secret with a warning. Default False.
+
+    Failures are a creation error, a secret that is not visible after creation, and an
+    existing secret whose type, provider, declared scope or unredacted declared settings
+    such as ``key_id``, ``region`` or ``endpoint`` differ from the declaration.
+    """
 
 
 class DuckDBDriverFeatures(TypedDict):
@@ -330,6 +346,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Close the connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
+
+    def _prepare_driver(self, driver: DuckDBDriver) -> DuckDBDriver:
+        driver = super()._prepare_driver(driver)
+        if self.connection_instance is not None:
+            driver.driver_features.update(self.connection_instance._storage_settings(driver.connection))
+        return driver
 
     def create_connection(self) -> DuckDBConnection:
         """Get a DuckDB connection from the pool.

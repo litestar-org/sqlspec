@@ -1191,7 +1191,28 @@ class TableDetails(ObjectMetadata):
 
 
 class ColumnMetadata(TypedDict, total=False):
-    """Metadata for a database column."""
+    """Metadata for a database column.
+
+    Attributes:
+        schema_name: Schema containing the table.
+        table_name: Table name.
+        column_name: Name of the column.
+        data_type: Dialect or canonical data type name.
+        is_nullable: Whether the column allows null values.
+        column_default: Default value expression or sequence default.
+        ordinal_position: 1-based column position in the table.
+        max_length: Maximum character or byte length.
+        numeric_precision: Numeric precision.
+        numeric_scale: Numeric scale.
+        is_primary: Whether the column is part of the primary key.
+        is_unique: Whether the column has a unique constraint.
+        extra: Dialect-specific extra column attributes.
+        column_type: Full column type specification (e.g. on MySQL).
+        column_key: Index key designation (e.g. MySQL ``PRI``, ``UNI``, ``MUL``).
+        identity_generation: Identity column generation type (``a`` for ALWAYS, ``d`` for BY DEFAULT).
+        sequence_name: Name of the sequence owned by a serial or identity column.
+        is_generated: Whether the column is a generated/computed column.
+    """
 
     schema_name: str
     table_name: str
@@ -1206,6 +1227,11 @@ class ColumnMetadata(TypedDict, total=False):
     is_primary: bool | int
     is_unique: bool | int
     extra: str
+    column_type: str
+    column_key: str
+    identity_generation: str | None
+    sequence_name: str | None
+    is_generated: bool | int
 
 
 class TableMetadata(TypedDict, total=False):

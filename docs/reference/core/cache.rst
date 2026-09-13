@@ -74,4 +74,6 @@ Module-Level Functions
 
 .. autofunction:: create_cache_key
 
-.. autofunction:: canonicalize_filters
+.. autofunction:: get_cache_instances
+
+.. autofunction:: get_pipeline_metrics

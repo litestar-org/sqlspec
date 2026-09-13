@@ -101,12 +101,13 @@ Cloud Log Formatters
    :members:
    :show-inheritance:
 
-Prometheus
+Extensions
 ==========
 
-.. autoclass:: sqlspec.extensions.prometheus.PrometheusStatementObserver
-   :members:
-   :show-inheritance:
+See the extension reference pages for distributed tracing and metrics:
+
+- :doc:`extensions/prometheus` for Prometheus metrics and observer helpers.
+- :doc:`extensions/otel` for OpenTelemetry span generation and tracing helpers.
 
 Helper Functions
 ================

@@ -254,6 +254,25 @@ isolate channels onto per-channel physical queues, template the queue name with
 Channels
 ========
 
+Both channel classes expose ``backend_name``, the resolved backend kind
+(``notify``, ``notify_queue``, ``poll_queue``, ``aq``, or ``txeventq``), and
+``metrics_snapshot()``. The snapshot holds every observability metric recorded
+for the channel's database configuration, including loader, migration, storage,
+and other event channels on that configuration. Values are floats, and each key
+is prefixed with the configuration's ``bind_key``, or with the configuration
+class name when no bind key is set. Counter names vary by backend, so select
+the event metrics by name rather than assuming a fixed key:
+
+.. code-block:: python
+
+    channel = spec.event_channel(config)
+    await channel.publish("notifications", {"action": "refresh"})
+
+    event_metrics = {
+        name: value for name, value in channel.metrics_snapshot().items() if ".events." in name
+    }
+    print(channel.backend_name, event_metrics)
+
 .. autoclass:: sqlspec.extensions.events.AsyncEventChannel
    :members:
    :show-inheritance:
@@ -395,6 +414,10 @@ Utility Functions
 
 .. autofunction:: sqlspec.extensions.events.load_native_backend
 
+.. autofunction:: sqlspec.extensions.events.get_runtime_hints
+
+.. autofunction:: sqlspec.extensions.events.resolve_adapter_name
+
 .. autofunction:: sqlspec.extensions.events.resolve_poll_interval
 
 .. autofunction:: sqlspec.extensions.events.resolve_event_poll_interval
@@ -402,3 +425,11 @@ Utility Functions
 .. autofunction:: sqlspec.extensions.events.normalize_event_channel_name
 
 .. autofunction:: sqlspec.extensions.events.normalize_queue_table_name
+
+Configuration
+=============
+
+.. autoclass:: sqlspec.config.EventsConfig
+   :members:
+   :show-inheritance:
+   :no-index:

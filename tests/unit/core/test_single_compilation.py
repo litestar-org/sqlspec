@@ -107,7 +107,7 @@ def test_single_compilation_compile_called_once_with_named_parameters(sqlite_spe
 
     with spec.provide_session(config) as session:
         with patch.object(SQL, "compile", counting_compile):
-            session.execute("SELECT :value", {"value": 42})
+            session.execute("SELECT :value", value=42)
     assert call_count == 1, f"compile() called {call_count} times, expected 1"
 
 

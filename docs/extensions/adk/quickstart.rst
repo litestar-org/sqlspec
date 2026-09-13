@@ -34,10 +34,10 @@ When a user returns, the agent can resume from where it left off.
        },
    )
 
-   store = AsyncpgADKStore(config)
-   await store.ensure_tables()
+   session_store = AsyncpgADKStore(config)
+   await session_store.ensure_tables()
 
-   session_service = SQLSpecSessionService(store)
+   session_service = SQLSpecSessionService(session_store)
 
    # Create a session with scoped state
    session = await session_service.create_session(
@@ -111,7 +111,7 @@ Memory Service
 ==============
 
 The memory service retains context that the agent can reference later. This
-enables long-term memory across sessions with full-text search.
+enables long-term memory across sessions with full-text search and pgvector semantic recall.
 
 .. code-block:: python
 
@@ -123,9 +123,29 @@ enables long-term memory across sessions with full-text search.
 
    memory_service = SQLSpecMemoryService(memory_store)
 
+   # Ingest a completed session into searchable memory
+   await memory_service.add_session_to_memory(session)
+
+   # Text search over memory entries
+   results = await memory_service.search_memory(
+       app_name="my_agent",
+       user_id="user_123",
+       query="database migration preferences",
+   )
+
+   # Semantic vector recall (using pgvector)
+   query_embedding = [0.021, -0.045, 0.112, ...]  # 768-dimensional vector
+   vector_results = await memory_service.search_memory(
+       app_name="my_agent",
+       user_id="user_123",
+       query="database migration preferences",
+       embedding=query_embedding,
+   )
+
 Enable full-text search by setting ``memory_use_fts: True`` in the ADK config.
-This creates database-native FTS indexes (tsvector, FTS5, InnoDB FT) for
-efficient memory retrieval.
+For pgvector semantic recall, configure ``vector_index_type`` (e.g. ``"hnsw"``)
+and ``vector_dimensions`` (e.g. ``768``) under ``extension_config["adk"]``.
+See :ref:`pgvector-recall` for advanced hybrid search and RRF configurations.
 
 Artifact Service
 ================

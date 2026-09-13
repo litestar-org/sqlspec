@@ -55,11 +55,10 @@ async def test_oracle_clob_wrapper_round_trip(oracle_async_session: "OracleAsync
     )
     await oracle_async_session.execute_script("CREATE TABLE smart_lob_clob (id NUMBER PRIMARY KEY, content CLOB)")
     await oracle_async_session.execute(
-        "INSERT INTO smart_lob_clob (id, content) VALUES (:id, :content)",
-        {"id": 1, "content": OracleClob(_LARGE_CLOB_TEXT)},
+        "INSERT INTO smart_lob_clob (id, content) VALUES (:id, :content)", id=1, content=OracleClob(_LARGE_CLOB_TEXT)
     )
 
-    result = await oracle_async_session.execute("SELECT content FROM smart_lob_clob WHERE id = :id", {"id": 1})
+    result = await oracle_async_session.execute("SELECT content FROM smart_lob_clob WHERE id = :id", id=1)
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     fetched = rows[0]
     value = fetched["content"] if isinstance(fetched, dict) else fetched[0]
@@ -74,10 +73,10 @@ async def test_oracle_blob_wrapper_round_trip(oracle_async_session: "OracleAsync
     )
     await oracle_async_session.execute_script("CREATE TABLE smart_lob_blob (id NUMBER PRIMARY KEY, data BLOB)")
     await oracle_async_session.execute(
-        "INSERT INTO smart_lob_blob (id, data) VALUES (:id, :data)", {"id": 1, "data": OracleBlob(_LARGE_BLOB_BYTES)}
+        "INSERT INTO smart_lob_blob (id, data) VALUES (:id, :data)", id=1, data=OracleBlob(_LARGE_BLOB_BYTES)
     )
 
-    result = await oracle_async_session.execute("SELECT data FROM smart_lob_blob WHERE id = :id", {"id": 1})
+    result = await oracle_async_session.execute("SELECT data FROM smart_lob_blob WHERE id = :id", id=1)
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     fetched = rows[0]
     value = fetched["data"] if isinstance(fetched, dict) else fetched[0]
@@ -96,11 +95,10 @@ async def test_oracle_json_wrapper_native_round_trip(oracle_async_session: "Orac
     )
     await oracle_async_session.execute_script("CREATE TABLE smart_lob_json (id NUMBER PRIMARY KEY, payload JSON)")
     await oracle_async_session.execute(
-        "INSERT INTO smart_lob_json (id, payload) VALUES (:id, :payload)",
-        {"id": 1, "payload": OracleJson(_LARGE_JSON_PAYLOAD)},
+        "INSERT INTO smart_lob_json (id, payload) VALUES (:id, :payload)", id=1, payload=OracleJson(_LARGE_JSON_PAYLOAD)
     )
 
-    result = await oracle_async_session.execute("SELECT payload FROM smart_lob_json WHERE id = :id", {"id": 1})
+    result = await oracle_async_session.execute("SELECT payload FROM smart_lob_json WHERE id = :id", id=1)
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     fetched = rows[0]
     payload = fetched["payload"] if isinstance(fetched, dict) else fetched[0]
@@ -133,10 +131,10 @@ async def test_threshold_override_keeps_string_as_varchar2(
             )
             payload = "y" * 5000
             await session.execute(
-                "INSERT INTO smart_lob_extended (id, content) VALUES (:id, :content)", {"id": 1, "content": payload}
+                "INSERT INTO smart_lob_extended (id, content) VALUES (:id, :content)", id=1, content=payload
             )
 
-            result = await session.execute("SELECT content FROM smart_lob_extended WHERE id = :id", {"id": 1})
+            result = await session.execute("SELECT content FROM smart_lob_extended WHERE id = :id", id=1)
             rows = result.get_data() if hasattr(result, "get_data") else result.data
             fetched = rows[0]
             value = fetched["content"] if isinstance(fetched, dict) else fetched[0]
@@ -167,12 +165,11 @@ async def test_json_bytes_payload_no_manual_createlob_needed(oracle_async_sessio
     assert isinstance(serialized, bytes)
 
     await oracle_async_session.execute(
-        "INSERT INTO smart_lob_json_bytes (id, payload) VALUES (:id, :payload)",
-        {"id": 1, "payload": OracleJson(payload)},
+        "INSERT INTO smart_lob_json_bytes (id, payload) VALUES (:id, :payload)", id=1, payload=OracleJson(payload)
     )
     del serialized
 
-    result = await oracle_async_session.execute("SELECT payload FROM smart_lob_json_bytes WHERE id = :id", {"id": 1})
+    result = await oracle_async_session.execute("SELECT payload FROM smart_lob_json_bytes WHERE id = :id", id=1)
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     fetched = rows[0]
     value = fetched["payload"] if isinstance(fetched, dict) else fetched[0]
@@ -189,10 +186,11 @@ def test_oracle_clob_wrapper_round_trip_sync(oracle_sync_session: "OracleSyncDri
     oracle_sync_session.execute_script("CREATE TABLE smart_lob_clob_sync (id NUMBER PRIMARY KEY, content CLOB)")
     oracle_sync_session.execute(
         "INSERT INTO smart_lob_clob_sync (id, content) VALUES (:id, :content)",
-        {"id": 1, "content": OracleClob(_LARGE_CLOB_TEXT)},
+        id=1,
+        content=OracleClob(_LARGE_CLOB_TEXT),
     )
 
-    result = oracle_sync_session.execute("SELECT content FROM smart_lob_clob_sync WHERE id = :id", {"id": 1})
+    result = oracle_sync_session.execute("SELECT content FROM smart_lob_clob_sync WHERE id = :id", id=1)
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     fetched = rows[0]
     value = fetched["content"] if isinstance(fetched, dict) else fetched[0]
@@ -207,11 +205,10 @@ def test_oracle_blob_wrapper_round_trip_sync(oracle_sync_session: "OracleSyncDri
     )
     oracle_sync_session.execute_script("CREATE TABLE smart_lob_blob_sync (id NUMBER PRIMARY KEY, data BLOB)")
     oracle_sync_session.execute(
-        "INSERT INTO smart_lob_blob_sync (id, data) VALUES (:id, :data)",
-        {"id": 1, "data": OracleBlob(_LARGE_BLOB_BYTES)},
+        "INSERT INTO smart_lob_blob_sync (id, data) VALUES (:id, :data)", id=1, data=OracleBlob(_LARGE_BLOB_BYTES)
     )
 
-    result = oracle_sync_session.execute("SELECT data FROM smart_lob_blob_sync WHERE id = :id", {"id": 1})
+    result = oracle_sync_session.execute("SELECT data FROM smart_lob_blob_sync WHERE id = :id", id=1)
     rows = result.get_data() if hasattr(result, "get_data") else result.data
     fetched = rows[0]
     value = fetched["data"] if isinstance(fetched, dict) else fetched[0]
