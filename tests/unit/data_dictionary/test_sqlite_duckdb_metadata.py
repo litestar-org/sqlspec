@@ -310,33 +310,37 @@ def test_duckdb_columns_ignore_generated_text_in_string_literals(tmp_path: Path)
             '"v, q INTEGER GENERATED ALWAYS AS(" INTEGER, q INTEGER, "MixedCase" INTEGER GENERATED ALWAYS AS (2), u AS (3))'
         )
 
-        t1_columns = driver.data_dictionary.get_columns(driver, table="t1")
-        t2_columns = driver.data_dictionary.get_columns(driver, table="t2")
+        driver.execute("CREATE TYPE mood AS ENUM ('x', 'y')")
+        driver.execute(
+            "CREATE TABLE t3(id INTEGER, e ENUM('a', 'b') GENERATED ALWAYS AS ('a'), "
+            "m mood GENERATED ALWAYS AS ('x'), s STRUCT(\"a b\" INTEGER) GENERATED ALWAYS AS ({'a b': 1}), "
+            "\"E x\" ENUM('p', 'q') AS ('p'), d ENUM('a', ', z INTEGER GENERATED ALWAYS AS('), z INTEGER)"
+        )
+
+        by_table = {table: driver.data_dictionary.get_columns(driver, table=table) for table in ("t1", "t2", "t3")}
         by_schema = driver.data_dictionary.get_columns(driver)
 
-    assert {column["column_name"]: bool(column["is_generated"]) for column in t1_columns} == {
-        "id": False,
-        "g": False,
-        "h": False,
+    expected = {
+        "t1": {"id": False, "g": False, "h": False},
+        "t2": {
+            "it's": False,
+            'a"b\nc': True,
+            "e": False,
+            "z": False,
+            "w": False,
+            '("q" INTEGER GENERATED ALWAYS AS(': False,
+            "v, q INTEGER GENERATED ALWAYS AS(": False,
+            "q": False,
+            "MixedCase": True,
+            "u": True,
+        },
+        "t3": {"id": False, "e": True, "m": True, "s": True, "E x": True, "d": False, "z": False},
     }
-    t2_expected = {
-        "it's": False,
-        'a"b\nc': True,
-        "e": False,
-        "z": False,
-        "w": False,
-        '("q" INTEGER GENERATED ALWAYS AS(': False,
-        "v, q INTEGER GENERATED ALWAYS AS(": False,
-        "q": False,
-        "MixedCase": True,
-        "u": True,
-    }
-    assert {column["column_name"]: bool(column["is_generated"]) for column in t2_columns} == t2_expected
+    for table, columns in by_table.items():
+        assert {column["column_name"]: bool(column["is_generated"]) for column in columns} == expected[table]
     assert {
         (column["table_name"], column["column_name"]): bool(column["is_generated"])
         for column in by_schema
-        if column["table_name"] in {"t1", "t2"}
-    } == {("t1", "id"): False, ("t1", "g"): False, ("t1", "h"): False} | {
-        ("t2", name): flag for name, flag in t2_expected.items()
-    }
+        if column["table_name"] in expected
+    } == {(table, name): flag for table, flags in expected.items() for name, flag in flags.items()}
     config.close_pool()
