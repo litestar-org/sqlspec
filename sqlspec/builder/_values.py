@@ -130,14 +130,15 @@ class Values(QueryBuilder):
             msg = "VALUES clause requires at least one row."
             raise SQLBuilderError(msg)
 
+        columns = self._columns
         first_row = rows[0]
         if isinstance(first_row, Mapping):
-            if self._columns is None:
-                self._columns = list(first_row.keys())
-            if not self._columns:
+            if columns is None:
+                columns = list(first_row.keys())
+            if not columns:
                 msg = "VALUES clause rows must contain at least one column."
                 raise SQLBuilderError(msg)
-            expected_keys = set(self._columns)
+            expected_keys = set(columns)
             normalized_rows: list[list[Any]] = []
             for idx, r in enumerate(rows):
                 if not isinstance(r, Mapping):
@@ -146,9 +147,9 @@ class Values(QueryBuilder):
                 if set(r.keys()) != expected_keys:
                     msg = "All rows in VALUES clause must have the same keys as the initial row."
                     raise SQLBuilderError(msg)
-                normalized_rows.append([r[k] for k in self._columns])
+                normalized_rows.append([r[k] for k in columns])
         else:
-            if not isinstance(first_row, (list, tuple)):
+            if not isinstance(first_row, Sequence) or isinstance(first_row, (str, bytes, bytearray)):
                 msg = "VALUES rows must be sequences or mappings."
                 raise SQLBuilderError(msg)
             expected_len = len(first_row)
@@ -157,7 +158,7 @@ class Values(QueryBuilder):
                 raise SQLBuilderError(msg)
             normalized_rows = []
             for idx, r in enumerate(rows):
-                if not isinstance(r, (list, tuple)):
+                if not isinstance(r, Sequence) or isinstance(r, (str, bytes, bytearray)):
                     msg = f"Row {idx} must be a sequence."
                     raise SQLBuilderError(msg)
                 if len(r) != expected_len:
@@ -165,13 +166,14 @@ class Values(QueryBuilder):
                     raise SQLBuilderError(msg)
                 normalized_rows.append(list(r))
 
-            if self._columns is not None and len(self._columns) != expected_len:
-                msg = f"Column count ({len(self._columns)}) does not match row width ({expected_len})."
+            if columns is not None and len(columns) != expected_len:
+                msg = f"Column count ({len(columns)}) does not match row width ({expected_len})."
                 raise SQLBuilderError(msg)
 
         if self._rows and len(normalized_rows[0]) != len(self._rows[0]):
             msg = "All rows in VALUES clause must have the same number of columns."
             raise SQLBuilderError(msg)
+        self._columns = columns
         self._rows.extend(normalized_rows)
         self._rebuild_expression()
         return self
@@ -231,4 +233,11 @@ class Values(QueryBuilder):
         if not self._rows:
             msg = "VALUES clause requires at least one row."
             raise SQLBuilderError(msg)
-        return super()._build_final_expression(copy=copy)
+        expression = super()._build_final_expression(copy=copy)
+        with_clause = expression.args.pop("with_", None)
+        if with_clause is not None:
+            if not expression.args.get("alias"):
+                expression = exp.alias_(expression, "_values", table=self._columns or True)
+            expression = exp.select("*").from_(expression)
+            expression.set("with_", with_clause)
+        return expression

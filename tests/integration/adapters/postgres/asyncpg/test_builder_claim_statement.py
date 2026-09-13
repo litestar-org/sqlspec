@@ -36,7 +36,13 @@ async def asyncpg_tasks_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGen
 async def test_claim_one_row(asyncpg_tasks_session: AsyncpgDriver) -> None:
     """Test claiming exactly one row using UPDATE FROM with a subquery, FOR UPDATE SKIP LOCKED, and RETURNING."""
     subquery = (
-        sql.select("id").from_("test_builder_tasks").where_eq("status", "pending").limit(1).for_update(skip_locked=True)
+        sql
+        .select("id")
+        .from_("test_builder_tasks")
+        .where_eq("status", "pending")
+        .order_by("id")
+        .limit(1)
+        .for_update(skip_locked=True)
     )
     claim_query = (
         sql

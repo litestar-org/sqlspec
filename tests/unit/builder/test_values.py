@@ -1,5 +1,7 @@
 from typing import Any, cast
 
+from sqlglot import exp
+
 import pytest
 
 from sqlspec import sql
@@ -194,3 +196,35 @@ def test_values_rebuild_preserves_cte_parameters() -> None:
     query = sql.values([(1,)], columns=["id"]).with_cte("c", sql.select("id").from_("t").where_eq("id", 2))
     query.add_rows([(3,)])
     assert sorted(query.build().parameters.values()) == [1, 2, 3]
+
+
+def test_values_accepts_general_row_sequences() -> None:
+    assert list(sql.values([range(2)]).build().parameters.values()) == [0, 1]
+
+
+def test_values_invalid_mapping_does_not_change_column_state() -> None:
+    query = Values()
+    with pytest.raises(SQLBuilderError, match="same keys"):
+        query.add_rows([{"id": 1}, {"other": 2}])
+    query.add_rows([{"other": 3}])
+    assert query.columns == ["other"]
+    assert list(query.build().parameters.values()) == [3]
+
+
+def test_raw_values_cte_moves_alias_columns_without_mutation() -> None:
+    values = exp.values([(1,)], alias="old", columns=["id"])
+    query = sql.select("id").from_("v").with_cte("v", values)
+    expression = query._build_final_expression(copy=True)
+    cte = expression.args["with_"].expressions[0]
+    assert cte.this.args.get("alias") is None
+    assert [column.name for column in cte.args["alias"].columns] == ["id"]
+    assert values.alias == "old"
+
+
+def test_select_from_values_preserves_attached_cte() -> None:
+    source = sql.select(exp.Literal.number(1).as_("id"))
+    values = sql.values([(exp.Subquery(this=exp.select("id").from_("c")),)], columns=["id"])
+    values.with_cte("c", source)
+    query = sql.select("*").from_(values, alias="v")
+    assert "WITH" in query.build(dialect="postgres").sql
+    assert "WITH" in values.build(dialect="postgres").sql

@@ -373,7 +373,7 @@ class UpdateFromClauseMixin:
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
         elif isinstance(table, exp.Expr):
-            if isinstance(table, exp.Select):
+            if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())
                 if alias:
                     table_expr = exp.alias_(table_expr, alias, table=True)
@@ -425,7 +425,7 @@ class UpdateFromClauseMixin:
                     table_expr = subquery_copy
             elif isinstance(subquery_copy, exp.Subquery):
                 table_expr = exp.alias_(subquery_copy, alias, table=True) if alias else subquery_copy
-            elif isinstance(subquery_copy, exp.Select):
+            elif isinstance(subquery_copy, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=subquery_copy)
                 if alias or builder_alias:
                     table_expr = exp.alias_(table_expr, alias or builder_alias, table=True)

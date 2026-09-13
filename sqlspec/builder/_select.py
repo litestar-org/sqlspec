@@ -334,7 +334,11 @@ class SelectClauseMixin:
         elif is_expression(table):
             from_expr = exp.alias_(table, alias) if alias else table
         elif has_parameter_builder(table):
-            subquery_expression = table.get_expression()
+            subquery_expression = (
+                cast("QueryBuilder", table)._build_final_expression(copy=True)
+                if hasattr(table, "_build_final_expression")
+                else table.get_expression()
+            )
             if subquery_expression is None:
                 msg = "Subquery builder has no expression to include in FROM clause."
                 raise SQLBuilderError(msg)

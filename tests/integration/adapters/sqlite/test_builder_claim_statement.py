@@ -31,7 +31,7 @@ def sqlite_tasks_session() -> Generator[SqliteDriver, None, None]:
 
 def test_claim_one_row(sqlite_tasks_session: SqliteDriver) -> None:
     """Test claiming exactly one row using UPDATE FROM with a subquery and RETURNING."""
-    subquery = sql.select("id").from_("tasks").where_eq("status", "pending").limit(1)
+    subquery = sql.select("id").from_("tasks").where_eq("status", "pending").order_by("id").limit(1)
     claim_query = (
         sql
         .update("tasks")

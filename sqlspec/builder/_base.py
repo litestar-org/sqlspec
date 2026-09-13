@@ -341,7 +341,9 @@ class QueryBuilder:
             simplify_expressions=self.simplify_expressions,
         )
 
-    def _resolve_cte_query(self, alias: str, query: "QueryBuilder | exp.Select | exp.SetOperation | exp.Values | str | Any") -> exp.Expr:
+    def _resolve_cte_query(
+        self, alias: str, query: "QueryBuilder | exp.Select | exp.SetOperation | exp.Values | str | Any"
+    ) -> exp.Expr:
         """Resolve a CTE query into a Select or Values expression with merged parameters."""
         if isinstance(query, QueryBuilder):
             query_expr = query._build_final_expression(copy=True)
@@ -395,7 +397,10 @@ class QueryBuilder:
             return parsed_expression
 
         if isinstance(query, (exp.Select, exp.SetOperation, exp.Values)):
-            return query
+            cte_expression = query.copy()
+            if isinstance(cte_expression, exp.Values):
+                cte_expression.set("alias", None)
+            return cte_expression
 
         self._raise_cte_query_error(alias, f"invalid query type: {type(query).__name__}")
         msg = "Unreachable"
@@ -633,6 +638,10 @@ class QueryBuilder:
 
         cte_select_expression = self._resolve_cte_query(alias, query)
         cte_columns = columns
+        if cte_columns is None and isinstance(query, exp.Values):
+            values_alias = query.args.get("alias")
+            if isinstance(values_alias, exp.TableAlias):
+                cte_columns = [column.name for column in values_alias.columns]
         if cte_columns is None:
             query_cols = getattr(query, "columns", None)
             query_private_cols = getattr(query, "_columns", None)
@@ -997,7 +1006,9 @@ class QueryBuilder:
             return
         from sqlspec.data_dictionary import get_dialect_config
 
-        dialect_name = dialect.lower() if isinstance(dialect, str) else type(Dialect.get_or_raise(dialect)).__name__.lower()
+        dialect_name = (
+            dialect.lower() if isinstance(dialect, str) else type(Dialect.get_or_raise(dialect)).__name__.lower()
+        )
         try:
             config = get_dialect_config(dialect_name)
         except ValueError:

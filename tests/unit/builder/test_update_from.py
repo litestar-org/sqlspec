@@ -4,8 +4,8 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import sql
-from sqlspec.exceptions import SQLBuilderError
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_update_from_select_builder_matrix() -> None:
@@ -108,10 +108,9 @@ def test_oracle_update_from_runtime_capability(major: int, expected: bool) -> No
     from sqlspec.data_dictionary import VersionInfo
     from sqlspec.data_dictionary.dialects.oracle.config import ORACLE_CONFIG, resolve_oracle_feature_flag
 
-    assert resolve_oracle_feature_flag(
-        ORACLE_CONFIG,
-        VersionInfo(major, 0, 0),
-        "supports_update_from",
-        compatible_major=major,
-        is_autonomous=False,
-    ) is expected
+    assert (
+        resolve_oracle_feature_flag(
+            ORACLE_CONFIG, VersionInfo(major, 0, 0), "supports_update_from", compatible_major=major, is_autonomous=False
+        )
+        is expected
+    )
