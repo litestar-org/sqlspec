@@ -1128,64 +1128,13 @@ class UnpivotClauseMixin:
 
 @trait
 class CommonTableExpressionMixin:
+    """Mixin for Common Table Expression (CTE) support.
+
+    CTE functionality is provided directly by :class:`~sqlspec.builder._base.QueryBuilder`.
+    This class is retained for backward compatibility.
+    """
+
     __slots__ = ()
-
-    def get_expression(self) -> exp.Expr | None: ...
-    def set_expression(self, expression: exp.Expr) -> None: ...
-
-    _with_ctes: Any
-    dialect: Any
-
-    def with_(self, name: str, query: Any | str, recursive: bool = False, columns: list[str] | None = None) -> Self:
-        """Add a CTE via the WITH clause.
-
-        When ``query`` is another builder we reuse its expression, merge parameters with unique names, and let sqlglot handle the actual CTE wrapping to avoid duplicating ``_with_ctes`` state.
-        """
-        builder = cast("QueryBuilder", self)
-        expression = builder.get_expression()
-        if expression is None:
-            msg = "Cannot add WITH clause: expression not initialized."
-            raise SQLBuilderError(msg)
-
-        if not isinstance(expression, (exp.Select, exp.Insert, exp.Update, exp.Delete)):
-            msg = f"Cannot add WITH clause to {type(expression).__name__} expression."
-            raise SQLBuilderError(msg)
-
-        cte_select: exp.Expr | None
-        if isinstance(query, str):
-            cte_select = exp.maybe_parse(query, dialect=self.dialect)
-        elif isinstance(query, exp.Expr):
-            cte_select = query
-        else:
-            cte_select = query.get_expression()
-            if cte_select is None:
-                msg = f"Could not get expression from builder: {query}"
-                raise SQLBuilderError(msg)
-
-            built_query = query.to_statement()
-            parameters = built_query.parameters
-            if isinstance(parameters, dict):
-                param_mapping: dict[str, str] = {}
-                for param_name, param_value in parameters.items():
-                    unique_name = builder._next_parameter_name(f"{name}_{param_name}")
-                    param_mapping[param_name] = unique_name
-                    builder.add_parameter(param_value, name=unique_name)
-                cte_select = builder._update_placeholders(cte_select, param_mapping)
-            elif isinstance(parameters, (list, tuple)):
-                for param_value in parameters:
-                    builder.add_parameter(param_value)
-            elif parameters is not None:
-                builder.add_parameter(parameters)
-
-        if cte_select is None:
-            msg = f"Could not parse CTE query: {query}"
-            raise SQLBuilderError(msg)
-
-        if isinstance(expression, (exp.Select, exp.Insert, exp.Update)):
-            updated = expression.with_(name, as_=cte_select.copy(), recursive=recursive, copy=True)
-            builder.set_expression(updated)
-
-        return cast("Self", builder)
 
 
 @trait
