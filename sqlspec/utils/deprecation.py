@@ -10,7 +10,6 @@ import os
 import sys
 import types
 from collections.abc import Callable
-from pathlib import Path
 from typing import Generic, Literal, cast
 from warnings import warn
 
@@ -18,7 +17,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 __all__ = ("deprecated", "warn_deprecation")
 
-_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1]) + os.sep
+_PACKAGE_ROOT = os.path.dirname(os.path.dirname(__file__)) + os.sep  # noqa: PTH120
 
 
 T = TypeVar("T")
@@ -73,17 +72,16 @@ def warn_deprecation(
     text = ". ".join(parts)  # pyright: ignore[reportUnknownArgumentType]
     warning_class = PendingDeprecationWarning if pending else DeprecationWarning
 
-    warn(text, warning_class, stacklevel=_external_stacklevel())
+    warn(text, warning_class, stacklevel=_external_stacklevel(sys._getframe(0)))
 
 
-def _external_stacklevel() -> int:
-    """Count Python frames from the caller of warn_deprecation up to the first frame outside the package.
+def _external_stacklevel(frame: "types.FrameType | None") -> int:
+    """Return the warn() stacklevel of the first frame outside the package, counting from ``frame``.
 
-    Compiled frames do not appear in the interpreter stack, so the count adapts to
-    interpreted and mypyc builds alike.
+    ``frame`` is the frame ``warn()`` treats as level 1. Compiled frames do not appear
+    in the interpreter stack, so the count adapts to interpreted and mypyc builds alike.
     """
     stacklevel = 1
-    frame: types.FrameType | None = sys._getframe(1)
     while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE_ROOT):
         stacklevel += 1
         frame = frame.f_back
