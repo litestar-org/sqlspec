@@ -38,7 +38,6 @@ def test_reliable_rowcount_defaults() -> None:
     assert DatabaseConfigProtocol.supports_reliable_rowcount is True
 
 
-
 @pytest.mark.parametrize(("module_path", "class_name"), CONFIG_CLASSES)
 def test_each_adapter_reliable_rowcount_flag(module_path: str, class_name: str) -> None:
     """Verify supports_reliable_rowcount value for each individual adapter config."""
