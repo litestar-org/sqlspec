@@ -8,7 +8,7 @@ Introduction
 
    .. grid-item-card::
 
-      **SQLSpec is a SQL first data access layer.**
+      **SQLSpec is a SQL-first data access layer.**
       It keeps you close to SQL while adding type-safe results, consistent driver APIs, and optional
       tooling for query construction and observability.
 
@@ -62,5 +62,11 @@ Good fit when
 
 - You prefer writing SQL and want predictable behavior.
 - You need consistent APIs across multiple databases.
-- You care about performance, type safety, and data‑engineering workflows.
+- You care about performance, type safety, and data-engineering workflows.
 - You want optional tools rather than a full ORM stack.
+
+Next steps
+----------
+
+- Head to :doc:`installation` to install SQLSpec and database driver dependencies.
+- Follow the :doc:`quickstart` guide to connect and execute your first query.

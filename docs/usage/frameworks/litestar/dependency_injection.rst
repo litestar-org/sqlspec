@@ -86,13 +86,15 @@ sync DuckDB for ETL operations:
        )
    )
 
+   from typing import Any
+
    @get("/report")
-   async def report(db: AsyncpgDriver, etl_db: DuckDBDriver) -> dict:
+   async def report(db: AsyncpgDriver, etl_db: DuckDBDriver) -> dict[str, Any]:
        # Async query to primary PostgreSQL
        users = await db.select("SELECT * FROM users")
        # Sync query to DuckDB ETL database
        metrics = etl_db.select("SELECT * FROM analytics")
-       return {"users": users.all(), "metrics": metrics.all()}
+       return {"users": users, "metrics": metrics}
 
    app = Litestar(
        route_handlers=[report],
@@ -270,7 +272,7 @@ This pattern enables querying PostgreSQL tables directly from DuckDB SQL:
 .. code-block:: python
 
    @get("/sync-users")
-   def sync_users(etl_db: DuckDBDriver) -> dict:
+   def sync_users(etl_db: DuckDBDriver) -> dict[str, int]:
        # Query PostgreSQL via DuckDB's postgres extension
        result = etl_db.execute(
            "INSERT INTO local_users SELECT * FROM pg.users RETURNING *"

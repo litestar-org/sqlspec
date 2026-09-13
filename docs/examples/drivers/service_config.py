@@ -19,7 +19,7 @@ def test_sync_service_config(tmp_path: Path) -> None:
     try:
         with service.begin_transaction() as session:
             session.execute("CREATE TABLE users (name TEXT)")
-            session.execute("INSERT INTO users VALUES (:name)", {"name": "Ada"})
+            session.execute("INSERT INTO users VALUES (:name)", name="Ada")
 
         # Each bare helper acquires and releases its own session.
         assert service.get_one(users) == {"name": "Ada"}
@@ -33,13 +33,13 @@ def test_sync_service_config(tmp_path: Path) -> None:
 
         # Both helpers see the same uncommitted transaction.
         with service.begin_transaction() as session:
-            session.execute("INSERT INTO users VALUES (:name)", {"name": "Grace"})
+            session.execute("INSERT INTO users VALUES (:name)", name="Grace")
             assert service.exists(sql.select("name").from_("users").where_eq("name", "Grace"))
             assert service.paginate(users).total == 2
 
         try:
             with service.begin_transaction() as session:
-                session.execute("INSERT INTO users VALUES (:name)", {"name": "Rolled back"})
+                session.execute("INSERT INTO users VALUES (:name)", name="Rolled back")
                 msg = "Cancel this change"
                 raise ValueError(msg)  # noqa: TRY301 - Demonstrate an application error rolling back the block.
         except ValueError:
@@ -65,7 +65,7 @@ async def test_async_service_config(tmp_path: Path) -> None:
     try:
         async with service.begin_transaction() as session:
             await session.execute("CREATE TABLE users (name TEXT)")
-            await session.execute("INSERT INTO users VALUES (:name)", {"name": "Ada"})
+            await session.execute("INSERT INTO users VALUES (:name)", name="Ada")
 
         assert await service.get_one(users) == {"name": "Ada"}
         assert await service.exists(users)
@@ -76,13 +76,13 @@ async def test_async_service_config(tmp_path: Path) -> None:
             assert await service.get_one(users, session=session) == {"name": "Ada"}
 
         async with service.begin_transaction() as session:
-            await session.execute("INSERT INTO users VALUES (:name)", {"name": "Grace"})
+            await session.execute("INSERT INTO users VALUES (:name)", name="Grace")
             assert await service.exists(sql.select("name").from_("users").where_eq("name", "Grace"))
             assert (await service.paginate(users)).total == 2
 
         try:
             async with service.begin_transaction() as session:
-                await session.execute("INSERT INTO users VALUES (:name)", {"name": "Rolled back"})
+                await session.execute("INSERT INTO users VALUES (:name)", name="Rolled back")
                 msg = "Cancel this change"
                 raise ValueError(msg)  # noqa: TRY301 - Demonstrate an application error rolling back the block.
         except ValueError:

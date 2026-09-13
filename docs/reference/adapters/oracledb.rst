@@ -211,7 +211,9 @@ rewrite it into ``MERGE``. For a single row, select the named bind values from
 
     await session.execute(
         merge_widget,
-        {"sku": "W-100", "name": "Widget", "quantity": 3},
+        sku="W-100",
+        name="Widget",
+        quantity=3,
     )
 
 Do not add ``RETURNING`` to this ``MERGE``. When the caller needs an ID
@@ -220,7 +222,7 @@ transaction is committed::
 
     widget_id = await session.select_value(
         "SELECT id FROM widget WHERE sku = :sku",
-        {"sku": "W-100"},
+        sku="W-100",
     )
 
 Keeping the ``MERGE`` and follow-up ``SELECT`` in one SQLSpec session preserves
@@ -281,6 +283,27 @@ Async Configuration
 ===================
 
 .. autoclass:: sqlspec.adapters.oracledb.OracleAsyncConfig
+   :members:
+   :show-inheritance:
+
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.oracledb.OracleConnectionParams
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.oracledb.OraclePoolParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.oracledb.OracleDriverFeatures
    :members:
    :show-inheritance:
 

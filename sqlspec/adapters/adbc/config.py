@@ -81,20 +81,20 @@ class AdbcDriverFeatures(TypedDict):
     Attributes:
         json_serializer: JSON serialization function to use.
             Callable that takes Any and returns str (JSON string).
-        Default: sqlspec.utils.serializers.to_json
+            Default: sqlspec.utils.serializers.to_json
         enable_cast_detection: Enable cast-aware parameter processing.
             When True, detects SQL casts and applies appropriate
             serialization. Currently used for PostgreSQL JSONB handling.
-        Default: True
+            Default: True
         enable_strict_type_coercion: Enforce strict type coercion rules.
             When True, raises errors for unsupported type conversions.
             When False, attempts best-effort conversion.
-        Default: False
+            Default: False
         strict_type_coercion: Alias for enable_strict_type_coercion.
         enable_arrow_extension_types: Enable PyArrow extension type support.
             When True, preserves Arrow extension type metadata when reading data.
             When False, falls back to storage types.
-        Default: True
+            Default: True
         arrow_extension_types: Alias for enable_arrow_extension_types.
         enable_pgvector: Enable automatic pgvector extension detection.
             When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
@@ -111,7 +111,7 @@ class AdbcDriverFeatures(TypedDict):
         on_connection_create: Callback executed when a connection is created.
             Receives the raw ADBC connection for low-level driver configuration.
         events_backend: Event channel backend selection.
-        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
+            Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
             ADBC does not have native pub/sub, so poll_queue is the only backend.
             Defaults to "poll_queue".
     """

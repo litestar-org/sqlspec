@@ -21,17 +21,20 @@ Example
 Core Responsibilities
 =====================
 
-- Register database configurations.
-- Provide sync and async session context managers.
-- Manage connection pool startup and shutdown.
-- Track configs by bind key for multi-database setups.
+- Register and manage database configuration handles.
+- Provide sync and async connection and session context managers.
+- Manage connection pool startup, tracking, and shutdown.
+- Track database configurations by instance identity for multi-database setups.
+- Manage named SQL queries and parameter declarations through an integrated :class:`~sqlspec.loader.SQLFileLoader`.
+- Publish and subscribe to events across sync and async event channels.
 
-Session Management
-==================
+Connection and Session Management
+=================================
 
-- ``provide_session`` yields a session bound to a specific config.
-- Sync and async sessions share the same registry API.
-- Close pools explicitly with ``close_all_pools`` when needed.
+- ``provide_session`` and ``get_session`` yield or return driver adapter instances bound to a specific config.
+- ``provide_connection`` and ``get_connection`` provide raw database connections.
+- Sync and async operations share consistent registry APIs.
+- Pool lifecycle helpers (``get_pool``, ``close_pool``, ``close_all_pools``) handle resource cleanup.
 
 API Reference
 =============

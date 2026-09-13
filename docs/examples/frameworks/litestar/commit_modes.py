@@ -10,21 +10,20 @@ def test_litestar_commit_modes() -> None:
     # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.extensions.litestar import CommitMode, SQLSpecPlugin
+    from sqlspec.extensions.litestar import SQLSpecPlugin
 
     sqlspec = SQLSpec()
     sqlspec.add_config(
         SqliteConfig(
-            connection_config={"database": ":memory:"},
-            extension_config={"litestar": {"commit_mode": CommitMode.autocommit}},
+            connection_config={"database": ":memory:"}, extension_config={"litestar": {"commit_mode": "autocommit"}}
         )
     )
     sqlspec.add_config(
         SqliteConfig(
+            bind_key="manual",
             connection_config={"database": ":memory:"},
-            extension_config={"litestar": {"commit_mode": CommitMode.manual}},
-        ),
-        name="manual",
+            extension_config={"litestar": {"commit_mode": "manual"}},
+        )
     )
 
     plugin = SQLSpecPlugin(sqlspec=sqlspec)

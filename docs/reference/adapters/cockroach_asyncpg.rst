@@ -11,14 +11,24 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgConnectionConfig
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
 .. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgPoolConfig
    :members:
    :show-inheritance:
 
-Driver
-======
+Driver Features
+===============
 
-.. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgDriver
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgDriverFeatures
    :members:
    :show-inheritance:
 
@@ -26,6 +36,13 @@ Retry Configuration
 ===================
 
 .. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgRetryConfig
+   :members:
+   :show-inheritance:
+
+Driver
+======
+
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgDriver
    :members:
    :show-inheritance:
 
@@ -70,7 +87,8 @@ inherited client-side path.
             exported = await driver.select_to_storage(
                 "SELECT :id::INT8 AS id, :label::STRING AS label",
                 destination,
-                {"id": 7, "label": "O'Reilly"},
+                id=7,
+                label="O'Reilly",
                 format_hint="csv",
             )
             prefix = urlsplit(exported.telemetry["destination"])

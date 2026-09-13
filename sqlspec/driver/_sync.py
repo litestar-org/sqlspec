@@ -563,7 +563,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             .. code-block:: python
 
                 with session.transaction():
-                    session.execute("INSERT INTO items (id) VALUES (?)", 1)
+                    session.execute(
+                        "INSERT INTO items (id) VALUES (:id)", id=1
+                    )
 
         Returns:
             A context manager yielding this driver.

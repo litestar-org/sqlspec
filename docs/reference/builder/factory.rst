@@ -18,7 +18,7 @@ SQLFactory
 Convenience Instance
 ====================
 
-.. py:data:: sqlspec.builder.sql
+.. py:data:: sql
    :type: SQLFactory
 
    Pre-configured ``SQLFactory`` instance for convenient query building.

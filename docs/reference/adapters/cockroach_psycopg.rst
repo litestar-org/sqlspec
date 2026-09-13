@@ -19,6 +19,27 @@ Async Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgConnectionConfig
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgPoolConfig
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgDriverFeatures
+   :members:
+   :show-inheritance:
+
 Sync Driver
 ===========
 
@@ -117,7 +138,8 @@ filenames; preserve URI query parameters when constructing import sources.
             exported = driver.select_to_storage(
                 "SELECT :id::INT8 AS id, :label::STRING AS label",
                 destination,
-                {"id": 7, "label": "O'Reilly"},
+                id=7,
+                label="O'Reilly",
                 format_hint="parquet",
             )
             prefix = urlsplit(exported.telemetry["destination"])

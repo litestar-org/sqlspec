@@ -32,6 +32,7 @@ from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor, structural_fingerprint, value_fingerprint
+from sqlspec.core.result._base import RowFormat
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
     ForeignKeyMetadata,
@@ -84,7 +85,6 @@ if TYPE_CHECKING:
 
     from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
-    from sqlspec.core.result._base import RowFormat
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.storage import (
@@ -179,17 +179,17 @@ class ExecutionResult(NamedTuple):
     cursor_result: Any
     rowcount_override: int | None
     special_data: Any
-    selected_data: "list[Any] | None"
-    column_names: "list[str] | None"
+    selected_data: list[Any] | None
+    column_names: list[str] | None
     data_row_count: int | None
     statement_count: int | None
     successful_statements: int | None
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
-    row_format: "RowFormat" = "dict"
+    row_format: RowFormat = "dict"
     last_inserted_id: int | str | None = None
-    column_types: "dict[str, str] | None" = None
+    column_types: dict[str, str] | None = None
 
 
 def describe_stack_statement(statement: "StatementProtocol | str") -> str:

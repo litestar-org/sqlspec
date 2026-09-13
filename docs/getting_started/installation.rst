@@ -197,6 +197,10 @@ Package groups
 Multiple extras
 ---------------
 
+Combine multiple extras in a comma-separated list to install everything your stack
+requires. For example, to configure async PostgreSQL with high-performance ``msgspec``
+mapping and Litestar framework integration:
+
 .. tab-set::
 
    .. tab-item:: uv

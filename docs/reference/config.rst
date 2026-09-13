@@ -80,3 +80,47 @@ Extension Configuration Types
 .. autoclass:: ADKConfig
    :members:
    :show-inheritance:
+
+Framework Configuration Types
+=============================
+
+.. autoclass:: LitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: FastAPIConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: StarletteConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: SanicConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: FlaskConfig
+   :members:
+   :show-inheritance:
+
+Extension Configuration Map
+===========================
+
+.. autodata:: ExtensionConfigs
+
+Validation Utilities
+====================
+
+.. autofunction:: validate_migration_config_keys
+
+Type Variables
+==============
+
+.. autodata:: SyncConfigT
+
+.. autodata:: AsyncConfigT
+
+.. autodata:: ConfigT
+
+.. autodata:: DriverT

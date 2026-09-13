@@ -92,6 +92,18 @@ Insert
    :members:
    :show-inheritance:
 
+.. autoclass:: InsertIntoClauseMixin
+   :members:
+   :show-inheritance:
+
+.. autoclass:: InsertValuesMixin
+   :members:
+   :show-inheritance:
+
+.. autoclass:: InsertFromSelectMixin
+   :members:
+   :show-inheritance:
+
 Update
 ======
 
@@ -99,10 +111,26 @@ Update
    :members:
    :show-inheritance:
 
+.. autoclass:: UpdateTableClauseMixin
+   :members:
+   :show-inheritance:
+
+.. autoclass:: UpdateSetClauseMixin
+   :members:
+   :show-inheritance:
+
+.. autoclass:: UpdateFromClauseMixin
+   :members:
+   :show-inheritance:
+
 Delete
 ======
 
 .. autoclass:: Delete
+   :members:
+   :show-inheritance:
+
+.. autoclass:: DeleteFromClauseMixin
    :members:
    :show-inheritance:
 
@@ -117,6 +145,10 @@ Explain
 =======
 
 .. autoclass:: Explain
+   :members:
+   :show-inheritance:
+
+.. autoclass:: ExplainMixin
    :members:
    :show-inheritance:
 

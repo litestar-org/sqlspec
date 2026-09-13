@@ -31,9 +31,12 @@ def test_default_provide_session_runs_dml(spanner_config: "SpannerSyncConfig", t
     with spanner_config.provide_session() as driver:
         driver.execute(
             f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            {"id": "u1", "name": "Alice", "email": "alice@example.com", "age": 30},
+            id="u1",
+            name="Alice",
+            email="alice@example.com",
+            age=30,
         )
-        row = driver.execute(f"SELECT name FROM {test_users_table} WHERE id = @id", {"id": "u1"}).one()
+        row = driver.execute(f"SELECT name FROM {test_users_table} WHERE id = @id", id="u1").one()
         assert row["name"] == "Alice"
 
 
@@ -43,5 +46,8 @@ def test_provide_read_session_blocks_writes(spanner_config: "SpannerSyncConfig",
         with pytest.raises(SQLConversionError, match="provide_read_session"):
             driver.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-                {"id": "u2", "name": "Bob", "email": "bob@example.com", "age": 25},
+                id="u2",
+                name="Bob",
+                email="bob@example.com",
+                age=25,
             )

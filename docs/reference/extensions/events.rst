@@ -414,6 +414,10 @@ Utility Functions
 
 .. autofunction:: sqlspec.extensions.events.load_native_backend
 
+.. autofunction:: sqlspec.extensions.events.get_runtime_hints
+
+.. autofunction:: sqlspec.extensions.events.resolve_adapter_name
+
 .. autofunction:: sqlspec.extensions.events.resolve_poll_interval
 
 .. autofunction:: sqlspec.extensions.events.resolve_event_poll_interval
@@ -421,3 +425,11 @@ Utility Functions
 .. autofunction:: sqlspec.extensions.events.normalize_event_channel_name
 
 .. autofunction:: sqlspec.extensions.events.normalize_queue_table_name
+
+Configuration
+=============
+
+.. autoclass:: sqlspec.config.EventsConfig
+   :members:
+   :show-inheritance:
+   :no-index:

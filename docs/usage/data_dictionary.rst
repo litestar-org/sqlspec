@@ -217,17 +217,26 @@ lookups return a ``DDLResult`` directly:
 Use ``get_schema_ddl()`` when you need a collection of DDL items. That method
 returns a ``MetadataResult`` whose items are ``DDLResult`` instances.
 
-Sort DDL by typed dependencies before replay. Dependency-capable adapters should
-return enough edge metadata for callers to order objects before exporting or
+Sort DDL by typed dependencies before replay. Dependency-capable adapters return
+typed dependency edge metadata so callers can order objects before exporting or
 replaying them:
 
 .. code-block:: python
 
+   from sqlspec.data_dictionary import dependency_edges_from_metadata, sort_ddl_results, sort_dependencies
+
+   # Order a collection of DDLResult objects directly:
+   schema_ddl = db.data_dictionary.get_schema_ddl(db, schema="public")
+   if schema_ddl.capability.support == "supported":
+       ordered_ddl = sort_ddl_results(schema_ddl.items, order="create")
+
+   # Or sort specific object identities using extracted edges:
    dependencies = db.data_dictionary.get_dependencies(db, schema="public")
    ddl = db.data_dictionary.get_ddl(db, "orders", schema="public")
-
    if dependencies.capability.support == "supported":
-       ordered_items = order_for_replay((ddl,), dependencies.items)
+       edges = dependency_edges_from_metadata(dependencies.items)
+       sort_result = sort_dependencies([ddl.identity], edges, order="create")
+       ordered_identities = sort_result.ordered
 
 System And Performance Metadata
 ===============================
@@ -292,3 +301,10 @@ inspection metadata unless the target workflow explicitly accepts those limits.
 
 SQLSpec's bundled dialect query packs are maintained SQLSpec query packs based
 on public catalog behavior.
+
+Related Guides
+==============
+
+- :doc:`drivers_and_querying` for driver sessions and query execution.
+- :doc:`/reference/adapters/index` for adapter-specific data dictionary support.
+- :doc:`/reference/driver` for the ``SyncDataDictionaryBase`` and ``AsyncDataDictionaryBase`` interface.

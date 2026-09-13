@@ -71,6 +71,10 @@ Loaders
    :members:
    :show-inheritance:
 
+.. autoclass:: sqlspec.migrations.MigrationLoadError
+   :members:
+   :show-inheritance:
+
 .. autofunction:: sqlspec.migrations.loaders.get_migration_loader
 
 Squashing
@@ -131,6 +135,12 @@ Templates
 .. autoclass:: sqlspec.migrations.templates.PythonTemplateDefinition
    :members:
    :show-inheritance:
+
+.. autoclass:: sqlspec.migrations.templates.TemplateValidationError
+   :members:
+   :show-inheritance:
+
+.. autofunction:: sqlspec.migrations.templates.build_template_settings
 
 Utilities
 =========

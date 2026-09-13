@@ -412,6 +412,8 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
     def begin_transaction(self) -> "_AsyncBeginTransactionContext[AsyncDriverT]":
         """Context manager that commits on success and rolls back on error.
 
+        Nested blocks run in a savepoint on the outer session.
+
         Returns:
             The underlying driver session bound to the active transaction.
         """
@@ -692,6 +694,8 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
 
     def begin_transaction(self) -> "_SyncBeginTransactionContext[SyncDriverT]":
         """Context manager that commits on success and rolls back on error.
+
+        Nested blocks run in a savepoint on the outer session.
 
         Returns:
             The underlying driver session bound to the active transaction.

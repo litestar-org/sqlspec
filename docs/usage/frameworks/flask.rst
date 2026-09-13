@@ -4,7 +4,7 @@ Flask
 
 SQLSpec provides a Flask extension that manages database connections within the Flask
 request lifecycle. The extension registers connection pool setup and teardown with
-Flask's application context hooks.
+Flask's application context hooks, supporting both synchronous and asynchronous adapters.
 
 Installation
 ============
@@ -51,28 +51,59 @@ Flask app. Use ``plugin.get_session()`` inside request handlers to obtain a sess
    :dedent: 4
    :no-upgrade:
 
-Key Concepts
-============
+Transaction Modes
+=================
 
-**Request-Scoped Sessions**
-   Sessions obtained via ``get_session()`` are bound to the current request context.
-   They are automatically closed when the request finishes.
+Configure the commit mode under ``extension_config["flask"]``:
 
-**Application Factory Pattern**
-   When using the factory pattern, initialize the plugin in your ``create_app`` function:
+``manual`` (default)
+   SQLSpec manages connection lifecycle within the request context. Your route handler
+   commits or rolls back explicitly.
 
-   .. code-block:: python
+``autocommit``
+   SQLSpec automatically commits transactions for 2xx responses and rolls back for 4xx/5xx
+   responses or unhandled exceptions.
 
-      def create_app():
-          app = Flask(__name__)
-          sqlspec = SQLSpec()
-          sqlspec.add_config(SqliteConfig(...))
-          plugin = SQLSpecPlugin(sqlspec, app)
-          return app
+``autocommit_include_redirect``
+   Extends autocommit to also commit on redirect responses (2xx and 3xx).
 
-**Sync Execution**
-   Flask operates synchronously by default. Use sync adapters like ``SqliteConfig`` or
-   ``PsycopgSyncConfig`` for straightforward integration.
+.. code-block:: python
+
+   from sqlspec.adapters.sqlite import SqliteConfig
+
+   config = SqliteConfig(
+       connection_config={"database": "app.db"},
+       extension_config={
+           "flask": {
+               "commit_mode": "autocommit",
+               "extra_rollback_statuses": {409},
+               "session_key": "db",
+           }
+       },
+   )
+
+Multiple Databases
+==================
+
+For multiple databases, assign unique ``session_key``, ``connection_key``, and ``pool_key``
+settings under ``extension_config["flask"]``. Retrieve sessions by passing the key to
+``plugin.get_session()``:
+
+.. literalinclude:: /examples/frameworks/flask/multi_database.py
+   :language: python
+   :caption: ``flask multi database``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Async Adapter Support
+=====================
+
+While Flask operates synchronously by default, SQLSpec provides seamless support for
+asynchronous database adapters (such as ``AsyncpgConfig`` or ``AiosqliteConfig``) via
+an internal AnyIO portal runner. In async configurations, ``get_session()`` handles the
+event loop bridge transparently.
 
 Related Guides
 ==============

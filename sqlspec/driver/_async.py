@@ -544,7 +544,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
                 async with session.transaction():
                     await session.execute(
-                        "INSERT INTO items (id) VALUES (?)", 1
+                        "INSERT INTO items (id) VALUES (:id)", id=1
                     )
 
         Returns:

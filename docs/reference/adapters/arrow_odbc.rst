@@ -24,9 +24,15 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
 .. autoclass:: sqlspec.adapters.arrow_odbc.ArrowOdbcConnectionParams
    :members:
    :show-inheritance:
+
+Driver Features
+===============
 
 .. autoclass:: sqlspec.adapters.arrow_odbc.ArrowOdbcDriverFeatures
    :members:

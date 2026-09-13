@@ -17,14 +17,21 @@ Configuration
 Connection Parameters
 =====================
 
-.. autoclass:: sqlspec.adapters.pymssql.config.PymssqlConnectionParams
+.. autoclass:: sqlspec.adapters.pymssql.PymssqlConnectionParams
+   :members:
+   :show-inheritance:
+
+Pool Parameters
+===============
+
+.. autoclass:: sqlspec.adapters.pymssql.PymssqlPoolParams
    :members:
    :show-inheritance:
 
 Driver Features
 ===============
 
-.. autoclass:: sqlspec.adapters.pymssql.config.PymssqlDriverFeatures
+.. autoclass:: sqlspec.adapters.pymssql.PymssqlDriverFeatures
    :members:
    :show-inheritance:
 

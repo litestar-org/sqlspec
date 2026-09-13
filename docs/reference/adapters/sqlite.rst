@@ -12,6 +12,35 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.sqlite.SqliteConnectionParams
+   :members:
+   :show-inheritance:
+
+Driver Features
+===============
+
+.. autoclass:: sqlspec.adapters.sqlite.SqliteDriverFeatures
+   :members:
+   :show-inheritance:
+
+User-Defined Functions and Extensions
+=====================================
+
+.. autoclass:: sqlspec.adapters.sqlite.SqliteFunctionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.sqlite.SqliteCollationConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.sqlite.SqliteAggregateConfig
+   :members:
+   :show-inheritance:
+
 Driver
 ======
 

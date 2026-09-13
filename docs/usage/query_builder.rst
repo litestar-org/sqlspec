@@ -92,5 +92,6 @@ Query Modifiers
 Related Guides
 --------------
 
-- :doc:`drivers_and_querying` for execution behavior.
-- :doc:`../reference/builder` for the full builder API.
+- :doc:`drivers_and_querying` for execution behavior and transaction management.
+- :doc:`filtering` for filter types, order by, and pagination helpers.
+- :doc:`/reference/builder/index` for the full query builder, DDL, and expression API reference.

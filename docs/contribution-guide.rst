@@ -1,3 +1,1 @@
-:orphan:
-
 .. include:: ../CONTRIBUTING.rst

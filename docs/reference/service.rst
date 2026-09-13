@@ -18,7 +18,8 @@ concurrency rules.
 inside a savepoint on the outer block's session and never acquires a second
 session. It releases the savepoint when it succeeds and rolls back to the
 savepoint when it raises, then re-raises, so only the inner work is undone and the
-outer block can continue and commit. An adapter without savepoint support raises
+outer block can continue and commit. Adapters without savepoint support (DuckDB,
+BigQuery, Spanner, and ADBC connections to DuckDB, BigQuery, or Snowflake) raise
 ``ImproperConfigurationError`` when a nested block is entered.
 
 The five web-framework extensions — ``litestar``, ``fastapi``, ``flask``,

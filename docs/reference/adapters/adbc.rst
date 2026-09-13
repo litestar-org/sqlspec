@@ -242,12 +242,19 @@ Configuration
    :members:
    :show-inheritance:
 
+Connection Parameters
+=====================
+
+.. autoclass:: sqlspec.adapters.adbc.AdbcConnectionParams
+   :members:
+   :show-inheritance:
+
 Driver Features
 ===============
 
-.. autoclass:: sqlspec.adapters.adbc.config.AdbcDriverFeatures
+.. autoclass:: sqlspec.adapters.adbc.AdbcDriverFeatures
    :members:
-   :no-index:
+   :show-inheritance:
 
 Driver
 ======

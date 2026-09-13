@@ -89,7 +89,7 @@ def test_fastapi_manual_commit() -> None:
             conn: Annotated[AiosqliteConnection, Depends(db_ext.provide_connection(config))],
         ) -> dict[str, Any]:
             await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "FastAPI"})
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="FastAPI")
             await conn.commit()
             return {"created": True}
 
@@ -127,7 +127,7 @@ def test_fastapi_autocommit_mode() -> None:
             db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session(config))],
         ) -> dict[str, Any]:
             await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
-            await db.execute("INSERT INTO test (name) VALUES (:name)", {"name": "AutoCommit"})
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="AutoCommit")
             return {"created": True}
 
         @app.get("/data")
@@ -238,15 +238,11 @@ def test_fastapi_complex_route_with_multiple_queries() -> None:
             await db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
             await db.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT)")
 
-            await db.execute("INSERT INTO users (name) VALUES (:name)", {"name": "Alice"})
-            await db.execute("INSERT INTO users (name) VALUES (:name)", {"name": "Bob"})
+            await db.execute("INSERT INTO users (name) VALUES (:name)", name="Alice")
+            await db.execute("INSERT INTO users (name) VALUES (:name)", name="Bob")
 
-            await db.execute(
-                "INSERT INTO posts (user_id, title) VALUES (:user_id, :title)", {"user_id": 1, "title": "Post 1"}
-            )
-            await db.execute(
-                "INSERT INTO posts (user_id, title) VALUES (:user_id, :title)", {"user_id": 1, "title": "Post 2"}
-            )
+            await db.execute("INSERT INTO posts (user_id, title) VALUES (:user_id, :title)", user_id=1, title="Post 1")
+            await db.execute("INSERT INTO posts (user_id, title) VALUES (:user_id, :title)", user_id=1, title="Post 2")
 
             await conn.commit()
             return {"setup": True}

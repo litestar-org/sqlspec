@@ -8,10 +8,11 @@ Supported Drivers (High Level)
 ------------------------------
 
 - **PostgreSQL**: asyncpg, psycopg (sync/async), psqlpy, ADBC
+- **CockroachDB**: cockroach-asyncpg, cockroach-psycopg
 - **SQLite**: sqlite3, aiosqlite, ADBC
-- **MySQL**: asyncmy, mysql-connector, pymysql
+- **MySQL & MariaDB**: aiomysql, asyncmy, mysql-connector, pymysql
 - **SQL Server**: mssql-python, pymssql, arrow-odbc
-- **Analytics / Cloud**: DuckDB, BigQuery, Spanner, Oracle, ADBC
+- **Analytics & Cloud**: DuckDB, BigQuery, Spanner, Oracle, ADBC, arrow-odbc
 
 Core Execution Pattern
 ----------------------
@@ -26,6 +27,59 @@ Core Execution Pattern
 
 Transactions
 ------------
+
+SQLSpec drivers provide a ``transaction()`` context manager that commits on
+successful block exit and rolls back when an exception is raised. If the connection
+already has an open transaction, the block joins it instead of starting a new one.
+
+.. tab-set::
+
+   .. tab-item:: Async
+
+      .. code-block:: python
+
+         async with config.provide_session() as session:
+             async with session.transaction():
+                 await session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+                 await session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
+
+   .. tab-item:: Sync
+
+      .. code-block:: python
+
+         with config.provide_session() as session:
+             with session.transaction():
+                 session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+                 session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
+
+Nested Transactions and Savepoints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Nested ``transaction()`` blocks run inside a savepoint on the enclosing
+transaction. If the inner block raises, only its work is rolled back, allowing
+the outer transaction to catch the error, continue, and commit:
+
+.. code-block:: python
+
+    from sqlspec.exceptions import UniqueViolationError
+
+    with session.transaction():
+        session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+        try:
+            with session.transaction():
+                session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+        except UniqueViolationError:
+            pass
+
+Adapters without savepoint support (DuckDB, BigQuery, Spanner, and ADBC connections
+to DuckDB, BigQuery, or Snowflake) raise ``ImproperConfigurationError`` when a
+nested block is entered.
+
+Manual Transaction Control
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For fine-grained lifecycle control, you can call ``begin()``, ``commit()``, and
+``rollback()`` directly on the driver:
 
 .. literalinclude:: /examples/drivers/transaction_handling.py
    :language: python
@@ -49,8 +103,12 @@ Parameter Binding
 Schema Mapping
 --------------
 
-Use the ``schema_type`` parameter on ``select()``, ``select_one()``, and
-``select_one_or_none()`` to map result rows to dataclass instances automatically.
+Use the ``schema_type`` parameter on ``select()``, ``select_one()``,
+``select_one_or_none()``, and ``select_stream()`` to map result rows directly to
+dataclasses, msgspec Structs, Pydantic models, attrs classes, or TypedDict
+shapes. When working with raw ``SQLResult`` objects from ``execute()``, pass
+``schema_type`` to ``result.all()``, ``result.one()``, ``result.one_or_none()``,
+or ``result.get_data()``.
 
 .. literalinclude:: /examples/querying/schema_mapping.py
    :language: python
@@ -63,9 +121,10 @@ Use the ``schema_type`` parameter on ``select()``, ``select_one()``, and
 Scalar Values and Pagination
 -----------------------------
 
-``select_value`` returns a single scalar from a one-row, one-column result.
-``select_value_or_none`` returns ``None`` when no rows match.
-``select_with_total`` returns both the data page and the total count for pagination.
+- ``select_value()`` returns a single scalar from a one-row, one-column result (with optional type conversion via ``value_type``).
+- ``select_value_or_none()`` returns ``None`` when no rows match.
+- ``select_with_total()`` returns a ``(data_rows, total_count)`` tuple for pagination.
+- Drivers also provide ``fetch()``, ``fetch_one()``, ``fetch_one_or_none()``, ``fetch_value()``, ``fetch_value_or_none()``, ``fetch_with_total()``, and ``fetch_stream()`` aliases matching asyncpg conventions.
 
 .. literalinclude:: /examples/querying/batch_operations.py
    :language: python
@@ -162,5 +221,6 @@ Driver Configuration Examples
 Related References
 ------------------
 
-- :doc:`../reference/adapters` for full adapter configuration reference.
-- :doc:`/reference/adapters` for adapter capabilities and connection profiles.
+- :doc:`/reference/adapters/index` for full adapter configuration, feature matrix, and connection profiles.
+- :doc:`/reference/driver` for the driver interface and query execution API.
+- :doc:`/reference/core/statement` for the ``SQL`` statement model and modifiers.

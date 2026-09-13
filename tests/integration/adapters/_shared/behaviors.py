@@ -3920,7 +3920,7 @@ def _bigquery_param_codecs(driver: object, case: DriverCase) -> None:
     sync_driver = cast("SyncContractDriver", driver)
 
     with pytest.raises(SQLSpecError, match="Cannot determine BigQuery ARRAY type"):
-        sync_driver.execute("SELECT ARRAY_LENGTH(@values)", {"values": []})
+        sync_driver.execute("SELECT ARRAY_LENGTH(@values)", values=[])
 
 
 register_sync_extra_assertion("param_codecs:bigquery", PARAM_CODECS_SCOPE, _bigquery_param_codecs)

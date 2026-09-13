@@ -49,6 +49,18 @@ and services such as Litestar, FastAPI, Flask, Sanic, Starlette, and Google ADK.
 
       Pub/sub event channels with database-backed queues.
 
+   .. grid-item-card:: OpenTelemetry
+      :link: otel
+      :link-type: doc
+
+      Distributed tracing spans for database statements and operations.
+
+   .. grid-item-card:: Prometheus
+      :link: prometheus
+      :link-type: doc
+
+      Execution metrics, query counters, and latency histograms.
+
 .. toctree::
    :hidden:
 
@@ -59,3 +71,5 @@ and services such as Litestar, FastAPI, Flask, Sanic, Starlette, and Google ADK.
    starlette
    adk
    events
+   otel
+   prometheus

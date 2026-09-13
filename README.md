@@ -23,6 +23,8 @@ SQLSpec is a SQL execution layer for Python. You write the SQL -- as strings, th
 ## Quick Start
 
 ```bash
+uv add sqlspec
+# or
 pip install sqlspec
 ```
 
@@ -43,7 +45,7 @@ db = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(db) as session:
     greeting = session.select_one("SELECT 'Hello, SQLSpec!' AS message", schema_type=Greeting)
-    print(greeting.message)  # Output: Hello, SQLSpec!
+    print(greeting.message)
 ```
 
 Write SQL, define a schema, get typed objects back. The [getting started guide](https://sqlspec.dev/getting_started/) covers adapter installation and the query builder.
@@ -64,7 +66,7 @@ Write SQL, define a schema, get typed objects back. The [getting started guide](
 
 - [Getting Started](https://sqlspec.dev/getting_started/) -- installation, adapter selection, first steps
 - [Usage Guides](https://sqlspec.dev/usage/) -- adapters, configuration, SQL file loader, and more
-- [Examples Gallery](https://sqlspec.dev/examples/) -- working code for common patterns
+- [Recipes](https://sqlspec.dev/recipes/) -- production patterns (DI, service layers, multi-tenancy)
 - [API Reference](https://sqlspec.dev/reference/) -- full API docs
 - [CLI Reference](https://sqlspec.dev/usage/cli.html) -- migration and management commands
 

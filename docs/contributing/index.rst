@@ -2,29 +2,41 @@
 Developers
 ==========
 
-Thank you for your interest in contributing to SQLSpec! This section provides guidance for developers who want to extend SQLSpec, create new adapters, or contribute to the project.
+Welcome to the SQLSpec developer documentation! SQLSpec is a type-safe SQL query mapper and connectivity layer designed for high performance with minimal abstraction. Whether you are building new database adapters, enhancing the query builder, fixing a bug, or improving documentation, this section provides the essential resources to get started.
 
 .. grid:: 1 1 2 2
     :padding: 0
     :gutter: 2
 
-    .. grid-item-card:: :octicon:`database` Creating Adapters
-      :link: creating_adapters
-      :link-type: doc
-
-      Comprehensive guide to building new database adapters for SQLSpec.
-
     .. grid-item-card:: :octicon:`git-pull-request` Contribution Guide
       :link: ../contribution-guide
       :link-type: doc
 
-      General contribution guidelines, code standards, and PR workflow.
+      Environment setup with ``uv``, development workflow, coding standards (PEP 604, typing, docstrings), and repository quality gates.
+
+    .. grid-item-card:: :octicon:`database` Creating Adapters
+      :link: creating_adapters
+      :link-type: doc
+
+      Architecture guide for authoring new synchronous and asynchronous database adapters, driver base classes, statement configs, and feature flags.
+
+    .. grid-item-card:: :octicon:`tag` Releases & Versioning
+      :link: ../releases
+      :link-type: doc
+
+      Release lifecycle, Semantic Versioning standards, pre-release cadences, LTS deprecation policies, and the automated CI publishing pipeline.
+
+    .. grid-item-card:: :octicon:`history` Changelog
+      :link: ../changelog
+      :link-type: doc
+
+      Comprehensive version-by-version change log covering features, bug fixes, breaking changes, and migration notes across all releases.
 
 .. toctree::
     :maxdepth: 2
     :hidden:
 
-    creating_adapters
-    ../changelog
     ../contribution-guide
+    creating_adapters
     ../releases
+    ../changelog

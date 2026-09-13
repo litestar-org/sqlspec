@@ -37,15 +37,15 @@ commits or rolls back that whole transaction, including work done before the blo
 
     async with config.provide_session() as session:
         async with session.transaction():
-            await session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
-            await session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+            await session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+            await session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
 
 .. code-block:: python
 
     with config.provide_session() as session:
         with session.transaction():
-            session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
-            session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+            session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+            session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
 
 Nested blocks
 -------------
@@ -62,10 +62,10 @@ enclosing block stays open and decides whether the work is committed. A service
     from sqlspec.exceptions import UniqueViolationError
 
     with session.transaction():
-        session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+        session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
         try:
             with session.transaction():
-                session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+                session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
         except UniqueViolationError:
             pass
 
@@ -88,25 +88,84 @@ block, using the syntax your database supports:
 
     async with session.transaction():
         await session.execute_script("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-        await session.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", 10, 1)
+        await session.execute(
+            "UPDATE accounts SET balance = balance - :amount WHERE id = :id",
+            amount=10,
+            id=1,
+        )
 
-Base Driver Classes
-===================
+Driver Adapter Protocol and Base Classes
+========================================
 
-Synchronous Driver
-------------------
+SQLSpec does not define standalone ``DriverProtocol``, ``AsyncDriverProtocol``, or
+``SessionProtocol`` classes. Instead, database drivers and sessions are instances
+of :class:`SyncDriverAdapterBase` or :class:`AsyncDriverAdapterBase`. The type alias
+:data:`DriverAdapterProtocol` unifies synchronous and asynchronous driver adapters
+for generic annotations.
+
+.. autodata:: DriverAdapterProtocol
+
+Synchronous Driver Adapter
+--------------------------
 
 .. autoclass:: SyncDriverAdapterBase
    :members:
    :undoc-members:
    :show-inheritance:
 
-Asynchronous Driver
--------------------
+Asynchronous Driver Adapter
+---------------------------
 
 .. autoclass:: AsyncDriverAdapterBase
    :members:
    :undoc-members:
+   :show-inheritance:
+
+Connection Context and Session Factories
+========================================
+
+Context managers that manage pool connection and session lifecycles for driver adapters.
+
+.. autoclass:: SyncPoolConnectionContext
+   :members:
+   :show-inheritance:
+
+.. autoclass:: AsyncPoolConnectionContext
+   :members:
+   :show-inheritance:
+
+.. autoclass:: SyncPoolSessionFactory
+   :members:
+   :show-inheritance:
+
+.. autoclass:: AsyncPoolSessionFactory
+   :members:
+   :show-inheritance:
+
+Row Streaming and Execution Results
+===================================
+
+.. autoclass:: SyncRowStream
+   :members:
+   :show-inheritance:
+
+.. autoclass:: AsyncRowStream
+   :members:
+   :show-inheritance:
+
+.. autoclass:: ExecutionResult
+   :members:
+   :show-inheritance:
+
+Exception Handlers
+==================
+
+.. autoclass:: BaseSyncExceptionHandler
+   :members:
+   :show-inheritance:
+
+.. autoclass:: BaseAsyncExceptionHandler
+   :members:
    :show-inheritance:
 
 Data Dictionary
