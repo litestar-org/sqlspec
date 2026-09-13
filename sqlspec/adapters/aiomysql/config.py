@@ -18,6 +18,7 @@ from sqlspec.adapters.aiomysql._typing import (
 from sqlspec.adapters.aiomysql.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -212,6 +213,9 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
     supports_native_row_streaming: ClassVar[bool] = True
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
+    )
     _connection_context_class: "ClassVar[type[AiomysqlConnectionContext]]" = AiomysqlConnectionContext
     _session_factory_class: "ClassVar[type[_AiomysqlSessionFactory]]" = _AiomysqlSessionFactory
     _session_context_class: "ClassVar[type[AiomysqlSessionContext]]" = AiomysqlSessionContext

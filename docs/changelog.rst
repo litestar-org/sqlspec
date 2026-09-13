@@ -50,6 +50,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   the explicit ``native_json=True`` override remains available.
   (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
 
+* Expose :class:`~sqlspec.core.TypeCoercionCapabilities` on all adapter configuration classes
+  as a ``type_coercion_capabilities`` ClassVar, declaring each adapter's datetime binding mode
+  (``native``, ``iso_text``, or ``naive_utc``), timestamp precision (``microsecond``, ``millisecond``, or ``second``),
+  JSON column decoding behavior, and UUID binding mode (``native`` or ``text``).
+  (`#780 <https://github.com/litestar-org/sqlspec/issues/780>`_)
+
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
   it fails; a failed commit is followed by a rollback attempt. A block entered while
@@ -207,6 +213,9 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
 **Fixed:**
+
+* Preserve JSON objects and arrays as individual query parameters after placeholder conversion,
+  instead of reinterpreting them as batches during parameter validation.
 
 * SQLite and aiosqlite adapters map primary key constraint violations (extended error code 1555
   and ``SQLITE_CONSTRAINT_PRIMARYKEY``) to ``UniqueViolationError``.

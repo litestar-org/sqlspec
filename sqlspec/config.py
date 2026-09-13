@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, Ty
 
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import (
     build_default_statement_config,
     close_async_pool,
@@ -75,6 +76,7 @@ __all__ = (
     "StarletteConfig",
     "SyncConfigT",
     "SyncDatabaseConfig",
+    "TypeCoercionCapabilities",
     "validate_migration_config_keys",
 )
 
@@ -959,6 +961,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_reliable_rowcount: "ClassVar[bool]" = True
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
+    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="native"
+    )
     bind_key: "str | None"
     statement_config: "StatementConfig"
     connection_config: "dict[str, Any]"

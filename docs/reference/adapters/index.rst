@@ -129,6 +129,12 @@ the session when deciding whether to verify a modifying statement with a follow-
 query. The flag describes affected-row reporting for individual DML statements;
 SELECT, scripts, and batch operations retain their adapter-specific count semantics.
 
+Type coercion capabilities describe the default adapter parameter and result paths.
+Custom statement coercions, driver feature overrides, and database column types can
+change these behaviors. Timestamp precision describes the adapter binding path; a
+lower-precision database column can still truncate the value. ``native`` binding
+means the parameter pipeline preserves the Python value for the driver.
+
 .. list-table::
    :header-rows: 1
 
@@ -139,6 +145,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Arrow Support
      - Native Pipelines
      - Reliable rowcount
+     - Datetime Binding
+     - Timestamp Precision
+     - JSON Decoded
+     - UUID Binding
    * - asyncpg
      -
      - Yes
@@ -146,6 +156,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      - Yes
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Native
    * - psycopg
      - Yes
      - Yes
@@ -153,6 +167,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      - Yes
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Native
    * - psqlpy
      -
      - Yes
@@ -160,6 +178,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Native
    * - sqlite
      - Yes
      -
@@ -167,6 +189,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - ISO Text
+     - Microsecond
+     -
+     - Text
    * - aiosqlite
      -
      - Yes
@@ -174,6 +200,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - ISO Text
+     - Microsecond
+     -
+     - Text
    * - duckdb
      - Yes
      -
@@ -181,6 +211,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - Yes
+     - ISO Text
+     - Microsecond
+     -
+     - Text
    * - oracledb
      - Yes
      - Yes
@@ -188,6 +222,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      - Yes
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Native
    * - mysql-connector
      - Yes
      - Yes
@@ -195,6 +233,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - Native
+     - Microsecond
+     -
+     - Text
    * - pymysql
      - Yes
      -
@@ -202,6 +244,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - Native
+     - Microsecond
+     -
+     - Text
    * - asyncmy
      -
      - Yes
@@ -209,6 +255,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - Native
+     - Microsecond
+     -
+     - Text
    * - aiomysql
      -
      - Yes
@@ -216,6 +266,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - Native
+     - Microsecond
+     -
+     - Text
    * - bigquery
      - Yes
      -
@@ -223,6 +277,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Text
    * - spanner
      - Yes
      -
@@ -230,6 +288,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Text
    * - cockroach (asyncpg)
      -
      - Yes
@@ -237,6 +299,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      - Yes
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Native
    * - cockroach (psycopg)
      - Yes
      - Yes
@@ -244,6 +310,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      - Yes
      - Yes
+     - Native
+     - Microsecond
+     - Yes
+     - Native
    * - adbc
      - Yes
      -
@@ -251,6 +321,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - No
+     - Native
+     - Microsecond
+     -
+     - Native
    * - arrow_odbc
      - Yes
      -
@@ -258,6 +332,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - No
+     - ISO Text
+     - Microsecond
+     -
+     - Text
    * - mssql_python
      - Yes
      -
@@ -265,6 +343,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - Yes
+     - Native
+     - Microsecond
+     -
+     - Native
    * - pymssql
      - Yes
      -
@@ -272,6 +354,10 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      -
      -
      - Yes
+     - Native
+     - Microsecond
+     -
+     - Text
 
 .. toctree::
    :hidden:

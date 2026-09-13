@@ -6,7 +6,6 @@ from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.parameters._alignment import looks_like_execute_many
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
     _NAMED_STYLE_VALUES,
@@ -727,8 +726,7 @@ class ParameterProcessor:
         if has_named_placeholders:
             return False
 
-        looks_many = is_many or looks_like_execute_many(payload)
-        if not looks_many:
+        if not is_many:
             return False
 
         # Fast type dispatch for common types

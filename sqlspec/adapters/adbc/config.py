@@ -22,6 +22,7 @@ from sqlspec.adapters.adbc.core import (
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
+from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -196,6 +197,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     supports_native_parquet_import: "ClassVar[bool]" = True
     supports_reliable_rowcount: ClassVar[bool] = False
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed", "rows_per_chunk")
+    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="native"
+    )
     _connection_context_class: "ClassVar[type[AdbcConnectionContext]]" = AdbcConnectionContext
     _session_factory_class: "ClassVar[type[_AdbcSessionConnectionHandler]]" = _AdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[AdbcSessionContext]]" = AdbcSessionContext

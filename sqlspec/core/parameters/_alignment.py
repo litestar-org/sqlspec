@@ -117,9 +117,7 @@ def validate_parameter_alignment(
     if profile.total_count == 0:
         return
 
-    effective_is_many = is_many or looks_like_execute_many(parameters)
-
-    if effective_is_many:
+    if is_many:
         if parameters is None:
             if profile.total_count == 0:
                 return
@@ -184,12 +182,6 @@ def _collect_actual_identifiers(parameters: Any) -> "tuple[set[tuple[str, int | 
     if isinstance(parameters, Mapping):
         mapping_identifiers = {normalize_parameter_key(key) for key in parameters}
         return mapping_identifiers, len(parameters)
-    if looks_like_execute_many(parameters):
-        aggregated_identifiers: set[tuple[str, int | str]] = set()
-        for entry in parameters:
-            entry_identifiers, _ = _collect_actual_identifiers(entry)
-            aggregated_identifiers.update(entry_identifiers)
-        return aggregated_identifiers, len(aggregated_identifiers)
     if _is_sequence_like(parameters):
         identifiers = {("index", cast("int | str", index)) for index in range(len(parameters))}
         return identifiers, len(parameters)

@@ -10,7 +10,6 @@ from sqlglot import exp as _exp
 import sqlspec.exceptions
 from sqlspec.core.parameters._alignment import (
     collect_null_parameter_ordinals,
-    looks_like_execute_many,
     normalize_parameter_key,
     validate_parameter_alignment,
 )
@@ -236,7 +235,7 @@ def replace_null_parameters_with_literals(
             return expression, _as_concrete_payload(parameters)
         return expression, None
 
-    if is_many or looks_like_execute_many(parameters):
+    if is_many:
         if isinstance(parameters, (dict, list, tuple)):
             return expression, _as_concrete_payload(parameters)
         return expression, None
@@ -244,7 +243,7 @@ def replace_null_parameters_with_literals(
     if parameter_profile is None:
         msg = "replace_null_parameters_with_literals() requires parameter_profile for non-empty parameters"
         raise sqlspec.exceptions.SQLSpecError(msg)
-    validate_parameter_alignment(parameter_profile, parameters)
+    validate_parameter_alignment(parameter_profile, parameters, is_many=is_many)
 
     null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
     if not null_positions:

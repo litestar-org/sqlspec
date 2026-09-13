@@ -26,6 +26,7 @@ from sqlspec.adapters.mysqlconnector.driver import (
     MysqlConnectorSyncExceptionHandler,
 )
 from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, SyncDatabaseConfig
+from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
@@ -288,6 +289,9 @@ class MysqlConnectorSyncConfig(
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
     supports_native_row_streaming: ClassVar[bool] = True
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
+    )
     _connection_context_class: "ClassVar[type[MysqlConnectorSyncConnectionContext]]" = (
         MysqlConnectorSyncConnectionContext
     )
@@ -407,6 +411,9 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
     supports_native_row_streaming: ClassVar[bool] = True
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
+    )
     _connection_context_class: "ClassVar[type[MysqlConnectorAsyncConnectionContext]]" = (
         MysqlConnectorAsyncConnectionContext
     )

@@ -10,6 +10,7 @@ from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
@@ -174,6 +175,9 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     supports_native_row_streaming: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
+    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="native"
+    )
     _connection_context_class: "ClassVar[type[MssqlPythonConnectionContext]]" = MssqlPythonConnectionContext
     _session_factory_class: "ClassVar[type[_MssqlPythonSyncSessionConnectionHandler]]" = (
         _MssqlPythonSyncSessionConnectionHandler
