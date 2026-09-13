@@ -18,6 +18,7 @@ from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
 from sqlspec.core.parameters import (
+    ParameterProcessingResult,
     ParameterProcessor,
     ParameterProfile,
     structural_fingerprint,
@@ -485,7 +486,7 @@ class SQLProcessor:
 
     def _prepare_parameters(
         self, sql: str, parameters: Any, is_many: bool, dialect_str: "str | None", *, param_fingerprint: Any | None
-    ) -> "tuple[str, Any, ParameterProfile, str, tuple[str, ...], bool]":
+    ) -> ParameterProcessingResult:
         """Process SQL parameters for compilation.
 
         Args:
@@ -496,10 +497,9 @@ class SQLProcessor:
             param_fingerprint: Pre-computed parameter fingerprint for cache key.
 
         Returns:
-            Tuple of processed SQL, processed parameters, parameter profile, SQLGlot SQL,
-            input named parameters, and applied wrap types flag.
+            ParameterProcessingResult containing processed SQL and metadata.
         """
-        process_result = self._parameter_processor.process(
+        return self._parameter_processor.process(
             sql=sql,
             parameters=parameters,
             config=self._parameter_config,
@@ -507,14 +507,6 @@ class SQLProcessor:
             is_many=is_many,
             wrap_types=self._enable_parameter_type_wrapping,
             param_fingerprint=param_fingerprint,
-        )
-        return (
-            process_result.sql,
-            process_result.parameters,
-            process_result.parameter_profile,
-            process_result.sqlglot_sql,
-            process_result.input_named_parameters,
-            process_result.applied_wrap_types,
         )
 
     @staticmethod
@@ -832,19 +824,14 @@ class SQLProcessor:
         operation_profile = OperationProfile.empty()
 
         try:
-            (
-                processed_sql,
-                processed_params,
-                parameter_profile,
-                sqlglot_sql,
-                input_named_parameters,
-                applied_wrap_types,
-            ) = self._prepare_parameters(
+            process_result = self._prepare_parameters(
                 sql, parameters, is_many, self._dialect_str, param_fingerprint=param_fingerprint
             )
-            expression_override = SQLProcessor._normalize_expression_override(expression_override, sqlglot_sql, sql)
+            expression_override = SQLProcessor._normalize_expression_override(
+                expression_override, process_result.sqlglot_sql, sql
+            )
 
-            final_parameters = processed_params
+            final_parameters = process_result.parameters
             ast_was_transformed = False
             expression = None
             operation_type: OperationType = "COMMAND"
@@ -853,13 +840,13 @@ class SQLProcessor:
 
             if self._config.enable_parsing:
                 (expression, operation_type, operation_profile, parse_cache_key) = self._resolve_expression(
-                    sqlglot_sql, self._dialect_str, expression_override
+                    process_result.sqlglot_sql, self._dialect_str, expression_override
                 )
                 (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
                     self._apply_ast_transformers(
                         expression,
                         final_parameters,
-                        parameter_profile,
+                        process_result.parameter_profile,
                         operation_type,
                         operation_profile,
                         parse_cache_key,
@@ -871,21 +858,20 @@ class SQLProcessor:
                     parameter_casts = SQLProcessor._parameter_casts(expression)
 
             final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
-                processed_sql,
-                processed_params,
+                process_result.sql,
+                process_result.parameters,
                 expression,
                 final_parameters,
-                parameter_profile,
+                process_result.parameter_profile,
                 is_many,
                 self._dialect_str,
                 ast_was_transformed,
-                original_input_named_parameters=input_named_parameters,
+                original_input_named_parameters=process_result.input_named_parameters,
             )
 
-            # If not transformed, we still need input_named_parameters from _prepare_parameters
             if not ast_was_transformed:
-                input_named_params = input_named_parameters
-                applied_wrap = applied_wrap_types
+                input_named_params = process_result.input_named_parameters
+                applied_wrap = process_result.applied_wrap_types
 
             if self._should_validate_parameters(final_params, parameters, is_many):
                 self._validate_parameters(parameter_profile, final_params, is_many)

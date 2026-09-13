@@ -675,19 +675,7 @@ class ParameterProcessor:
             parameter_rows = cast("Sequence[Any]", parameters)
             updated_rows: list[Any] | None = None
             for idx, row in enumerate(parameter_rows):
-                row_type = type(row)
-                if row_type is dict:
-                    row_dict: dict[str, Any] = row
-                    if strict:
-                        missing = [name for name in named_order if name not in row_dict]
-                        if missing:
-                            from sqlspec.exceptions import SQLSpecError
-
-                            msg = f"Missing required parameters: {missing}"
-                            raise SQLSpecError(msg)
-                    mapped_row: Any = tuple(row_dict.get(name) for name in named_order)
-                elif isinstance(row, Mapping):
-                    # Fallback for custom Mapping types
+                if type(row) is dict or isinstance(row, Mapping):
                     if strict:
                         missing = [name for name in named_order if name not in row]
                         if missing:
@@ -695,7 +683,7 @@ class ParameterProcessor:
 
                             msg = f"Missing required parameters: {missing}"
                             raise SQLSpecError(msg)
-                    mapped_row = tuple(row.get(name) for name in named_order)
+                    mapped_row: Any = tuple(row.get(name) for name in named_order)
                 else:
                     mapped_row = row
 
@@ -711,19 +699,7 @@ class ParameterProcessor:
                 return tuple(updated_rows)
             return updated_rows
 
-        if param_type is dict:
-            dict_parameters = cast("dict[str, Any]", parameters)
-            if strict:
-                missing = [name for name in named_order if name not in dict_parameters]
-                if missing:
-                    from sqlspec.exceptions import SQLSpecError
-
-                    msg = f"Missing required parameters: {missing}"
-                    raise SQLSpecError(msg)
-            return tuple(dict_parameters.get(name) for name in named_order)
-
-        # Fallback for custom Mapping types
-        if isinstance(parameters, Mapping):
+        if param_type is dict or isinstance(parameters, Mapping):
             if strict:
                 missing = [name for name in named_order if name not in parameters]
                 if missing:
@@ -890,11 +866,7 @@ class ParameterProcessor:
             # Convert parameters to concrete type for return
             if parameters is None:
                 return sql, None, None
-            if isinstance(parameters, dict):
-                return sql, parameters, None
-            if isinstance(parameters, list):
-                return sql, parameters, None
-            if isinstance(parameters, tuple):
+            if isinstance(parameters, (dict, list, tuple)):
                 return sql, parameters, None
             if isinstance(parameters, Mapping):
                 return sql, dict(parameters), None

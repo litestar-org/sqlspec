@@ -143,19 +143,11 @@ class ParameterConverter:
             return self._embed_static_parameters(sql, parameters, extracted_param_info)
 
         current_style = _single_parameter_style(extracted_param_info)
-        if current_style is not None and target_style == current_style:
-            converted_parameters = self._convert_parameter_format(
-                parameters,
-                extracted_param_info,
-                target_style,
-                parameters,
-                preserve_parameter_format=True,
-                is_many=is_many,
-                strict_named_parameters=strict_named_parameters,
-            )
-            return sql, converted_parameters
-
-        converted_sql = self._convert_placeholders_to_style(sql, extracted_param_info, target_style, precomputed_plan)
+        converted_sql = (
+            sql
+            if current_style is not None and target_style == current_style
+            else self._convert_placeholders_to_style(sql, extracted_param_info, target_style, precomputed_plan)
+        )
         converted_parameters = self._convert_parameter_format(
             parameters,
             extracted_param_info,
@@ -334,12 +326,8 @@ class ParameterConverter:
     def _preserve_original_format(
         self, param_values: "list[Any]", original_parameters: object
     ) -> "PositionalParameterOutput":
-        if isinstance(original_parameters, tuple):
-            return tuple(param_values)
         if isinstance(original_parameters, list):
             return param_values
-        if isinstance(original_parameters, Mapping):
-            return tuple(param_values)
         return tuple(param_values)
 
     def _convert_parameter_format(
@@ -409,23 +397,14 @@ class ParameterConverter:
             unique_params: dict[str, Any] = {}
             param_order: list[str] = []
 
-            if has_mixed_styles:
-                param_keys = list(parameters.keys())
-                for param in param_info:
-                    param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
-                    if param_key not in unique_params:
-                        value, found = self._lookup_parameter_value(param, parameters, param_keys)
-                        if found:
-                            unique_params[param_key] = value
-                            param_order.append(param_key)
-            else:
-                for param in param_info:
-                    param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
-                    if param_key not in unique_params:
-                        value, found = self._lookup_parameter_value(param, parameters, [])
-                        if found:
-                            unique_params[param_key] = value
-                            param_order.append(param_key)
+            param_keys = list(parameters.keys()) if has_mixed_styles else []
+            for param in param_info:
+                param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
+                if param_key not in unique_params:
+                    value, found = self._lookup_parameter_value(param, parameters, param_keys)
+                    if found:
+                        unique_params[param_key] = value
+                        param_order.append(param_key)
 
             needs_expansion = target_style in _EXPANDING_POSITIONAL_STYLES
 
@@ -454,12 +433,10 @@ class ParameterConverter:
 
         unique_params: dict[str, int] = {}
         for param in param_info:
-            if param.style in _OCCURRENCE_KEYED_STYLES:
+            if param.style in _OCCURRENCE_KEYED_STYLES or not param.name:
                 param_key = f"{param.placeholder_text}_{param.ordinal}"
-            elif (param.style == ParameterStyle.NUMERIC and param.name) or param.name:
-                param_key = param.placeholder_text
             else:
-                param_key = f"{param.placeholder_text}_{param.ordinal}"
+                param_key = param.placeholder_text
 
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
@@ -489,12 +466,10 @@ class ParameterConverter:
     def _parameter_value(
         self, parameters: "ParameterPayload", param: "ParameterInfo", unique_params: "dict[str, int]"
     ) -> object | None:
-        if param.style in _OCCURRENCE_KEYED_STYLES:
+        if param.style in _OCCURRENCE_KEYED_STYLES or not param.name:
             param_key = f"{param.placeholder_text}_{param.ordinal}"
-        elif (param.style == ParameterStyle.NUMERIC and param.name) or param.name:
-            param_key = param.placeholder_text
         else:
-            param_key = f"{param.placeholder_text}_{param.ordinal}"
+            param_key = param.placeholder_text
 
         unique_ordinal = unique_params.get(param_key)
         if unique_ordinal is None:
