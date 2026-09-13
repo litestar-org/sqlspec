@@ -124,6 +124,11 @@ exports a typed config class and a driver implementation.
 Feature Comparison
 ==================
 
+Read ``config.supports_reliable_rowcount`` from the configuration used to create
+the session when deciding whether to verify a modifying statement with a follow-up
+query. The flag describes affected-row reporting for individual DML statements;
+SELECT, scripts, and batch operations retain their adapter-specific count semantics.
+
 .. list-table::
    :header-rows: 1
 

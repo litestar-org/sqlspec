@@ -32,18 +32,11 @@ UNRELIABLE_ROWCOUNT_CONFIGS: frozenset[str] = frozenset({"ArrowOdbcConfig", "Adb
 
 
 def test_reliable_rowcount_defaults() -> None:
-    """Verify supports_reliable_rowcount default on base protocol and across all registered adapter configs."""
+    """Verify the reliable rowcount default on the base configuration."""
     from sqlspec.config import DatabaseConfigProtocol
 
     assert DatabaseConfigProtocol.supports_reliable_rowcount is True
 
-    for module_path, class_name in CONFIG_CLASSES:
-        module = pytest.importorskip(module_path)
-        config_cls = getattr(module, class_name)
-        expected = class_name not in UNRELIABLE_ROWCOUNT_CONFIGS
-        assert config_cls.supports_reliable_rowcount is expected, (
-            f"{class_name}.supports_reliable_rowcount is {config_cls.supports_reliable_rowcount}, expected {expected}"
-        )
 
 
 @pytest.mark.parametrize(("module_path", "class_name"), CONFIG_CLASSES)
