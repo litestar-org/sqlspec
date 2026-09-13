@@ -257,3 +257,15 @@ def test_sync_store_defaults_to_driver_supported_json_storage(major: int) -> Non
 
     assert "state NVARCHAR(MAX) NOT NULL" in store._sessions_table_ddl()
     config.provide_session.assert_not_called()
+
+
+def test_disabled_memory_store_rejects_operations_without_connecting() -> None:
+    config = _mock_config({"enable_memory": False})
+    store = MssqlPythonADKMemoryStore(config)
+    store.create_tables()
+    with pytest.raises(RuntimeError, match="disabled"):
+        store.insert_memory_entries([])
+    with pytest.raises(RuntimeError, match="disabled"):
+        store.search_entries("query", "app", "user")
+    config.provide_connection.assert_not_called()
+    config.provide_session.assert_not_called()

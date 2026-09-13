@@ -33,3 +33,11 @@ async def test_disabled_mssql_memory_migration_does_not_create_tables() -> None:
 async def test_other_adapters_are_unchanged_by_mssql_memory_upgrade() -> None:
     config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
     assert await migration.up(MigrationContext(config=config)) == []
+
+
+@pytest.mark.anyio
+async def test_memory_upgrade_requires_database_config() -> None:
+    from sqlspec.exceptions import SQLSpecError
+
+    with pytest.raises(SQLSpecError, match="context must have a config"):
+        await migration.up()
