@@ -1,8 +1,7 @@
 from typing import Any, cast
 
-from sqlglot import exp
-
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import Values
