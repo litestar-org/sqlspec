@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 
 from sqlspec import sql
@@ -130,6 +132,7 @@ def test_values_as_and_set_columns() -> None:
 def test_values_expected_result_type() -> None:
     """Test expected result type property."""
     from sqlspec.core import SQLResult
+
     val = Values([(1, "a")])
     assert val._expected_result_type == SQLResult
 
@@ -151,6 +154,7 @@ def test_values_build_empty_raises() -> None:
 def test_values_with_sqlglot_expressions() -> None:
     """Test Values containing SQLGlot expressions."""
     from sqlglot import exp
+
     val = Values([(exp.convert(1), "text")])
     stmt = val.build()
     assert "1" in stmt.sql
@@ -165,10 +169,10 @@ def test_values_add_rows_validation_errors() -> None:
         Values([{"a": 1}, {"b": 2}])
 
     with pytest.raises(SQLBuilderError, match=r"(?i)must be a sequence"):
-        Values([(1, 2), 3])
+        Values(cast(Any, [(1, 2), 3]))
 
     with pytest.raises(SQLBuilderError, match=r"(?i)at least one column"):
         Values([()])
 
     with pytest.raises(SQLBuilderError, match=r"(?i)must be sequences or mappings"):
-        Values([1, 2])
+        Values(cast(Any, [1, 2]))
