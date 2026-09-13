@@ -879,6 +879,9 @@ class ParameterProcessor:
         execution_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
             param_info, target_style
         )
+        preserve_batch = (
+            is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple))
+        )
         processed_sql, processed_parameters, converted_param_info = self._converter._convert_with_metadata(
             sql,
             parameters,
@@ -887,10 +890,8 @@ class ParameterProcessor:
             strict_named_parameters=config.strict_named_parameters,
             param_info=param_info,
             precomputed_plan=execution_plan,
+            preserve_original_batch=preserve_batch,
         )
-        if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
-            return processed_sql, parameters, converted_param_info
-
         return processed_sql, processed_parameters, converted_param_info
 
 
