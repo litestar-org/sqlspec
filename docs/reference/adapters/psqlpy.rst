@@ -36,7 +36,7 @@ Driver Features
 Extension Dialects
 ==================
 
-PsqlPy supports the :doc:`pgvector and ParadeDB dialects <../dialects>` for vector
+PsqlPy supports the :doc:`pgvector, pg_textsearch, and ParadeDB dialects <../dialects>` for vector
 similarity search and full-text search operators. See the :doc:`Dialects <../dialects>`
 reference for operator details.
 

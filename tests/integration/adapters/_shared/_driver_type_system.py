@@ -176,6 +176,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_cast_detection",
         "enable_pgvector",
         "enable_paradedb",
+        "enable_pg_textsearch",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",
@@ -185,6 +186,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
     "psycopg": (
         "enable_pgvector",
         "enable_paradedb",
+        "enable_pg_textsearch",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",

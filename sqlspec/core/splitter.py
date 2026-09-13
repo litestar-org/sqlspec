@@ -551,6 +551,8 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "postgresql": PostgreSQLDialectConfig,
     "postgres": PostgreSQLDialectConfig,
     "paradedb": PostgreSQLDialectConfig,
+    "pg_textsearch": PostgreSQLDialectConfig,
+    "pgtextsearch": PostgreSQLDialectConfig,
     "pgvector": PostgreSQLDialectConfig,
     "mysql": MySQLDialectConfig,
     "sqlite": SQLiteDialectConfig,

@@ -23,6 +23,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
+    is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
@@ -74,6 +75,7 @@ __all__ = (
     "format_execute_many_parameters",
     "format_table_identifier",
     "get_parameter_casts",
+    "is_postgres_extension_active",
     "prepare_parameters_with_casts",
     "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
@@ -171,6 +173,7 @@ def apply_driver_features(
     features.setdefault("enable_cast_detection", True)
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
+    features.setdefault("enable_pg_textsearch", True)
 
     base_config = build_statement_config_from_profile(
         driver_profile, json_serializer=serializer, json_deserializer=deserializer

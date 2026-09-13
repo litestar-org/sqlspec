@@ -11,6 +11,7 @@ from sqlspec.adapters.psqlpy.core import (
     build_connection_config,
     build_postgres_extension_probe_names,
     default_statement_config,
+    is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
@@ -100,6 +101,10 @@ class PsqlpyDriverFeatures(TypedDict):
      switches to "paradedb" which supports search operators (@@@, &&&, etc.)
      and inherits all pgvector distance operators.
      Defaults to True. Independent of enable_pgvector.
+    enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
+     When enabled and the pg_textsearch extension is detected, the SQL dialect
+     switches to "pg_textsearch" which supports the BM25 <@> relevance ranking operator.
+     Defaults to True.
     json_serializer: Custom JSON serializer applied to the statement configuration.
     json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
     on_connection_create: Async callback executed when a connection is acquired from pool.
@@ -120,6 +125,7 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_cast_detection: NotRequired[bool]
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
+    enable_pg_textsearch: NotRequired[bool]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
@@ -237,6 +243,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         self._initialized_connection_ids: set[int] = set()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
+        self._pg_textsearch_available: bool | None = None
 
         super().__init__(
             connection_config=connection_config,
@@ -248,6 +255,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             extension_config=extension_config,
             **kwargs,
         )
+
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
 
     async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
@@ -269,6 +281,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             self.statement_config, self._pgvector_available, self._paradedb_available = (
                 resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
             )
+            self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
         conn_id = id(connection)
         if conn_id in self._initialized_connection_ids:

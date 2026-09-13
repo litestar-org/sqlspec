@@ -102,7 +102,7 @@ async def test_create_migration_resolves_only_the_enabled_store_class(monkeypatc
     assert memory_calls == ["_get_memory_store_class"]
 
 
-@pytest.mark.parametrize("dialect", ["postgres", "postgresql", "pgvector", "paradedb"])
+@pytest.mark.parametrize("dialect", ["postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch", "pgtextsearch"])
 async def test_asyncpg_memory_migration_installs_vector_extension_before_first_use(dialect: str) -> None:
     """PostgreSQL vector memory DDL is preceded by exactly one extension statement."""
     context = MigrationContext(config=_asyncpg_config(), dialect=dialect)
@@ -130,9 +130,10 @@ async def test_psycopg_memory_migration_installs_vector_extension() -> None:
     )
 
 
-async def test_postgres_bm25_migration_installs_pg_textsearch_extension() -> None:
+@pytest.mark.parametrize("dialect", ["postgres", "pg_textsearch", "pgtextsearch"])
+async def test_postgres_bm25_migration_installs_pg_textsearch_extension(dialect: str) -> None:
     """BM25 DDL is preceded by an idempotent pg_textsearch enablement statement."""
-    context = MigrationContext(config=_asyncpg_config({"enable_bm25": True}), dialect="postgres")
+    context = MigrationContext(config=_asyncpg_config({"enable_bm25": True}), dialect=dialect)
 
     statements = await migration.up(context)
 

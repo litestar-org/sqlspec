@@ -161,6 +161,7 @@ sqlspec = "sqlspec.__main__:run_cli"
 
 [project.entry-points."sqlglot.dialects"]
 paradedb = "sqlspec.dialects.postgres:ParadeDB"
+pg_textsearch = "sqlspec.dialects.postgres:PGTextSearch"
 pgvector = "sqlspec.dialects.postgres:PGVector"
 spangres = "sqlspec.dialects.spanner:Spangres"
 spanner = "sqlspec.dialects.spanner:Spanner"
@@ -236,6 +237,7 @@ exclude = [
   "sqlspec/migrations/commands.py",         # interpreted: inspect.signature/functools.wraps on coroutines
   "sqlspec/dialects/postgres/_pgvector.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/postgres/_paradedb.py", # interpreted: Dialect subclass needs sqlglot's metaclass
+  "sqlspec/dialects/postgres/_pg_textsearch.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/spanner/_spanner.py",   # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/spanner/_spangres.py",  # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted

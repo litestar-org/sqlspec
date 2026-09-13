@@ -11,6 +11,7 @@ import asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
+    is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
@@ -58,6 +59,7 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "invoke_prepared_statement",
+    "is_postgres_extension_active",
     "parse_status",
     "register_json_codecs",
     "register_pgvector_support",
@@ -235,6 +237,7 @@ def apply_driver_features(
     processed_features.setdefault("enable_json_codecs", True)
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
+    processed_features.setdefault("enable_pg_textsearch", True)
     processed_features.setdefault("enable_cloud_sql", False)
     processed_features.setdefault("enable_alloydb", False)
 

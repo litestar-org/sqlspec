@@ -6,6 +6,7 @@ from importlib.metadata import entry_points
 
 DIALECT_ENTRY_POINTS = {
     "paradedb": "sqlspec.dialects.postgres",
+    "pg_textsearch": "sqlspec.dialects.postgres",
     "pgvector": "sqlspec.dialects.postgres",
     "spangres": "sqlspec.dialects.spanner",
     "spanner": "sqlspec.dialects.spanner",
@@ -52,13 +53,15 @@ def test_importing_sqlspec_does_not_eagerly_load_dialect_machinery() -> None:
 def test_lazy_dialects_attribute_still_works() -> None:
     code = (
         "import sqlspec\n"
-        "from sqlspec.dialects import Spanner, Spangres, PGVector, ParadeDB\n"
+        "from sqlspec.dialects import Spanner, Spangres, PGVector, ParadeDB, PGTextSearch\n"
         "assert sqlspec.dialects.Spanner is Spanner\n"
+        "assert sqlspec.dialects.PGTextSearch is PGTextSearch\n"
         "from sqlglot.dialects.dialect import Dialect\n"
         "assert Dialect.get('spanner') is Spanner\n"
         "assert Dialect.get('spangres') is Spangres\n"
         "assert Dialect.get('pgvector') is PGVector\n"
         "assert Dialect.get('paradedb') is ParadeDB\n"
+        "assert Dialect.get('pg_textsearch') is PGTextSearch\n"
         "print('ok')\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)

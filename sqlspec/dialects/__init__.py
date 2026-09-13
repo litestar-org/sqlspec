@@ -13,12 +13,13 @@ This package intentionally avoids importing the dialect modules eagerly so
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from sqlspec.dialects.postgres import ParadeDB, PGVector
+    from sqlspec.dialects.postgres import ParadeDB, PGTextSearch, PGVector
     from sqlspec.dialects.spanner import Spangres, Spanner
 
-__all__ = ("PGVector", "ParadeDB", "Spangres", "Spanner")
+__all__ = ("PGTextSearch", "PGVector", "ParadeDB", "Spangres", "Spanner")
 
 _DIALECT_MODULES = {
+    "PGTextSearch": "sqlspec.dialects.postgres",
     "PGVector": "sqlspec.dialects.postgres",
     "ParadeDB": "sqlspec.dialects.postgres",
     "Spangres": "sqlspec.dialects.spanner",

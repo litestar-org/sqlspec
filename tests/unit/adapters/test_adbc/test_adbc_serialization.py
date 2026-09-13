@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter
 from sqlspec.utils.serializers import to_json
 
 
@@ -118,3 +119,9 @@ def test_backward_compatibility_no_serializer() -> None:
 
     assert "json_serializer" in config.driver_features
     assert config.driver_features["json_serializer"] is to_json
+
+
+def test_pg_textsearch_converter_keeps_postgres_json_and_array_handling() -> None:
+    converter = ADBCOutputConverter("pg_textsearch")
+    assert converter.convert_dict({"value": 1}) == to_json({"value": 1})
+    assert converter.convert_sequence([1, None, 3]) == [1, None, 3]

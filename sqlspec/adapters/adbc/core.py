@@ -21,6 +21,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
+    is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
@@ -74,6 +75,7 @@ __all__ = (
     "get_statement_config",
     "handle_postgres_rollback",
     "is_postgres_dialect",
+    "is_postgres_extension_active",
     "normalize_driver_path",
     "normalize_postgres_empty_parameters",
     "normalize_script_rowcount",
@@ -231,29 +233,32 @@ def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_diale
 
 
 def detect_postgres_extensions(
-    connection: Any, *, enable_pgvector: bool = False, enable_paradedb: bool = False
-) -> "tuple[bool, bool]":
-    """Detect pgvector and paradedb extensions on a postgres connection.
+    connection: Any, *, enable_pgvector: bool = False, enable_paradedb: bool = False, enable_pg_textsearch: bool = False
+) -> "tuple[bool, bool, bool]":
+    """Detect pgvector, paradedb, and pg_textsearch extensions on a postgres connection.
 
-    Queries ``pg_extension`` for the ``vector`` and ``pg_search`` extensions.
+    Queries ``pg_extension`` for the ``vector``, ``pg_search``, and ``pg_textsearch`` extensions.
     Returns cached-friendly booleans suitable for storing on the config instance.
 
     Args:
         connection: ADBC connection to a PostgreSQL database.
         enable_pgvector: Whether to check for the pgvector extension.
         enable_paradedb: Whether to check for the pg_search extension.
+        enable_pg_textsearch: Whether to check for the pg_textsearch extension.
 
     Returns:
-        Tuple of ``(pgvector_available, paradedb_available)``.
+        Tuple of ``(pgvector_available, paradedb_available, pg_textsearch_available)``.
     """
     extensions: list[str] = []
     if enable_pgvector:
         extensions.append("vector")
     if enable_paradedb:
         extensions.append("pg_search")
+    if enable_pg_textsearch:
+        extensions.append("pg_textsearch")
 
     if not extensions:
-        return False, False
+        return False, False, False
 
     try:
         cursor = connection.cursor()
@@ -261,11 +266,11 @@ def detect_postgres_extensions(
             cursor.execute("SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions])
             rows = cursor.fetchall()
             detected: set[str] = {row[0] for row in rows} if rows else set()
-            return "vector" in detected, "pg_search" in detected
+            return "vector" in detected, "pg_search" in detected, "pg_textsearch" in detected
         finally:
             cursor.close()
     except Exception:
-        return False, False
+        return False, False, False
 
 
 def normalize_driver_path(driver_name: str) -> str:
@@ -455,15 +460,21 @@ def resolve_dialect_name(dialect: Any) -> str:
     """Return the normalized dialect name string."""
     if dialect is None:
         return ""
+    if isinstance(dialect, str):
+        return dialect.lower()
+    if isinstance(dialect, type) and issubclass(dialect, sqlglot.Dialect):
+        return dialect.__name__.lower()
+    if isinstance(dialect, sqlglot.Dialect):
+        return type(dialect).__name__.lower()
     return str(dialect)
 
 
 def is_postgres_dialect(dialect_name: str) -> bool:
     """Return True when the dialect indicates PostgreSQL.
 
-    Includes pgvector and paradedb which are PostgreSQL extension dialects.
+    Includes pgvector, paradedb, and pg_textsearch extension dialects.
     """
-    return dialect_name in {"postgres", "postgresql", "pgvector", "paradedb"}
+    return dialect_name in {"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch", "pgtextsearch"}
 
 
 def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = None) -> None:
@@ -726,7 +737,8 @@ def build_profile() -> "DriverParameterProfile":
 def get_statement_config(detected_dialect: str) -> StatementConfig:
     """Create statement configuration for the specified dialect."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+        "postgres" if is_postgres_dialect(detected_dialect) else detected_dialect,
+        (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
     )
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
@@ -744,7 +756,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
 
-    if detected_dialect in {"postgres", "postgresql"}:
+    if is_postgres_dialect(detected_dialect):
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
@@ -775,6 +787,7 @@ def apply_driver_features(
     processed_features.setdefault("enable_arrow_extension_types", processed_features["arrow_extension_types"])
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
+    processed_features.setdefault("enable_pg_textsearch", True)
 
     if json_serializer is not None:
         statement_config = _apply_adbc_json_serializer(statement_config, json_serializer)

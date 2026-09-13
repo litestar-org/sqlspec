@@ -109,6 +109,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "hard_block",
         "reason": "SQLGlot subclass/registration module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
     },
+    "sqlspec/dialects/postgres/_pg_textsearch.py": {
+        "classification": "hard_block",
+        "reason": "SQLGlot subclass/registration module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
+    },
     "sqlspec/dialects/postgres/_pgvector.py": {
         "classification": "hard_block",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
@@ -407,6 +411,7 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             if pattern
             in {
                 "sqlspec/dialects/postgres/_paradedb.py",
+                "sqlspec/dialects/postgres/_pg_textsearch.py",
                 "sqlspec/dialects/postgres/_pgvector.py",
                 "sqlspec/dialects/spanner/_spangres.py",
                 "sqlspec/dialects/spanner/_spanner.py",

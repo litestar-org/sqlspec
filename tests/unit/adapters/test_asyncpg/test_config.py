@@ -206,18 +206,35 @@ async def test_asyncpg_bm25_probe_failure_is_preserved_as_cause() -> None:
     assert exc_info.value.__cause__ is probe_error
 
 
-async def test_asyncpg_does_not_probe_pg_textsearch_when_memory_or_bm25_is_disabled() -> None:
-    """Unneeded BM25 capability checks are omitted from first-connection setup."""
-    for adk_config in ({"enable_memory": False, "enable_bm25": True}, {"enable_bm25": False}):
-        connection = AsyncMock()
-        config = AsyncpgConfig(
-            driver_features={"enable_json_codecs": False, "enable_pgvector": False, "enable_paradedb": False},
-            extension_config={"adk": adk_config},
-        )
+async def test_asyncpg_does_not_probe_pg_textsearch_when_disabled() -> None:
+    """Extension probe is omitted when all extension flags are disabled."""
+    connection = AsyncMock()
+    config = AsyncpgConfig(
+        driver_features={
+            "enable_json_codecs": False,
+            "enable_pgvector": False,
+            "enable_paradedb": False,
+            "enable_pg_textsearch": False,
+        }
+    )
 
-        await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
 
-        connection.fetch.assert_not_awaited()
+    connection.fetch.assert_not_awaited()
+
+
+async def test_asyncpg_pg_textsearch_available_property() -> None:
+    """pg_textsearch_available reflects detected extension state."""
+    connection = AsyncMock()
+    connection.fetch.return_value = [{"extname": "pg_textsearch"}]
+    config = AsyncpgConfig(
+        driver_features={"enable_json_codecs": False, "enable_pgvector": False, "enable_paradedb": False}
+    )
+
+    assert config.pg_textsearch_available is False
+    await config._init_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    assert config.pg_textsearch_available is True
+    assert config.statement_config.dialect == "pg_textsearch"
 
 
 @pytest.mark.anyio
