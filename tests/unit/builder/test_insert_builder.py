@@ -403,7 +403,7 @@ def test_on_conflict_mysql_transpiles() -> None:
     assert "id = id" in nothing_mysql.sql or "`id` = `id`" in nothing_mysql.sql
 
 
-@pytest.mark.parametrize("dialect", ["oracle", "tsql", "mssql", "spanner", "bigquery"])
+@pytest.mark.parametrize("dialect", ["oracle", "tsql", "mssql", "bigquery"])
 def test_on_conflict_raises_oracle_tsql(dialect: str) -> None:
     """Test ON CONFLICT raises SQLBuilderError mentioning sql.merge() on unsupported dialects."""
     query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
@@ -468,3 +468,19 @@ def test_mysql_rejects_conflict_semantics_it_cannot_preserve(argument: str) -> N
     conflict.set(argument, exp.to_identifier("restricted"))
     with pytest.raises(SQLBuilderError, match="cannot preserve"):
         query.build(dialect="mysql")
+
+
+@pytest.mark.parametrize("dialect", ["spanner", "spangres"])
+def test_spanner_native_conflicts(dialect: str) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.insert("users").values(id=1).on_conflict("id").do_nothing()
+    assert "ON CONFLICT" in query.to_statement(StatementConfig(dialect=dialect)).sql
+    query = sql.insert("users").values(id=1).on_conflict("id").do_update(id=exp.column("id", table="excluded"))
+    assert "DO UPDATE" in query.build(dialect=dialect).sql
+
+
+def test_spangres_rejects_non_insert_value_conflict_update() -> None:
+    query = sql.insert("users").values(id=1).on_conflict("id").do_update(id=2)
+    with pytest.raises(SQLBuilderError, match="require excluded column values"):
+        query.build(dialect="spangres")

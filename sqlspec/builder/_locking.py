@@ -38,13 +38,16 @@ def _render_lock_targets(generator: "Generator", expressions: "Iterable[exp.Expr
 
 
 def _lock_sql(generator: "Generator", expression: exp.Lock) -> str:
-    if not generator.LOCKING_READS_SUPPORTED:
+    if not generator.LOCKING_READS_SUPPORTED and type(generator.dialect).__name__ != "Spanner":
         generator.unsupported("Locking reads using 'FOR UPDATE/SHARE' are not supported")
         return ""
 
     update = expression.args["update"]
     key = expression.args.get("key")
     lock_type = ("FOR NO KEY UPDATE" if key else "FOR UPDATE") if update else "FOR KEY SHARE" if key else "FOR SHARE"
+
+    if expression.args.get("sqlspec_share_mode"):
+        lock_type = "LOCK IN SHARE MODE"
 
     targets = _render_lock_targets(generator, expression.expressions)
     target_sql = f" OF {targets}" if targets else ""

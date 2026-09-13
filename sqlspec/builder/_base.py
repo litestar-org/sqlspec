@@ -21,7 +21,7 @@ from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
 from sqlspec.builder._locking import register_lock_generator
-from sqlspec.builder._parsing_utils import _resolve_dialect
+from sqlspec.builder._parsing_utils import _normalize_dialect, _resolve_dialect
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor
 from sqlspec.core import (
     SQL,
@@ -42,8 +42,6 @@ from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, h
 from sqlspec.utils.uuids import uuid4
 
 __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
-
-DIALECT_BUILD_ALIASES: dict[str, str] = {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres"}
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
@@ -615,7 +613,7 @@ class QueryBuilder:
             final_expression = self._optimize_expression(final_expression)
 
         target_dialect = self._build_dialect(dialect)
-        final_expression = self._prepare_dialect_expression(final_expression, target_dialect)
+        final_expression = self._prepare_dialect_expression(final_expression, target_dialect, dialect)
 
         try:
             if isinstance(final_expression, exp.Expr):
@@ -638,30 +636,56 @@ class QueryBuilder:
         return BuiltQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=target_dialect)
 
     def _build_dialect(self, dialect: DialectType = None) -> str | None:
-        resolved = dialect or self.dialect
-        if resolved is None:
-            return None
-        if isinstance(resolved, str):
-            name = resolved.lower()
-        elif isinstance(resolved, type):
-            name = resolved.__name__.lower()
-        else:
-            name = type(resolved).__name__.lower()
-        return DIALECT_BUILD_ALIASES.get(name, name)
+        return _normalize_dialect(dialect or self.dialect)
 
-    def _prepare_dialect_expression(self, expression: exp.Expr, dialect: str | None) -> exp.Expr:
+    def _prepare_dialect_expression(
+        self, expression: exp.Expr, dialect: str | None, source_dialect: DialectType = None
+    ) -> exp.Expr:
         """Validate and translate a copy so builds never mutate the builder AST."""
         if dialect is None:
             return expression
         try:
-            config = get_dialect_config(dialect)
+            config = get_dialect_config("spanner" if dialect == "spangres" else dialect)
         except ValueError:
             return expression
+        if str(source_dialect or self.dialect).lower() == "mariadb" and expression.find(exp.Lock):
+            expression = expression.copy()
+            for lock in expression.find_all(exp.Lock):
+                if not lock.args.get("update"):
+                    lock.set("sqlspec_share_mode", True)
         for lock in expression.find_all(exp.Lock):
+            if dialect in {"spanner", "spangres"} and (
+                not lock.args.get("update") or lock.args.get("wait") is not None or lock.expressions or lock.args.get("key")
+            ):
+                self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
+            if dialect == "oracle" and not lock.args.get("update"):
+                self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
+            if lock.args.get("sqlspec_share_mode") and lock.expressions:
+                self._raise_builder_error("MariaDB LOCK IN SHARE MODE does not support OF targets.")
             if config.get_feature_flag("supports_for_update") is False:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
             if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
+        if dialect == "spangres":
+            for conflict in expression.find_all(exp.OnConflict):
+                if any(conflict.args.get(key) for key in ("where", "index_predicate", "constraint", "duplicate")):
+                    self._raise_builder_error("Spanner PostgreSQL does not support these ON CONFLICT modifiers.")
+                assignments = conflict.args.get("expressions") or []
+                if assignments:
+                    insert = conflict.find_ancestor(exp.Insert)
+                    schema = insert.this if insert is not None else None
+                    assigned_columns = set()
+                    for assignment in assignments:
+                        value = assignment.expression
+                        if (
+                            not isinstance(value, exp.Column)
+                            or value.table.lower() != "excluded"
+                            or value.name != assignment.this.name
+                        ):
+                            self._raise_builder_error("Spanner PostgreSQL conflict updates require excluded column values.")
+                        assigned_columns.add(assignment.this.name)
+                    if isinstance(schema, exp.Schema) and assigned_columns != {column.name for column in schema.expressions}:
+                        self._raise_builder_error("Spanner PostgreSQL conflict updates must assign every inserted column.")
         if config.get_feature_flag("supports_on_conflict") is not False or not expression.find(exp.OnConflict):
             return expression
         if dialect != "mysql":
@@ -887,7 +911,7 @@ class QueryBuilder:
         if self.enable_optimization and isinstance(statement_expression, exp.Expr):
             statement_expression = self._optimize_expression(statement_expression)
 
-        statement_expression = self._prepare_dialect_expression(statement_expression, resolved_dialect)
+        statement_expression = self._prepare_dialect_expression(statement_expression, resolved_dialect, dialect_override)
 
         if statement_expression.find(exp.Lock):
             register_lock_generator(resolved_dialect)

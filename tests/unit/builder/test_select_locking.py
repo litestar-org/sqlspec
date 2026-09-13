@@ -240,7 +240,7 @@ def test_complex_join_with_for_update_of() -> None:
     assert "c" in sql_content
 
 
-@pytest.mark.parametrize("dialect", ["tsql", "mssql", "sqlite", "duckdb", "spanner", "bigquery"])
+@pytest.mark.parametrize("dialect", ["tsql", "mssql", "sqlite", "duckdb", "bigquery"])
 def test_for_update_raises_on_unsupported_dialects(dialect: str) -> None:
     """Test FOR UPDATE raises SQLBuilderError on dialects without row lock support."""
     query = sql.select("*").from_("job").for_update()
@@ -248,7 +248,7 @@ def test_for_update_raises_on_unsupported_dialects(dialect: str) -> None:
         query.build(dialect=dialect)
 
 
-@pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "cockroachdb", "mariadb"])
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "oracle", "cockroachdb", "mariadb", "spanner", "spangres"])
 def test_for_update_supported_dialects(dialect: str) -> None:
     """Test FOR UPDATE renders on dialects supporting row locks."""
     query = sql.select("*").from_("job").for_update()
@@ -270,3 +270,41 @@ def test_skip_locked_flag_gate() -> None:
     query = sql.select("*").from_("job").for_update(skip_locked=True)
     with pytest.raises(SQLBuilderError, match="does not support SKIP LOCKED"):
         query.build(dialect="custom_no_skip_locked")
+
+
+@pytest.mark.parametrize("statement", [False, True])
+def test_oracle_for_share_rejected(statement: bool) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("job").for_share()
+    with pytest.raises(SQLBuilderError, match="does not support FOR SHARE"):
+        if statement:
+            query.to_statement(StatementConfig(dialect="oracle"))
+        else:
+            query.build(dialect="oracle")
+
+
+@pytest.mark.parametrize("statement", [False, True])
+def test_mariadb_shared_lock_rendering(statement: bool) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("job").for_share(skip_locked=True)
+    rendered = query.to_statement(StatementConfig(dialect="mariadb")) if statement else query.build(dialect="mariadb")
+    assert "LOCK IN SHARE MODE SKIP LOCKED" in rendered.sql
+    assert "FOR SHARE" in query.build(dialect="postgres").sql
+
+
+@pytest.mark.parametrize("dialect", ["spanner", "spangres"])
+def test_spanner_statement_locking(dialect: str) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("job").for_update()
+    assert "FOR UPDATE" in query.to_statement(StatementConfig(dialect=dialect)).sql
+    for locked_query in (
+        sql.select("id").from_("job").for_update(skip_locked=True),
+        sql.select("id").from_("job").for_update(nowait=True),
+        sql.select("id").from_("job").for_update(of="job"),
+        sql.select("id").from_("job").for_share(),
+    ):
+        with pytest.raises(SQLBuilderError, match="only plain FOR UPDATE"):
+            locked_query.build(dialect=dialect)
