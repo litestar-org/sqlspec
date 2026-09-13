@@ -140,7 +140,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_reliable_rowcount: "ClassVar[bool]" = False
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
-        datetime_binding="native", timestamp_precision="millisecond", json_columns_decoded=False, uuid_binding="text"
+        datetime_binding="iso_text", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
     )
     _connection_context_class: "ClassVar[type[ArrowOdbcConnectionContext]]" = ArrowOdbcConnectionContext
     _session_factory_class: "ClassVar[type[_ArrowOdbcSessionConnectionHandler]]" = _ArrowOdbcSessionConnectionHandler

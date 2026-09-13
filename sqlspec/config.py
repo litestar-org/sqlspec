@@ -55,7 +55,6 @@ __all__ = (
     "AsyncDatabaseConfig",
     "ConfigT",
     "ConnectionT",
-    "DatabaseConfigBase",
     "DatabaseConfigProtocol",
     "DriverT",
     "EventsConfig",
@@ -1595,9 +1594,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
-
-
-DatabaseConfigBase: TypeAlias = DatabaseConfigProtocol
 
 
 class _SyncMigrationMixin:

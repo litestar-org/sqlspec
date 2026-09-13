@@ -5,7 +5,7 @@ import pickle
 
 import pytest
 
-from sqlspec.config import DatabaseConfigBase, DatabaseConfigProtocol
+from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 
 
@@ -92,4 +92,20 @@ def test_database_config_default_capabilities() -> None:
     assert default_cap.timestamp_precision == "microsecond"
     assert default_cap.json_columns_decoded is False
     assert default_cap.uuid_binding == "native"
-    assert DatabaseConfigBase.type_coercion_capabilities == default_cap
+
+
+def test_arrow_odbc_datetime_binding_preserves_microseconds() -> None:
+    """The declared policy matches the final ODBC parameter boundary."""
+    from datetime import datetime, timezone
+
+    from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
+    from sqlspec.adapters.arrow_odbc.driver import _odbc_parameters
+
+    value = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    capabilities = ArrowOdbcConfig.type_coercion_capabilities
+    assert capabilities.datetime_binding == "iso_text"
+    assert capabilities.timestamp_precision == "microsecond"
+    parameters = _odbc_parameters([value])
+    assert parameters is not None
+    assert isinstance(parameters[0], str)
+    assert datetime.fromisoformat(parameters[0]) == value
