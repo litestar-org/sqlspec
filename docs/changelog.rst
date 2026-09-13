@@ -166,6 +166,15 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   consumption without intermediate tuple relays.
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
+* Query builder validates dialect capabilities at build time instead of silently dropping unsupported clauses.
+  ``.for_update()`` and ``.for_share()`` raise ``SQLBuilderError`` on dialects without row-level locking support
+  (T-SQL, SQLite, DuckDB, Spanner, BigQuery), and ``skip_locked=True`` validates against ``supports_skip_locked``.
+  ``.on_conflict()`` automatically transpiles to ``ON DUPLICATE KEY UPDATE`` for MySQL and MariaDB (with ``do_nothing()``
+  rewriting to self-assignment), while raising ``SQLBuilderError`` suggesting ``sql.merge()`` on dialects lacking native
+  upsert support (Oracle, T-SQL, Spanner, BigQuery). Query builder ``build()`` also normalizes dialect aliases
+  (``mssql`` to ``tsql``, ``mariadb`` to ``mysql``, and ``cockroachdb`` to ``postgres``).
+  (`#779 <https://github.com/litestar-org/sqlspec/issues/779>`_)
+
 **Fixed:**
 
 * SQLite and aiosqlite adapters map primary key constraint violations (extended error code 1555
