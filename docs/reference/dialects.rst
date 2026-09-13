@@ -84,9 +84,7 @@ ADK ``enable_bm25`` requires successful pg_textsearch detection.
 
 The dialect label remains selected in priority order: ``paradedb``,
 ``pg_textsearch``, then ``pgvector`` for an otherwise default PostgreSQL
-configuration. The active extension set records all enabled discoveries;
-ParadeDB includes both text-search operator families so a coinstalled
-``pg_search`` does not hide ``pg_textsearch`` syntax.
+configuration. The active extension set records all enabled discoveries independently.
 An explicitly selected non-default dialect is preserved; select a dialect that
 supports the operators your queries use. Extension detection does not override
 that choice, and a dialect label alone does not mark an extension as available.
