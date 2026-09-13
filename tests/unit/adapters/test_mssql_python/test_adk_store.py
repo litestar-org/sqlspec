@@ -82,7 +82,7 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
 
 
 def test_sync_store_can_force_native_json_from_extension_config() -> None:
-    """MSSQL-native JSON is opt-in unless version detection proves support."""
+    """MSSQL-native JSON requires an explicit override."""
 
     store = MssqlPythonADKStore(_mock_config({"native_json": True}))
 
@@ -245,9 +245,9 @@ def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
     assert store._drop_memory_table_sql() == ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
 
 
-@pytest.mark.parametrize(("major", "expected"), [(16, "NVARCHAR(MAX)"), (17, "JSON")])
-def test_sync_store_detects_json_support_by_default(major: int, expected: str) -> None:
-    """Omitting native_json preserves server-version detection."""
+@pytest.mark.parametrize("major", [16, 17])
+def test_sync_store_defaults_to_driver_supported_json_storage(major: int) -> None:
+    """Server JSON availability does not imply native driver JSON support."""
     from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 
     config = _mock_config()
@@ -255,5 +255,5 @@ def test_sync_store_detects_json_support_by_default(major: int, expected: str) -
     driver.data_dictionary.get_version.return_value = MssqlVersionInfo(major=major)
     store = MssqlPythonADKStore(config)
 
-    assert f"state {expected} NOT NULL" in store._sessions_table_ddl()
-    driver.data_dictionary.get_version.assert_called_once_with(driver)
+    assert "state NVARCHAR(MAX) NOT NULL" in store._sessions_table_ddl()
+    config.provide_session.assert_not_called()

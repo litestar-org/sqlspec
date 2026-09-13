@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonCursor
-from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -45,14 +44,13 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     """Synchronous mssql-python ADK session/event store."""
 
     connector_name: ClassVar[str] = "mssql_python"
-    __slots__ = ("_json_column_type", "_native_json")
+    __slots__ = ("_json_column_type",)
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
-        self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
-        self._json_column_type: str | None = None
+        self._json_column_type = JSON_NATIVE_COLUMN_TYPE if native_json is True else JSON_FALLBACK_COLUMN_TYPE
 
     def create_tables(self) -> None:
         """Create ADK tables (idempotent T-SQL) and DD-gated indexes."""
@@ -386,14 +384,6 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
     def _json_column_type_sync(self) -> str:
-        if self._json_column_type is not None:
-            return self._json_column_type
-        configured = _configured_json_column_type(self._native_json)
-        if configured is not None:
-            self._json_column_type = configured
-            return configured
-        with self._config.provide_session() as driver:
-            self._json_column_type = _json_column_type_from_sync_driver(driver)
         return self._json_column_type
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
@@ -599,21 +589,6 @@ def _adk_config(config: Any) -> MssqlPythonADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("MssqlPythonADKConfig", adk_config)
-
-
-def _configured_json_column_type(native_json: "bool | None") -> "str | None":
-    if native_json is True:
-        return JSON_NATIVE_COLUMN_TYPE
-    if native_json is False:
-        return JSON_FALLBACK_COLUMN_TYPE
-    return None
-
-
-def _json_column_type_from_sync_driver(driver: "MssqlPythonDriver") -> str:
-    version_info = driver.data_dictionary.get_version(driver)
-    if isinstance(version_info, MssqlVersionInfo) and version_info.supports_native_json():
-        return JSON_NATIVE_COLUMN_TYPE
-    return JSON_FALLBACK_COLUMN_TYPE
 
 
 def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:

@@ -36,6 +36,8 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   shared integration test suites for Google ADK, durable event queues, and Litestar session stores.
   ADK migration ``0002`` provisions missing mssql-python memory tables and lookup indexes
   for existing installations; downgrading that additive repair preserves memory data.
+  mssql-python ADK JSON storage defaults to driver-supported ``NVARCHAR(MAX)``;
+  the explicit ``native_json=True`` override remains available.
   (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
 
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a

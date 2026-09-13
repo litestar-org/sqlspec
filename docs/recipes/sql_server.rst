@@ -229,13 +229,20 @@ Named savepoints are supported through ``create_savepoint()``, ``release_savepoi
 Bulk Loading with BulkCopy and Arrow
 ====================================
 
-The ``mssql-python`` adapter provides high-throughput bulk insertion via Microsoft BulkCopy and Apache Arrow streaming.
+The ``mssql-python`` adapter provides bulk insertion through Microsoft BulkCopy.
+SQLSpec's ``load_from_arrow()`` currently materializes Arrow data as Python rows
+and passes them to BulkCopy.
 In contrast, ``pymssql`` does not support native BulkCopy and uses batched ``execute_many`` operations.
 
 The three examples below use separate, pre-created tables with ``id``,
-``event_type``, and ``created_at`` columns.
+``event_type``, and ``created_at`` columns. Commit table creation before loading.
+BulkCopy uses its own connection and commits independently: rolling back the
+SQLSpec session cannot undo a completed load. See Microsoft's
+`BulkCopy documentation <https://learn.microsoft.com/en-us/sql/connect/python/mssql-python/bulk-copy>`_.
 
 .. code-block:: python
+
+   from datetime import datetime
 
    import pyarrow as pa
    from sqlspec.adapters.mssql_python import MssqlPythonConfig
@@ -261,15 +268,15 @@ The three examples below use separate, pre-created tables with ``id``,
    )
 
    rows = [
-       (1, "login", "2026-01-01T00:00:00"),
-       (2, "logout", "2026-01-01T00:01:00"),
+       (1, "login", datetime(2026, 1, 1)),
+       (2, "logout", datetime(2026, 1, 1, 0, 1)),
    ]
 
    arrow_table = pa.Table.from_arrays(
        [
            pa.array([1, 2]),
            pa.array(["login", "logout"]),
-           pa.array(["2026-01-01T00:00:00", "2026-01-01T00:01:00"]),
+           pa.array([datetime(2026, 1, 1), datetime(2026, 1, 1, 0, 1)]),
        ],
        names=["id", "event_type", "created_at"],
    )
@@ -406,9 +413,13 @@ The channel publishes, consumes, and acknowledges events using the ``poll_queue`
 
    channel.publish("notifications", {"user_id": 42, "event": "order_placed"})
 
-   event = channel.consume("notifications")
-   if event is not None:
-       channel.ack(event.id)
+   try:
+       for event in channel.iter_events("notifications"):
+           channel.ack(event.event_id)
+           break
+   finally:
+       channel.shutdown()
+       config.close_pool()
 
 Litestar Plugin and Session Store
 =================================
