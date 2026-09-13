@@ -1010,7 +1010,7 @@ class QueryBuilder:
             dialect.lower() if isinstance(dialect, str) else type(Dialect.get_or_raise(dialect)).__name__.lower()
         )
         try:
-            config = get_dialect_config(dialect_name)
+            config = get_dialect_config("spanner" if dialect_name == "spangres" else dialect_name)
         except ValueError:
             return
         if not config.feature_flags.get("supports_update_from", True):

@@ -35,7 +35,7 @@ def test_update_from_select_builder_matrix() -> None:
     assert stmt_tsql.parameters["a"] == 1
 
 
-@pytest.mark.parametrize("dialect", ["oracle", "mysql", "mariadb", "spanner"])
+@pytest.mark.parametrize("dialect", ["oracle", "mysql", "mariadb", "spanner", "spangres"])
 def test_update_from_raises_oracle_mysql(dialect: str) -> None:
     """Test UPDATE FROM raises SQLBuilderError on unsupported dialects."""
     subquery = sql.select("id").from_("t").limit(1)
@@ -81,7 +81,7 @@ def test_update_from_multiple_sources() -> None:
     assert "AS s1" in stmt.sql and "AS s2" in stmt.sql
 
 
-@pytest.mark.parametrize("dialect", ["mysql", "oracle", "mariadb"])
+@pytest.mark.parametrize("dialect", ["mysql", "oracle", "mariadb", "spangres"])
 def test_update_from_statement_config_rejects_unsupported_dialect(dialect: str) -> None:
     query = sql.update("t").set(a=1).from_("source")
     with pytest.raises(SQLBuilderError, match="MERGE"):
