@@ -18,7 +18,6 @@ Example
    :dedent: 4
    :no-upgrade:
 
-<<<<<<< HEAD
 Transaction Blocks
 ==================
 
@@ -38,15 +37,15 @@ commits or rolls back that whole transaction, including work done before the blo
 
     async with config.provide_session() as session:
         async with session.transaction():
-            await session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
-            await session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+            await session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+            await session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
 
 .. code-block:: python
 
     with config.provide_session() as session:
         with session.transaction():
-            session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
-            session.execute("INSERT INTO audit (action) VALUES (?)", "user-created")
+            session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+            session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
 
 Nested blocks
 -------------
@@ -63,10 +62,10 @@ enclosing block stays open and decides whether the work is committed. A service
     from sqlspec.exceptions import UniqueViolationError
 
     with session.transaction():
-        session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+        session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
         try:
             with session.transaction():
-                session.execute("INSERT INTO users (name) VALUES (?)", "Ada")
+                session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
         except UniqueViolationError:
             pass
 
@@ -89,7 +88,11 @@ block, using the syntax your database supports:
 
     async with session.transaction():
         await session.execute_script("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-        await session.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", 10, 1)
+        await session.execute(
+            "UPDATE accounts SET balance = balance - :amount WHERE id = :id",
+            amount=10,
+            id=1,
+        )
 
 Driver Adapter Protocol and Base Classes
 ========================================

@@ -216,10 +216,39 @@ memory, so these helpers suit fixture-sized data rather than bulk transfers.
         )
         session.commit()
 
-        export_table_fixtures_sync(session, fixtures, ["users", "posts"], compress=True)
+        export_table_fixtures_sync(session, fixtures, tables=["users", "posts"], compress=True)
 
-``load_table_fixtures_async`` and ``export_table_fixtures_async`` take the same
-arguments with an async driver.
+``load_table_fixtures_async`` and ``export_table_fixtures_async`` provide identical
+functionality for asynchronous drivers:
+
+.. code-block:: python
+
+    from pathlib import Path
+    import pytest
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
+    from sqlspec.utils.fixtures import export_table_fixtures_async, load_table_fixtures_async
+
+    fixtures = Path("tests/fixtures/tables")
+
+    @pytest.fixture
+    async def seeded_session(db_session: AsyncpgDriver) -> AsyncpgDriver:
+        await load_table_fixtures_async(
+            db_session,
+            fixtures,
+            table_order=["users", "posts"],
+            conflict_keys={"users": ["id"]},
+            resync_sequences=True,
+        )
+        await db_session.commit()
+        return db_session
+
+    async def test_export_fixtures(db_session: AsyncpgDriver) -> None:
+        await export_table_fixtures_async(
+            db_session,
+            fixtures,
+            tables=["users", "posts"],
+            compress=True,
+        )
 
 - **Which tables load:** every table fixture file in the directory, or only the
   names passed as ``tables``. Files whose names are not table identifiers are
@@ -317,3 +346,4 @@ Related Guides
 - :doc:`drivers_and_querying` for querying and transaction APIs.
 - :doc:`migrations` for migration execution and schema tracking.
 - :doc:`bulk_ingest` for high-volume data loading in tests.
+- :doc:`/reference/utils` for fixture utility function signatures and API reference.

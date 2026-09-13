@@ -40,13 +40,15 @@ does not resolve named SQL for you.
    * - ``exists(statement, *parameters, session=None)``
      - Returns ``True`` when the query matches at least one row.
    * - ``begin_transaction()``
-     - Holds one session across helpers, commits on success, and rolls back on error.
+     - Holds one session across helpers, commits on success, and rolls back on error. Nested blocks run in savepoints.
    * - ``provide_session(session=None)``
      - Yields a session for explicit reuse. Acquired sessions are released on exit.
    * - ``begin(session=None)`` / ``commit(session=None)`` / ``rollback(session=None)``
      - Control an available session; they never acquire a disposable session.
    * - ``session`` / ``driver``
      - The caller's session or the active transaction's driver.
+   * - ``config``
+     - The database configuration the service was built from, or ``None`` for session-built services.
 
 Subclass whichever matches your driver and add your own query methods:
 
@@ -146,10 +148,10 @@ may hit a unique constraint run without aborting the surrounding transaction:
     async with service.begin_transaction() as session:
         try:
             async with service.begin_transaction():
-                await session.execute("INSERT INTO users (email) VALUES ($1)", email)
+                await session.execute("INSERT INTO users (email) VALUES (:email)", email=email)
         except UniqueViolationError:
             pass
-        user = await service.get_one("SELECT id, email FROM users WHERE email = $1", email)
+        user = await service.get_one("SELECT id, email FROM users WHERE email = :email", email=email)
 
 The outer block commits everything that was not rolled back; if the outer block
 raises, work from inner blocks that succeeded is rolled back with it. Nesting works
@@ -160,7 +162,8 @@ after an earlier statement, the block joins that transaction instead of calling
 ``begin()``, and exiting the block commits or rolls back all of it, including the
 earlier work. If the outer commit fails, the block
 attempts a rollback before raising the commit error. Adapters without savepoint
-support raise ``ImproperConfigurationError`` when a nested block is entered.
+support (DuckDB, BigQuery, Spanner, and ADBC connections to DuckDB, BigQuery,
+or Snowflake) raise ``ImproperConfigurationError`` when a nested block is entered.
 
 A nested block must run in the task or thread that entered the outer block. Entering
 ``begin_transaction()`` from another task or thread while the outer block is active

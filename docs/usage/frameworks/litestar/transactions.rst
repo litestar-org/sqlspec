@@ -56,7 +56,9 @@ You can customize which HTTP statuses trigger commits or rollbacks using
 Manual Transactions in Handlers
 -------------------------------
 
-In ``manual`` mode, handlers control transaction boundaries directly on the injected driver:
+In ``manual`` mode, handlers control transaction boundaries directly on the injected driver.
+The recommended approach is to wrap operations in ``async with db_session.transaction():``,
+which commits on exit and rolls back on exception:
 
 .. code-block:: python
 
@@ -73,23 +75,45 @@ In ``manual`` mode, handlers control transaction boundaries directly on the inje
 
    @post("/transfer")
    async def transfer(db_session: AsyncpgDriver, data: TransferRequest) -> dict[str, str]:
-       await db_session.execute(
-           "UPDATE accounts SET balance = balance - :amount WHERE id = :from_id",
-           amount=data.amount,
-           from_id=data.from_account,
-       )
-       await db_session.execute(
-           "UPDATE accounts SET balance = balance + :amount WHERE id = :to_id",
-           amount=data.amount,
-           to_id=data.to_account,
-       )
-       await db_session.commit()
+       async with db_session.transaction():
+           await db_session.execute(
+               "UPDATE accounts SET balance = balance - :amount WHERE id = :from_id",
+               amount=data.amount,
+               from_id=data.from_account,
+           )
+           await db_session.execute(
+               "UPDATE accounts SET balance = balance + :amount WHERE id = :to_id",
+               amount=data.amount,
+               to_id=data.to_account,
+           )
        return {"status": "transferred"}
 
-Savepoints
-----------
+You can also call ``await db_session.begin()``, ``await db_session.commit()``, and
+``await db_session.rollback()`` directly for manual control.
 
-SQLSpec drivers provide explicit savepoint management within active transactions:
+Savepoints and Nested Transactions
+----------------------------------
+
+Nested ``transaction()`` blocks automatically run in savepoints: an inner block rolls
+back only its own work if it fails, allowing the outer transaction to continue:
+
+.. code-block:: python
+
+   from sqlspec.exceptions import UniqueViolationError
+
+   async with db_session.transaction():
+       await db_session.execute("INSERT INTO audit_log (event) VALUES (:event)", event="attempt")
+       try:
+           async with db_session.transaction():
+               await db_session.execute("INSERT INTO users (email) VALUES (:email)", email=data.email)
+       except UniqueViolationError:
+           pass
+
+Adapters without savepoint support (DuckDB, BigQuery, Spanner, and ADBC connections to
+DuckDB, BigQuery, or Snowflake) raise ``ImproperConfigurationError`` when a nested block
+is entered.
+
+Drivers also provide explicit low-level savepoint methods:
 
 .. code-block:: python
 

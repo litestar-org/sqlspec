@@ -28,6 +28,59 @@ Core Execution Pattern
 Transactions
 ------------
 
+SQLSpec drivers provide a ``transaction()`` context manager that commits on
+successful block exit and rolls back when an exception is raised. If the connection
+already has an open transaction, the block joins it instead of starting a new one.
+
+.. tab-set::
+
+   .. tab-item:: Async
+
+      .. code-block:: python
+
+         async with config.provide_session() as session:
+             async with session.transaction():
+                 await session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+                 await session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
+
+   .. tab-item:: Sync
+
+      .. code-block:: python
+
+         with config.provide_session() as session:
+             with session.transaction():
+                 session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+                 session.execute("INSERT INTO audit (action) VALUES (:action)", action="user-created")
+
+Nested Transactions and Savepoints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Nested ``transaction()`` blocks run inside a savepoint on the enclosing
+transaction. If the inner block raises, only its work is rolled back, allowing
+the outer transaction to catch the error, continue, and commit:
+
+.. code-block:: python
+
+    from sqlspec.exceptions import UniqueViolationError
+
+    with session.transaction():
+        session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+        try:
+            with session.transaction():
+                session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+        except UniqueViolationError:
+            pass
+
+Adapters without savepoint support (DuckDB, BigQuery, Spanner, and ADBC connections
+to DuckDB, BigQuery, or Snowflake) raise ``ImproperConfigurationError`` when a
+nested block is entered.
+
+Manual Transaction Control
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For fine-grained lifecycle control, you can call ``begin()``, ``commit()``, and
+``rollback()`` directly on the driver:
+
 .. literalinclude:: /examples/drivers/transaction_handling.py
    :language: python
    :caption: ``manual transaction``
