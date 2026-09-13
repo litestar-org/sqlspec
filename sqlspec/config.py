@@ -1192,12 +1192,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         migration_config = cast("dict[str, Any]", self.migration_config)
         include_extensions = migration_config.get("include_extensions")
         if include_extensions is not None and name in include_extensions:
-            if isinstance(include_extensions, set):
-                include_extensions.discard(name)
-            elif isinstance(include_extensions, list):
-                include_extensions[:] = [ext for ext in include_extensions if ext != name]
-            else:
-                migration_config["include_extensions"] = [ext for ext in include_extensions if ext != name]
+            migration_config["include_extensions"] = [ext for ext in include_extensions if ext != name]
             removed = True
 
         if removed:

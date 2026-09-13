@@ -322,3 +322,16 @@ def test_remove_unknown_extension_is_noop(
     monkeypatch.setattr(config, "_rebuild_migration_commands", fail_rebuild)
     assert config.remove_extension_migrations("litestar_queues") is False
     assert not rebuild_called
+
+
+def test_remove_extension_preserves_caller_include_list(tmp_path: Path) -> None:
+    """Removing an explicitly included extension must not change shared input."""
+    shared = ["fastapi", "fastapi"]
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(tmp_path / "migrations"), "include_extensions": shared},
+    )
+
+    assert config.remove_extension_migrations("fastapi") is True
+    assert config.migration_config["include_extensions"] == []
+    assert shared == ["fastapi", "fastapi"]

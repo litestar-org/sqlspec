@@ -118,7 +118,7 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   allowing runtime unregistration of extension migrations. The method removes the extension entry from
   ``extension_config`` and ``migration_config["include_extensions"]``, rebuilding cached migration
   commands when found.
-  (`#775 <https://github.com/litestar-org/sqlspec/issues/775>`_)
+  (`#774 <https://github.com/litestar-org/sqlspec/pull/774>`_)
 
 **Changed:**
 
