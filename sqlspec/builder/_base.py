@@ -667,7 +667,7 @@ class QueryBuilder:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support PostgreSQL key lock modes.")
             if dialect == "oracle" and not lock.args.get("update"):
                 self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
-            if config.get_feature_flag("supports_for_update") is False:
+            if dialect not in {"spanner", "spangres"} and config.get_feature_flag("supports_for_update") is False:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
             if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
