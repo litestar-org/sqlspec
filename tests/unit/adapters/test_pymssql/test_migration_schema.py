@@ -94,6 +94,22 @@ def test_pymssql_migration_schema_restores_from_dict_rows() -> None:
     assert cursor.executed[-1] == ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [sales];", None)
 
 
+def test_pymssql_second_switch_reuses_captured_user_and_schema() -> None:
+    cursor = FakeCursor(current_schema="sales")
+    driver = PymssqlDriver(cast("Any", FakeConnection(cursor)))
+
+    driver.set_migration_session_schema("tenant_a")
+    driver.set_migration_session_schema("tenant_b")
+    driver.reset_migration_session_schema()
+
+    assert cursor.executed == [
+        ("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None),
+        ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [tenant_a];", None),
+        ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [tenant_b];", None),
+        ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [sales];", None),
+    ]
+
+
 def test_pymssql_reset_without_set_is_noop() -> None:
     cursor = FakeCursor()
     driver = PymssqlDriver(cast("Any", FakeConnection(cursor)))
