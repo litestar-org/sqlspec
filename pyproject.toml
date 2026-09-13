@@ -658,7 +658,7 @@ known-first-party = ["sqlspec", "tests"]
 split-on-trailing-comma = false
 
 [tool.ruff.lint.per-file-ignores]
-"docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004"]
+"docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004", "TID251"]
 "docs/examples/**" = ["T201"]
 "sqlspec/adapters/spanner/config.py" = ["PLC2801"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
@@ -695,10 +695,15 @@ split-on-trailing-comma = false
   "PT",
   "PERF203",
   "ANN",
+  "TID251",
 ]
-"tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]
+"tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911", "TID251"]
 "tools/prepare_release.py" = ["S603", "S607"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 # Disallow all relative imports.
 ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"__future__.annotations" = { msg = "Use Python 3.10+ PEP 604 annotations instead of from __future__ import annotations" }
+

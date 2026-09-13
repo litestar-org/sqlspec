@@ -169,7 +169,6 @@ exclude_patterns = [
     "_build",
     "Thumbs.db",
     ".DS_Store",
-    "PYPI_README.md",
     "STYLE_GUIDE.md",
     "VOICE_AUDIT_REPORT.md",
     "autoapi/sqlspec/index.rst",
