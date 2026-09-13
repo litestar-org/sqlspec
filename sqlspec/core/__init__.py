@@ -109,6 +109,7 @@ from sqlspec.core.cache import (
     reset_stats_only,
     update_cache_config,
 )
+from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.compiler import (
     CompiledSQL,
     OperationProfile,
@@ -301,6 +302,7 @@ __all__ = (
     "StatementFilter",
     "StatementResult",
     "StatementStack",
+    "TypeCoercionCapabilities",
     "TypedParameter",
     "apply_filter",
     "apply_limit",

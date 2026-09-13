@@ -250,6 +250,7 @@ exclude = [
 include = [
   "sqlspec/base.py",                               # SQLSpec registry/session manager
   "sqlspec/core/**/*.py",                          # Core module
+  "sqlspec/core/capabilities.py",                  # Introspectable type coercion capabilities
   "sqlspec/builder/**/*.py",                       # Builder module
   "sqlspec/exceptions.py",                         # Exceptions module
   "sqlspec/loader.py",                             # Loader module
