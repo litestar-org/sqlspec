@@ -32,6 +32,8 @@ KNOWN_SET_SITES: frozenset[tuple[str, str, str]] = frozenset({
     ("sqlspec/builder/_base.py", "cte_duck_expression", "alias"),
     ("sqlspec/builder/_base.py", "cte_expression", "alias"),
     ("sqlspec/builder/_base.py", "cte_select_expression", "alias"),
+    ("sqlspec/builder/_base.py", "expression", "conflict"),
+    ("sqlspec/builder/_base.py", "final_expression", "with_"),
     ("sqlspec/builder/_base.py", "final_expression.args['with_']", "recursive"),
     ("sqlspec/builder/_base.py", "lock", "sqlspec_share_mode"),
     ("sqlspec/builder/_base.py", "node", "quoted"),
