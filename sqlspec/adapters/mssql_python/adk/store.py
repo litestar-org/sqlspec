@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
-    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
     from sqlspec.extensions.adk import SessionOrderBy
     from sqlspec.extensions.adk.memory._types import StoredMemory
 
