@@ -1,7 +1,5 @@
 """Local extension and S3-compatible behavior behind native storage eligibility."""
 
-import json
-import os
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -85,22 +83,6 @@ def test_native_http_parquet_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         server.shutdown()
         server.server_close()
         thread.join()
-
-
-@pytest.mark.skipif(not os.getenv("SQLSPEC_DUCKDB_STORAGE_BENCHMARK"), reason="Opt-in local storage benchmark")
-def test_native_storage_benchmark(
-    rustfs_service: RustfsService, rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from tools.scripts.bench_duckdb_storage import run_benchmark
-
-    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
-    monkeypatch.setenv("SQLSPEC_STORAGE_ENDPOINT", f"http://{rustfs_service.endpoint}")
-    monkeypatch.setenv("SQLSPEC_STORAGE_BUCKET", bucket)
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", rustfs_service.access_key)
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", rustfs_service.secret_key)
-    results = run_benchmark()
-    Path(os.environ["SQLSPEC_DUCKDB_STORAGE_BENCHMARK"]).write_text(json.dumps(results, indent=2) + "\n")
-    assert len(results["results"]) == 3
 
 
 @pytest.mark.parametrize("autoload", [False, True])
