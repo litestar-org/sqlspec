@@ -179,7 +179,6 @@ def test_lateral_join_error_conditions() -> None:
 
 def test_lateral_join_parameter_binding() -> None:
     """Test parameter binding in LATERAL joins."""
-    # Use simple parameter binding via builder methods instead of sql.raw()
     query = sql.select("u.name", "s.value").from_("users u")
     subquery = sql.select("value").from_("stats").where_eq("user_id", 123)
     query = query.lateral_join(subquery, alias="s")
@@ -188,8 +187,7 @@ def test_lateral_join_parameter_binding() -> None:
 
     assert "LATERAL" in stmt.sql
     assert "stats" in stmt.sql.lower()
-    # Check for parameter from the where clause
-    assert stmt.parameters or True  # Parameters may be handled differently
+    assert stmt.parameters == {"user_id": 123}
 
 
 def test_lateral_join_types_coverage() -> None:
