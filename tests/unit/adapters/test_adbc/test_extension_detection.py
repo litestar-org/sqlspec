@@ -144,56 +144,57 @@ def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
     assert paradedb_available is True
 
 
-def test_adbc_config_update_dialect_for_extensions_pgvector() -> None:
+def test_adbc_config_resolve_dialect_for_extensions_pgvector() -> None:
     """Dialect switches to pgvector when pgvector is available."""
     config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
-    config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
-    config._paradedb_available = False  # pyright: ignore[reportPrivateUsage]
-    config._pg_textsearch_available = False  # pyright: ignore[reportPrivateUsage]
-    config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
-    assert config.statement_config.dialect == "pgvector"
+    statement_config, pgvector, paradedb = resolve_postgres_extension_state(
+        config.statement_config, config.driver_features, {"vector"}
+    )
+    assert statement_config.dialect == "pgvector"
+    assert pgvector is True
+    assert paradedb is False
 
 
-def test_adbc_config_update_dialect_for_extensions_pg_textsearch() -> None:
+def test_adbc_config_resolve_dialect_for_extensions_pg_textsearch() -> None:
     """Dialect switches to pg_textsearch when pg_textsearch is available."""
-    config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
-    config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
-    config._paradedb_available = False  # pyright: ignore[reportPrivateUsage]
-    config._pg_textsearch_available = True  # pyright: ignore[reportPrivateUsage]
-    config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
-    assert config.statement_config.dialect == "pg_textsearch"
-    assert config.pg_textsearch_available is True
+    config = AdbcConfig(
+        connection_config={"uri": "postgresql://localhost/test"}, driver_features={"enable_pg_textsearch": True}
+    )
+    statement_config, _, _ = resolve_postgres_extension_state(
+        config.statement_config, config.driver_features, {"vector", "pg_textsearch"}
+    )
+    assert statement_config.dialect == "pg_textsearch"
 
 
-def test_adbc_config_update_dialect_for_extensions_paradedb() -> None:
+def test_adbc_config_resolve_dialect_for_extensions_paradedb() -> None:
     """Dialect switches to paradedb when both extensions available (paradedb > pgvector)."""
-    config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
-    config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
-    config._paradedb_available = True  # pyright: ignore[reportPrivateUsage]
-    config._pg_textsearch_available = True  # pyright: ignore[reportPrivateUsage]
-    config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
-    assert config.statement_config.dialect == "paradedb"
+    config = AdbcConfig(
+        connection_config={"uri": "postgresql://localhost/test"}, driver_features={"enable_pg_textsearch": True}
+    )
+    statement_config, _, _ = resolve_postgres_extension_state(
+        config.statement_config, config.driver_features, {"vector", "pg_search", "pg_textsearch"}
+    )
+    assert statement_config.dialect == "paradedb"
 
 
-def test_adbc_config_update_dialect_skips_non_postgres() -> None:
+def test_adbc_config_resolve_dialect_skips_non_postgres() -> None:
     """Dialect is not changed for non-postgres backends."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "sqlite"})
-    original_dialect = config.statement_config.dialect
-    config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
-    config._paradedb_available = True  # pyright: ignore[reportPrivateUsage]
-    config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
-    assert config.statement_config.dialect == original_dialect
+    statement_config, _, _ = resolve_postgres_extension_state(
+        config.statement_config, config.driver_features, {"vector", "pg_search"}
+    )
+    assert statement_config.dialect == config.statement_config.dialect
 
 
-def test_adbc_config_update_dialect_preserves_custom_dialect() -> None:
+def test_adbc_config_resolve_dialect_preserves_custom_dialect() -> None:
     """If user explicitly set a non-postgres dialect, don't override it."""
     config = AdbcConfig(
         connection_config={"uri": "postgresql://localhost/test"}, statement_config=StatementConfig(dialect="custom")
     )
-    config._pgvector_available = True  # pyright: ignore[reportPrivateUsage]
-    config._paradedb_available = True  # pyright: ignore[reportPrivateUsage]
-    config._update_dialect_for_extensions()  # pyright: ignore[reportPrivateUsage]
-    assert config.statement_config.dialect == "custom"
+    statement_config, _, _ = resolve_postgres_extension_state(
+        config.statement_config, config.driver_features, {"vector", "pg_search"}
+    )
+    assert statement_config.dialect == "custom"
 
 
 def test_adbc_config_provide_session_skips_extension_probe_for_non_postgres(monkeypatch: MonkeyPatch) -> None:

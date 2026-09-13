@@ -218,13 +218,13 @@ def test_stmt_cache_rebind_reuses_driver_owned_processor(sqlite_sync_driver: Any
     )
     processor = sqlite_sync_driver._stmt_cache_rebind_processor
     calls: list[object] = []
-    original_transform = ParameterProcessor._transform_cached_parameters
+    original_transform = ParameterProcessor.transform_cached_parameters
 
     def wrapped_transform(self: ParameterProcessor, *args: Any, **kwargs: Any) -> Any:
         calls.append(self)
         return original_transform(self, *args, **kwargs)
 
-    monkeypatch.setattr(ParameterProcessor, "_transform_cached_parameters", wrapped_transform)
+    monkeypatch.setattr(ParameterProcessor, "transform_cached_parameters", wrapped_transform)
 
     sqlite_sync_driver.stmt_cache_rebind({"id": 1}, cached)
     sqlite_sync_driver.stmt_cache_rebind({"id": 2}, cached)

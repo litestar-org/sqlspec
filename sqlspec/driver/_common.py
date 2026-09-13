@@ -86,7 +86,7 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from collections import abc
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable
     from types import TracebackType
 
     from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
@@ -558,10 +558,6 @@ class DataDictionaryMixin:
         result.raise_for_cycles()
         return [identity.name for identity in result.ordered]
 
-    def _resolve_log_adapter(self) -> str:
-        """Resolve adapter identifier for logging."""
-        return str(type(self).dialect)
-
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
         logger.debug(
@@ -712,7 +708,7 @@ class CommonDriverAttributesMixin:
             and not needs_style_remap
         ):
             return params
-        return self._stmt_cache_rebind_processor._transform_cached_parameters(
+        return self._stmt_cache_rebind_processor.transform_cached_parameters(
             params,
             cached.parameter_profile,
             config,
@@ -987,15 +983,15 @@ class CommonDriverAttributesMixin:
                 for param_set in parameters:
                     if isinstance(param_set, dict):
                         for value in param_set.values():
-                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
+                            if parameter_value_needs_processing(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
                     elif isinstance(param_set, (list, tuple)):
                         for value in param_set:
-                            if self._needs_coercion_candidate(value, type_coercion_map, fallback_items):
+                            if parameter_value_needs_processing(value, type_coercion_map, fallback_items):
                                 needs_transform = True
                                 break
-                    elif self._needs_coercion_candidate(param_set, type_coercion_map, fallback_items):
+                    elif parameter_value_needs_processing(param_set, type_coercion_map, fallback_items):
                         needs_transform = True
                     if needs_transform:
                         break
@@ -1402,14 +1398,6 @@ class CommonDriverAttributesMixin:
             sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
 
-    def _needs_coercion_candidate(
-        self,
-        value: object,
-        type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
-        fallback_items: "tuple[tuple[type, Any], ...]",
-    ) -> bool:
-        return parameter_value_needs_processing(value, type_coercion_map, fallback_items)
-
     def _batch_parameters(
         self, parameters: "StatementParameters", statement_config: "StatementConfig"
     ) -> "ConvertedParameters":
@@ -1631,7 +1619,7 @@ class CommonDriverAttributesMixin:
                 # but we must still use the caller's actual parameter values.
                 parameter_profile = cached_result.parameter_profile
                 if parameter_profile is not None:
-                    prepared_parameters = self._stmt_cache_rebind_processor._transform_cached_parameters(
+                    prepared_parameters = self._stmt_cache_rebind_processor.transform_cached_parameters(
                         statement.parameters,
                         parameter_profile,
                         statement_config.parameter_config,

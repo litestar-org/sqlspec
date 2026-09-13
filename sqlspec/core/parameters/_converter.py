@@ -6,6 +6,7 @@ from typing import Any, Final
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import (
+    _EXPANDING_POSITIONAL_STYLES,
     _NAMED_STYLES,
     _POSITIONAL_STYLES,
     ConvertedParameters,
@@ -26,11 +27,6 @@ _ORDERED_PARAM_INFO_MIN_SIZE = 2
 _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.QMARK,
     ParameterStyle.POSITIONAL_PYFORMAT,
-})
-_EXPANDING_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
-    ParameterStyle.QMARK,
-    ParameterStyle.POSITIONAL_PYFORMAT,
-    ParameterStyle.POSITIONAL_COLON,
 })
 
 

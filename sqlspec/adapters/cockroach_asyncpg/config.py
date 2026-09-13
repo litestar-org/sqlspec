@@ -12,7 +12,6 @@ from sqlspec.adapters.asyncpg.core import (
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
-    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
@@ -22,6 +21,7 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
