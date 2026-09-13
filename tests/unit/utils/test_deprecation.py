@@ -156,18 +156,3 @@ def test_deprecation_warning_stacklevel() -> None:
         warning = warning_list[0]
         assert warning.filename == __file__
         assert warning.lineno == call_line
-
-
-def test_deprecation_warning_attributes_through_package_frames() -> None:
-    """Warnings raised inside SQLSpec code point at the user call, not at package internals."""
-    from sqlspec import sql
-
-    with warnings.catch_warnings(record=True) as warning_list:
-        warnings.simplefilter("always")
-        warnings.simplefilter("ignore", ResourceWarning)
-        _ = sql.user_id
-        call_line = inspect.currentframe().f_lineno - 1  # type: ignore[union-attr]
-
-    assert len(warning_list) == 1
-    assert warning_list[0].filename == __file__
-    assert warning_list[0].lineno == call_line

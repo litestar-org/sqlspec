@@ -139,13 +139,6 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   consumption without intermediate tuple relays.
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
-**Deprecated:**
-
-* Dynamic column access on the ``sql`` factory (``sql.some_column``) now emits a
-  ``DeprecationWarning``. Use ``sql.column("some_column")`` or ``Column("some_column")``;
-  the dynamic form will be removed in the next major release.
-  (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
-
 **Fixed:**
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
@@ -216,6 +209,10 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 * Removed undocumented ``sqlspec.exceptions.wrap_exceptions`` helper, superseded by typed per-adapter exception
   handlers.
+
+* Dynamic column access on the ``sql`` factory (``sql.some_column``) has been removed.
+  Use ``sql.column("some_column")`` or ``Column("some_column")``.
+  (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
 v0.62.2 - Litestar config lookup diagnostics
 ---------------------------------------------
