@@ -214,6 +214,9 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 **Fixed:**
 
+* Preserve JSON objects and arrays as individual query parameters after placeholder conversion,
+  instead of reinterpreting them as batches during parameter validation.
+
 * SQLite and aiosqlite adapters map primary key constraint violations (extended error code 1555
   and ``SQLITE_CONSTRAINT_PRIMARYKEY``) to ``UniqueViolationError``.
   (`#775 <https://github.com/litestar-org/sqlspec/pull/775>`_)

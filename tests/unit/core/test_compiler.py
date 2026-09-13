@@ -1145,21 +1145,21 @@ def test_concurrent_compilation_safety(basic_statement_config: "StatementConfig"
 
 
 @pytest.mark.parametrize(
-    "sql,parameters,expected_supports_many",
+    "sql,parameters,is_many,expected_supports_many",
     [
-        ("SELECT * FROM users WHERE id = ?", [123], True),
-        ("INSERT INTO users (name) VALUES (?)", [["john"], ["jane"]], True),
-        ("UPDATE users SET name = ? WHERE id = ?", [("new", 1), ("other", 2)], True),
-        ("SELECT * FROM users", None, False),
+        ("SELECT * FROM users WHERE id = ?", [123], False, True),
+        ("INSERT INTO users (name) VALUES (?)", [["john"], ["jane"]], True, True),
+        ("UPDATE users SET name = ? WHERE id = ?", [("new", 1), ("other", 2)], True, True),
+        ("SELECT * FROM users", None, False, False),
     ],
 )
 def test_execute_many_detection(
-    basic_statement_config: "StatementConfig", sql: str, parameters: Any, expected_supports_many: bool
+    basic_statement_config: "StatementConfig", sql: str, parameters: Any, is_many: bool, expected_supports_many: bool
 ) -> None:
     """Test detection of execute_many scenarios."""
     processor = SQLProcessor(basic_statement_config)
 
-    result = processor.compile(sql, parameters)
+    result = processor.compile(sql, parameters, is_many=is_many)
 
     assert result.supports_many == expected_supports_many
 

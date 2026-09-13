@@ -2782,3 +2782,23 @@ def test_parameter_pipeline_executes_on_sqlite_duckdb_and_reuses_warm_cache(proc
     duck_res = duck_conn.execute(res_duck.sql, res_duck.parameters).fetchone()
     assert duck_res == ("charlie", 30, "charlie")
     duck_conn.close()
+
+
+@pytest.mark.parametrize("parameters", [({"key": "value"}, {"count": 42}), ([1, 2, 3], [4, 5])])
+def test_alignment_preserves_nested_single_statement_values(parameters: tuple[object, object]) -> None:
+    """JSON objects and arrays count as values, including within explicit batches."""
+    profile = ParameterProfile(ParameterValidator().extract_parameters("SELECT $1, $2"))
+    _alignment_module.validate_parameter_alignment(profile, parameters, is_many=False)
+    _alignment_module.validate_parameter_alignment(profile, [parameters, parameters], is_many=True)
+    with pytest.raises(SQLSpecError, match="Parameter count mismatch"):
+        _alignment_module.validate_parameter_alignment(profile, [parameters, parameters[:1]], is_many=True)
+
+
+def test_process_positional_json_values_preserves_objects(processor: ParameterProcessor) -> None:
+    """A positional JSON object must not be normalized as an execute_many row."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC, default_execution_parameter_style=ParameterStyle.NUMERIC
+    )
+    parameters = ({"key": "value"}, {"count": 42})
+    result = processor.process("SELECT $1, $2", parameters, config, is_many=False)
+    assert result.parameters == parameters

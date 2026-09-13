@@ -126,7 +126,19 @@ async def test_psqlpy_json_columns_match_capabilities(psqlpy_config: "PsqlpyConf
     assert psqlpy_config.type_coercion_capabilities.json_columns_decoded is True
     async with psqlpy_config.provide_session() as driver:
         row = await driver.select_one(
-            "SELECT $1::json AS payload, $2::jsonb AS binary_payload", {"key": "value"}, {"count": 42}
+            "SELECT :payload::json AS payload, :binary_payload::jsonb AS binary_payload",
+            {"payload": {"key": "value"}, "binary_payload": {"count": 42}},
         )
         assert row["payload"] == {"key": "value"}
         assert row["binary_payload"] == {"count": 42}
+
+
+async def test_psqlpy_array_parameters_are_not_batches(psqlpy_config: "PsqlpyConfig") -> None:
+    """Array-valued named binds remain individual parameters after compilation."""
+    async with psqlpy_config.provide_session() as driver:
+        row = await driver.select_one(
+            "SELECT :first::int[] AS first_values, :second::int[] AS second_values",
+            {"first": [1, 2, 3], "second": [4, 5]},
+        )
+        assert row["first_values"] == [1, 2, 3]
+        assert row["second_values"] == [4, 5]
