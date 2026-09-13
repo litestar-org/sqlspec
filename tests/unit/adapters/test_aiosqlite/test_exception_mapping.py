@@ -113,7 +113,7 @@ def test_primary_key_code_maps_to_unique_violation() -> None:
 
 
 def test_primary_key_error_name_maps_to_unique_violation() -> None:
-    err = _SqliteIntegrityError("UNIQUE constraint failed: t.id", None, "SQLITE_CONSTRAINT_PRIMARYKEY")
+    err = _SqliteIntegrityError("primary key rejected", None, "SQLITE_CONSTRAINT_PRIMARYKEY")
     result = create_mapped_exception(err)
     assert isinstance(result, UniqueViolationError)
     assert result.__cause__ is err
