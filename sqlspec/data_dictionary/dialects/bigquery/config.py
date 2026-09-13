@@ -40,6 +40,10 @@ BIGQUERY_TYPE_MAPPINGS: dict[str, str] = {
     "geography": "GEOGRAPHY",
     "numeric": "NUMERIC",
     "bignumeric": "BIGNUMERIC",
+    "integer": "INT64",
+    "bigint": "INT64",
+    "float": "FLOAT64",
+    "varchar": "STRING",
 }
 
 

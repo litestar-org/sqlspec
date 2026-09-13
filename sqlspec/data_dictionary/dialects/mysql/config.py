@@ -70,6 +70,10 @@ MYSQL_TYPE_MAPPINGS: dict[str, str] = {
     "text": "TEXT",
     "blob": "BLOB",
     "json": "JSON",
+    "integer": "INT",
+    "bigint": "BIGINT",
+    "float": "DOUBLE",
+    "varchar": "VARCHAR({length})",
 }
 
 

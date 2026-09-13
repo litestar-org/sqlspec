@@ -25,6 +25,10 @@ SPANNER_TYPE_MAPPINGS: dict[str, str] = {
     "numeric": "NUMERIC",
     "bignumeric": "NUMERIC",
     "array": "ARRAY",
+    "integer": "INT64",
+    "bigint": "INT64",
+    "float": "FLOAT64",
+    "varchar": "STRING({length})",
 }
 
 

@@ -32,6 +32,10 @@ SQLITE_TYPE_MAPPINGS: dict[str, str] = {
     "text": "TEXT",
     "blob": "BLOB",
     "json": "JSON",
+    "integer": "INTEGER",
+    "bigint": "INTEGER",
+    "float": "REAL",
+    "varchar": "TEXT",
 }
 
 

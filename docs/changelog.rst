@@ -114,6 +114,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   override the configured default schema for individual migration scripts.
   (`#770 <https://github.com/litestar-org/sqlspec/pull/770>`_)
 
+* Data dictionary dialect configurations map ``integer``, ``bigint``, ``float``, and ``varchar``
+  logical types across all supported dialects. :meth:`~sqlspec.data_dictionary.DialectConfig.get_optimal_type`
+  supports an optional ``length`` parameter for bounded types (such as ``varchar``), falling back to
+  unbounded text types when length is omitted.
+  (`#776 <https://github.com/litestar-org/sqlspec/pull/776>`_)
+
 **Changed:**
 
 * Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
@@ -199,6 +205,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 * Storage benchmark scripts type-check cleanly under Python 3.10.
   (`#772 <https://github.com/litestar-org/sqlspec/pull/772>`_)
+
+* DDL statement builders (:class:`~sqlspec.builder._ddl.CreateTable` and
+  :class:`~sqlspec.builder._ddl.AlterTable`) parse column definitions using the effective or target
+  dialect, allowing dialect-specific data types (such as SQL Server ``DATETIME2(6)``) to parse correctly.
+  Re-building a statement for a different dialect re-parses column types for the target dialect.
+  (`#776 <https://github.com/litestar-org/sqlspec/pull/776>`_)
 
 **Removed:**
 

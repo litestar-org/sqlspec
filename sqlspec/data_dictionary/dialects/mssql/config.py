@@ -135,6 +135,10 @@ MSSQL_TYPE_MAPPINGS: dict[str, str] = {
     "timestamptz": "DATETIMEOFFSET(6)",
     "bytea": "VARBINARY(MAX)",
     "blob": "VARBINARY(MAX)",
+    "integer": "INT",
+    "bigint": "BIGINT",
+    "float": "FLOAT",
+    "varchar": "NVARCHAR({length})",
 }
 
 MSSQL_CONFIG = DialectConfig(

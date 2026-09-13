@@ -62,6 +62,10 @@ ORACLE_TYPE_MAPPINGS: dict[str, str] = {
     "text": "CLOB",
     "blob": "BLOB",
     "json": "JSON",
+    "integer": "NUMBER(10)",
+    "bigint": "NUMBER(19)",
+    "float": "BINARY_DOUBLE",
+    "varchar": "VARCHAR2({length})",
 }
 
 

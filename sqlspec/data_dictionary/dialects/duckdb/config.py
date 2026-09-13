@@ -34,6 +34,10 @@ DUCKDB_TYPE_MAPPINGS: dict[str, str] = {
     "array": "LIST",
     "map": "MAP",
     "struct": "STRUCT",
+    "integer": "INTEGER",
+    "bigint": "BIGINT",
+    "float": "DOUBLE",
+    "varchar": "TEXT",
 }
 
 
