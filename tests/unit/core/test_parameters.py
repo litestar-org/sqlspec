@@ -2636,25 +2636,33 @@ def test_characterize_fallback_mapping_alias_precedence(converter: ParameterConv
     info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = :name")
     param = info[0]
 
-    val1, ok1 = converter._lookup_parameter_value(param, {"name": "exact", ":name": "placeholder"}, [])
+    val1, ok1, keys1 = converter._lookup_parameter_value(param, {"name": "exact", ":name": "placeholder"}, [])
     assert ok1 is True and val1 == "exact"
+    assert keys1 is None
 
-    val2, ok2 = converter._lookup_parameter_value(param, {":name": "placeholder", "param_0": "param_ord"}, [])
+    val2, ok2, keys2 = converter._lookup_parameter_value(param, {":name": "placeholder", "param_0": "param_ord"}, [])
     assert ok2 is True and val2 == "placeholder"
+    assert keys2 is None
 
-    val3, ok3 = converter._lookup_parameter_value(param, {"param_0": "param_ord", "1": "one"}, [])
+    val3, ok3, keys3 = converter._lookup_parameter_value(param, {"param_0": "param_ord", "1": "one"}, [])
     assert ok3 is True and val3 == "param_ord"
+    assert keys3 is None
 
-    val4, ok4 = converter._lookup_parameter_value(param, {"1": "one", "fallback": "ordered"}, [])
+    val4, ok4, keys4 = converter._lookup_parameter_value(param, {"1": "one", "fallback": "ordered"}, [])
     assert ok4 is True and val4 == "one"
+    assert keys4 is None
 
-    val5, ok5 = converter._lookup_parameter_value(param, {"fallback": "ordered"}, [])
+    val5, ok5, keys5 = converter._lookup_parameter_value(param, {"fallback": "ordered"}, [])
     assert ok5 is True and val5 == "ordered"
+    assert keys5 == ["fallback"]
 
     num_info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = $1")
     num_param = num_info[0]
-    val6, ok6 = converter._lookup_parameter_value(num_param, {"col_a": "aliased", "param_0": "param_ord"}, ["col_a"])
+    val6, ok6, keys6 = converter._lookup_parameter_value(
+        num_param, {"col_a": "aliased", "param_0": "param_ord"}, ["col_a"]
+    )
     assert ok6 is True and val6 == "aliased"
+    assert keys6 is None
 
 
 def test_characterize_preserve_many_batch_behavior() -> None:
