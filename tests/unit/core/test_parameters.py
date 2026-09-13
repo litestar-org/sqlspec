@@ -2606,7 +2606,6 @@ def test_characterize_injected_converter_overrides() -> None:
             strict_named_parameters: bool = True,
             param_info: list[ParameterInfo] | None = None,
             precomputed_plan: tuple[list[ParameterInfo], dict[str, int]] | None = None,
-            preserve_original_batch: bool = False,
         ) -> tuple[str, Any]:
             self.convert_called = True
             return super().convert_placeholder_style(
@@ -2617,7 +2616,6 @@ def test_characterize_injected_converter_overrides() -> None:
                 strict_named_parameters=strict_named_parameters,
                 param_info=param_info,
                 precomputed_plan=precomputed_plan,
-                preserve_original_batch=preserve_original_batch,
             )
 
     custom = CustomConverter()
