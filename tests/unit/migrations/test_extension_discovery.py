@@ -274,3 +274,51 @@ def test_auto_inclusion_does_not_mutate_caller_include_list(tmp_path: Path, thir
     )
 
     assert shared == ["fastapi"]
+
+
+def test_remove_extension_migrations_stops_discovery(tmp_path: Path, third_party_migrations: Path) -> None:
+    """Removing an extension stops migration discovery and updates configuration."""
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path / "migrations")}
+    )
+    config.add_extension_migrations("litestar_queues", third_party_migrations, settings={"table_name": "queue_tasks"})
+
+    commands = config.get_migration_commands()
+    assert commands.runner.extension_migrations["litestar_queues"] == third_party_migrations
+    assert commands.extension_configs["litestar_queues"]["table_name"] == "queue_tasks"
+    assert config.migration_config.get("include_extensions") == ["litestar_queues"]
+
+    assert config.remove_extension_migrations("litestar_queues") is True
+
+    updated_commands = config.get_migration_commands()
+    assert "litestar_queues" not in updated_commands.runner.extension_migrations
+    assert "litestar_queues" not in updated_commands.extension_configs
+    assert "litestar_queues" not in (config.migration_config.get("include_extensions") or [])
+    assert "litestar_queues" not in config.extension_config
+
+
+def test_remove_unknown_extension_is_noop(
+    tmp_path: Path, third_party_migrations: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing an unknown extension returns False without rebuilding commands."""
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path / "migrations")}
+    )
+    rebuild_called = False
+
+    def fail_rebuild() -> None:
+        nonlocal rebuild_called
+        rebuild_called = True
+
+    monkeypatch.setattr(config, "_rebuild_migration_commands", fail_rebuild)
+
+    assert config.remove_extension_migrations("unknown_ext") is False
+    assert not rebuild_called
+
+    monkeypatch.undo()
+    config.add_extension_migrations("litestar_queues", third_party_migrations)
+    assert config.remove_extension_migrations("litestar_queues") is True
+
+    monkeypatch.setattr(config, "_rebuild_migration_commands", fail_rebuild)
+    assert config.remove_extension_migrations("litestar_queues") is False
+    assert not rebuild_called

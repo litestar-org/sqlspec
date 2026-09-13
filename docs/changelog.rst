@@ -114,6 +114,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   override the configured default schema for individual migration scripts.
   (`#770 <https://github.com/litestar-org/sqlspec/pull/770>`_)
 
+* Database configurations support :meth:`~sqlspec.config.DatabaseConfigBase.remove_extension_migrations`,
+  allowing runtime unregistration of extension migrations. The method removes the extension entry from
+  ``extension_config`` and ``migration_config["include_extensions"]``, rebuilding cached migration
+  commands when found.
+  (`#775 <https://github.com/litestar-org/sqlspec/issues/775>`_)
+
 **Changed:**
 
 * Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
