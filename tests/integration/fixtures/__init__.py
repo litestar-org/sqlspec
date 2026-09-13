@@ -26,6 +26,7 @@ from tests.integration.fixtures.bigquery import (
 from tests.integration.fixtures.duckdb import duckdb_basic_config, duckdb_basic_session
 from tests.integration.fixtures.mssql import (
     arrow_odbc_mssql_config,
+    mssql_migration_connection_config,
     mssql_python_config,
     mssql_python_connection_config,
     pymssql_config,
@@ -144,6 +145,7 @@ __all__ = (
     "duckdb_basic_config",
     "duckdb_basic_session",
     "gizmosql_sqlite_service",
+    "mssql_migration_connection_config",
     "mssql_python_config",
     "mssql_python_connection_config",
     "mysqlconnector_async_config",

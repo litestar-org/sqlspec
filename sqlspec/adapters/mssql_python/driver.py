@@ -134,7 +134,13 @@ class MssqlPythonStreamSource:
 class MssqlPythonDriver(SyncDriverAdapterBase):
     """mssql-python sync driver."""
 
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_restore_autocommit", "_transaction_active")
+    __slots__ = (
+        "_column_name_cache",
+        "_data_dictionary",
+        "_migration_schema_restore",
+        "_restore_autocommit",
+        "_transaction_active",
+    )
     dialect = "tsql"
 
     def __init__(
@@ -150,6 +156,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MssqlPythonSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._migration_schema_restore: str | None = None
         self._restore_autocommit = False
         self._transaction_active = False
 
@@ -253,6 +260,33 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
     def rollback_to_savepoint(self, name: str) -> None:
         self.execute_script(f"ROLLBACK TRANSACTION {validate_savepoint_name(name)}")
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Set default schema for the current migration session."""
+        quoted_schema = _quote_tsql_identifier(schema)
+        with self.with_cursor(self.connection) as cursor:
+            if self._migration_schema_restore is None:
+                _execute_cursor(cursor, "SELECT SCHEMA_NAME() AS schema_name;", None)
+                row = cursor.fetchone()
+                if row is not None:
+                    self._migration_schema_restore = _scalar(row, "schema_name", 0)
+            _execute_cursor(cursor, f"ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = {quoted_schema};", None)
+
+    def reset_migration_session_schema(self) -> None:
+        """Reset default schema back to the original value prior to migration execution."""
+        if self._migration_schema_restore is None:
+            return
+        restore_schema = self._migration_schema_restore
+        self._migration_schema_restore = None
+        quoted_schema = _quote_tsql_identifier(restore_schema)
+        with self.with_cursor(self.connection) as cursor:
+            _execute_cursor(cursor, f"ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = {quoted_schema};", None)
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether the specified schema exists."""
+        with self.with_cursor(self.connection) as cursor:
+            _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,))
+            return cursor.fetchone() is not None
 
     def select_to_arrow(
         self,
@@ -468,6 +502,21 @@ def _coerce_bulk_copy_result(result: Any, cursor: "MssqlPythonRawCursor") -> Mss
     if isinstance(result, dict):
         return cast("MssqlPythonBulkCopyResult", dict(result))
     return {"rows_copied": _cursor_rowcount(cursor)}
+
+
+def _quote_tsql_identifier(identifier: str) -> str:
+    return f"[{identifier.replace(']', ']]')}]"
+
+
+def _scalar(row: Any, key: str, index: int) -> str:
+    if isinstance(row, dict):
+        return str(row[key])
+    if isinstance(row, (tuple, list)):
+        return str(row[index])
+    try:
+        return str(row[key])
+    except Exception:
+        return str(row[index])
 
 
 register_driver_profile("mssql_python", driver_profile, allow_override=True)

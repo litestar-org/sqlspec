@@ -138,8 +138,26 @@ def _drop_schema_sql(schema: str) -> str:
     return f"DROP SCHEMA IF EXISTS {quote_identifier(schema)} CASCADE"
 
 
+def _drop_schema_sync(driver: Any, case: MigrationCase, schema: str) -> None:
+    if case.schema_dialect == "mssql":
+        tables = driver.select(
+            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = :schema",
+            schema=schema,
+        )
+        for row in tables:
+            tbl = row[0] if isinstance(row, (tuple, list)) else row["TABLE_NAME"]
+            driver.execute_script(f"DROP TABLE IF EXISTS [{schema}].[{tbl}]")
+        driver.execute_script(f"DROP SCHEMA IF EXISTS [{schema}]")
+    else:
+        driver.execute_script(_drop_schema_sql(schema))
+
+
 def _default_schema_name(case: MigrationCase) -> str:
-    return "main" if case.schema_dialect == "duckdb" else "public"
+    if case.schema_dialect == "duckdb":
+        return "main"
+    if case.schema_dialect == "mssql":
+        return "dbo"
+    return "public"
 
 
 def _table_exists_in_schema_sync(driver: Any, schema: str, table: str) -> bool:
@@ -422,11 +440,11 @@ def assert_sync_migration_default_schema_contract(make_config: Any, case: Migrat
         with config.provide_session() as driver:
             assert _table_exists_in_schema_sync(driver, schema, table)
             assert _table_exists_in_schema_sync(driver, schema, version_table)
-            assert not _table_exists_in_schema_sync(driver, "public", table)
+            assert not _table_exists_in_schema_sync(driver, _default_schema_name(case), table)
     finally:
         with contextlib.suppress(Exception):
             with config.provide_session() as driver:
-                driver.execute_script(_drop_schema_sql(schema))
+                _drop_schema_sync(driver, case, schema)
                 driver.commit()
         config.close_pool()
 
@@ -451,7 +469,7 @@ async def assert_async_migration_default_schema_contract(make_config: Any, case:
         async with config.provide_session() as driver:
             assert await _table_exists_in_schema_async(driver, schema, table)
             assert await _table_exists_in_schema_async(driver, schema, version_table)
-            assert not await _table_exists_in_schema_async(driver, "public", table)
+            assert not await _table_exists_in_schema_async(driver, _default_schema_name(case), table)
     finally:
         with contextlib.suppress(Exception):
             async with config.provide_session() as driver:
@@ -493,8 +511,8 @@ def assert_sync_migration_multi_schema_contract(make_config: Any, case: Migratio
     finally:
         with contextlib.suppress(Exception):
             with config.provide_session() as driver:
-                driver.execute_script(_drop_schema_sql(default_schema))
-                driver.execute_script(_drop_schema_sql(tracker_schema))
+                _drop_schema_sync(driver, case, default_schema)
+                _drop_schema_sync(driver, case, tracker_schema)
                 driver.commit()
         config.close_pool()
 
@@ -562,7 +580,7 @@ def assert_sync_migration_version_table_schema_contract(make_config: Any, case: 
     finally:
         with contextlib.suppress(Exception):
             with config.provide_session() as driver:
-                driver.execute_script(_drop_schema_sql(tracker_schema))
+                _drop_schema_sync(driver, case, tracker_schema)
                 driver.commit()
         config.close_pool()
 
@@ -614,8 +632,8 @@ def assert_sync_migration_missing_schema_contract(make_config: Any, case: Migrat
             commands.upgrade()
 
         with config.provide_session() as driver:
-            assert not _table_exists_in_schema_sync(driver, "public", version_table)
-            assert not _table_exists_in_schema_sync(driver, "public", table)
+            assert not _table_exists_in_schema_sync(driver, _default_schema_name(case), version_table)
+            assert not _table_exists_in_schema_sync(driver, _default_schema_name(case), table)
     finally:
         config.close_pool()
 
@@ -636,8 +654,8 @@ async def assert_async_migration_missing_schema_contract(make_config: Any, case:
             await commands.upgrade()
 
         async with config.provide_session() as driver:
-            assert not await _table_exists_in_schema_async(driver, "public", version_table)
-            assert not await _table_exists_in_schema_async(driver, "public", table)
+            assert not await _table_exists_in_schema_async(driver, _default_schema_name(case), version_table)
+            assert not await _table_exists_in_schema_async(driver, _default_schema_name(case), table)
     finally:
         await config.close_pool()
 
@@ -663,7 +681,7 @@ async def assert_async_migration_non_transactional_default_schema_contract(
 
         async with config.provide_session() as driver:
             assert await _table_exists_in_schema_async(driver, schema, table)
-            assert not await _table_exists_in_schema_async(driver, "public", table)
+            assert not await _table_exists_in_schema_async(driver, _default_schema_name(case), table)
     finally:
         with contextlib.suppress(Exception):
             async with config.provide_session() as driver:

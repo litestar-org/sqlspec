@@ -9,13 +9,15 @@ from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 from tests.integration.adapters._shared._cases import (
     ADBC_MARK,
     DUCKDB_XDIST_MARK,
+    MSSQL_MARK,
+    MSSQL_XDIST_MARK,
     MYSQL_XDIST_MARK,
     ORACLE_XDIST_MARK,
     POSTGRES_XDIST_MARK,
     SQLITE_XDIST_MARK,
 )
 
-MigrationSchemaDialect = Literal["duckdb", "postgres"]
+MigrationSchemaDialect = Literal["duckdb", "mssql", "postgres"]
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,28 @@ SYNC_MIGRATION_CASES = (
         "sync",
         uses_oracle_ddl=True,
         marks=(ORACLE_XDIST_MARK,),
+    ),
+    MigrationCase(
+        "mssql_python-sync",
+        "migration_config_mssql_python",
+        "mssql_python",
+        "sync",
+        schema_dialect="mssql",
+        supports_default_schema=True,
+        supports_multi_schema_migrations=True,
+        supports_missing_schema_validation=True,
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK),
+    ),
+    MigrationCase(
+        "pymssql-sync",
+        "migration_config_pymssql",
+        "pymssql",
+        "sync",
+        schema_dialect="mssql",
+        supports_default_schema=True,
+        supports_multi_schema_migrations=True,
+        supports_missing_schema_validation=True,
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK),
     ),
 )
 
