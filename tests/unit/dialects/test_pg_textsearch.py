@@ -7,7 +7,9 @@ from sqlspec.dialects.postgres import PGTextSearch
 
 def test_pg_textsearch_bm25_ranking_operator() -> None:
     """Verify BM25 relevance ranking operator <@> parses and generates."""
-    sql = "SELECT title, content <@> 'database system' AS score FROM documents ORDER BY content <@> 'database system' ASC"
+    sql = (
+        "SELECT title, content <@> 'database system' AS score FROM documents ORDER BY content <@> 'database system' ASC"
+    )
     expression = parse_one(sql, read=PGTextSearch)
     rendered = expression.sql(dialect=PGTextSearch)
     assert "<@>" in rendered
@@ -36,10 +38,7 @@ def test_pg_textsearch_hybrid_query() -> None:
 
 def test_pg_textsearch_bm25_index_ddl() -> None:
     """Verify BM25 index creation statement parses."""
-    sql = (
-        "CREATE INDEX idx_docs_bm25 ON documents "
-        "USING bm25 (content) WITH (text_config='english', k1=1.2, b=0.75)"
-    )
+    sql = "CREATE INDEX idx_docs_bm25 ON documents USING bm25 (content) WITH (text_config='english', k1=1.2, b=0.75)"
     expression = parse_one(sql, read=PGTextSearch)
     rendered = expression.sql(dialect=PGTextSearch)
     assert "USING bm25" in rendered

@@ -34,11 +34,7 @@ register_postgres_extension_operators()
 class ParadeDBTokenizer(Postgres.Tokenizer):
     """Tokenizer with ParadeDB search operators and pgvector distance operators."""
 
-    KEYWORDS = {
-        **Postgres.Tokenizer.KEYWORDS,
-        **PARADEDB_OPERATOR_TOKENS,
-        **PGVECTOR_OPERATOR_TOKENS,
-    }
+    KEYWORDS = {**Postgres.Tokenizer.KEYWORDS, **PARADEDB_OPERATOR_TOKENS, **PGVECTOR_OPERATOR_TOKENS}
 
 
 class ParadeDB(Postgres):

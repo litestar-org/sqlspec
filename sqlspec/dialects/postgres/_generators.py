@@ -24,9 +24,12 @@ from sqlspec.dialects.postgres._operators import is_postgres_extension_operator,
 __all__ = ("PGTextSearchGenerator", "PGVectorGenerator", "ParadeDBGenerator")
 
 _BASE_OPERATOR_TRANSFORM = Postgres.Generator.TRANSFORMS[exp.Operator]
-_POSTGRES_EXTENSION_DIALECT_NAMES: Final[frozenset[str]] = frozenset(
-    {"Postgres", "PGVector", "ParadeDB", "PGTextSearch"}
-)
+_POSTGRES_EXTENSION_DIALECT_NAMES: Final[frozenset[str]] = frozenset({
+    "Postgres",
+    "PGVector",
+    "ParadeDB",
+    "PGTextSearch",
+})
 
 
 def _postgres_extension_operator_sql(generator: PostgresGenerator, expression: exp.Operator) -> str:

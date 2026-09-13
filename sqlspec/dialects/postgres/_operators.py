@@ -14,8 +14,8 @@ from sqlglot.tokenizer_core import TokenType
 
 __all__ = (
     "PARADEDB_OPERATOR_TOKENS",
-    "PG_TEXTSEARCH_OPERATOR_TOKENS",
     "PGVECTOR_OPERATOR_TOKENS",
+    "PG_TEXTSEARCH_OPERATOR_TOKENS",
     "is_postgres_extension_operator",
     "postgres_extension_operator",
     "register_postgres_extension_operators",
@@ -41,9 +41,7 @@ PARADEDB_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {
     "##": TokenType.NESTED,
     "##>": TokenType.AGGREGATEFUNCTION,
 }
-PG_TEXTSEARCH_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {
-    "<@>": TokenType.RING,
-}
+PG_TEXTSEARCH_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {"<@>": TokenType.RING}
 
 _REGISTERED = False
 
@@ -65,11 +63,7 @@ def register_postgres_extension_operators() -> None:
         return
 
     factor: dict[TokenType, Any] = dict(PostgresParser.FACTOR)
-    extension_tokens = {
-        **PGVECTOR_OPERATOR_TOKENS,
-        **PARADEDB_OPERATOR_TOKENS,
-        **PG_TEXTSEARCH_OPERATOR_TOKENS,
-    }
+    extension_tokens = {**PGVECTOR_OPERATOR_TOKENS, **PARADEDB_OPERATOR_TOKENS, **PG_TEXTSEARCH_OPERATOR_TOKENS}
     for operator, token in extension_tokens.items():
         factor[token] = _build_operator_factory(operator)
 

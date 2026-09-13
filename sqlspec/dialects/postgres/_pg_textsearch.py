@@ -28,11 +28,7 @@ register_postgres_extension_operators()
 class PGTextSearchTokenizer(Postgres.Tokenizer):
     """Tokenizer with pg_textsearch BM25 ranking operators and pgvector distance operators."""
 
-    KEYWORDS = {
-        **Postgres.Tokenizer.KEYWORDS,
-        **PG_TEXTSEARCH_OPERATOR_TOKENS,
-        **PGVECTOR_OPERATOR_TOKENS,
-    }
+    KEYWORDS = {**Postgres.Tokenizer.KEYWORDS, **PG_TEXTSEARCH_OPERATOR_TOKENS, **PGVECTOR_OPERATOR_TOKENS}
 
 
 class PGTextSearch(Postgres):
