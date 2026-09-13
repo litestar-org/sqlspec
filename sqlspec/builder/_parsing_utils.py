@@ -435,3 +435,16 @@ def _grouping_sets_expression(*column_sets: tuple[str, ...] | list[str]) -> exp.
 
 def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None") -> "DialectType | None":
     return dialect or default
+
+
+def _normalize_dialect(dialect: "DialectType | None") -> str | None:
+    """Resolve public dialect aliases to SQLGlot dialect names."""
+    if dialect is None:
+        return None
+    if isinstance(dialect, str):
+        name = dialect.lower()
+    elif isinstance(dialect, type):
+        name = dialect.__name__.lower()
+    else:
+        name = type(dialect).__name__.lower()
+    return {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres"}.get(name, name)

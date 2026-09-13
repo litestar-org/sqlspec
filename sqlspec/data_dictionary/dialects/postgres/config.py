@@ -35,6 +35,10 @@ POSTGRES_TYPE_MAPPINGS: dict[str, str] = {
     "blob": "BYTEA",
     "array": "ARRAY",
     "json": "JSONB",
+    "integer": "INTEGER",
+    "bigint": "BIGINT",
+    "float": "DOUBLE PRECISION",
+    "varchar": "VARCHAR({length})",
 }
 
 

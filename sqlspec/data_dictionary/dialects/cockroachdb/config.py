@@ -34,6 +34,10 @@ COCKROACHDB_TYPE_MAPPINGS: dict[str, str] = {
     "blob": "BYTES",
     "array": "ARRAY",
     "json": "JSONB",
+    "integer": "INT8",
+    "bigint": "INT8",
+    "float": "FLOAT8",
+    "varchar": "VARCHAR({length})",
 }
 
 COCKROACHDB_CONFIG = DialectConfig(

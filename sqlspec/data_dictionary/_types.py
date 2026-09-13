@@ -1539,17 +1539,23 @@ class DialectConfig:
         """
         return cast("VersionInfo | None", self.feature_versions.get(feature))
 
-    def get_optimal_type(self, logical_type: str) -> str:
+    def get_optimal_type(self, logical_type: str, *, length: int | None = None) -> str:
         """Return the dialect-specific type for a logical type.
 
         Args:
             logical_type: Logical type name.
+            length: Optional length for bounded types like varchar.
 
         Returns:
             Dialect-specific type string.
         """
         default_type = self.type_mappings.get("text", "TEXT")
-        return self.type_mappings.get(logical_type, default_type)
+        mapping = self.type_mappings.get(logical_type, default_type)
+        if "{length}" in mapping:
+            if length is None:
+                return self.type_mappings.get("text", "TEXT")
+            return mapping.format(length=length)
+        return mapping
 
 
 def _coerce_support(value: "MetadataSupport | str") -> MetadataSupport:
