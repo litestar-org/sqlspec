@@ -956,6 +956,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_migration_schemas: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
+    supports_reliable_rowcount: "ClassVar[bool]" = True
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     bind_key: "str | None"
@@ -1163,6 +1164,38 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         migration_config["include_extensions"] = include_list
 
         self._rebuild_migration_commands()
+
+    def remove_extension_migrations(self, name: str) -> bool:
+        """Unregister migrations previously registered for an extension.
+
+        Removes the extension entry from ``extension_config`` and from
+        ``migration_config["include_extensions"]``. If anything
+        was removed, cached migration commands are rebuilt so the extension is no
+        longer discovered.
+
+        Args:
+            name: Extension name to unregister.
+
+        Returns:
+            True if the extension was found and removed, False otherwise.
+        """
+        removed = False
+        extension_config = cast("dict[str, Any]", self.extension_config)
+        if isinstance(extension_config, dict) and name in extension_config:
+            del extension_config[name]
+            removed = True
+
+        migration_config = cast("dict[str, Any]", self.migration_config)
+        include_extensions = migration_config.get("include_extensions")
+        if include_extensions is not None and name in include_extensions:
+            migration_config["include_extensions"] = [ext for ext in include_extensions if ext != name]
+            removed = True
+
+        if removed:
+            self._rebuild_migration_commands()
+            return True
+
+        return False
 
     @abstractmethod
     def migrate_up(

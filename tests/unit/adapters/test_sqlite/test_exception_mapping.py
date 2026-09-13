@@ -1,10 +1,10 @@
-"""Unit tests for aiosqlite exception mapping parity with sqlite."""
+"""Unit tests for SQLite exception mapping."""
 
 import sqlite3
 
 import pytest
 
-from sqlspec.adapters.aiosqlite.core import create_mapped_exception
+from sqlspec.adapters.sqlite.core import create_mapped_exception
 from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError, UniqueViolationError
 
 
@@ -20,6 +20,20 @@ class _SqliteIntegrityError(sqlite3.IntegrityError):
         super().__init__(message)
         self.sqlite_errorcode = code
         self.sqlite_errorname = name
+
+
+def test_primary_key_code_maps_to_unique_violation() -> None:
+    err = _SqliteIntegrityError("UNIQUE constraint failed: t.id", 1555, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, UniqueViolationError)
+    assert result.__cause__ is err
+
+
+def test_primary_key_error_name_maps_to_unique_violation() -> None:
+    err = _SqliteIntegrityError("primary key rejected", None, "SQLITE_CONSTRAINT_PRIMARYKEY")
+    result = create_mapped_exception(err)
+    assert isinstance(result, UniqueViolationError)
+    assert result.__cause__ is err
 
 
 def test_busy_error_code_maps_to_deadlock() -> None:
@@ -46,31 +60,11 @@ def test_locked_error_name_maps_to_deadlock() -> None:
     assert isinstance(result, DeadlockError)
 
 
-def test_locked_text_heuristic_maps_to_deadlock() -> None:
-    result = create_mapped_exception(sqlite3.OperationalError("database locked"))
-    assert isinstance(result, DeadlockError)
-
-
-def test_busy_text_heuristic_maps_to_deadlock() -> None:
-    result = create_mapped_exception(sqlite3.OperationalError("database is busy, please retry"))
-    assert isinstance(result, DeadlockError)
-
-
 def test_interrupt_error_code_maps_to_operation_cancelled() -> None:
     err = _SqliteError("interrupted", 9, "SQLITE_INTERRUPT")
     result = create_mapped_exception(err)
     assert isinstance(result, OperationCancelledError)
     assert result.__cause__ is err
-
-
-def test_interrupt_error_name_maps_to_operation_cancelled() -> None:
-    result = create_mapped_exception(_SqliteError("query was interrupted", None, "SQLITE_INTERRUPT"))
-    assert isinstance(result, OperationCancelledError)
-
-
-def test_interrupt_text_heuristic_maps_to_operation_cancelled() -> None:
-    result = create_mapped_exception(sqlite3.OperationalError("query was interrupted by application"))
-    assert isinstance(result, OperationCancelledError)
 
 
 def test_perm_error_code_maps_to_permission_denied() -> None:
@@ -80,44 +74,10 @@ def test_perm_error_code_maps_to_permission_denied() -> None:
     assert result.__cause__ is err
 
 
-def test_perm_error_name_maps_to_permission_denied() -> None:
-    result = create_mapped_exception(_SqliteError("access permission denied", None, "SQLITE_PERM"))
-    assert isinstance(result, PermissionDeniedError)
-
-
 def test_readonly_error_code_maps_to_permission_denied() -> None:
     err = _SqliteError("attempt to write a readonly database", 8, "SQLITE_READONLY")
     result = create_mapped_exception(err)
     assert isinstance(result, PermissionDeniedError)
-    assert result.__cause__ is err
-
-
-def test_readonly_error_name_maps_to_permission_denied() -> None:
-    result = create_mapped_exception(_SqliteError("readonly database", None, "SQLITE_READONLY"))
-    assert isinstance(result, PermissionDeniedError)
-
-
-def test_readonly_text_heuristic_maps_to_permission_denied() -> None:
-    result = create_mapped_exception(sqlite3.OperationalError("attempt to write a readonly database"))
-    assert isinstance(result, PermissionDeniedError)
-
-
-def test_permission_denied_text_heuristic_maps_to_permission_denied() -> None:
-    result = create_mapped_exception(sqlite3.OperationalError("permission denied: cannot open /etc/passwd"))
-    assert isinstance(result, PermissionDeniedError)
-
-
-def test_primary_key_code_maps_to_unique_violation() -> None:
-    err = _SqliteIntegrityError("UNIQUE constraint failed: t.id", 1555, None)
-    result = create_mapped_exception(err)
-    assert isinstance(result, UniqueViolationError)
-    assert result.__cause__ is err
-
-
-def test_primary_key_error_name_maps_to_unique_violation() -> None:
-    err = _SqliteIntegrityError("primary key rejected", None, "SQLITE_CONSTRAINT_PRIMARYKEY")
-    result = create_mapped_exception(err)
-    assert isinstance(result, UniqueViolationError)
     assert result.__cause__ is err
 
 

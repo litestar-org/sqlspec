@@ -89,6 +89,22 @@ Unsupported metadata is explicit:
        # The domain is supported, but no privileges matched.
        ...
 
+Version-Aware Feature Flags
+===========================
+
+The data dictionary provides ``get_feature_flag(driver, feature)`` to resolve version-gated
+flags against the connected server on every adapter. Most adapters resolve flags through
+``resolve_feature_flag(feature, version_info)`` after retrieving the server version, while
+Oracle (``resolve_oracle_feature_flag``) and SQL Server (``resolve_mssql_feature_flag``) dialect
+resolvers expose dynamic flags such as ``supports_native_json`` and ``is_azure_sql``.
+
+For example, querying ``supports_skip_locked`` dynamically resolves against the server version:
+
+.. code-block:: python
+
+   # Returns False on PostgreSQL 9.4, but True on PostgreSQL 9.5+
+   has_skip_locked = await db.data_dictionary.get_feature_flag(db, "supports_skip_locked")
+
 Support Matrix
 ==============
 

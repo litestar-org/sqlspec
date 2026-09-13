@@ -14,6 +14,21 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 **Added:**
 
+* Public table-queue primitives extracted to :mod:`sqlspec.extensions.events.primitives`
+  and exported from :mod:`sqlspec.extensions.events`: :func:`~sqlspec.extensions.events.lock_clause`,
+  :func:`~sqlspec.extensions.events.row_limit_clause`,
+  :func:`~sqlspec.extensions.events.select_limit_prefix`, and
+  :func:`~sqlspec.extensions.events.claim_verified`.
+  :class:`~sqlspec.extensions.events.SyncTableEventQueue` and
+  :class:`~sqlspec.extensions.events.AsyncTableEventQueue` delegate to them for dialect-aware
+  row-limiting, row-locking, and claim lease verification.
+  (`#776 <https://github.com/litestar-org/sqlspec/pull/776>`_)
+
+* Added :attr:`~sqlspec.config.DatabaseConfigProtocol.supports_reliable_rowcount` capability
+  flag to configurations, indicating whether ``rows_affected`` can be trusted without re-querying
+  (defaults to ``True``; set to ``False`` for ADBC and arrow-odbc).
+  (`#773 <https://github.com/litestar-org/sqlspec/pull/773>`_)
+
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
   it fails; a failed commit is followed by a rollback attempt. A block entered while
@@ -120,6 +135,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   unbounded text types when length is omitted.
   (`#777 <https://github.com/litestar-org/sqlspec/pull/777>`_)
 
+* Database configurations support :meth:`~sqlspec.config.DatabaseConfigBase.remove_extension_migrations`,
+  allowing runtime unregistration of extension migrations. The method removes the extension entry from
+  ``extension_config`` and ``migration_config["include_extensions"]``, rebuilding cached migration
+  commands when found.
+  (`#774 <https://github.com/litestar-org/sqlspec/pull/774>`_)
+
 **Changed:**
 
 * Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
@@ -146,6 +167,14 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
 **Fixed:**
+
+* SQLite and aiosqlite adapters map primary key constraint violations (extended error code 1555
+  and ``SQLITE_CONSTRAINT_PRIMARYKEY``) to ``UniqueViolationError``.
+  (`#775 <https://github.com/litestar-org/sqlspec/pull/775>`_)
+
+* DuckDB adapter maps ``TransactionException`` update conflicts ("Conflict on update") to
+  ``SerializationConflictError``, and all other transaction failures to ``OperationalError``.
+  (`#775 <https://github.com/litestar-org/sqlspec/pull/775>`_)
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
   order. Assignments such as ``do_update(name=exp.column("name", table="excluded"))`` no longer render

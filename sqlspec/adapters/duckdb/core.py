@@ -20,6 +20,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -495,6 +496,7 @@ def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], descriptio
 _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 _CONSTRAINT_EXCEPTION_TYPE: type[BaseException] | None = None
+_TRANSACTION_EXCEPTION_TYPE: type[BaseException] | None = None
 
 
 def _register_duckdb_exception_mappings() -> None:
@@ -508,10 +510,14 @@ def _register_duckdb_exception_mappings() -> None:
     except ImportError:
         return
 
-    global _CONSTRAINT_EXCEPTION_TYPE
+    global _CONSTRAINT_EXCEPTION_TYPE, _TRANSACTION_EXCEPTION_TYPE
     constraint_cls = getattr(_duckdb_module, "ConstraintException", None)
     if isinstance(constraint_cls, type) and issubclass(constraint_cls, BaseException):
         _CONSTRAINT_EXCEPTION_TYPE = constraint_cls
+
+    transaction_cls = getattr(_duckdb_module, "TransactionException", None)
+    if isinstance(transaction_cls, type) and issubclass(transaction_cls, BaseException):
+        _TRANSACTION_EXCEPTION_TYPE = transaction_cls
 
     direct_mappings: tuple[tuple[str, tuple[type[SQLSpecError], str]], ...] = (
         ("CatalogException", (NotFoundError, "catalog error")),
@@ -557,6 +563,12 @@ def _classify_duckdb_constraint(error: "BaseException") -> SQLSpecError:
     return _create_duckdb_error(error, IntegrityError, "integrity constraint violation")
 
 
+def _map_transaction_exception(error: "BaseException") -> SQLSpecError:
+    if "conflict on update" in str(error).lower():
+        return _create_duckdb_error(error, SerializationConflictError, "serialization conflict")
+    return _create_duckdb_error(error, OperationalError, "transaction error")
+
+
 _register_duckdb_exception_mappings()
 
 
@@ -585,6 +597,8 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     exc_type = type(error)
     if _CONSTRAINT_EXCEPTION_TYPE is not None and isinstance(error, _CONSTRAINT_EXCEPTION_TYPE):
         return _classify_duckdb_constraint(error)
+    if _TRANSACTION_EXCEPTION_TYPE is not None and isinstance(error, _TRANSACTION_EXCEPTION_TYPE):
+        return _map_transaction_exception(error)
 
     mapped = _resolve_duckdb_exception_mapping(exc_type)
     if mapped is not None:
@@ -594,6 +608,8 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     exc_name = exc_type.__name__.lower()
     if "constraintexception" in exc_name:
         return _classify_duckdb_constraint(error)
+    if "transactionexception" in exc_name:
+        return _map_transaction_exception(error)
     if "catalogexception" in exc_name:
         return _create_duckdb_error(error, NotFoundError, "catalog error")
     if "parserexception" in exc_name or "binderexception" in exc_name:
@@ -614,6 +630,8 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
         return _create_duckdb_error(error, OperationCancelledError, "query canceled")
     if "type mismatch" in error_msg:
         return _create_duckdb_error(error, DataError, "data error")
+    if "conflict on update" in error_msg:
+        return _create_duckdb_error(error, SerializationConflictError, "serialization conflict")
 
     return _create_duckdb_error(error, SQLSpecError, "database error")
 

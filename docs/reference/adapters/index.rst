@@ -124,6 +124,11 @@ exports a typed config class and a driver implementation.
 Feature Comparison
 ==================
 
+Read ``config.supports_reliable_rowcount`` from the configuration used to create
+the session when deciding whether to verify a modifying statement with a follow-up
+query. The flag describes affected-row reporting for individual DML statements;
+SELECT, scripts, and batch operations retain their adapter-specific count semantics.
+
 .. list-table::
    :header-rows: 1
 
@@ -133,13 +138,16 @@ Feature Comparison
      - Connection Pool
      - Arrow Support
      - Native Pipelines
+     - Reliable rowcount
    * - asyncpg
      -
      - Yes
      - Yes
      - Yes
      - Yes
+     - Yes
    * - psycopg
+     - Yes
      - Yes
      - Yes
      - Yes
@@ -151,29 +159,34 @@ Feature Comparison
      - Yes
      - Yes
      -
+     - Yes
    * - sqlite
      - Yes
      -
      - Yes
      -
      -
+     - Yes
    * - aiosqlite
      -
      - Yes
      - Yes
      -
      -
+     - Yes
    * - duckdb
      - Yes
      -
      - Yes
      - Yes
      -
+     - Yes
    * - oracledb
      - Yes
      - Yes
      - Yes
      -
+     - Yes
      - Yes
    * - mysql-connector
      - Yes
@@ -181,43 +194,51 @@ Feature Comparison
      - Yes
      -
      -
+     - Yes
    * - pymysql
      - Yes
      -
      - Yes
      -
      -
+     - Yes
    * - asyncmy
      -
      - Yes
      - Yes
      -
      -
+     - Yes
    * - aiomysql
      -
      - Yes
      - Yes
      -
      -
+     - Yes
    * - bigquery
      - Yes
      -
      -
      - Yes
      -
+     - Yes
    * - spanner
      - Yes
      -
      - Yes
      -
      -
+     - Yes
    * - cockroach (asyncpg)
      -
      - Yes
      - Yes
      - Yes
      - Yes
+     - Yes
    * - cockroach (psycopg)
+     - Yes
      - Yes
      - Yes
      - Yes
@@ -229,24 +250,28 @@ Feature Comparison
      -
      - Yes
      -
+     - No
    * - arrow_odbc
      - Yes
      -
      -
      - Yes
      -
+     - No
    * - mssql_python
      - Yes
      -
      - Yes
      -
      -
+     - Yes
    * - pymssql
      - Yes
      -
      - Yes
      -
      -
+     - Yes
 
 .. toctree::
    :hidden:
