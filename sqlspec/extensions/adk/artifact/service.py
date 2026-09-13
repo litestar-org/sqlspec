@@ -13,6 +13,7 @@ starting from 0.
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from google.adk.artifacts.base_artifact_service import BaseArtifactService
@@ -22,8 +23,6 @@ from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from google.adk.artifacts.base_artifact_service import ArtifactVersion
     from google.genai import types
 
@@ -32,148 +31,6 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpecArtifactService",)
 
 logger = get_logger("sqlspec.extensions.adk.artifact.service")
-
-
-# Matches path traversal and absolute path components
-_UNSAFE_PATH_CHARS = re.compile(r"(?:^|/)\.\.(?:/|$)|[\x00]")
-
-
-def _sanitize_path_component(value: str) -> str:
-    """Sanitize a path component to prevent directory traversal.
-
-    Removes leading/trailing slashes, rejects ``..`` traversals, and
-    replaces NUL bytes.
-
-    Args:
-        value: Raw path component.
-
-    Returns:
-        Sanitized path component.
-
-    Raises:
-        ValueError: If the value contains path traversal sequences.
-    """
-    value = value.strip("/")
-    if _UNSAFE_PATH_CHARS.search(value):
-        msg = f"Unsafe path component: {value!r}"
-        raise ValueError(msg)
-    return value
-
-
-def _build_content_path(
-    app_name: str, user_id: str, filename: str, version: int, session_id: "str | None" = None
-) -> str:
-    """Build the storage path for artifact content.
-
-    Pattern:
-        ``apps/{app_name}/users/{user_id}/[sessions/{session_id}/]artifacts/{filename}/v{version}``
-
-    All path components are sanitized to prevent directory traversal.
-
-    Args:
-        app_name: Application name.
-        user_id: User identifier.
-        filename: Artifact filename.
-        version: Version number.
-        session_id: Optional session identifier.
-
-    Returns:
-        Sanitized storage path.
-    """
-    parts = ["apps", _sanitize_path_component(app_name), "users", _sanitize_path_component(user_id)]
-    if session_id is not None:
-        parts.extend(["sessions", _sanitize_path_component(session_id)])
-    parts.extend(["artifacts", _sanitize_path_component(filename), f"v{version}"])
-    return "/".join(parts)
-
-
-def _extract_mime_type(artifact: "types.Part | dict[str, Any]") -> "str | None":
-    """Extract MIME type from an artifact Part.
-
-    Checks ``inline_data.mime_type`` and ``file_data.mime_type`` on the Part.
-
-    Args:
-        artifact: ADK Part or dict representation.
-
-    Returns:
-        MIME type string, or None if not determinable.
-    """
-    if isinstance(artifact, dict):
-        # Handle camelCase and snake_case keys
-        inline = artifact.get("inline_data") or artifact.get("inlineData")
-        if isinstance(inline, dict):
-            return inline.get("mime_type") or inline.get("mimeType")
-        file_data = artifact.get("file_data") or artifact.get("fileData")
-        if isinstance(file_data, dict):
-            return file_data.get("mime_type") or file_data.get("mimeType")
-        return None
-
-    # types.Part object
-    if hasattr(artifact, "inline_data") and artifact.inline_data is not None:
-        return getattr(artifact.inline_data, "mime_type", None)
-    if hasattr(artifact, "file_data") and artifact.file_data is not None:
-        return getattr(artifact.file_data, "mime_type", None)
-    return None
-
-
-def _serialize_artifact(artifact: "types.Part | dict[str, Any]") -> bytes:
-    """Serialize an artifact Part to bytes for content storage.
-
-    The artifact is serialized as JSON via ``model_dump(exclude_none=True)``.
-    This preserves the full Part structure including text, inline_data,
-    file_data, and any future Part fields.
-
-    Args:
-        artifact: ADK Part or dict representation.
-
-    Returns:
-        JSON-encoded bytes.
-    """
-    if isinstance(artifact, dict):
-        return json.dumps(artifact, default=str).encode("utf-8")
-
-    # Use Pydantic model serialization
-    if hasattr(artifact, "model_dump"):
-        data = artifact.model_dump(exclude_none=True)
-        return json.dumps(data, default=str).encode("utf-8")
-
-    # Fallback for unexpected types
-    return json.dumps({"text": str(artifact)}).encode("utf-8")
-
-
-def _deserialize_artifact(data: bytes) -> "types.Part":
-    """Deserialize bytes back into an ADK Part.
-
-    Args:
-        data: JSON-encoded bytes from content storage.
-
-    Returns:
-        Reconstructed Part object.
-    """
-    from google.genai import types
-
-    parsed = json.loads(data.decode("utf-8"))
-    return types.Part.model_validate(parsed)
-
-
-def _record_to_artifact_version(record: "StoredArtifact") -> "ArtifactVersion":
-    """Convert a database artifact record to an ADK ArtifactVersion.
-
-    Args:
-        record: Database artifact record.
-
-    Returns:
-        ArtifactVersion model instance.
-    """
-    from google.adk.artifacts.base_artifact_service import ArtifactVersion
-
-    return ArtifactVersion(
-        version=record["version"],
-        canonical_uri=record["canonical_uri"],
-        custom_metadata=record["custom_metadata"] or {},
-        create_time=record["created_at"].timestamp(),
-        mime_type=record["mime_type"],
-    )
 
 
 class SQLSpecArtifactService(BaseArtifactService):
@@ -241,33 +98,18 @@ class SQLSpecArtifactService(BaseArtifactService):
         """
         from google.adk.artifacts.base_artifact_service import ensure_part
 
-        # Normalize artifact to Part
         artifact_part: types.Part = ensure_part(artifact)
-
-        # Determine the next version
         version = await self._store.get_next_version(
             app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
-
-        # Build the content path and canonical URI
         content_path = _build_content_path(
             app_name=app_name, user_id=user_id, filename=filename, version=version, session_id=session_id
         )
         canonical_uri = f"{self._artifact_storage_uri}/{content_path}"
-
-        # Serialize content
         content_bytes = _serialize_artifact(artifact_part)
-
-        # Extract MIME type
         mime_type = _extract_mime_type(artifact_part)
-
-        # Write content first (fail-fast before metadata)
         backend = self._registry.get(self._artifact_storage_uri)
         await _call_storage_backend(backend, "write_bytes_async", "write_bytes_sync", content_path, content_bytes)
-
-        # Insert metadata row
-        from datetime import datetime, timezone
-
         record = StoredArtifact(
             app_name=app_name,
             user_id=user_id,
@@ -525,6 +367,143 @@ class SQLSpecArtifactService(BaseArtifactService):
                     canonical_uri=record["canonical_uri"],
                     version=record["version"],
                 )
+
+
+_UNSAFE_PATH_CHARS = re.compile(r"(?:^|/)\.\.(?:/|$)|[\x00]")
+
+
+def _sanitize_path_component(value: str) -> str:
+    """Sanitize a path component to prevent directory traversal.
+
+    Removes leading/trailing slashes, rejects ``..`` traversals, and
+    replaces NUL bytes.
+
+    Args:
+        value: Raw path component.
+
+    Returns:
+        Sanitized path component.
+
+    Raises:
+        ValueError: If the value contains path traversal sequences.
+    """
+    value = value.strip("/")
+    if _UNSAFE_PATH_CHARS.search(value):
+        msg = f"Unsafe path component: {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+def _build_content_path(
+    app_name: str, user_id: str, filename: str, version: int, session_id: "str | None" = None
+) -> str:
+    """Build the storage path for artifact content.
+
+    Pattern:
+        ``apps/{app_name}/users/{user_id}/[sessions/{session_id}/]artifacts/{filename}/v{version}``
+
+    All path components are sanitized to prevent directory traversal.
+
+    Args:
+        app_name: Application name.
+        user_id: User identifier.
+        filename: Artifact filename.
+        version: Version number.
+        session_id: Optional session identifier.
+
+    Returns:
+        Sanitized storage path.
+    """
+    parts = ["apps", _sanitize_path_component(app_name), "users", _sanitize_path_component(user_id)]
+    if session_id is not None:
+        parts.extend(["sessions", _sanitize_path_component(session_id)])
+    parts.extend(["artifacts", _sanitize_path_component(filename), f"v{version}"])
+    return "/".join(parts)
+
+
+def _extract_mime_type(artifact: "types.Part | dict[str, Any]") -> "str | None":
+    """Extract MIME type from an artifact Part.
+
+    Checks ``inline_data.mime_type`` and ``file_data.mime_type`` on the Part.
+
+    Args:
+        artifact: ADK Part or dict representation.
+
+    Returns:
+        MIME type string, or None if not determinable.
+    """
+    if isinstance(artifact, dict):
+        inline = artifact.get("inline_data") or artifact.get("inlineData")
+        if isinstance(inline, dict):
+            return inline.get("mime_type") or inline.get("mimeType")
+        file_data = artifact.get("file_data") or artifact.get("fileData")
+        if isinstance(file_data, dict):
+            return file_data.get("mime_type") or file_data.get("mimeType")
+        return None
+
+    if hasattr(artifact, "inline_data") and artifact.inline_data is not None:
+        return getattr(artifact.inline_data, "mime_type", None)
+    if hasattr(artifact, "file_data") and artifact.file_data is not None:
+        return getattr(artifact.file_data, "mime_type", None)
+    return None
+
+
+def _serialize_artifact(artifact: "types.Part | dict[str, Any]") -> bytes:
+    """Serialize an artifact Part to bytes for content storage.
+
+    The artifact is serialized as JSON via ``model_dump(exclude_none=True)``.
+    This preserves the full Part structure including text, inline_data,
+    file_data, and any future Part fields.
+
+    Args:
+        artifact: ADK Part or dict representation.
+
+    Returns:
+        JSON-encoded bytes.
+    """
+    if isinstance(artifact, dict):
+        return json.dumps(artifact, default=str).encode("utf-8")
+
+    if hasattr(artifact, "model_dump"):
+        data = artifact.model_dump(exclude_none=True)
+        return json.dumps(data, default=str).encode("utf-8")
+
+    return json.dumps({"text": str(artifact)}).encode("utf-8")
+
+
+def _deserialize_artifact(data: bytes) -> "types.Part":
+    """Deserialize bytes back into an ADK Part.
+
+    Args:
+        data: JSON-encoded bytes from content storage.
+
+    Returns:
+        Reconstructed Part object.
+    """
+    from google.genai import types
+
+    parsed = json.loads(data.decode("utf-8"))
+    return types.Part.model_validate(parsed)
+
+
+def _record_to_artifact_version(record: "StoredArtifact") -> "ArtifactVersion":
+    """Convert a database artifact record to an ADK ArtifactVersion.
+
+    Args:
+        record: Database artifact record.
+
+    Returns:
+        ArtifactVersion model instance.
+    """
+    from google.adk.artifacts.base_artifact_service import ArtifactVersion
+
+    return ArtifactVersion(
+        version=record["version"],
+        canonical_uri=record["canonical_uri"],
+        custom_metadata=record["custom_metadata"] or {},
+        create_time=record["created_at"].timestamp(),
+        mime_type=record["mime_type"],
+    )
 
 
 async def _call_storage_backend(
