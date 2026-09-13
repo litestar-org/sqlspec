@@ -43,7 +43,7 @@ from sqlspec.core._pipeline import compile_with_pipeline, reset_statement_pipeli
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
 from sqlspec.core.statement import get_default_config
-from tests.conftest import requires_interpreted
+from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
 @pytest.fixture
@@ -922,6 +922,7 @@ def test_compilation_exception_recovery(basic_statement_config: "StatementConfig
     assert result.operation_type == "COMMAND"
 
 
+@requires_patchable_internals
 @pytest.mark.parametrize("exception_cls", (RuntimeError, ValueError, TypeError))
 def test_unexpected_compile_exception_is_not_swallowed(
     basic_statement_config: "StatementConfig", exception_cls: type[Exception]

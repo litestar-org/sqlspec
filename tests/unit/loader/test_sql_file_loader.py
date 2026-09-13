@@ -26,7 +26,7 @@ from sqlspec.loader import (
     _normalize_query_name,
 )
 from sqlspec.storage.registry import StorageRegistry
-from tests.conftest import requires_interpreted
+from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
 def test_named_statement_creation() -> None:
@@ -105,6 +105,7 @@ def test_load_sql_skips_file_without_named_sections(tmp_path: Path) -> None:
     assert loader.list_files() == []
 
 
+@requires_patchable_internals
 def test_load_single_file_reads_once_on_stale_cache(monkeypatch, tmp_path: Path) -> None:
     """A stale cache entry should not cause a checksum read and a parse read."""
     sql_file = tmp_path / "queries.sql"

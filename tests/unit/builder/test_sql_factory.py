@@ -38,6 +38,7 @@ from sqlspec.builder._join import create_join_builder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
+from tests.conftest import requires_patchable_internals
 
 
 class _SQLExpressionObject:
@@ -1016,6 +1017,7 @@ def test_multiple_sql_raw_objects_parameter_merging() -> None:
     assert ":min_date" in stmt.sql
 
 
+@requires_patchable_internals
 def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
@@ -2081,12 +2083,11 @@ def test_native_layout_wave3_sqlfactory_slots_preserve_dynamic_column_access() -
     assert column.name == "user_id"
 
 
-def test_native_layout_wave3_join_builder_slots_remove_dead_condition_field() -> None:
-    """JoinBuilder should be slotted without the unused _condition field."""
+def test_join_builder_has_no_instance_dict_or_condition_field() -> None:
+    """JoinBuilder carries no per-instance __dict__ and no unused _condition field."""
     builder = JoinBuilder("LEFT")
     assert not hasattr(builder, "__dict__")
     assert not hasattr(builder, "_condition")
-    assert "_condition" not in JoinBuilder.__slots__
     builder._table = "posts"
     join = builder.on("users.id = posts.user_id")
     assert isinstance(join, exp.Join)

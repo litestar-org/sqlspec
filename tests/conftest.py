@@ -67,6 +67,9 @@ def is_compiled() -> bool:
 requires_interpreted = pytest.mark.skipif(
     is_compiled(), reason="Test uses interpreted subclass of compiled base (mypyc GC conflict)"
 )
+requires_patchable_internals = pytest.mark.skipif(
+    is_compiled(), reason="Test patches module internals that mypyc binds at compile time"
+)
 
 
 def _module_is_available(module: str) -> bool:
