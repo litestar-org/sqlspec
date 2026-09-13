@@ -46,6 +46,9 @@ class FakeSyncDriver:
         self.driver_features = driver_features or {}
         self.select_calls: list[tuple[Any, dict[str, Any]]] = []
 
+    def select_value_or_none(self, _statement: Any, **_kwargs: Any) -> str:
+        return "dbo"
+
     def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
         self.select_calls.append((statement, kwargs))
         query_text = getattr(statement, "raw_sql", str(statement))

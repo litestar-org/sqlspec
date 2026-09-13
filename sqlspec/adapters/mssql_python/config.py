@@ -167,6 +167,7 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     connection_type: "ClassVar[type[MssqlPythonConnection]]" = MssqlPythonConnection
     migration_tracker_type: "ClassVar[type[MssqlPythonSyncMigrationTracker]]" = MssqlPythonSyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_arrow_streaming: "ClassVar[bool]" = True
