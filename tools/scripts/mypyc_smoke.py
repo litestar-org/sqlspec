@@ -15,7 +15,7 @@ from typing import Any, NamedTuple
 __all__ = ("SMOKE_IMPORTS", "SmokeImport", "is_compiled_module", "main", "run_construction_checks", "run_smoke")
 
 COMPILED_SUFFIXES: tuple[str, ...] = tuple(
-    dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".dylib", ".pyd"))
+    dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".pyd"))
 )
 
 

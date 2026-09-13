@@ -52,7 +52,7 @@ here = Path(__file__).parent
 
 
 COMPILED_EXTENSION_SUFFIXES: tuple[str, ...] = tuple(
-    dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".dylib", ".pyd"))
+    dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".pyd"))
 )
 
 
