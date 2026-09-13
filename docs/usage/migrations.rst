@@ -327,10 +327,18 @@ Packages that register migrations at runtime can call
         settings={"table_name": "queue_tasks"},
     )
 
-Both forms record the extension under ``extension_config`` and opt it into
-``include_extensions``. Call ``add_extension_migrations`` before
-``get_migration_commands()`` -- mutating ``extension_config`` directly after the
-configuration is built does not re-run discovery.
+To unregister an extension's migrations at runtime, call
+``remove_extension_migrations``:
+
+.. code-block:: python
+
+    removed = config.remove_extension_migrations("litestar_queues")
+
+These methods update the extension entry under ``extension_config`` and
+``migration_config["include_extensions"]``. ``MigrationCommands`` and its
+``runner`` are rebuilt by these methods and are not a direct mutation surface;
+mutating ``extension_config`` or runner internals directly does not re-run
+discovery.
 
 SQL files inside a registered extension directory use their filename-local
 version in named-query directives. For example,
