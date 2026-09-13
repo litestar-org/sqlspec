@@ -143,15 +143,15 @@ def test_create_table_parses_types_with_target_dialect() -> None:
     assert "DATETIME2(6)" in result.sql
 
 
-def test_unparseable_type_raises_builder_error() -> None:
-    """Unparseable column types raise SQLBuilderError naming the column."""
+def test_unparsable_type_raises_builder_error() -> None:
+    """Unparsable column types raise SQLBuilderError naming the column."""
     with pytest.raises(SQLBuilderError) as exc_info:
         sql.create_table("t").column("a", "DATETIME2(6)").build()
     assert "'a'" in str(exc_info.value)
 
 
 def test_rebuild_for_other_dialect() -> None:
-    """Switching dialect on the same builder re-parses and raises if unparseable."""
+    """Switching dialect on the same builder re-parses and raises if unparsable."""
     builder = sql.create_table("t").column("a", "TIMESTAMPTZ")
     pg_result = builder.build(dialect="postgres")
     assert "TIMESTAMPTZ" in pg_result.sql.upper() or "TIMESTAMP" in pg_result.sql.upper()
