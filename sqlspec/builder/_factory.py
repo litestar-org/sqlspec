@@ -59,6 +59,7 @@ from sqlspec.builder._update import Update
 from sqlspec.core import SQL
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.deprecation import warn_deprecation
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -914,7 +915,7 @@ class SQLFactory:
         return create_join_builder("cross join", lateral=True)
 
     def __getattr__(self, name: str) -> "Column":
-        """Dynamically create column references.
+        """Build a column reference while warning about dynamic attribute access.
 
         Args:
             name: Column name.
@@ -924,6 +925,14 @@ class SQLFactory:
         """
         if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
+        warn_deprecation(
+            "0.63.0",
+            f"sql.{name}",
+            "attribute",
+            removal_in="1.0.0",
+            alternative=f'sql.column("{name}")',
+            info="Dynamic attribute access builds a Column for any name, including typos",
+        )
         return Column(name)
 
     @staticmethod

@@ -373,7 +373,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
-    config = SqliteConfig(connection_config={"database": str(db_path)})
+    config = SqliteConfig(connection_config={"database": str(db_path), "isolation_level": None})
 
     # We need to get a driver instance to test QC methods.
     # Use the session context to get the driver, but keep it alive.
@@ -550,7 +550,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
 
     # --- 7. Cursor context manager overhead ---
 
-    raw_conn = sqlite3.connect(str(db_path))
+    raw_conn = sqlite3.connect(str(db_path), isolation_level=None)
     raw_conn.execute("PRAGMA journal_mode = WAL")
 
     from sqlspec.adapters.sqlite.driver import SqliteCursor

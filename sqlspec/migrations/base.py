@@ -266,7 +266,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for delete.
         """
-        return sql.delete().from_(self.version_table).where(sql.version_num == version)
+        return sql.delete().from_(self.version_table).where(sql.column("version_num") == version)
 
     def _update_version_statement(self, old_version: str, new_version: str, new_version_type: str) -> Update:
         """Get SQL builder for updating version record.
@@ -288,7 +288,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             .update(self.version_table)
             .set("version_num", new_version)
             .set("version_type", new_version_type)
-            .where(sql.version_num == old_version)
+            .where(sql.column("version_num") == old_version)
         )
 
     def _delete_versions_statement(self, versions: "list[str]") -> Delete:
@@ -302,7 +302,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for delete.
         """
-        return sql.delete().from_(self.version_table).where(sql.version_num.in_(versions))
+        return sql.delete().from_(self.version_table).where(sql.column("version_num").in_(versions))
 
     def _check_versions_query(self, versions: "list[str]") -> Select:
         """Get SQL builder for checking whether any versions exist.
@@ -313,7 +313,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for version existence query.
         """
-        return sql.select("version_num").from_(self.version_table).where(sql.version_num.in_(versions))
+        return sql.select("version_num").from_(self.version_table).where(sql.column("version_num").in_(versions))
 
     def _record_squashed_migration_statement(
         self,

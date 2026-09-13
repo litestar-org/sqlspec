@@ -7,6 +7,7 @@ import sqlspec.builder._merge as merge_module
 from sqlspec import sql
 from sqlspec.builder import Merge
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
+from tests.conftest import requires_interpreted
 
 
 def test_merge_basic_structure() -> None:
@@ -884,6 +885,7 @@ def test_merge_factory_rejects_non_merge_sql() -> None:
         sql.merge(bad_sql)
 
 
+@requires_interpreted
 def test_merge_corrupted_expression_state_raises_builder_error() -> None:
     """A merge builder whose expression state cannot be initialized raises SQLBuilderError."""
 
