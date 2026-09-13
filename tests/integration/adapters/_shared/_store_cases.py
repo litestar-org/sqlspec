@@ -46,6 +46,13 @@ STORE_CASES = (
         "arrow_odbc",
         marks=(MSSQL_MARK, MSSQL_XDIST_MARK, ARROW_ODBC_MARK, pytest.mark.anyio),
     ),
+    StoreCase(
+        "mssql-python",
+        "contract_mssql_python_store",
+        "mssql_python",
+        marks=(MSSQL_MARK, MSSQL_XDIST_MARK, pytest.mark.anyio),
+    ),
+    StoreCase("pymssql", "contract_pymssql_store", "pymssql", marks=(MSSQL_MARK, MSSQL_XDIST_MARK, pytest.mark.anyio)),
     StoreCase("asyncpg", "contract_asyncpg_store", "asyncpg", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)),
     StoreCase("psqlpy", "contract_psqlpy_store", "psqlpy", marks=(POSTGRES_XDIST_MARK, pytest.mark.anyio)),
     StoreCase(

@@ -7,9 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonADKStore
+from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonADKMemoryStore, MssqlPythonADKStore
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -81,7 +82,7 @@ def test_sync_store_generates_tsql_idempotent_schema_with_conservative_json() ->
 
 
 def test_sync_store_can_force_native_json_from_extension_config() -> None:
-    """MSSQL-native JSON is opt-in unless version detection proves support."""
+    """MSSQL-native JSON requires an explicit override."""
 
     store = MssqlPythonADKStore(_mock_config({"native_json": True}))
 
@@ -186,3 +187,85 @@ def test_mssql_python_list_sessions_rejects_invalid_options(
         store.list_sessions("app", **options)
 
     assert calls == []
+
+
+def test_mssql_python_config_accepts_default_adk_extension_config() -> None:
+    """The default ADK extension config resolves both session and memory stores."""
+    from sqlspec.adapters.mssql_python import MssqlPythonConfig
+
+    config = MssqlPythonConfig(
+        connection_config={"server": "localhost", "database": "app", "user": "u", "password": "p"},
+        extension_config={"adk": {}},
+    )
+
+    assert config.extension_config["adk"] == {}
+
+
+def test_mssql_python_adk_memory_store_instance() -> None:
+    """MssqlPythonADKMemoryStore satisfies BaseSyncADKMemoryStore with default table name."""
+    store = MssqlPythonADKMemoryStore(_mock_config())
+    assert isinstance(store, BaseSyncADKMemoryStore)
+    assert store.memory_table == "adk_memory"
+
+
+def test_mssql_python_adk_memory_store_ddl() -> None:
+    """Memory table DDL contains expected T-SQL column and constraint definitions."""
+    store = MssqlPythonADKMemoryStore(_mock_config())
+    ddl = store._memory_table_ddl()
+    assert "IF NOT EXISTS (SELECT 1 FROM sys.tables" in ddl
+    assert "content_text NVARCHAR(MAX) NOT NULL" in ddl
+    assert "inserted_at DATETIME2(6) NOT NULL" in ddl
+    assert "UNIQUE (event_id)" in ddl
+
+
+def test_mssql_python_adk_memory_store_search_entries(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """Search entries generates TOP (?) and LIKE ? queries with expected parameter bindings."""
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture(_store: MssqlPythonADKMemoryStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+        calls.append((sql, tuple(params)))
+        return []
+
+    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute_fetchall", capture)
+    store = MssqlPythonADKMemoryStore(_mock_config())
+    results = store.search_entries("latte", "app", "u1", limit=5, scope_filter="user")
+
+    assert results == []
+    assert len(calls) == 1
+    sql, params = calls[0]
+    normalized_sql = _normalized(sql)
+    assert normalized_sql.startswith("SELECT TOP (?)")
+    assert "content_text LIKE ?" in normalized_sql
+    assert params == (5, "app", "u1", "%latte%")
+
+
+def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
+    """Drop memory table statement uses T-SQL IF EXISTS syntax."""
+    store = MssqlPythonADKMemoryStore(_mock_config())
+    assert store._drop_memory_table_sql() == ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
+
+
+@pytest.mark.parametrize("major", [16, 17])
+def test_sync_store_defaults_to_driver_supported_json_storage(major: int) -> None:
+    """Server JSON availability does not imply native driver JSON support."""
+    from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
+
+    config = _mock_config()
+    driver = config.provide_session.return_value.__enter__.return_value
+    driver.data_dictionary.get_version.return_value = MssqlVersionInfo(major=major)
+    store = MssqlPythonADKStore(config)
+
+    assert "state NVARCHAR(MAX) NOT NULL" in store._sessions_table_ddl()
+    config.provide_session.assert_not_called()
+
+
+def test_disabled_memory_store_rejects_operations_without_connecting() -> None:
+    config = _mock_config({"enable_memory": False})
+    store = MssqlPythonADKMemoryStore(config)
+    store.create_tables()
+    with pytest.raises(RuntimeError, match="disabled"):
+        store.insert_memory_entries([])
+    with pytest.raises(RuntimeError, match="disabled"):
+        store.search_entries("query", "app", "user")
+    config.provide_connection.assert_not_called()
+    config.provide_session.assert_not_called()

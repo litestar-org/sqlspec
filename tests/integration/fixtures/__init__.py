@@ -26,6 +26,10 @@ from tests.integration.fixtures.bigquery import (
 from tests.integration.fixtures.duckdb import duckdb_basic_config, duckdb_basic_session
 from tests.integration.fixtures.mssql import (
     arrow_odbc_mssql_config,
+    contract_mssql_python_store,
+    contract_pymssql_store,
+    events_config_mssql_python,
+    events_config_pymssql,
     mssql_migration_connection_config,
     mssql_python_config,
     mssql_python_connection_config,
@@ -143,8 +147,12 @@ __all__ = (
     "cockroach_asyncpg_config",
     "cockroach_psycopg_async_config",
     "cockroach_psycopg_sync_config",
+    "contract_mssql_python_store",
+    "contract_pymssql_store",
     "duckdb_basic_config",
     "duckdb_basic_session",
+    "events_config_mssql_python",
+    "events_config_pymssql",
     "gizmosql_sqlite_service",
     "mssql_migration_connection_config",
     "mssql_python_config",

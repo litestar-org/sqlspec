@@ -52,6 +52,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeat
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.litestar import DuckdbStore
 from sqlspec.adapters.mssql_python import MssqlPythonConfig, MssqlPythonDriver
+from sqlspec.adapters.mssql_python.adk import MssqlPythonADKStore
 from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConfig,
     MysqlConnectorAsyncDriver,
@@ -83,6 +84,7 @@ from sqlspec.adapters.psycopg import (
 from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore, PsycopgSyncADKStore
 from sqlspec.adapters.psycopg.litestar import PsycopgAsyncStore, PsycopgSyncStore
 from sqlspec.adapters.pymssql import PymssqlConfig, PymssqlDriver
+from sqlspec.adapters.pymssql.adk import PymssqlADKStore
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, PyMysqlDriverFeatures
 from sqlspec.adapters.pymysql.adk import PyMysqlADKStore
 from sqlspec.adapters.pymysql.litestar import PyMysqlStore
@@ -130,7 +132,11 @@ from tests.integration.adapters._shared._schema import (
 from tests.integration.adapters._shared._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
 from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
 from tests.integration.fixtures.bigquery import _bigquery_connection_config
-from tests.integration.fixtures.mssql import _arrow_odbc_connection_config
+from tests.integration.fixtures.mssql import (
+    _arrow_odbc_connection_config,
+    _mssql_connection_config,
+    _mssql_python_connection_config,
+)
 from tests.integration.fixtures.mysql import _mysql_connection_config
 from tests.integration.fixtures.oracle import _oracle_pool_params
 from tests.integration.fixtures.postgres import (
@@ -1767,10 +1773,24 @@ async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenera
         driver_features={"dbms_name": "Microsoft SQL Server"},
     )
     store = ArrowOdbcStore(config)
+    with contextlib.suppress(Exception):
+        with config.provide_session() as driver:
+            driver.execute_script(
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}; "
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}_chunks', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}_chunks;"
+            )
+            driver.commit()
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
         await store.delete_all()
+    with contextlib.suppress(Exception):
+        with config.provide_session() as driver:
+            driver.execute_script(
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}; "
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}_chunks', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}_chunks;"
+            )
+            driver.commit()
     config.close_pool()
 
 
@@ -2154,6 +2174,35 @@ def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> Callable[..., Any
             driver_features={"dbms_name": "Microsoft SQL Server"},
         )
         return config, ArrowOdbcADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_mssql_python(mssql_service: MSSQLService) -> Callable[..., Any]:
+    """Build a fresh mssql-python ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = MssqlPythonConfig(
+            connection_config=_mssql_python_connection_config(mssql_service),
+            extension_config=_adk_extension_config(suffix),
+        )
+        return config, MssqlPythonADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_pymssql(mssql_service: MSSQLService) -> Callable[..., Any]:
+    """Build a fresh pymssql ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        suffix = uuid4().hex[:8]
+        config = PymssqlConfig(
+            connection_config=_mssql_connection_config(mssql_service), extension_config=_adk_extension_config(suffix)
+        )
+        return config, PymssqlADKStore(config)
 
     return make
 

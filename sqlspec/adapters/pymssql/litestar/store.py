@@ -132,7 +132,7 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
         expires_at = self._calculate_expires_at(expires_in)
         sql = f"""
         MERGE INTO {self._table_name} AS target
-        USING (SELECT %s AS session_id, %s AS data, %s AS expires_at) AS src
+        USING (SELECT %s AS session_id, CONVERT(VARBINARY(MAX), %s) AS data, %s AS expires_at) AS src
            ON target.session_id = src.session_id
         WHEN MATCHED THEN
             UPDATE SET

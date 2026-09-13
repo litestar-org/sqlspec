@@ -2,11 +2,14 @@
 mssql-python
 ============
 
-Sync SQL Server adapter built on Microsoft's official
-`mssql-python <https://pypi.org/project/mssql-python/>`_ driver. Ships a
-T-SQL data dictionary, a Litestar session store, an events queue store,
-and migrations tracker. The SQL splitter also gains ``GO`` batch-separator
-handling so multi-batch T-SQL scripts execute correctly.
+Sync-only SQL Server adapter built on Microsoft's official
+`mssql-python <https://pypi.org/project/mssql-python/>`_ driver. Ships
+native Arrow reads and BulkCopy, a T-SQL data dictionary, migrations tracker,
+events queue store, Litestar session store, and ADK session and memory stores.
+The SQL splitter provides ``GO`` batch-separator handling so multi-batch
+T-SQL scripts execute correctly.
+
+See :doc:`/recipes/sql_server` for end-to-end examples.
 
 Configuration
 =============
@@ -61,5 +64,24 @@ Migrations
 ==========
 
 .. autoclass:: sqlspec.adapters.mssql_python.MssqlPythonSyncMigrationTracker
+   :members:
+   :show-inheritance:
+
+Extensions
+==========
+
+.. autoclass:: sqlspec.adapters.mssql_python.events.MssqlPythonEventQueueStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mssql_python.litestar.MssqlPythonStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mssql_python.adk.MssqlPythonADKStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.mssql_python.adk.MssqlPythonADKMemoryStore
    :members:
    :show-inheritance:

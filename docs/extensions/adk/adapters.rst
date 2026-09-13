@@ -18,10 +18,10 @@ Use async adapters for best performance with ADK runners:
 - **DuckDB**: ``duckdb`` (analytics; reduced-scope for ADK)
 - **ADBC**: ``adbc`` (Arrow-native portability; reduced-scope for ADK)
 - **Spanner**: ``spanner`` (Google Cloud, globally distributed)
-- **SQL Server over ODBC**: ``arrow_odbc`` with Microsoft ODBC Driver 18
+- **SQL Server**: ``mssql_python`` (native Arrow and BulkCopy), ``pymssql`` (FreeTDS), ``arrow_odbc`` (Arrow over Microsoft ODBC Driver 18)
 
 Sync adapters (``psycopg`` sync mode, ``sqlite``, ``mysqlconnector``,
-``pymysql``, ``arrow_odbc``) work but require wrapping with ``anyio`` for async
+``pymysql``, ``mssql_python``, ``pymssql``, ``arrow_odbc``) work but require wrapping with ``anyio`` for async
 ADK runners.
 
 Each Adapter Provides

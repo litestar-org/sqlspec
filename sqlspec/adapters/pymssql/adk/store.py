@@ -454,21 +454,22 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
 
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", %s" if self._owner_id_column_name else ""
+        # Keep the key-range lock and insertion in one statement, including autocommit.
         sql = f"""
-        IF NOT EXISTS (SELECT 1 FROM {_table_ref(self._memory_table)} WHERE event_id = %s)
-        BEGIN
-            INSERT INTO {_table_ref(self._memory_table)} (
-                id, session_id, app_name, user_id, scope, event_id, author, timestamp,
-                content_json, content_text, metadata_json{owner_column}
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{owner_value});
-        END;
+        INSERT INTO {_table_ref(self._memory_table)} (
+            id, session_id, app_name, user_id, scope, event_id, author, timestamp,
+            content_json, content_text, metadata_json{owner_column}
+        )
+        SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{owner_value}
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {_table_ref(self._memory_table)} WITH (UPDLOCK, HOLDLOCK)
+            WHERE event_id = %s
+        );
         """
         inserted = 0
         with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
             for entry in entries:
                 params: tuple[Any, ...] = (
-                    entry["event_id"],
                     entry["id"],
                     entry["session_id"],
                     entry["app_name"],
@@ -483,7 +484,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                 )
                 if self._owner_id_column_name:
                     params = (*params, owner_id)
-                cursor.execute(sql, params)
+                cursor.execute(sql, (*params, entry["event_id"]))
                 inserted += _cursor_rowcount(cursor)
             conn.commit()
         return inserted

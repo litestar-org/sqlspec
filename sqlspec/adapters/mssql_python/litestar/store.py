@@ -93,7 +93,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
-        WHERE session_id = %s
+        WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
         with self._config.provide_connection() as conn:
@@ -116,8 +116,8 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                         update_cursor.execute(
                             f"""
                             UPDATE {self._table_name}
-                            SET expires_at = %s, updated_at = SYSUTCDATETIME()
-                            WHERE session_id = %s
+                            SET expires_at = ?, updated_at = SYSUTCDATETIME()
+                            WHERE session_id = ?
                             """,
                             (new_expires_at, key),
                         )
@@ -132,7 +132,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         expires_at = self._calculate_expires_at(expires_in)
         sql = f"""
         MERGE INTO {self._table_name} AS target
-        USING (SELECT %s AS session_id, %s AS data, %s AS expires_at) AS src
+        USING (SELECT ? AS session_id, CONVERT(VARBINARY(MAX), ?) AS data, ? AS expires_at) AS src
            ON target.session_id = src.session_id
         WHEN MATCHED THEN
             UPDATE SET
@@ -155,7 +155,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = %s", (key,))
+                cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
             finally:
                 cursor.close()
             conn.commit()
@@ -174,7 +174,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         sql = f"""
         SELECT 1
         FROM {self._table_name}
-        WHERE session_id = %s
+        WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
         with self._config.provide_connection() as conn:
@@ -189,7 +189,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = %s", (key,))
+                cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
                 row = cursor.fetchone()
             finally:
                 cursor.close()

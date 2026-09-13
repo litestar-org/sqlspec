@@ -25,9 +25,16 @@ patterns.
 
       Base service classes with pagination, get-or-404, and transaction helpers.
 
+   .. grid-item-card:: SQL Server
+      :link: sql_server
+      :link-type: doc
+
+      Driver choice, pooling, GO batches, BulkCopy, migrations, ADK stores, the event queue, and Litestar on SQL Server.
+
 
 .. toctree::
    :hidden:
 
    dishka
    service_layer
+   sql_server

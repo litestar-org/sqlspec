@@ -113,7 +113,7 @@ exports a typed config class and a driver implementation.
       :link: mssql_python
       :link-type: doc
 
-      Sync SQL Server via Microsoft's official mssql-python driver.
+      Sync SQL Server via Microsoft's official mssql-python driver with Arrow loading and BulkCopy.
 
    .. grid-item-card:: pymssql
       :link: pymssql
@@ -262,7 +262,7 @@ SELECT, scripts, and batch operations retain their adapter-specific count semant
      - Yes
      -
      - Yes
-     -
+     - Yes
      -
      - Yes
    * - pymssql
