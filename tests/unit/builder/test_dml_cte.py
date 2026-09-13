@@ -9,12 +9,7 @@ from sqlspec.exceptions import SQLBuilderError
 def test_update_cte_renders_with_returning() -> None:
     """Test that CTEs attached to UPDATE statements render in SQL with RETURNING."""
     cte = sql.select("id").from_("source")
-    query = (
-        sql.update("t")
-        .with_cte("c", cte)
-        .set(a=1)
-        .returning("id")
-    )
+    query = sql.update("t").with_cte("c", cte).set(a=1).returning("id")
 
     stmt = query.build(dialect="postgres")
     assert stmt.sql.startswith("WITH")
@@ -27,12 +22,7 @@ def test_update_cte_renders_with_returning() -> None:
 def test_update_with_alias_renders_cte() -> None:
     """Test that with_() method on UPDATE works as an alias for with_cte."""
     cte = sql.select("id").from_("source")
-    query = (
-        sql.update("t")
-        .with_("c", cte)
-        .set(a=1)
-        .returning("id")
-    )
+    query = sql.update("t").with_("c", cte).set(a=1).returning("id")
 
     stmt = query.build(dialect="postgres")
     assert stmt.sql.startswith("WITH")
@@ -43,12 +33,7 @@ def test_update_with_alias_renders_cte() -> None:
 def test_delete_cte_renders() -> None:
     """Test that CTEs attached to DELETE statements render in SQL with RETURNING."""
     cte = sql.select("id").from_("source")
-    query = (
-        sql.delete("t")
-        .with_cte("c", cte)
-        .where("t.id in (select id from c)")
-        .returning("id")
-    )
+    query = sql.delete("t").with_cte("c", cte).where("t.id in (select id from c)").returning("id")
 
     stmt = query.build(dialect="postgres")
     assert stmt.sql.startswith("WITH")
@@ -60,12 +45,7 @@ def test_delete_cte_renders() -> None:
 def test_delete_with_alias_renders_cte() -> None:
     """Test that with_() method on DELETE works as an alias for with_cte."""
     cte = sql.select("id").from_("source")
-    query = (
-        sql.delete("t")
-        .with_("c", cte)
-        .where("t.id in (select id from c)")
-        .returning("id")
-    )
+    query = sql.delete("t").with_("c", cte).where("t.id in (select id from c)").returning("id")
 
     stmt = query.build(dialect="postgres")
     assert stmt.sql.startswith("WITH")
@@ -79,7 +59,8 @@ def test_cte_parameter_merge_and_collision() -> None:
     cte2 = sql.select("id").from_("y").where_eq("status", "archived")
 
     query = (
-        sql.update("t")
+        sql
+        .update("t")
         .with_cte("c1", cte1)
         .with_cte("c2", cte2)
         .set(status="active")

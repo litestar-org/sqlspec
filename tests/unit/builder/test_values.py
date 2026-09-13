@@ -47,12 +47,7 @@ def test_values_as_cte_on_select() -> None:
 def test_values_as_cte_on_update() -> None:
     """Test using sql.values() as a Common Table Expression on an UPDATE query."""
     val = sql.values([(1, "active"), (2, "inactive")], alias="v", columns=["id", "status"])
-    query = (
-        sql.update("users")
-        .with_cte("v", val)
-        .set(status="v.status")
-        .where("users.id = v.id")
-    )
+    query = sql.update("users").with_cte("v", val).set(status="v.status").where("users.id = v.id")
     stmt = query.build(dialect="postgres")
 
     assert "WITH" in stmt.sql
@@ -68,12 +63,7 @@ def test_values_as_cte_on_update() -> None:
 def test_values_as_update_from_source() -> None:
     """Test using sql.values() as an UPDATE ... FROM source table expression."""
     val = sql.values([(1, "alice"), (2, "bob")], alias="v", columns=["id", "name"])
-    query = (
-        sql.update("users")
-        .set(name="v.name")
-        .from_(val)
-        .where("users.id = v.id")
-    )
+    query = sql.update("users").set(name="v.name").from_(val).where("users.id = v.id")
     stmt = query.build(dialect="postgres")
 
     assert "UPDATE" in stmt.sql
@@ -125,3 +115,60 @@ def test_column_named_values_still_works() -> None:
     query = sql.select(col).from_("events")
     stmt = query.build()
     assert "values" in stmt.sql
+
+
+def test_values_as_and_set_columns() -> None:
+    """Test as_ and set_columns methods on Values builder."""
+    val = Values([(1, "a")]).as_("my_alias").set_columns("col1", "col2")
+    assert val.alias_name == "my_alias"
+    assert val.columns == ["col1", "col2"]
+
+    with pytest.raises(SQLBuilderError, match=r"(?i)does not match"):
+        val.set_columns("only_one")
+
+
+def test_values_expected_result_type() -> None:
+    """Test expected result type property."""
+    from sqlspec.core import SQLResult
+    val = Values([(1, "a")])
+    assert val._expected_result_type == SQLResult
+
+
+def test_values_alias_without_columns() -> None:
+    """Test Values with alias but without column list."""
+    val = Values([(1, "a")], alias="v")
+    stmt = val.build()
+    assert 'AS "v"' in stmt.sql or "AS v" in stmt.sql
+
+
+def test_values_build_empty_raises() -> None:
+    """Test building an empty Values instance raises SQLBuilderError."""
+    val = Values()
+    with pytest.raises(SQLBuilderError, match=r"(?i)at least one row"):
+        val.build()
+
+
+def test_values_with_sqlglot_expressions() -> None:
+    """Test Values containing SQLGlot expressions."""
+    from sqlglot import exp
+    val = Values([(exp.convert(1), "text")])
+    stmt = val.build()
+    assert "1" in stmt.sql
+
+
+def test_values_add_rows_validation_errors() -> None:
+    """Test various validation failure branches in add_rows."""
+    with pytest.raises(SQLBuilderError, match=r"(?i)not a mapping"):
+        Values([{"a": 1}, (2,)])
+
+    with pytest.raises(SQLBuilderError, match=r"(?i)same keys"):
+        Values([{"a": 1}, {"b": 2}])
+
+    with pytest.raises(SQLBuilderError, match=r"(?i)must be a sequence"):
+        Values([(1, 2), 3])
+
+    with pytest.raises(SQLBuilderError, match=r"(?i)at least one column"):
+        Values([()])
+
+    with pytest.raises(SQLBuilderError, match=r"(?i)must be sequences or mappings"):
+        Values([1, 2])

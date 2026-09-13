@@ -339,9 +339,7 @@ class QueryBuilder:
             simplify_expressions=self.simplify_expressions,
         )
 
-    def _resolve_cte_query(
-        self, alias: str, query: "QueryBuilder | exp.Select | exp.Values | str | Any"
-    ) -> exp.Expr:
+    def _resolve_cte_query(self, alias: str, query: "QueryBuilder | exp.Select | exp.Values | str | Any") -> exp.Expr:
         """Resolve a CTE query into a Select or Values expression with merged parameters."""
         if isinstance(query, QueryBuilder):
             query_expr = query._build_final_expression(copy=True)
@@ -643,8 +641,7 @@ class QueryBuilder:
 
         if cte_columns:
             alias_node: exp.Expr = exp.TableAlias(
-                this=exp.to_identifier(alias),
-                columns=[exp.to_identifier(c) for c in cte_columns],
+                this=exp.to_identifier(alias), columns=[exp.to_identifier(c) for c in cte_columns]
             )
         else:
             alias_node = exp.to_table(alias)

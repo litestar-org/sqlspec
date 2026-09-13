@@ -36,14 +36,11 @@ async def asyncpg_tasks_session(asyncpg_async_driver: AsyncpgDriver) -> AsyncGen
 async def test_claim_one_row(asyncpg_tasks_session: AsyncpgDriver) -> None:
     """Test claiming exactly one row using UPDATE FROM with a subquery, FOR UPDATE SKIP LOCKED, and RETURNING."""
     subquery = (
-        sql.select("id")
-        .from_("test_builder_tasks")
-        .where_eq("status", "pending")
-        .limit(1)
-        .for_update(skip_locked=True)
+        sql.select("id").from_("test_builder_tasks").where_eq("status", "pending").limit(1).for_update(skip_locked=True)
     )
     claim_query = (
-        sql.update("test_builder_tasks")
+        sql
+        .update("test_builder_tasks")
         .set(status="processing")
         .from_(subquery, alias="sub")
         .where("test_builder_tasks.id = sub.id")
@@ -63,7 +60,8 @@ async def test_values_cte_bulk_update(asyncpg_tasks_session: AsyncpgDriver) -> N
     """Test bulk updating rows using a sql.values() Common Table Expression."""
     val_cte = sql.values([("task-1", "completed"), ("task-2", "failed")], alias="v", columns=["id", "status"])
     bulk_update = (
-        sql.update("test_builder_tasks")
+        sql
+        .update("test_builder_tasks")
         .with_cte("v", val_cte)
         .set(status=exp.column("status", table="v"))
         .from_("v")

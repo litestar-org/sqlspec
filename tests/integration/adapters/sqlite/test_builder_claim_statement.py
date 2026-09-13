@@ -33,7 +33,8 @@ def test_claim_one_row(sqlite_tasks_session: SqliteDriver) -> None:
     """Test claiming exactly one row using UPDATE FROM with a subquery and RETURNING."""
     subquery = sql.select("id").from_("tasks").where_eq("status", "pending").limit(1)
     claim_query = (
-        sql.update("tasks")
+        sql
+        .update("tasks")
         .set(status="processing")
         .from_(subquery, alias="sub")
         .where("tasks.id = sub.id")
@@ -54,7 +55,8 @@ def test_values_cte_bulk_update(sqlite_tasks_session: SqliteDriver) -> None:
     """Test bulk updating rows using a sql.values() Common Table Expression."""
     val_cte = sql.values([(1, "completed"), (2, "failed")], alias="v", columns=["id", "status"])
     bulk_update = (
-        sql.update("tasks")
+        sql
+        .update("tasks")
         .with_cte("v", val_cte)
         .set(status=exp.column("status", table="v"))
         .from_("v")
