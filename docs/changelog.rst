@@ -213,7 +213,7 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
 * ``sql.values`` creates a :class:`~sqlspec.builder.Values` builder for parameterized bulk row lists rather than resolving as a column named ``values``. Use ``sql.column("values")`` to construct column expressions referencing that identifier.
-  (`#773 <https://github.com/litestar-org/sqlspec/pull/773>`_)
+  (`#779 <https://github.com/litestar-org/sqlspec/pull/779>`_)
 
 **Fixed:**
 
