@@ -268,7 +268,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 _execute_cursor(cursor, "SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None)
                 row: Any = cursor.fetchone()
                 user_name, current_schema = row[0], row[1]
+                _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None)
                 self._migration_schema_restore = (str(user_name), str(current_schema))
+                return
             _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
 
     def reset_migration_session_schema(self) -> None:
@@ -504,6 +506,7 @@ def _coerce_bulk_copy_result(result: Any, cursor: "MssqlPythonRawCursor") -> Mss
 
 
 def _quote_tsql_identifier(identifier: str) -> str:
+    """Bracket-quote an identifier so the statement is valid regardless of the session's QUOTED_IDENTIFIER setting."""
     return f"[{identifier.replace(']', ']]')}]"
 
 

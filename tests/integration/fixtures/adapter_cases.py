@@ -1512,7 +1512,7 @@ def migration_config_oracle_async(oracle_23ai_service: OracleService) -> Callabl
 
 
 @pytest.fixture
-def migration_config_mssql_python(mssql_migration_connection_config: dict[str, Any]) -> Callable[..., Any]:
+def migration_config_mssql_python(mssql_python_migration_connection_config: dict[str, Any]) -> Callable[..., Any]:
     """Build mssql-python sync configs for migration contract tests."""
 
     def make(
@@ -1531,14 +1531,9 @@ def migration_config_mssql_python(mssql_migration_connection_config: dict[str, A
             migration_config["default_schema"] = default_schema
         if version_table_schema is not None:
             migration_config["version_table_schema"] = version_table_schema
-        conn_config = dict(mssql_migration_connection_config)
-        conn_config.update({
-            "encrypt": False,
-            "trust_server_certificate": True,
-            "autocommit": False,
-            "pool_enabled": False,
-        })
-        return MssqlPythonConfig(connection_config=conn_config, migration_config=migration_config)
+        return MssqlPythonConfig(
+            connection_config=dict(mssql_python_migration_connection_config), migration_config=migration_config
+        )
 
     return make
 

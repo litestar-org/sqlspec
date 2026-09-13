@@ -231,9 +231,13 @@ raises ``MigrationError`` before any DDL is issued.
    * - ``mssql_python``, ``pymssql``
      - ``ALTER USER [<user>] WITH DEFAULT_SCHEMA = [<schema>]`` for the
        connected database user (``USER_NAME()``). Validates against
-       ``sys.schemas`` and restores the previous default schema after each
-       migration. The setting is persistent on the user, so it is restored
-       even when the migration fails, and ``dbo`` cannot be switched.
+       ``sys.schemas``. The previous default schema is restored after each
+       migration (a failed transactional migration rolls the switch back).
+       SQL Server refuses to alter the default schema of the ``dbo`` database
+       user (what ``sa`` maps to), so connect with a dedicated login. Because
+       the restore is committed, a failed non-transactional migration on a
+       connection with autocommit disabled also commits the statements that
+       succeeded before the failure.
 
 Per-migration schema directives
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

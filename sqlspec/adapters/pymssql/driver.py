@@ -261,7 +261,9 @@ class PymssqlDriver(SyncDriverAdapterBase):
                 user_name, current_schema = (
                     (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
                 )
+                cursor.execute(_alter_default_schema_sql(str(user_name), schema))
                 self._migration_schema_restore = (str(user_name), str(current_schema))
+                return
             cursor.execute(_alter_default_schema_sql(self._migration_schema_restore[0], schema))
 
     def reset_migration_session_schema(self) -> None:
@@ -307,6 +309,7 @@ def _pymssql_error_type() -> "type[BaseException]":
 
 
 def _quote_tsql_identifier(identifier: str) -> str:
+    """Bracket-quote an identifier so the statement is valid regardless of the session's QUOTED_IDENTIFIER setting."""
     return f"[{identifier.replace(']', ']]')}]"
 
 

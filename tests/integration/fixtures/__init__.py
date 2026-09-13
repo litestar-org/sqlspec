@@ -29,6 +29,7 @@ from tests.integration.fixtures.mssql import (
     mssql_migration_connection_config,
     mssql_python_config,
     mssql_python_connection_config,
+    mssql_python_migration_connection_config,
     pymssql_config,
     pymssql_connection_config,
 )
@@ -148,6 +149,7 @@ __all__ = (
     "mssql_migration_connection_config",
     "mssql_python_config",
     "mssql_python_connection_config",
+    "mssql_python_migration_connection_config",
     "mysqlconnector_async_config",
     "mysqlconnector_async_driver",
     "mysqlconnector_clean_async_driver",

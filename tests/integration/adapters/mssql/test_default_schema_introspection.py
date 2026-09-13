@@ -11,13 +11,13 @@ from sqlspec.adapters.pymssql import PymssqlConfig
 pytestmark = [pytest.mark.mssql, pytest.mark.xdist_group("mssql")]
 
 
-def test_mssql_python_introspects_connection_default_schema(mssql_migration_connection_config: dict[str, Any]) -> None:
+def test_mssql_python_introspects_connection_default_schema(
+    mssql_python_migration_connection_config: dict[str, Any],
+) -> None:
     """mssql-python data dictionary uses connection default schema when schema is omitted."""
     schema = f"introspect_{uuid4().hex[:8]}"
     table = f"tbl_{uuid4().hex[:8]}"
-    conn_config = dict(mssql_migration_connection_config)
-    conn_config.update({"encrypt": False, "trust_server_certificate": True, "autocommit": False, "pool_enabled": False})
-    config = MssqlPythonConfig(connection_config=conn_config)
+    config = MssqlPythonConfig(connection_config=dict(mssql_python_migration_connection_config))
     try:
         with config.provide_session() as driver:
             driver.execute_script(f"CREATE SCHEMA [{schema}];")
@@ -65,8 +65,12 @@ def test_pymssql_introspects_connection_default_schema(mssql_migration_connectio
                 assert table in table_names
             finally:
                 driver.reset_migration_session_schema()
-        with config.provide_session() as verify:
-            assert verify.select_value("SELECT SCHEMA_NAME()") == "dbo"
+        verify_config = PymssqlConfig(connection_config=dict(mssql_migration_connection_config))
+        try:
+            with verify_config.provide_session() as verify:
+                assert verify.select_value("SELECT SCHEMA_NAME()") == "dbo"
+        finally:
+            verify_config.close_pool()
     finally:
         with config.provide_session() as driver:
             driver.execute_script(f"DROP TABLE IF EXISTS [{schema}].[{table}];")

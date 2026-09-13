@@ -18,6 +18,7 @@ __all__ = (
     "mssql_migration_connection_config",
     "mssql_python_config",
     "mssql_python_connection_config",
+    "mssql_python_migration_connection_config",
     "pymssql_config",
     "pymssql_connection_config",
 )
@@ -132,6 +133,16 @@ def mssql_migration_connection_config(mssql_service: "MSSQLService") -> "dict[st
     """Provide SQL Server connection parameters using the dedicated migration login."""
     ensure_mssql_migration_login(mssql_service)
     config = _mssql_connection_config(mssql_service)
+    config["user"] = MSSQL_MIGRATION_LOGIN
+    config["password"] = MSSQL_MIGRATION_PASSWORD
+    return config
+
+
+@pytest.fixture(scope="session")
+def mssql_python_migration_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
+    """Provide mssql-python connection parameters using the dedicated migration login."""
+    ensure_mssql_migration_login(mssql_service)
+    config = _mssql_python_connection_config(mssql_service, autocommit=False)
     config["user"] = MSSQL_MIGRATION_LOGIN
     config["password"] = MSSQL_MIGRATION_PASSWORD
     return config
