@@ -78,7 +78,7 @@ def test_update_from_multiple_sources() -> None:
     s2 = sql.select("id").from_("src2")
     query = sql.update("t").set(a=1).from_(s1, alias="s1").from_(s2, alias="s2").where("t.id = s1.id")
     stmt = query.build(dialect="postgres")
-    assert "AS s1" in stmt.sql and "AS s2" in stmt.sql
+    assert 'AS "s1"' in stmt.sql and 'AS "s2"' in stmt.sql
 
 
 @pytest.mark.parametrize("dialect", ["mysql", "oracle", "mariadb", "spangres"])
