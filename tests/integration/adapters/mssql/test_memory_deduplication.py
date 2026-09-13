@@ -1,13 +1,14 @@
 """SQL Server key-range locking for concurrent ADK memory deduplication."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from threading import Barrier
 from uuid import uuid4
 
 import pytest
 from pytest_databases.docker.mssql import MSSQLService
 
+from sqlspec import sql
 from sqlspec.adapters.mssql_python import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.adk import MssqlPythonADKMemoryStore
 from sqlspec.adapters.pymssql import PymssqlConfig
@@ -126,7 +127,8 @@ def test_memory_search_scopes_limits_and_retention(mssql_service: MSSQLService) 
         assert [entry["id"] for entry in store.search_entries("searchable", "app", "user", scope_filter="app")] == ["2"]
         assert store.search_entries("missing", "app", "user") == []
         with config.provide_session() as driver:
-            driver.execute(f"UPDATE [{table}] SET inserted_at = DATEADD(day, -60, SYSUTCDATETIME())")
+            expired_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=60)
+            driver.execute(sql.update(table).set(inserted_at=expired_at))
             driver.commit()
         assert store.delete_entries_older_than(30, app_name="app", scope="app") == 1
         assert store.delete_entries_by_session("session-0") == 1
