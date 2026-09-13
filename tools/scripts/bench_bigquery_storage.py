@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from google.auth.credentials import AnonymousCredentials
@@ -158,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         with Client(
             project=args.project,
             client_options={"api_endpoint": args.endpoint},
-            credentials=AnonymousCredentials() if local else None,
+            credentials=cast("Callable[[], Any]", AnonymousCredentials)() if local else None,
         ) as client:
             yield BigQueryDriver(
                 client,
