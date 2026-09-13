@@ -67,6 +67,10 @@ SYNC_EVENTS_CASES = (
         "sync",
         marks=(MSSQL_MARK, MSSQL_XDIST_MARK, ARROW_ODBC_MARK),
     ),
+    EventsCase(
+        "mssql-python-sync", "events_config_mssql_python", "mssql_python", "sync", marks=(MSSQL_MARK, MSSQL_XDIST_MARK)
+    ),
+    EventsCase("pymssql-sync", "events_config_pymssql", "pymssql", "sync", marks=(MSSQL_MARK, MSSQL_XDIST_MARK)),
     EventsCase("pymysql-sync", "events_config_pymysql", "pymysql", "sync", marks=(MYSQL_XDIST_MARK,)),
     EventsCase(
         "psycopg-sync",

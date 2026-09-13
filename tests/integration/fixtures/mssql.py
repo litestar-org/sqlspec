@@ -1,6 +1,8 @@
 """Shared SQL Server integration fixtures."""
 
-from collections.abc import Generator
+import contextlib
+from collections.abc import AsyncGenerator, Callable, Generator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -8,13 +10,19 @@ from pytest_databases.docker.mssql import MSSQLService
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
 from sqlspec.adapters.mssql_python import MssqlPythonConfig
+from sqlspec.adapters.mssql_python.litestar import MssqlPythonStore
 from sqlspec.adapters.pymssql import PymssqlConfig
+from sqlspec.adapters.pymssql.litestar import PymssqlStore
 
 __all__ = (
     "MSSQL_MIGRATION_LOGIN",
     "MSSQL_MIGRATION_PASSWORD",
     "arrow_odbc_mssql_config",
+    "contract_mssql_python_store",
+    "contract_pymssql_store",
     "ensure_mssql_migration_login",
+    "events_config_mssql_python",
+    "events_config_pymssql",
     "mssql_migration_connection_config",
     "mssql_python_config",
     "mssql_python_connection_config",
@@ -25,6 +33,18 @@ __all__ = (
 
 MSSQL_MIGRATION_LOGIN = "sqlspec_migrator"
 MSSQL_MIGRATION_PASSWORD = "Password123!"
+
+_STORE_EXTENSION_CONFIG: "dict[str, Any]" = {"litestar": {"session_table": "litestar_contract_sessions"}}
+
+
+def _mssql_events_migration_config(tmp_path: Path, suffix: str) -> "dict[str, Any]":
+    migrations = tmp_path / f"migrations_{suffix}"
+    migrations.mkdir()
+    return {
+        "script_location": str(migrations),
+        "include_extensions": ["events"],
+        "version_table_name": f"ddl_migrations_{suffix}",
+    }
 
 
 def ensure_mssql_migration_login(mssql_service: "MSSQLService") -> None:
@@ -126,6 +146,62 @@ def arrow_odbc_mssql_config(mssql_service: "MSSQLService") -> "Generator[ArrowOd
         yield config
     finally:
         config.close_pool()
+
+
+@pytest.fixture
+def events_config_mssql_python(mssql_service: "MSSQLService", tmp_path: Path) -> "Callable[..., Any]":
+    """Build mssql-python event-channel configs for contract tests."""
+
+    def make(*, extension_config: "dict[str, Any]", suffix: str) -> MssqlPythonConfig:
+        return MssqlPythonConfig(
+            connection_config=_mssql_python_connection_config(mssql_service),
+            migration_config=_mssql_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_pymssql(mssql_service: "MSSQLService", tmp_path: Path) -> "Callable[..., Any]":
+    """Build pymssql event-channel configs for contract tests."""
+
+    def make(*, extension_config: "dict[str, Any]", suffix: str) -> PymssqlConfig:
+        return PymssqlConfig(
+            connection_config=_mssql_connection_config(mssql_service),
+            migration_config=_mssql_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+async def contract_mssql_python_store(mssql_service: "MSSQLService") -> "AsyncGenerator[MssqlPythonStore, None]":
+    """Provide a ready mssql-python Litestar store for contract tests."""
+    config = MssqlPythonConfig(
+        connection_config=_mssql_python_connection_config(mssql_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = MssqlPythonStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
+
+
+@pytest.fixture
+async def contract_pymssql_store(mssql_service: "MSSQLService") -> "AsyncGenerator[PymssqlStore, None]":
+    """Provide a ready pymssql Litestar store for contract tests."""
+    config = PymssqlConfig(
+        connection_config=_mssql_connection_config(mssql_service), extension_config=_STORE_EXTENSION_CONFIG
+    )
+    store = PymssqlStore(config)
+    await store.create_table()
+    yield store
+    with contextlib.suppress(Exception):
+        await store.delete_all()
+    config.close_pool()
 
 
 @pytest.fixture(scope="session")
