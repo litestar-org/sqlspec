@@ -93,6 +93,18 @@ class _MssqlDataDictionaryMixin:
     """Shared helpers for MSSQL data dictionaries."""
 
     dialect: ClassVar[str] = "mssql"
+    _schema_queries_cache: dict[str, Any] | None = None
+
+    @property
+    def _schema_queries(self) -> dict[str, Any]:
+        """Return cached mapping of schema domain queries."""
+        if self._schema_queries_cache is None:
+            self._schema_queries_cache = {"current": self.get_domain_query("schemas", "current")}
+        return self._schema_queries_cache
+
+    @_schema_queries.setter
+    def _schema_queries(self, value: dict[str, Any]) -> None:
+        self._schema_queries_cache = value
 
     def get_dialect_config(self) -> "DialectConfig":
         """Return the dialect configuration for this data dictionary."""
@@ -103,6 +115,30 @@ class _MssqlDataDictionaryMixin:
         if schema is not None:
             return schema
         return self.get_dialect_config().default_schema
+
+    def resolve_connection_schema(self, driver: Any, schema: str | None) -> str | None:
+        """Resolve schema name from connection default when omitted."""
+        if schema is not None:
+            return schema
+        query = self._schema_queries["current"]
+        schema_name: Any = None
+        try:
+            if hasattr(driver, "execute"):
+                try:
+                    result = driver.execute(query)
+                except TypeError:
+                    result = driver.execute(getattr(query, "raw_sql", str(query)))
+                schema_name = _scalar(result)
+            elif hasattr(driver, "select_value"):
+                schema_name = driver.select_value(query)
+            elif hasattr(driver, "select_one_or_none"):
+                row = driver.select_one_or_none(query)
+                schema_name = _scalar(row)
+        except Exception:
+            schema_name = None
+        if not schema_name:
+            return "dbo"
+        return str(schema_name)
 
     def list_available_features(self) -> list[str]:
         """List available feature flags for this dialect."""
@@ -201,7 +237,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
 
     def get_tables(self, driver: "MssqlPythonDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered = cast(
             "list[TableMetadata]",
@@ -221,7 +257,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get column information for a table or schema."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return cast(
@@ -245,7 +281,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get index metadata for a table or schema."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return cast(
@@ -269,7 +305,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         self, driver: "MssqlPythonDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign key metadata."""
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return cast(
@@ -304,7 +340,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
     ) -> DDLResult:
         """Generate SQL Server table DDL from sys catalog rows."""
         _ = include_dependencies, prefer_native, redact
-        schema_name = self.resolve_schema(schema)
+        schema_name = self.resolve_connection_schema(driver, schema)
         columns = driver.select(
             self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
         )
@@ -342,3 +378,38 @@ def _row_value(row: object, *names: str) -> Any:
                 return row[upper_name]
         return None
     return getattr(row, names[0], None) if names else None
+
+
+def _scalar(value: Any) -> Any:
+    """Extract scalar value from a database query result, row, or scalar."""
+    if value is None:
+        return None
+    if hasattr(value, "scalar_or_none"):
+        return value.scalar_or_none()
+    if hasattr(value, "scalar"):
+        try:
+            return value.scalar()
+        except Exception:
+            return None
+    if hasattr(value, "fetchone"):
+        value = value.fetchone()
+        if value is None:
+            return None
+    if hasattr(value, "fetchall"):
+        rows = value.fetchall()
+        value = rows[0] if rows else None
+        if value is None:
+            return None
+    while isinstance(value, (tuple, list)):
+        if not value:
+            return None
+        value = value[0]
+    if isinstance(value, dict):
+        if "schema_name" in value:
+            return value["schema_name"]
+        if "SCHEMA_NAME" in value:
+            return value["SCHEMA_NAME"]
+        return None
+    return getattr(value, "schema_name", value)
+
+

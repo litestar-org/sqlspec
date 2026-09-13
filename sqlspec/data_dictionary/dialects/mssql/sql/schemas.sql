@@ -7,3 +7,8 @@ SELECT
 FROM sys.schemas AS s
 WHERE s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
 ORDER BY s.name;
+
+-- name: current
+-- dialect: mssql
+SELECT SCHEMA_NAME() AS schema_name;
+

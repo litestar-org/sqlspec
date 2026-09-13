@@ -1,9 +1,9 @@
-"""Unit tests for the mssql_python data dictionary."""
+"""Unit tests for the pymssql data dictionary."""
 
 from pathlib import Path
 from typing import Any, cast
 
-from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary, MssqlVersionInfo
+from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo, PymssqlSyncDataDictionary
 
 MSSQL_QUERY_DIR = Path("sqlspec/data_dictionary/dialects/mssql/sql")
 EXPECTED_MSSQL_QUERY_FILES = {"columns.sql", "foreign_keys.sql", "indexes.sql", "tables.sql", "version.sql"}
@@ -42,7 +42,7 @@ def test_mssql_query_files_follow_dialect_category_layout() -> None:
 def test_sync_data_dictionary_builds_version_info() -> None:
     """The sync dictionary should parse product version and edition metadata."""
     driver = FakeSyncDriver()
-    data_dictionary = MssqlPythonSyncDataDictionary()
+    data_dictionary = PymssqlSyncDataDictionary()
 
     version = data_dictionary.get_version(cast(Any, driver))
 
@@ -67,7 +67,7 @@ def test_mssql_version_info_uses_build_in_version_tuple_not_patch() -> None:
 def test_sync_data_dictionary_merges_table_lists_with_default_schema() -> None:
     """The sync dictionary should query dbo by default and append unordered tables."""
     driver = FakeSyncDriver()
-    data_dictionary = MssqlPythonSyncDataDictionary()
+    data_dictionary = PymssqlSyncDataDictionary()
 
     tables = data_dictionary.get_tables(cast(Any, driver))
 
@@ -79,7 +79,7 @@ def test_sync_data_dictionary_merges_table_lists_with_default_schema() -> None:
 def test_sync_data_dictionary_selects_columns_by_table() -> None:
     """Table-scoped metadata calls should bind schema and table parameters."""
     driver = FakeSyncDriver()
-    data_dictionary = MssqlPythonSyncDataDictionary()
+    data_dictionary = PymssqlSyncDataDictionary()
 
     columns = data_dictionary.get_columns(cast(Any, driver), table="app", schema="custom")
 
@@ -108,7 +108,7 @@ class FakeDriverWithSchema:
 def test_sync_data_dictionary_uses_connection_schema_when_schema_omitted() -> None:
     """Omitted schema should introspect current connection schema."""
     driver = FakeDriverWithSchema("sales")
-    data_dictionary = MssqlPythonSyncDataDictionary()
+    data_dictionary = PymssqlSyncDataDictionary()
 
     assert data_dictionary.resolve_connection_schema(cast(Any, driver), None) == "sales"
     data_dictionary.get_tables(cast(Any, driver))
@@ -119,7 +119,7 @@ def test_sync_data_dictionary_uses_connection_schema_when_schema_omitted() -> No
 def test_sync_data_dictionary_falls_back_to_dbo_when_schema_name_is_null() -> None:
     """When schema introspection returns null, fallback to dbo."""
     driver = FakeDriverWithSchema(None)
-    data_dictionary = MssqlPythonSyncDataDictionary()
+    data_dictionary = PymssqlSyncDataDictionary()
 
     assert data_dictionary.resolve_connection_schema(cast(Any, driver), None) == "dbo"
     data_dictionary.get_tables(cast(Any, driver))
@@ -129,10 +129,9 @@ def test_sync_data_dictionary_falls_back_to_dbo_when_schema_name_is_null() -> No
 def test_sync_data_dictionary_explicit_schema_skips_connection_lookup() -> None:
     """Explicit schema parameter bypasses connection schema introspection."""
     driver = FakeDriverWithSchema("sales")
-    data_dictionary = MssqlPythonSyncDataDictionary()
+    data_dictionary = PymssqlSyncDataDictionary()
 
     assert data_dictionary.resolve_connection_schema(cast(Any, driver), "custom") == "custom"
     data_dictionary.get_tables(cast(Any, driver), schema="custom")
     assert driver.select_calls[0][1]["schema_name"] == "custom"
     assert len(driver.executed) == 0
-
