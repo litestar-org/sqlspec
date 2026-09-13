@@ -367,17 +367,6 @@ class BaseMigrationTracker(Generic[DriverT]):
             )
         )
 
-    def _column_exists_query(self) -> Select:
-        """Get SQL to check what columns exist in the tracking table.
-
-        Returns a query that will fail gracefully if the table doesn't exist,
-        and returns column names if it does.
-
-        Returns:
-            SQL builder object for column check query.
-        """
-        return sql.select("*").from_(self.version_table).limit(0)
-
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
 

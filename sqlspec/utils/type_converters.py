@@ -205,12 +205,10 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
             When ``False`` (default), convert to ``str`` (for drivers that
             need a plain string.
     """
-    import uuid as _uuid_mod
-
     coercions: dict[type[Any], Callable[[Any], Any]] = {}
 
     if not native:
-        coercions[_uuid_mod.UUID] = _uuid_to_string
+        coercions[UUID] = _uuid_to_string
 
     uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
     if uuid_utils_uuid is not None:

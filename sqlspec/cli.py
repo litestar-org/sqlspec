@@ -518,6 +518,32 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             sqlspec_config = get_config_by_bind_key(ctx, bind_key)
             _show_for_config(sqlspec_config)
 
+    def _create_echo_settings(
+        no_echo: bool, summary_only: bool, use_logger: bool
+    ) -> tuple[bool | None, bool | None, bool, Callable[[Any], bool]]:
+        """Create echo and summary settings with echo predicate closure.
+
+        Args:
+            no_echo: Flag indicating console output should be suppressed.
+            summary_only: Flag indicating only summary logs should be emitted.
+            use_logger: Flag indicating logger is used rather than console.
+
+        Returns:
+            Tuple of (echo_setting, summary_setting, echo_enabled, should_echo_predicate).
+        """
+        effective_no_echo = no_echo or summary_only
+        echo_setting = False if effective_no_echo else None
+        summary_setting = True if summary_only else None
+        echo_enabled = not effective_no_echo and not use_logger
+
+        def _should_echo(config: Any) -> bool:
+            if not echo_enabled:
+                return False
+            migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
+            return not bool(migration_config.get("use_logger", False))
+
+        return echo_setting, summary_setting, echo_enabled, _should_echo
+
     @database_group.command(name="downgrade", help="Downgrade database to a specific revision.")
     @bind_key_option
     @no_prompt_option
@@ -540,18 +566,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         summary_only: bool,
     ) -> None:
         """Downgrade the database to the latest revision."""
-
         ctx = _ensure_click_context()
-        effective_no_echo = no_echo or summary_only
-        echo_setting = False if effective_no_echo else None
-        summary_setting = True if summary_only else None
-        echo_enabled = not effective_no_echo and not use_logger
-
-        def _should_echo(config: Any) -> bool:
-            if not echo_enabled:
-                return False
-            migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
-            return not bool(migration_config.get("use_logger", False))
+        echo_setting, summary_setting, echo_enabled, _should_echo = _create_echo_settings(
+            no_echo, summary_only, use_logger
+        )
 
         def _downgrade_for_config(config: Any) -> None:
             """Downgrade a single config with sync/async dispatch."""
@@ -646,16 +664,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     ) -> None:
         """Upgrade the database to the latest revision."""
         ctx = _ensure_click_context()
-        effective_no_echo = no_echo or summary_only
-        echo_setting = False if effective_no_echo else None
-        summary_setting = True if summary_only else None
-        echo_enabled = not effective_no_echo and not use_logger
-
-        def _should_echo(config: Any) -> bool:
-            if not echo_enabled:
-                return False
-            migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
-            return not bool(migration_config.get("use_logger", False))
+        echo_setting, summary_setting, echo_enabled, _should_echo = _create_echo_settings(
+            no_echo, summary_only, use_logger
+        )
 
         def _upgrade_for_config(config: Any) -> None:
             """Upgrade a single config with sync/async dispatch."""

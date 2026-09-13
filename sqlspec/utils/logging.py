@@ -95,6 +95,8 @@ class StructuredFormatter(logging.Formatter):
         Returns:
             JSON formatted log entry
         """
+        from sqlspec.utils.serializers import to_json
+
         record_dict = record.__dict__
         log_entry = {
             "timestamp": self.formatTime(record, self.datefmt),
@@ -131,8 +133,6 @@ class StructuredFormatter(logging.Formatter):
 
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
-
-        from sqlspec.utils.serializers import to_json
 
         return to_json(log_entry)
 
