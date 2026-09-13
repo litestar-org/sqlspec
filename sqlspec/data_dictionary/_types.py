@@ -1434,6 +1434,7 @@ class FeatureFlags(TypedDict, total=False):
     supports_skip_locked: bool
     supports_structs: bool
     supports_transactions: bool
+    supports_update_from: bool
     supports_upsert: bool
     supports_uuid: bool
     supports_window_functions: bool

@@ -158,3 +158,10 @@ Joins
 .. autoclass:: JoinBuilder
    :members:
    :show-inheritance:
+
+Values
+======
+
+.. autoclass:: Values
+   :members:
+   :show-inheritance:

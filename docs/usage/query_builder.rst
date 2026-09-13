@@ -38,6 +38,68 @@ Inserts and Updates
    :dedent: 4
    :no-upgrade:
 
+UPDATE ... FROM and CTEs
+------------------------
+
+Builder queries support ``UPDATE ... FROM`` with subqueries or Common Table Expressions (CTEs),
+enabling queue claim statements and batch updates across supported dialects.
+
+.. code-block:: python
+
+    from sqlspec import sql
+
+    claim_query = (
+        sql.update("tasks")
+        .set(status="processing")
+        .from_(
+            sql.select("id")
+            .from_("tasks")
+            .where_eq("status", "pending")
+            .limit(1)
+            .for_update(skip_locked=True),
+            alias="sub",
+        )
+        .where("tasks.id = sub.id")
+        .returning(sql.column("id", table="tasks"))
+    )
+
+Dialect Support Matrix
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+
+   * - Dialect
+     - UPDATE ... FROM Support
+     - Notes
+   * - PostgreSQL
+     - Yes
+     - Native ``UPDATE ... FROM`` with ``RETURNING`` and row locking
+   * - CockroachDB
+     - Yes
+     - Native ``UPDATE ... FROM``
+   * - SQLite
+     - Yes
+     - Native ``UPDATE ... FROM`` (SQLite 3.33.0+)
+   * - DuckDB
+     - Yes
+     - Native ``UPDATE ... FROM``
+   * - SQL Server (MSSQL)
+     - Yes
+     - Native ``UPDATE ... FROM``
+   * - MySQL / MariaDB
+     - No
+     - Raises ``SQLBuilderError``; use multi-table join update or MERGE
+   * - Oracle
+     - No
+     - Builder conservatively raises ``SQLBuilderError``; use MERGE or raw SQL on Oracle 23+
+   * - Spanner
+     - No
+     - Raises ``SQLBuilderError``
+   * - BigQuery
+     - Yes
+     - Native ``UPDATE ... FROM``; a ``WHERE`` condition is required
+
 Upserts (ON CONFLICT)
 ---------------------
 

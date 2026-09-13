@@ -124,6 +124,7 @@ MSSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_for_update": False,
     "supports_skip_locked": False,
     "supports_on_conflict": False,
+    "supports_update_from": True,
 }
 
 MSSQL_TYPE_MAPPINGS: dict[str, str] = {

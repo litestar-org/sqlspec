@@ -62,6 +62,7 @@ MYSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_sequences": False,
     "supports_system_versioned_tables": False,
     "supports_on_conflict": False,
+    "supports_update_from": False,
 }
 
 MYSQL_TYPE_MAPPINGS: dict[str, str] = {
@@ -115,6 +116,7 @@ MARIADB_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_invisible_indexes": False,
     "supports_resource_groups": False,
     "supports_on_conflict": False,
+    "supports_update_from": False,
 }
 
 MARIADB_CONFIG = DialectConfig(
