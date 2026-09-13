@@ -5,13 +5,16 @@ import importlib
 import inspect
 import operator
 import sqlite3
+import types
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from sqlspec.adapters.sqlite.driver import SqliteDriver
+from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
+from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 
@@ -641,3 +644,58 @@ def test_sql_result_building() -> None:
         assert script_sql_result.successful_statements == 1
     finally:
         connection.close()
+
+
+ADAPTER_CONFIG_MODULES = (
+    "sqlspec.adapters.adbc.config",
+    "sqlspec.adapters.aiomysql.config",
+    "sqlspec.adapters.aiosqlite.config",
+    "sqlspec.adapters.arrow_odbc.config",
+    "sqlspec.adapters.asyncmy.config",
+    "sqlspec.adapters.asyncpg.config",
+    "sqlspec.adapters.bigquery.config",
+    "sqlspec.adapters.cockroach_asyncpg.config",
+    "sqlspec.adapters.cockroach_psycopg.config",
+    "sqlspec.adapters.duckdb.config",
+    "sqlspec.adapters.mssql_python.config",
+    "sqlspec.adapters.mysqlconnector.config",
+    "sqlspec.adapters.oracledb.config",
+    "sqlspec.adapters.psqlpy.config",
+    "sqlspec.adapters.psycopg.config",
+    "sqlspec.adapters.pymssql.config",
+    "sqlspec.adapters.pymysql.config",
+    "sqlspec.adapters.spanner.config",
+    "sqlspec.adapters.sqlite.config",
+)
+
+
+def test_every_config_declares_type_coercion_capabilities() -> None:
+    """Assert every concrete config class defines type_coercion_capabilities and it is not the base default object."""
+    concrete_configs: list[type[DatabaseConfigProtocol[Any, Any, Any]]] = []
+
+    for module_name in ADAPTER_CONFIG_MODULES:
+        mod = importlib.import_module(module_name)
+        for _, obj in inspect.getmembers(mod):
+            if (
+                isinstance(obj, type)
+                and not isinstance(obj, (types.GenericAlias, getattr(types, "UnionType", ())))
+                and issubclass(obj, DatabaseConfigProtocol)
+                and obj is not DatabaseConfigProtocol
+                and not inspect.isabstract(obj)
+                and obj.__module__ == module_name
+            ):
+                concrete_configs.append(obj)
+
+    assert len(concrete_configs) == 23
+
+    for config_cls in concrete_configs:
+        assert "type_coercion_capabilities" in config_cls.__dict__, (
+            f"{config_cls.__name__} does not explicitly declare type_coercion_capabilities"
+        )
+        caps = config_cls.type_coercion_capabilities
+        assert isinstance(caps, TypeCoercionCapabilities), (
+            f"{config_cls.__name__}.type_coercion_capabilities is not TypeCoercionCapabilities"
+        )
+        assert caps is not DatabaseConfigProtocol.type_coercion_capabilities, (
+            f"{config_cls.__name__}.type_coercion_capabilities is the base default object"
+        )

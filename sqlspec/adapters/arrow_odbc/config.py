@@ -14,6 +14,7 @@ from sqlspec.adapters.arrow_odbc.core import (
 )
 from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
+from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -138,6 +139,9 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_reliable_rowcount: "ClassVar[bool]" = False
+    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="millisecond", json_columns_decoded=False, uuid_binding="text"
+    )
     _connection_context_class: "ClassVar[type[ArrowOdbcConnectionContext]]" = ArrowOdbcConnectionContext
     _session_factory_class: "ClassVar[type[_ArrowOdbcSessionConnectionHandler]]" = _ArrowOdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[ArrowOdbcSessionContext]]" = ArrowOdbcSessionContext

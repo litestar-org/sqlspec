@@ -21,6 +21,7 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
 )
 from sqlspec.adapters.psycopg.core import resolve_runtime_statement_config
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
@@ -226,6 +227,9 @@ class CockroachPsycopgSyncConfig(
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
     supports_native_row_streaming: "ClassVar[bool]" = True
+    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=True, uuid_binding="native"
+    )
     _connection_context_class: "ClassVar[type[CockroachPsycopgSyncConnectionContext]]" = (
         CockroachPsycopgSyncConnectionContext
     )
@@ -438,6 +442,9 @@ class CockroachPsycopgAsyncConfig(
     supports_native_parquet_export: "ClassVar[bool]" = True
     supports_native_parquet_import: "ClassVar[bool]" = True
     supports_native_row_streaming: "ClassVar[bool]" = True
+    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=True, uuid_binding="native"
+    )
     _connection_context_class: "ClassVar[type[CockroachPsycopgAsyncConnectionContext]]" = (
         CockroachPsycopgAsyncConnectionContext
     )

@@ -9,6 +9,7 @@ from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor
 from sqlspec.adapters.bigquery.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
+from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -178,6 +179,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supports_arrow_streaming: ClassVar[bool] = True
     supports_native_row_streaming: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
+    )
     _connection_context_class: "ClassVar[type[BigQueryConnectionContext]]" = BigQueryConnectionContext
     _session_factory_class: "ClassVar[type[_BigQuerySessionConnectionHandler]]" = _BigQuerySessionConnectionHandler
     _session_context_class: "ClassVar[type[BigQuerySessionContext]]" = BigQuerySessionContext
