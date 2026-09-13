@@ -651,6 +651,8 @@ class QueryBuilder:
         if str(source_dialect or self.dialect).lower() == "mariadb" and expression.find(exp.Lock):
             expression = expression.copy()
             for lock in expression.find_all(exp.Lock):
+                if lock.expressions:
+                    self._raise_builder_error("MariaDB locking clauses do not support OF targets.")
                 if not lock.args.get("update"):
                     lock.set("sqlspec_share_mode", True)
         for lock in expression.find_all(exp.Lock):
@@ -658,34 +660,16 @@ class QueryBuilder:
                 not lock.args.get("update") or lock.args.get("wait") is not None or lock.expressions or lock.args.get("key")
             ):
                 self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
+            if lock.args.get("key") and dialect != "postgres":
+                self._raise_builder_error(f"Dialect '{dialect}' does not support PostgreSQL key lock modes.")
             if dialect == "oracle" and not lock.args.get("update"):
                 self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
-            if lock.args.get("sqlspec_share_mode") and lock.expressions:
-                self._raise_builder_error("MariaDB LOCK IN SHARE MODE does not support OF targets.")
             if config.get_feature_flag("supports_for_update") is False:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
             if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
                 self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
         if dialect == "spangres":
-            for conflict in expression.find_all(exp.OnConflict):
-                if any(conflict.args.get(key) for key in ("where", "index_predicate", "constraint", "duplicate")):
-                    self._raise_builder_error("Spanner PostgreSQL does not support these ON CONFLICT modifiers.")
-                assignments = conflict.args.get("expressions") or []
-                if assignments:
-                    insert = conflict.find_ancestor(exp.Insert)
-                    schema = insert.this if insert is not None else None
-                    assigned_columns = set()
-                    for assignment in assignments:
-                        value = assignment.expression
-                        if (
-                            not isinstance(value, exp.Column)
-                            or value.table.lower() != "excluded"
-                            or value.name != assignment.this.name
-                        ):
-                            self._raise_builder_error("Spanner PostgreSQL conflict updates require excluded column values.")
-                        assigned_columns.add(assignment.this.name)
-                    if isinstance(schema, exp.Schema) and assigned_columns != {column.name for column in schema.expressions}:
-                        self._raise_builder_error("Spanner PostgreSQL conflict updates must assign every inserted column.")
+            self._validate_spangres_conflicts(expression)
         if config.get_feature_flag("supports_on_conflict") is not False or not expression.find(exp.OnConflict):
             return expression
         if dialect != "mysql":
@@ -714,6 +698,28 @@ class QueryBuilder:
                         column.replace(exp.Anonymous(this="VALUES", expressions=[exp.column(column.name)]))
             conflict.replace(exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=assignments))
         return expression
+
+    def _validate_spangres_conflicts(self, expression: exp.Expr) -> None:
+        """Check PostgreSQL-mode Spanner upsert restrictions visible in the AST."""
+        for conflict in expression.find_all(exp.OnConflict):
+            if any(conflict.args.get(key) for key in ("where", "index_predicate", "constraint", "duplicate")):
+                self._raise_builder_error("Spanner PostgreSQL does not support these ON CONFLICT modifiers.")
+            assignments = conflict.args.get("expressions") or []
+            if assignments:
+                insert = conflict.find_ancestor(exp.Insert)
+                schema = insert.this if insert is not None else None
+                assigned_columns = set()
+                for assignment in assignments:
+                    value = assignment.expression
+                    if (
+                        not isinstance(value, exp.Column)
+                        or value.table.lower() != "excluded"
+                        or value.name != assignment.this.name
+                    ):
+                        self._raise_builder_error("Spanner PostgreSQL conflict updates require excluded column values.")
+                    assigned_columns.add(assignment.this.name)
+                if isinstance(schema, exp.Schema) and assigned_columns != {column.name for column in schema.expressions}:
+                    self._raise_builder_error("Spanner PostgreSQL conflict updates must assign every inserted column.")
 
     def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
         """Return SQL string with optional parameter substitution.

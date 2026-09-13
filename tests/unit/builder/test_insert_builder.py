@@ -420,15 +420,6 @@ def test_on_conflict_postgres_unchanged() -> None:
     assert "ON DUPLICATE KEY UPDATE" not in stmt.sql
 
 
-@pytest.mark.parametrize("dialect", ["oracle", "tsql", "sqlite"])
-def test_to_statement_checks_unsupported_locking(dialect: str) -> None:
-    from sqlspec.core import StatementConfig
-
-    query = sql.select("id").from_("users").for_update()
-    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE"):
-        query.to_statement(StatementConfig(dialect=dialect))
-
-
 def test_to_statement_translates_conflict_without_mutating_builder() -> None:
     from sqlspec.core import StatementConfig
 

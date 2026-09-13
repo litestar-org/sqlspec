@@ -92,10 +92,11 @@ Query Modifiers
 ---------------
 
 Row-level locking clauses such as ``.for_update()`` and ``.for_share()`` are validated against
-dialect capabilities at build time. On dialects without row locking support (T-SQL, SQLite,
+dialect capabilities at build time. On dialects without these locking clauses (T-SQL, SQLite,
 DuckDB, and BigQuery), building a locked query raises :class:`~sqlspec.exceptions.SQLBuilderError`.
 Oracle also rejects ``.for_share()``; MariaDB renders it as ``LOCK IN SHARE MODE``
-and rejects ``of=`` targets for shared locks.
+and rejects ``of=`` targets for all locking clauses. PostgreSQL key lock variants
+are rejected on other dialect families.
 Spanner supports plain ``FOR UPDATE`` in both SQL modes, but rejects shared locks,
 ``SKIP LOCKED``, ``NOWAIT``, and ``OF`` modifiers. Its PostgreSQL mode requires conflict
 updates to assign every inserted column from the matching ``excluded`` column and
