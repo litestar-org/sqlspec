@@ -394,20 +394,30 @@ class UpdateFromClauseMixin:
 
             subquery_copy = raw_expression.copy() if hasattr(raw_expression, "copy") else raw_expression
             base_builder = cast("QueryBuilder", self)
+            builder_alias = getattr(table, "alias_name", None) or getattr(table, "alias", None)
+            if not builder_alias and hasattr(raw_expression, "alias_or_name"):
+                builder_alias = raw_expression.alias_or_name
+            effective_alias = alias or builder_alias or "subquery"
+
             subquery_params = getattr(table, "parameters", {})
             if subquery_params and isinstance(subquery_params, dict):
-                param_mapping = base_builder._merge_cte_parameters(alias or "subquery", subquery_params)
+                param_mapping = base_builder._merge_cte_parameters(effective_alias, subquery_params)
                 if param_mapping:
                     subquery_copy = base_builder._update_placeholders(subquery_copy, param_mapping)
 
             if isinstance(subquery_copy, exp.Values):
-                table_expr = (
-                    exp.alias_(subquery_copy, alias)
-                    if alias and not subquery_copy.args.get("alias")
-                    else subquery_copy
-                )
+                if alias:
+                    cols: list[str] = []
+                    existing_alias = subquery_copy.args.get("alias")
+                    if existing_alias and existing_alias.args.get("columns"):
+                        cols = [c.name for c in existing_alias.args["columns"]]
+                    elif hasattr(table, "columns") and isinstance(table.columns, (list, tuple)):
+                        cols = [str(c) for c in table.columns]
+                    table_expr = exp.alias_(subquery_copy, alias, table=cols or False)
+                else:
+                    table_expr = subquery_copy
             else:
-                table_expr = exp.Subquery(this=subquery_copy, alias=alias)
+                table_expr = exp.Subquery(this=subquery_copy, alias=alias or builder_alias)
         else:
             msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)

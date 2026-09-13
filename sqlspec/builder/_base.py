@@ -343,24 +343,45 @@ class QueryBuilder:
         self, alias: str, query: "QueryBuilder | exp.Select | exp.Values | str | Any"
     ) -> exp.Expr:
         """Resolve a CTE query into a Select or Values expression with merged parameters."""
-        if isinstance(query, QueryBuilder) or hasattr(query, "get_expression"):
-            query_expr = (
-                query._build_final_expression(copy=True)
-                if hasattr(query, "_build_final_expression")
-                else query.get_expression()
-            )
+        if isinstance(query, QueryBuilder):
+            query_expr = query._build_final_expression(copy=True)
             if query_expr is None:
                 self._raise_cte_query_error(alias, "query builder has no expression")
             if not isinstance(query_expr, (exp.Select, exp.Values)):
                 self._raise_cte_query_error(
                     alias, f"expression must be a Select or Values, got {type(query_expr).__name__}"
                 )
-            cte_select_expression = query_expr.copy()
-            if hasattr(query, "parameters"):
-                param_mapping = self._merge_cte_parameters(alias, query.parameters)
-                if param_mapping:
-                    cte_select_expression = self._update_placeholders(cte_select_expression, param_mapping)
+            cte_select_expression: exp.Expr = query_expr.copy()
+            if isinstance(cte_select_expression, exp.Values) and cte_select_expression.args.get("alias"):
+                cte_select_expression = cte_select_expression.copy()
+                cte_select_expression.set("alias", None)
+            param_mapping = self._merge_cte_parameters(alias, query.parameters)
+            if param_mapping:
+                cte_select_expression = self._update_placeholders(cte_select_expression, param_mapping)
             return cte_select_expression
+
+        if hasattr(query, "get_expression"):
+            raw_query = cast("Any", query)
+            raw_query_expr = (
+                raw_query._build_final_expression(copy=True)
+                if hasattr(raw_query, "_build_final_expression")
+                else raw_query.get_expression()
+            )
+            if raw_query_expr is None:
+                self._raise_cte_query_error(alias, "query builder has no expression")
+            if not isinstance(raw_query_expr, (exp.Select, exp.Values)):
+                self._raise_cte_query_error(
+                    alias, f"expression must be a Select or Values, got {type(raw_query_expr).__name__}"
+                )
+            cte_duck_expression: exp.Expr = raw_query_expr.copy()
+            if isinstance(cte_duck_expression, exp.Values) and cte_duck_expression.args.get("alias"):
+                cte_duck_expression = cte_duck_expression.copy()
+                cte_duck_expression.set("alias", None)
+            if hasattr(raw_query, "parameters"):
+                param_mapping = self._merge_cte_parameters(alias, raw_query.parameters)
+                if param_mapping:
+                    cte_duck_expression = self._update_placeholders(cte_duck_expression, param_mapping)
+            return cte_duck_expression
 
         if isinstance(query, str):
             try:
@@ -611,10 +632,19 @@ class QueryBuilder:
             self._raise_builder_error(f"CTE with alias '{alias}' already exists.")
 
         cte_select_expression = self._resolve_cte_query(alias, query)
-        if columns:
+        cte_columns = columns
+        if cte_columns is None:
+            query_cols = getattr(query, "columns", None)
+            query_private_cols = getattr(query, "_columns", None)
+            if isinstance(query_cols, (list, tuple)):
+                cte_columns = [str(c) for c in query_cols]
+            elif isinstance(query_private_cols, (list, tuple)):
+                cte_columns = [str(c) for c in query_private_cols]
+
+        if cte_columns:
             alias_node: exp.Expr = exp.TableAlias(
                 this=exp.to_identifier(alias),
-                columns=[exp.to_identifier(c) for c in columns],
+                columns=[exp.to_identifier(c) for c in cte_columns],
             )
         else:
             alias_node = exp.to_table(alias)
@@ -623,7 +653,7 @@ class QueryBuilder:
 
     def with_(
         self: Self,
-        alias: str,
+        name: str,
         query: "QueryBuilder | exp.Select | exp.Values | str | Any",
         recursive: bool = False,
         columns: "list[str] | None" = None,
@@ -631,7 +661,7 @@ class QueryBuilder:
         """Alias for with_cte for parity across builders.
 
         Args:
-            alias: The alias for the CTE.
+            name: The alias/name for the CTE.
             query: The CTE query expression or builder.
             recursive: Whether the CTE is recursive.
             columns: Optional list of column aliases for the CTE.
@@ -639,7 +669,7 @@ class QueryBuilder:
         Returns:
             Self: The current builder instance for method chaining.
         """
-        return self.with_cte(alias, query, recursive=recursive, columns=columns)
+        return self.with_cte(name, query, recursive=recursive, columns=columns)
 
     def build(self, dialect: DialectType = None) -> "BuiltQuery":
         """Builds the SQL query string and parameters.

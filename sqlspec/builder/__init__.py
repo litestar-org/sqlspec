@@ -91,6 +91,7 @@ from sqlspec.builder._select import (
 )
 from sqlspec.builder._temporal import create_temporal_table, register_version_generators
 from sqlspec.builder._update import Update
+from sqlspec.builder._values import Values
 from sqlspec.builder._vector_distance import VectorDistance
 from sqlspec.exceptions import SQLBuilderError
 
@@ -151,6 +152,7 @@ __all__ = (
     "UpdateFromClauseMixin",
     "UpdateSetClauseMixin",
     "UpdateTableClauseMixin",
+    "Values",
     "VectorDistance",
     "WhereClauseMixin",
     "WindowFunctionBuilder",

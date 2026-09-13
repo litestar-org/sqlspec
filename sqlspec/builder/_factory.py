@@ -56,6 +56,7 @@ from sqlspec.builder._parsing_utils import (
 )
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
+from sqlspec.builder._values import Values
 from sqlspec.core import SQL
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.exceptions import SQLBuilderError
@@ -93,6 +94,7 @@ __all__ = (
     "Select",
     "Truncate",
     "Update",
+    "Values",
     "WindowFunctionBuilder",
     "build_copy_from_statement",
     "build_copy_statement",
@@ -401,6 +403,28 @@ class SQLFactory:
             return self._populate_builder_from_sql(builder, table_or_sql, exp.Merge, parsed_expr)
 
         return Merge(table_or_sql, dialect=builder_dialect) if table_or_sql else Merge(dialect=builder_dialect)
+
+    def values(
+        self,
+        rows: "Sequence[Sequence[Any] | Mapping[str, Any]]",
+        *,
+        alias: str | None = None,
+        columns: "Sequence[str] | None" = None,
+        dialect: DialectType = None,
+    ) -> Values:
+        """Create a VALUES builder for bulk rows.
+
+        Args:
+            rows: Sequence of row tuples/lists or mappings.
+            alias: Optional table alias for the VALUES clause.
+            columns: Optional column names for the table alias.
+            dialect: Optional SQL dialect override.
+
+        Returns:
+            Values builder instance.
+        """
+        builder_dialect = _resolve_dialect(dialect, self.dialect)
+        return Values(rows, alias=alias, columns=columns, dialect=builder_dialect)
 
     def explain(
         self,
