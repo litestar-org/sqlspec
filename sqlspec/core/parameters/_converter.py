@@ -342,12 +342,16 @@ class ParameterConverter:
         return self._convert_sequence_to_dict(list(parameters.values()), param_info)
 
     def _lookup_parameter_value(
-        self, param: "ParameterInfo", parameters: "ParameterMapping", param_keys: "list[str]"
-    ) -> "tuple[object | None, bool]":
+        self,
+        param: "ParameterInfo",
+        parameters: "ParameterMapping",
+        param_keys: "list[str]",
+        fallback_keys: "list[str] | None" = None,
+    ) -> "tuple[object | None, bool, list[str] | None]":
         if param.name and param.name in parameters:
-            return parameters[param.name], True
+            return parameters[param.name], True, fallback_keys
         if param.placeholder_text in parameters:
-            return parameters[param.placeholder_text], True
+            return parameters[param.placeholder_text], True, fallback_keys
 
         if (
             param.style == ParameterStyle.NUMERIC
@@ -356,25 +360,27 @@ class ParameterConverter:
             and param.ordinal < len(param_keys)
         ):
             key_to_use = param_keys[param.ordinal]
-            return parameters[key_to_use], True
+            return parameters[key_to_use], True, fallback_keys
 
         if f"param_{param.ordinal}" in parameters:
-            return parameters[f"param_{param.ordinal}"], True
+            return parameters[f"param_{param.ordinal}"], True, fallback_keys
 
         ordinal_key = str(param.ordinal + 1)
         if ordinal_key in parameters:
-            return parameters[ordinal_key], True
+            return parameters[ordinal_key], True, fallback_keys
 
-        try:
-            ordered_keys = list(parameters.keys())
-        except AttributeError:
-            ordered_keys = []
-        if ordered_keys and param.ordinal < len(ordered_keys):
-            key = ordered_keys[param.ordinal]
+        if fallback_keys is None:
+            try:
+                fallback_keys = list(parameters.keys())
+            except AttributeError:
+                fallback_keys = []
+
+        if fallback_keys and param.ordinal < len(fallback_keys):
+            key = fallback_keys[param.ordinal]
             if key in parameters:
-                return parameters[key], True
+                return parameters[key], True, fallback_keys
 
-        return None, False
+        return None, False, fallback_keys
 
     def _missing_named_parameters(
         self, param_info: "list[ParameterInfo]", parameters: "ParameterMapping"
@@ -462,11 +468,14 @@ class ParameterConverter:
             unique_params: dict[str, Any] = {}
             param_order: list[str] = []
 
+            fallback_keys: list[str] | None = None
             param_keys = list(parameters.keys()) if has_mixed_styles else []
             for param in param_info:
                 param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
                 if param_key not in unique_params:
-                    value, found = self._lookup_parameter_value(param, parameters, param_keys)
+                    value, found, fallback_keys = self._lookup_parameter_value(
+                        param, parameters, param_keys, fallback_keys
+                    )
                     if found:
                         unique_params[param_key] = value
                         param_order.append(param_key)
