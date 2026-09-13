@@ -93,6 +93,16 @@ The table below classifies every backend by its ADK support level.
      - Full
      - Basic
      - Portability layer; native adapters provide optimized search.
+   * - mssql_python
+     - Supported
+     - Full
+     - Basic
+     - SQL Server through Microsoft's mssql-python driver; ``LIKE`` memory search.
+   * - pymssql
+     - Supported
+     - Full
+     - Basic
+     - SQL Server through FreeTDS; ``LIKE`` memory search.
    * - arrow_odbc
      - Supported
      - Full
@@ -284,6 +294,19 @@ ADBC (Arrow Database Connectivity) provides a driver-agnostic interface:
 - Backend capabilities depend on the underlying database driver.
 - Memory search uses the portable baseline path; choose a native adapter for
   backend-specific FTS, retention, and storage tuning.
+
+SQL Server (mssql-python and pymssql)
+-------------------------------------
+
+``mssql_python`` and ``pymssql`` provide SQL Server-backed ADK storage:
+
+- Session and event storage use SQL Server tables with ``DATETIME2(6)`` and
+  ``NVARCHAR(MAX)`` JSON payload columns, with an opt-in ``native_json`` switch
+  to use native ``JSON`` columns.
+- ``append_event_and_update_state()`` commits the session update, event row, and
+  scoped state in one transaction.
+- Memory search is ``LIKE``-based across memory entries.
+- Both stores are synchronous and require wrapping with ``anyio`` for async ADK runners.
 
 arrow-odbc
 ----------

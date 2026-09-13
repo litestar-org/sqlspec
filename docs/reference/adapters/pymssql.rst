@@ -7,6 +7,8 @@ and FreeTDS. It uses pyformat parameters (``%s`` and ``%(name)s``) and exposes
 sync SQLSpec config, driver, pooling, data dictionary, migration, and extension
 store integrations.
 
+See :doc:`/recipes/sql_server` for end-to-end examples.
+
 Configuration
 =============
 
@@ -60,5 +62,24 @@ Migrations
 ==========
 
 .. autoclass:: sqlspec.adapters.pymssql.migrations.PymssqlSyncMigrationTracker
+   :members:
+   :show-inheritance:
+
+Extensions
+==========
+
+.. autoclass:: sqlspec.adapters.pymssql.events.PymssqlEventQueueStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.pymssql.litestar.PymssqlStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.pymssql.adk.PymssqlADKStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore
    :members:
    :show-inheritance:

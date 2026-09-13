@@ -29,6 +29,13 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   (defaults to ``True``; set to ``False`` for ADBC and arrow-odbc).
   (`#773 <https://github.com/litestar-org/sqlspec/pull/773>`_)
 
+* SQL Server extension stores and documentation alignment:
+  added :class:`~sqlspec.adapters.mssql_python.adk.MssqlPythonADKMemoryStore` to complete
+  ADK store parity across SQL Server adapters, added an end-to-end SQL Server recipes guide
+  (:doc:`/recipes/sql_server`), and registered ``mssql_python`` and ``pymssql`` across
+  shared integration test suites for Google ADK, durable event queues, and Litestar session stores.
+  (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
+
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
   it fails; a failed commit is followed by a rollback attempt. A block entered while
@@ -175,6 +182,13 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 * DuckDB adapter maps ``TransactionException`` update conflicts ("Conflict on update") to
   ``SerializationConflictError``, and all other transaction failures to ``OperationalError``.
   (`#775 <https://github.com/litestar-org/sqlspec/pull/775>`_)
+
+* Fixed SQL Server Litestar session store parameter placeholder and binary conversion in
+  ``MssqlPythonStore`` and ``PymssqlStore`` (``CONVERT(VARBINARY(MAX), ?)``), removed unsupported
+  ``FOR UPDATE`` hints from ``PymssqlConfig.get_event_runtime_hints()`` for event queue polling,
+  and corrected the documentation feature table and metadata to designate ``mssql-python`` as
+  a sync-only driver with native Arrow support.
+  (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
   order. Assignments such as ``do_update(name=exp.column("name", table="excluded"))`` no longer render

@@ -295,9 +295,10 @@ Listeners
 Event Queue
 ===========
 
-The durable table queue is available for SQL Server through ``arrow_odbc`` when
-configured with Microsoft ODBC Driver 18. It uses SQL Server ``DATETIME2(6)``
-timestamps and ``NVARCHAR`` payload columns.
+The durable table queue is available for SQL Server through ``mssql_python``,
+``pymssql``, and ``arrow_odbc`` (the last configured with Microsoft ODBC Driver 18).
+All three use SQL Server ``DATETIME2(6)`` timestamps and ``NVARCHAR`` payload
+columns, and every SQL Server backend is ``poll_queue``.
 
 Durable queue migrations reconcile missing tables and additive columns from the
 adapter store's canonical DDL. Set ``events.manage_schema=False`` when an
