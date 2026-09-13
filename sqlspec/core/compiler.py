@@ -18,7 +18,6 @@ from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
 from sqlspec.core.parameters import (
-    ParameterProcessingResult,
     ParameterProcessor,
     ParameterProfile,
     structural_fingerprint,
@@ -484,31 +483,6 @@ class SQLProcessor:
             applied_wrap_types=cached_result.applied_wrap_types,
         )
 
-    def _prepare_parameters(
-        self, sql: str, parameters: Any, is_many: bool, dialect_str: "str | None", *, param_fingerprint: Any | None
-    ) -> ParameterProcessingResult:
-        """Process SQL parameters for compilation.
-
-        Args:
-            sql: SQL string.
-            parameters: Raw parameters.
-            is_many: Whether this is for execute_many.
-            dialect_str: Dialect name.
-            param_fingerprint: Pre-computed parameter fingerprint for cache key.
-
-        Returns:
-            ParameterProcessingResult containing processed SQL and metadata.
-        """
-        return self._parameter_processor.process(
-            sql=sql,
-            parameters=parameters,
-            config=self._parameter_config,
-            dialect=dialect_str,
-            is_many=is_many,
-            wrap_types=self._enable_parameter_type_wrapping,
-            param_fingerprint=param_fingerprint,
-        )
-
     @staticmethod
     def _normalize_expression_override(
         expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str
@@ -824,8 +798,14 @@ class SQLProcessor:
         operation_profile = OperationProfile.empty()
 
         try:
-            process_result = self._prepare_parameters(
-                sql, parameters, is_many, self._dialect_str, param_fingerprint=param_fingerprint
+            process_result = self._parameter_processor.process(
+                sql=sql,
+                parameters=parameters,
+                config=self._parameter_config,
+                dialect=self._dialect_str,
+                is_many=is_many,
+                wrap_types=self._enable_parameter_type_wrapping,
+                param_fingerprint=param_fingerprint,
             )
             expression_override = SQLProcessor._normalize_expression_override(
                 expression_override, process_result.sqlglot_sql, sql

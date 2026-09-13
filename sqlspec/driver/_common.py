@@ -33,8 +33,10 @@ from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
     ParameterProcessor,
+    apply_type_coercion,
     structural_fingerprint,
     type_coercion_dispatcher,
+    type_coercion_fallbacks,
     value_fingerprint,
 )
 from sqlspec.core.result._base import RowFormat
@@ -1400,21 +1402,6 @@ class CommonDriverAttributesMixin:
             sql_statement = filter_obj.append_to_statement(sql_statement)
         return sql_statement
 
-    def _apply_coercion_with_fallback(
-        self,
-        value: object,
-        type_coercion_map: "dict[type, Callable[[Any], Any]]",
-        fallback_items: "tuple[tuple[type, Any], ...]",
-    ) -> object:
-        value_type = type(value)
-        exact_converter = type_coercion_map.get(value_type)
-        if exact_converter is not None:
-            return exact_converter(value)
-        fallback_converter = type_coercion_dispatcher(fallback_items).get(value)
-        if fallback_converter is not None:
-            return fallback_converter(value)
-        return value
-
     def _needs_coercion_candidate(
         self,
         value: object,
@@ -1445,12 +1432,12 @@ class CommonDriverAttributesMixin:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
 
         if not isinstance(parameters, (dict, list, tuple)):
-            return [self._apply_coercion_with_fallback(parameters, type_coercion_map, fallback_items)]
+            return [apply_type_coercion(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
             result_mapping: dict[str, Any] | None = None
             for key, value in parameters.items():
-                coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
+                coerced_value = apply_type_coercion(value, type_coercion_map, fallback_items)
                 if result_mapping is None:
                     if coerced_value is value:
                         continue
@@ -1462,7 +1449,7 @@ class CommonDriverAttributesMixin:
 
         updated_params: list[Any] | None = None
         for idx, value in enumerate(parameters):
-            coerced_value = self._apply_coercion_with_fallback(value, type_coercion_map, fallback_items)
+            coerced_value = apply_type_coercion(value, type_coercion_map, fallback_items)
             if updated_params is None:
                 if coerced_value is value:
                     continue
@@ -1490,7 +1477,7 @@ class CommonDriverAttributesMixin:
 
         type_coercion_map = statement_config.parameter_config.type_coercion_map
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-        coerce_value = self._apply_coercion_with_fallback
+        coerce_value = apply_type_coercion
 
         if not isinstance(parameters, (dict, list, tuple)):
             return [coerce_value(parameters, type_coercion_map, fallback_items)]
@@ -2166,12 +2153,6 @@ def _parameters_for_repeated_names(original_sql: "SQL", excluded_names: "set[str
     return tuple(
         value for name, value in zip(input_names, execution_parameters, strict=False) if name not in excluded_names
     )
-
-
-def type_coercion_fallbacks(type_coercion_map: "dict[type, Any] | None") -> "tuple[tuple[type, Any], ...]":
-    if not type_coercion_map:
-        return ()
-    return tuple(type_coercion_map.items())
 
 
 def _callable_cache_key(func: Any) -> Any:
