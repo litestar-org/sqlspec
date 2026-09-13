@@ -212,6 +212,9 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   consumption without intermediate tuple relays.
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
+* ``sql.values`` creates a :class:`~sqlspec.builder.Values` builder for parameterized bulk row lists rather than resolving as a column named ``values``. Use ``sql.column("values")`` to construct column expressions referencing that identifier.
+  (`#773 <https://github.com/litestar-org/sqlspec/pull/773>`_)
+
 **Fixed:**
 
 * Preserve JSON objects and arrays as individual query parameters after placeholder conversion,
@@ -232,6 +235,12 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   a sync-only driver with Arrow support. SQL Server ADK memory inserts now
   deduplicate concurrent event IDs with a single key-range-locked statement.
   (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
+
+* ``Update.from_()`` accepts query builders and subqueries with parameter merging instead of raising a runtime type error, and dialect checks raise a descriptive ``SQLBuilderError`` on dialects without native ``FROM`` clause support.
+  (`#779 <https://github.com/litestar-org/sqlspec/pull/779>`_)
+
+* CTEs registered via ``with_cte()`` or ``with_()`` render on ``Update`` and ``Delete`` statements and merge bound parameters without inlining or dropping explicit common table expressions.
+  (`#779 <https://github.com/litestar-org/sqlspec/pull/779>`_)
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
   order. Assignments such as ``do_update(name=exp.column("name", table="excluded"))`` no longer render
