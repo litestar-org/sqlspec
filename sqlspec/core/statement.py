@@ -10,7 +10,7 @@ from sqlglot import Dialect, exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core import pipeline
+from sqlspec.core import _pipeline as pipeline
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType

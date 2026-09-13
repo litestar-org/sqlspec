@@ -913,19 +913,6 @@ class SQLFactory:
         """
         return create_join_builder("cross join", lateral=True)
 
-    def __getattr__(self, name: str) -> "Column":
-        """Dynamically create column references.
-
-        Args:
-            name: Column name.
-
-        Returns:
-            Column object for the given name.
-        """
-        if name.startswith("__") and name.endswith("__"):
-            raise AttributeError(name)
-        return Column(name)
-
     @staticmethod
     def raw(sql_fragment: str, **parameters: Any) -> "exp.Expr | SQL":
         """Create a raw SQL expression from a string fragment with optional parameters.

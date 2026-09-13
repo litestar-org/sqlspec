@@ -25,7 +25,14 @@ from sqlspec.core.parameters._types import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.utils.dispatch import TypeDispatcher
 
-__all__ = ("ParameterProcessor", "structural_fingerprint", "value_fingerprint")
+__all__ = (
+    "ParameterProcessor",
+    "apply_type_coercion",
+    "structural_fingerprint",
+    "type_coercion_dispatcher",
+    "type_coercion_fallbacks",
+    "value_fingerprint",
+)
 
 TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 
@@ -363,7 +370,7 @@ class ParameterProcessor:
             mapping_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
                 param_info, target_style
             )
-            processed_sql, processed_parameters = self._converter.convert_placeholder_style(
+            processed_sql, processed_parameters, param_info = self._converter._convert_with_metadata(
                 processed_sql,
                 processed_parameters,
                 target_style,
@@ -372,7 +379,6 @@ class ParameterProcessor:
                 param_info=param_info,
                 precomputed_plan=mapping_plan,
             )
-            param_info = self._converter.convert_parameter_info_style(param_info, target_style, mapping_plan)
             original_styles = {target_style}
             needs_execution_conversion = False
 
@@ -518,7 +524,7 @@ class ParameterProcessor:
         type_coercion_map: "dict[type, Callable[[Any], Any]]",
         is_many: bool = False,
     ) -> "ConvertedParameters":
-        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
         result = _coerce_parameters_payload(parameters, type_coercion_map, fallback_items, is_many)
         # Fast type narrowing - _coerce_parameters_payload returns object but produces concrete types
         if result is None:
@@ -675,19 +681,7 @@ class ParameterProcessor:
             parameter_rows = cast("Sequence[Any]", parameters)
             updated_rows: list[Any] | None = None
             for idx, row in enumerate(parameter_rows):
-                row_type = type(row)
-                if row_type is dict:
-                    row_dict: dict[str, Any] = row
-                    if strict:
-                        missing = [name for name in named_order if name not in row_dict]
-                        if missing:
-                            from sqlspec.exceptions import SQLSpecError
-
-                            msg = f"Missing required parameters: {missing}"
-                            raise SQLSpecError(msg)
-                    mapped_row: Any = tuple(row_dict.get(name) for name in named_order)
-                elif isinstance(row, Mapping):
-                    # Fallback for custom Mapping types
+                if type(row) is dict or isinstance(row, Mapping):
                     if strict:
                         missing = [name for name in named_order if name not in row]
                         if missing:
@@ -695,7 +689,7 @@ class ParameterProcessor:
 
                             msg = f"Missing required parameters: {missing}"
                             raise SQLSpecError(msg)
-                    mapped_row = tuple(row.get(name) for name in named_order)
+                    mapped_row: Any = tuple(row.get(name) for name in named_order)
                 else:
                     mapped_row = row
 
@@ -711,18 +705,6 @@ class ParameterProcessor:
                 return tuple(updated_rows)
             return updated_rows
 
-        if param_type is dict:
-            dict_parameters = cast("dict[str, Any]", parameters)
-            if strict:
-                missing = [name for name in named_order if name not in dict_parameters]
-                if missing:
-                    from sqlspec.exceptions import SQLSpecError
-
-                    msg = f"Missing required parameters: {missing}"
-                    raise SQLSpecError(msg)
-            return tuple(dict_parameters.get(name) for name in named_order)
-
-        # Fallback for custom Mapping types
         if isinstance(parameters, Mapping):
             if strict:
                 missing = [name for name in named_order if name not in parameters]
@@ -890,11 +872,7 @@ class ParameterProcessor:
             # Convert parameters to concrete type for return
             if parameters is None:
                 return sql, None, None
-            if isinstance(parameters, dict):
-                return sql, parameters, None
-            if isinstance(parameters, list):
-                return sql, parameters, None
-            if isinstance(parameters, tuple):
+            if isinstance(parameters, (dict, list, tuple)):
                 return sql, parameters, None
             if isinstance(parameters, Mapping):
                 return sql, dict(parameters), None
@@ -908,21 +886,8 @@ class ParameterProcessor:
         execution_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
             param_info, target_style
         )
-        converted_param_info = self._converter.convert_parameter_info_style(param_info, target_style, execution_plan)
-
-        if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
-            processed_sql, _ = self._converter.convert_placeholder_style(
-                sql,
-                parameters,
-                target_style,
-                is_many,
-                strict_named_parameters=config.strict_named_parameters,
-                param_info=param_info,
-                precomputed_plan=execution_plan,
-            )
-            return processed_sql, parameters, converted_param_info
-
-        processed_sql, processed_parameters = self._converter.convert_placeholder_style(
+        preserve_batch = is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple))
+        processed_sql, processed_parameters, converted_param_info = self._converter._convert_with_metadata(
             sql,
             parameters,
             target_style,
@@ -930,6 +895,7 @@ class ParameterProcessor:
             strict_named_parameters=config.strict_named_parameters,
             param_info=param_info,
             precomputed_plan=execution_plan,
+            preserve_original_batch=preserve_batch,
         )
         return processed_sql, processed_parameters, converted_param_info
 
@@ -964,15 +930,10 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
     return ("many_scalar", first_type)
 
 
-def _type_coercion_fallbacks(
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
-) -> "tuple[TypeCoercionFallback, ...]":
-    return tuple(type_coercion_map.items())
-
-
-def _type_coercion_dispatcher(
+def type_coercion_dispatcher(
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "TypeDispatcher[Callable[[Any], Any]]":
+    """Return the process-wide dispatcher registered for the fallback items."""
     dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
     if dispatcher is not None:
         return dispatcher
@@ -983,16 +944,26 @@ def _type_coercion_dispatcher(
     return dispatcher
 
 
-def _type_coercion(
+def type_coercion_fallbacks(
+    type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
+) -> "tuple[TypeCoercionFallback, ...]":
+    """Return the ordered fallback items for a coercion map, empty when none is configured."""
+    if not type_coercion_map:
+        return ()
+    return tuple(type_coercion_map.items())
+
+
+def apply_type_coercion(
     value: object,
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> object:
+    """Coerce a value by exact type first, then by the shared subclass/ABC dispatcher."""
     value_type = type(value)
     exact_converter = type_coercion_map.get(value_type)
     if exact_converter is not None:
         return exact_converter(value)
-    fallback_converter = _type_coercion_dispatcher(fallback_items).get(value)
+    fallback_converter = type_coercion_dispatcher(fallback_items).get(value)
     if fallback_converter is not None:
         return fallback_converter(value)
     return value
@@ -1029,12 +1000,12 @@ def _coerce_parameter_value(
         wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
-        coerced = _type_coercion(wrapped_value, type_coercion_map, fallback_items)
+        coerced = apply_type_coercion(wrapped_value, type_coercion_map, fallback_items)
         if coerced is wrapped_value:
             return wrapped_value
         return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
 
-    coerced = _type_coercion(value, type_coercion_map, fallback_items)
+    coerced = apply_type_coercion(value, type_coercion_map, fallback_items)
     if coerced is value:
         return value
     return _coerce_nested_value(coerced, type_coercion_map, fallback_items)

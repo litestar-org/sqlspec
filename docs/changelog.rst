@@ -107,6 +107,13 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 * Storage pipelines provide :meth:`resolve_destination`, returning a ``ResolvedStorageTarget(uri, protocol)``
   without requiring an active database session.
 
+* SQL Server migration runners (``mssql_python`` and ``pymssql``) support default schemas
+  via ``default_schema`` in migration configuration, using session-level user schema switching
+  with validation against ``sys.schemas`` and automatic schema reset. All migration adapters
+  supporting schema scoping now support per-migration ``-- schema: <name>`` directives to
+  override the configured default schema for individual migration scripts.
+  (`#770 <https://github.com/litestar-org/sqlspec/pull/770>`_)
+
 **Changed:**
 
 * Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
@@ -126,6 +133,11 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 * Unified ``sqlspec.extensions.litestar.LitestarConfig`` with ``sqlspec.config.LitestarConfig`` for
   consistent typing and schema export.
+
+* Parameter pipeline internal execution and placeholder conversion are consolidated to use single-traversal
+  rendering, shared type-coercion dispatcher registries across adapters, and direct compiler result
+  consumption without intermediate tuple relays.
+  (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
 **Fixed:**
 
@@ -185,6 +197,9 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 * Resolved Sphinx autodoc forward reference errors during documentation builds for ``ExecutionResult``
   NamedTuple type hints.
 
+* Storage benchmark scripts type-check cleanly under Python 3.10.
+  (`#772 <https://github.com/litestar-org/sqlspec/pull/772>`_)
+
 **Removed:**
 
 * Retracted experimental storage staging methods (:meth:`stage_artifact`, :meth:`flush_staging_artifacts`,
@@ -194,6 +209,10 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 * Removed undocumented ``sqlspec.exceptions.wrap_exceptions`` helper, superseded by typed per-adapter exception
   handlers.
+
+* Dynamic column access on the ``sql`` factory (``sql.some_column``) has been removed.
+  Use ``sql.column("some_column")`` or ``Column("some_column")``.
+  (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
 v0.62.2 - Litestar config lookup diagnostics
 ---------------------------------------------

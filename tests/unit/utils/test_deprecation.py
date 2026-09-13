@@ -3,6 +3,7 @@
 Tests deprecation warning utilities including decorator and warning functions.
 """
 
+import inspect
 import warnings
 
 import pytest
@@ -145,14 +146,13 @@ def test_deprecation_warning_stacklevel() -> None:
         warnings.simplefilter("always")
         warnings.simplefilter("ignore", ResourceWarning)
 
-        def wrapper_function() -> None:
+        def wrapper_function() -> int:
             warn_deprecation(version="1.0.0", deprecated_name="test", kind="function")
+            return inspect.currentframe().f_lineno - 1  # type: ignore[union-attr]
 
-        wrapper_function()
+        call_line = wrapper_function()
 
         assert len(warning_list) == 1
         warning = warning_list[0]
-
-        # Check that the warning points to the correct location
-        # The stacklevel=2 should make it point to wrapper_function, not warn_deprecation
-        assert "wrapper_function" in str(warning.filename) or warning.lineno > 0
+        assert warning.filename == __file__
+        assert warning.lineno == call_line

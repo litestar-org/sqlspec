@@ -37,6 +37,7 @@ from sqlspec.builder._join import create_join_builder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
+from tests.conftest import requires_patchable_internals
 
 
 class _SQLExpressionObject:
@@ -541,16 +542,6 @@ def test_column_method() -> None:
     assert col_with_table is not None
 
 
-def test_dynamic_column_access() -> None:
-    """Test dynamic column access via __getattr__."""
-    col = sql.name
-    assert col is not None
-    assert hasattr(col, "like")
-    assert hasattr(col, "in_")
-    test_col = sql.some_column_name
-    assert test_col is not None
-
-
 def test_raw_sql_parsing_error() -> None:
     """Test that raw SQL parsing errors raise appropriate exceptions."""
     with pytest.raises(SQLBuilderError) as exc_info:
@@ -730,10 +721,8 @@ def test_window_function_multiple_partition_columns() -> None:
     assert "hire_date" in stmt.sql
 
 
-def test_normal_column_access_preserved() -> None:
-    """Test that normal column access still works after adding window functions."""
-    assert isinstance(sql.department, Column)
-    assert isinstance(sql.some_normal_column, Column)
+def test_window_function_builders() -> None:
+    """Test window function builder shortcuts."""
     assert isinstance(sql.row_number_, WindowFunctionBuilder)
     assert isinstance(sql.rank_, WindowFunctionBuilder)
 
@@ -903,8 +892,6 @@ def test_backward_compatibility_preserved() -> None:
     query3 = sql.select("name", window_func).from_("employees")
     stmt3 = query3.build()
     assert "ROW_NUMBER" in stmt3.sql
-    assert isinstance(sql.users, Column)
-    assert isinstance(sql.posts, Column)
 
 
 def test_case_as_method_type_annotation_fix() -> None:
@@ -987,6 +974,7 @@ def test_multiple_sql_raw_objects_parameter_merging() -> None:
     assert ":min_date" in stmt.sql
 
 
+@requires_patchable_internals
 def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
@@ -2041,22 +2029,18 @@ def test_native_layout_wave3_expression_wrappers_are_slotted_and_functional() ->
         wrappers[1].dynamic_attr = "nope"
 
 
-def test_native_layout_wave3_sqlfactory_slots_preserve_dynamic_column_access() -> None:
-    """SQLFactory slotting should not break the dynamic column API."""
+def test_native_layout_wave3_sqlfactory_slots() -> None:
+    """SQLFactory instances carry no per-instance __dict__."""
     factory = SQLFactory(dialect="postgres")
     assert not hasattr(factory, "__dict__")
     assert factory.dialect == "postgres"
-    column = sql.user_id
-    assert isinstance(column, Column)
-    assert column.name == "user_id"
 
 
-def test_native_layout_wave3_join_builder_slots_remove_dead_condition_field() -> None:
-    """JoinBuilder should be slotted without the unused _condition field."""
+def test_join_builder_has_no_instance_dict_or_condition_field() -> None:
+    """JoinBuilder carries no per-instance __dict__ and no unused _condition field."""
     builder = JoinBuilder("LEFT")
     assert not hasattr(builder, "__dict__")
     assert not hasattr(builder, "_condition")
-    assert "_condition" not in JoinBuilder.__slots__
     builder._table = "posts"
     join = builder.on("users.id = posts.user_id")
     assert isinstance(join, exp.Join)

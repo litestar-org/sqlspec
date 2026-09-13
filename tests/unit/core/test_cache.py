@@ -24,9 +24,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sqlspec.core._pipeline as pipeline_module
 import sqlspec.core.cache as cache_module
 import sqlspec.core.hashing as hashing_module
-import sqlspec.core.pipeline as pipeline_module
 from sqlspec.core import (
     CacheConfig,
     CacheKey,

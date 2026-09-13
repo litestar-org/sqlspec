@@ -50,6 +50,7 @@ from sqlspec.core.parameters import _types
 from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
+from tests.conftest import requires_patchable_internals
 
 try:
     from sqlspec.adapters.asyncpg.core import driver_profile as asyncpg_driver_profile
@@ -1150,6 +1151,7 @@ def test_process_execute_many_named_to_positional(processor: "ParameterProcessor
     assert [tuple(param_set) for param_set in final_params] == [(10, 20), (30, 40)]
 
 
+@requires_patchable_internals
 def test_validate_parameter_alignment_reuses_execute_many_expected_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     """execute_many alignment should compute placeholder identifiers once per batch."""
     profile = ParameterProfile([
@@ -1270,8 +1272,8 @@ def test_replace_null_parameters_with_profile_emits_no_warning() -> None:
 def test_type_coercion_supports_virtual_abc_fallback() -> None:
     """ABC-registered coercions should still resolve for builtin sequence payloads."""
     type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}
-    fallback_items = _processor_module._type_coercion_fallbacks(type_map)
-    assert _processor_module._type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
+    fallback_items = _processor_module.type_coercion_fallbacks(type_map)
+    assert _processor_module.apply_type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
 
 
 def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(
@@ -1823,7 +1825,7 @@ def test_positional_parameter_output_type_narrowing(converter: ParameterConverte
     assert result_dict == (1, 2, 3)
 
 
-def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
+def test_convert_placeholder_style_skips_sort_for_position_ordered_params(
     converter: ParameterConverter, monkeypatch: Any
 ) -> None:
     """Position-ordered parameter metadata should not pay an extra sorted() pass."""
@@ -1834,16 +1836,16 @@ def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
         raise AssertionError("sorted() should not run for already ordered parameter metadata")
 
     monkeypatch.setattr("builtins.sorted", fail_sorted)
-    converted_sql = converter._convert_placeholders_to_style(sql, param_info, ParameterStyle.NUMERIC)
+    converted_sql = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC, param_info=param_info)[0]
     assert converted_sql == "SELECT $1, $2, $3"
 
 
-def test_convert_placeholders_to_style_sorts_unsafely_ordered_params_as_fallback(converter: ParameterConverter) -> None:
+def test_convert_placeholder_style_sorts_unsafely_ordered_params_as_fallback(converter: ParameterConverter) -> None:
     """Manually unordered parameter metadata should still be normalized correctly."""
     sql = "SELECT :a, :b, :c"
     param_info = converter.validator.extract_parameters(sql)
     unordered = [param_info[2], param_info[0], param_info[1]]
-    converted_sql = converter._convert_placeholders_to_style(sql, unordered, ParameterStyle.NUMERIC)
+    converted_sql = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC, param_info=unordered)[0]
     assert converted_sql == "SELECT $1, $2, $3"
 
 
@@ -2494,3 +2496,289 @@ def test_build_conversion_plan_called_once_execute_many_preserve_original_params
     assert converter.build_conversion_plan_calls == 1
     assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
     assert result.parameters is rows
+
+
+def test_type_coercion_dispatcher_is_shared_for_equal_fallbacks() -> None:
+    from collections.abc import Sequence
+
+    from sqlspec.core.parameters import type_coercion_dispatcher
+    from sqlspec.driver import type_coercion_fallbacks
+
+    assert type_coercion_fallbacks(None) == ()
+    items = type_coercion_fallbacks({Sequence: tuple})
+    assert type_coercion_dispatcher(items) is type_coercion_dispatcher(tuple(items))
+    assert type_coercion_dispatcher(items).get([1]) is tuple
+
+
+def test_renderer_sql_and_metadata_offsets_agree(converter: ParameterConverter) -> None:
+    """Renderer rewritten SQL offsets must exactly match converted parameter metadata positions."""
+    sql = "SELECT * FROM users WHERE first_name = :first_name AND id = :id AND last_name = :last_name"
+    params = {"first_name": "Alice", "id": 42, "last_name": "Smith"}
+
+    (plan_params, plan_unique) = converter._build_conversion_plan(
+        converter.validator.extract_parameters(sql), ParameterStyle.NUMERIC
+    )
+    (num_sql, _) = converter.convert_placeholder_style(
+        sql, params, ParameterStyle.NUMERIC, precomputed_plan=(plan_params, plan_unique)
+    )
+    num_meta = converter.convert_parameter_info_style(plan_params, ParameterStyle.NUMERIC, (plan_params, plan_unique))
+
+    assert num_sql == "SELECT * FROM users WHERE first_name = $1 AND id = $2 AND last_name = $3"
+    for meta in num_meta:
+        extracted = num_sql[meta.position : meta.position + len(meta.placeholder_text)]
+        assert extracted == meta.placeholder_text
+
+    (plan_params, plan_unique) = converter._build_conversion_plan(
+        converter.validator.extract_parameters(sql), ParameterStyle.QMARK
+    )
+    (q_sql, _) = converter.convert_placeholder_style(
+        sql, params, ParameterStyle.QMARK, precomputed_plan=(plan_params, plan_unique)
+    )
+    q_meta = converter.convert_parameter_info_style(plan_params, ParameterStyle.QMARK, (plan_params, plan_unique))
+
+    assert q_sql == "SELECT * FROM users WHERE first_name = ? AND id = ? AND last_name = ?"
+    for meta in q_meta:
+        extracted = q_sql[meta.position : meta.position + len(meta.placeholder_text)]
+        assert extracted == meta.placeholder_text
+
+
+def test_same_style_numeric_gaps_are_preserved(converter: ParameterConverter) -> None:
+    """Same-style input retains SQL when styles match, but re-indexes when converted."""
+    sql_numeric_gaps = "SELECT * FROM t WHERE a = $2 AND b = $5"
+    info = converter.validator.extract_parameters(sql_numeric_gaps)
+
+    (same_sql, same_params) = converter.convert_placeholder_style(
+        sql_numeric_gaps, [10, 20, 30, 40, 50], ParameterStyle.NUMERIC, param_info=info
+    )
+    assert same_sql == sql_numeric_gaps
+    assert same_params == [10, 20, 30, 40, 50]
+
+    (conv_sql, conv_params) = converter.convert_placeholder_style(
+        sql_numeric_gaps, [10, 20, 30, 40, 50], ParameterStyle.QMARK, param_info=info
+    )
+    assert conv_sql == "SELECT * FROM t WHERE a = ? AND b = ?"
+    assert conv_params == [10, 20, 30, 40, 50]
+
+    (map_sql, map_params) = converter.convert_placeholder_style(
+        sql_numeric_gaps, {"2": 20, "5": 50}, ParameterStyle.QMARK, param_info=info
+    )
+    assert map_sql == "SELECT * FROM t WHERE a = ? AND b = ?"
+    assert map_params == (20, 50)
+
+
+def test_repeated_binds_expand_or_share_index_by_style(converter: ParameterConverter) -> None:
+    """Repeated binds produce shared indices for NUMERIC and duplicate entries for expanding styles."""
+    sql = "SELECT * FROM t WHERE x = :val AND y = :other AND z = :val"
+    params = {"val": 100, "other": 200}
+    info = converter.validator.extract_parameters(sql)
+
+    (num_sql, num_params) = converter.convert_placeholder_style(sql, params, ParameterStyle.NUMERIC, param_info=info)
+    assert num_sql == "SELECT * FROM t WHERE x = $1 AND y = $2 AND z = $1"
+    assert num_params == (100, 200)
+
+    (q_sql, q_params) = converter.convert_placeholder_style(sql, params, ParameterStyle.QMARK, param_info=info)
+    assert q_sql == "SELECT * FROM t WHERE x = ? AND y = ? AND z = ?"
+    assert q_params == (100, 200, 100)
+
+    (py_sql, py_params) = converter.convert_placeholder_style(
+        sql, params, ParameterStyle.POSITIONAL_PYFORMAT, param_info=info
+    )
+    assert py_sql == "SELECT * FROM t WHERE x = %s AND y = %s AND z = %s"
+    assert py_params == (100, 200, 100)
+
+
+@pytest.mark.skipif(
+    _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
+)
+def test_injected_converter_overrides_are_invoked() -> None:
+    """Injected converter overrides are invoked by ParameterProcessor."""
+
+    class CustomConverter(ParameterConverter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.convert_called = False
+
+        def convert_placeholder_style(
+            self,
+            sql: str,
+            parameters: Any,
+            target_style: ParameterStyle,
+            is_many: bool = False,
+            *,
+            strict_named_parameters: bool = True,
+            param_info: list[ParameterInfo] | None = None,
+            precomputed_plan: tuple[list[ParameterInfo], dict[str, int]] | None = None,
+        ) -> tuple[str, Any]:
+            self.convert_called = True
+            return super().convert_placeholder_style(
+                sql,
+                parameters,
+                target_style,
+                is_many,
+                strict_named_parameters=strict_named_parameters,
+                param_info=param_info,
+                precomputed_plan=precomputed_plan,
+            )
+
+    custom = CustomConverter()
+    processor = ParameterProcessor(converter=custom, cache_max_size=0, validator_cache_max_size=0)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+    result = processor.process("SELECT * FROM t WHERE id = :id", {"id": 1}, config)
+    assert custom.convert_called is True
+    assert result.sql == "SELECT * FROM t WHERE id = $1"
+
+
+def test_fallback_mapping_alias_precedence(converter: ParameterConverter) -> None:
+    """Exact name > placeholder_text > param_keys (numeric) > param_{ord} > str(ord+1) > keys[ord]."""
+    info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = :name")
+    param = info[0]
+
+    val1, ok1, _ = converter._lookup_parameter_value(param, {"name": "exact", ":name": "placeholder"}, [])
+    assert ok1 is True and val1 == "exact"
+
+    val2, ok2, _ = converter._lookup_parameter_value(param, {":name": "placeholder", "param_0": "param_ord"}, [])
+    assert ok2 is True and val2 == "placeholder"
+
+    val3, ok3, _ = converter._lookup_parameter_value(param, {"param_0": "param_ord", "1": "one"}, [])
+    assert ok3 is True and val3 == "param_ord"
+
+    val4, ok4, _ = converter._lookup_parameter_value(param, {"1": "one", "fallback": "ordered"}, [])
+    assert ok4 is True and val4 == "one"
+
+    val5, ok5, _ = converter._lookup_parameter_value(param, {"fallback": "ordered"}, [])
+    assert ok5 is True and val5 == "ordered"
+
+    num_info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = $1")
+    num_param = num_info[0]
+    val6, ok6, _ = converter._lookup_parameter_value(num_param, {"col_a": "aliased", "param_0": "param_ord"}, ["col_a"])
+    assert ok6 is True and val6 == "aliased"
+
+
+def test_preserved_many_batches_keep_identity_and_validate_positional_targets() -> None:
+    """Preserve-many preserves row container identity while validating missing parameters in order."""
+    processor = ParameterProcessor(cache_max_size=0, validator_cache_max_size=0)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        preserve_original_params_for_many=True,
+    )
+    rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+    result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
+    assert result.parameters is rows
+
+    tuple_rows = ({"a": 1, "b": 2}, {"a": 3, "b": 4})
+    result_tuple = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", tuple_rows, config, is_many=True)
+    assert result_tuple.parameters is tuple_rows
+
+    missing_rows = [{"a": 1, "b": 2}, {"a": 3}]
+    with pytest.raises(SQLSpecError, match="Missing named parameter\\(s\\): b"):
+        processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", missing_rows, config, is_many=True)
+
+    named_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NAMED_AT,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT},
+        supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+        preserve_original_params_for_many=True,
+    )
+    named_result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", missing_rows, named_config, is_many=True)
+    assert named_result.sql == "INSERT INTO t (a, b) VALUES (@a, @b)"
+    assert named_result.parameters is missing_rows
+
+
+@pytest.mark.skipif(
+    _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
+)
+def test_preserved_many_batches_keep_identity_with_overridden_converter() -> None:
+    """An injected converter override still returns the caller's batch by identity."""
+
+    class CustomConverter(ParameterConverter):
+        def convert_placeholder_style(self, *args: Any, **kwargs: Any) -> tuple[str, Any]:
+            return super().convert_placeholder_style(*args, **kwargs)
+
+    processor = ParameterProcessor(converter=CustomConverter(), cache_max_size=0, validator_cache_max_size=0)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        preserve_original_params_for_many=True,
+    )
+    rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+    result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
+    assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
+    assert result.parameters is rows
+
+    with pytest.raises(SQLSpecError, match="Missing named parameter\\(s\\): b"):
+        processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", [{"a": 1, "b": 2}, {"a": 3}], config, is_many=True)
+
+
+def test_static_execution_style_outside_script_compilation_is_rejected(processor: ParameterProcessor) -> None:
+    """STATIC reaching execution conversion raises instead of embedding batch rows."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.STATIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON},
+        supported_execution_parameter_styles={ParameterStyle.STATIC},
+        needs_static_script_compilation=True,
+    )
+    with pytest.raises(ValueError, match="Unsupported target parameter style"):
+        processor.process("INSERT INTO t (a) VALUES (:a)", [{"a": 1}, {"a": 2}], config, is_many=True)
+
+
+def test_static_embedding_evaluates_right_to_left(converter: ParameterConverter) -> None:
+    """Static parameter embedding resolves right-to-left to preserve token positions."""
+    sql = "SELECT :first, :long_parameter_name, :first"
+    params = {"first": "A", "long_parameter_name": "B"}
+    (result_sql, result_params) = converter.convert_placeholder_style(sql, params, ParameterStyle.STATIC)
+    assert result_sql == "SELECT 'A', 'B', 'A'"
+    assert result_params is None
+
+    types_sql = "SELECT :a, :b, :c, :d, :e"
+    types_params = {"a": None, "b": True, "c": 42, "d": 3.14, "e": "it's"}
+    (result_types, _) = converter.convert_placeholder_style(types_sql, types_params, ParameterStyle.STATIC)
+    assert result_types == "SELECT NULL, TRUE, 42, 3.14, 'it''s'"
+
+
+def test_parameter_pipeline_executes_on_sqlite_duckdb_and_reuses_warm_cache(processor: ParameterProcessor) -> None:
+    """Filled SQL executes on SQLite and DuckDB, and warm cache reuse yields fresh values."""
+    import sqlite3
+
+    import duckdb
+
+    config_sqlite = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON, default_execution_parameter_style=ParameterStyle.QMARK
+    )
+    sql = "SELECT :name AS n, :val AS v, :name AS n2"
+
+    res1 = processor.process(sql, {"name": "alice", "val": 10}, config_sqlite)
+    assert res1.sql == "SELECT ? AS n, ? AS v, ? AS n2"
+    assert res1.parameters == ("alice", 10, "alice")
+
+    res2 = processor.process(sql, {"name": "bob", "val": 20}, config_sqlite)
+    assert res2.parameters == ("bob", 20, "bob")
+
+    sqlite_conn = sqlite3.connect(":memory:")
+    cur = sqlite_conn.execute(res2.sql, res2.parameters)
+    row = cur.fetchone()
+    assert row == ("bob", 20, "bob")
+    sqlite_conn.close()
+
+    config_duckdb = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON, default_execution_parameter_style=ParameterStyle.NUMERIC
+    )
+    res_duck = processor.process(sql, {"name": "charlie", "val": 30}, config_duckdb)
+    assert res_duck.sql == "SELECT $1 AS n, $2 AS v, $1 AS n2"
+    assert res_duck.parameters == ("charlie", 30)
+
+    duck_conn = duckdb.connect(":memory:")
+    duck_res = duck_conn.execute(res_duck.sql, res_duck.parameters).fetchone()
+    assert duck_res == ("charlie", 30, "charlie")
+    duck_conn.close()

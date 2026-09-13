@@ -26,6 +26,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
+from sqlspec.core.parameters import type_coercion_dispatcher
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -44,7 +45,6 @@ from sqlspec.exceptions import (
     _classify_timeout_or_cancellation,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
-from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -97,7 +97,6 @@ except ImportError:
     pass
 else:
     _JSONB_TYPE = _JSONB_IMPORTED
-_TYPE_COERCION_DISPATCHERS: "dict[tuple[tuple[type, Callable[[Any], Any]], ...], TypeDispatcher[Callable[[Any], Any]]]" = {}
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
@@ -384,7 +383,7 @@ def prepare_parameters_with_casts(
         result: list[Any] = []
         serializer = statement_config.parameter_config.json_serializer or to_json
         type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = _type_coercion_dispatcher(type_map) if type_map else None
+        dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "")
             prepared_value = param
@@ -688,18 +687,6 @@ def _dml_count_query(sql: str) -> str | None:
     count_query = exp.select(count_expression).from_(cte_alias, copy=False)
     count_query.with_(cte_alias, as_=expression, copy=False)
     return count_query.sql(dialect="postgres")
-
-
-def _type_coercion_dispatcher(type_map: "dict[type, Callable[[Any], Any]]") -> "TypeDispatcher[Callable[[Any], Any]]":
-    fallback_items = tuple(type_map.items())
-    dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
-    if dispatcher is not None:
-        return dispatcher
-
-    dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
-    dispatcher.register_all(fallback_items)
-    _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
-    return dispatcher
 
 
 def _create_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:

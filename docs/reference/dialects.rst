@@ -7,9 +7,12 @@ that extend built-in SQL grammars with extension-specific operators. These diale
 enable the :doc:`builder <builder/index>` to parse and generate SQL that uses
 vendor-specific syntax (e.g., pgvector distance operators, ParadeDB search operators).
 
-Import ``sqlspec.dialects`` to ensure all dialects are registered::
+The dialects are registered lazily through the ``sqlglot.dialects`` entry-point
+group, so ``sqlglot.parse_one(..., dialect="pgvector")`` resolves them in any
+environment where SQLSpec is installed; importing ``sqlspec`` alone does not load
+them. Import the classes directly when you need them as objects::
 
-   import sqlspec.dialects  # registers pgvector, paradedb, spanner, spangres
+   from sqlspec.dialects import PGVector, ParadeDB, Spanner, Spangres
 
 Performance builds compile the custom dialect helper modules alongside
 ``sqlglot[c]``: generator transforms, operator registries, and compatibility
