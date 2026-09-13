@@ -45,11 +45,9 @@ from sqlspec._typing import (
     StructStub,
     UnsetType,
     convert,
-    import_optional,
-    import_optional_attr,
-    module_available,
     msgspec_fields,
 )
+from sqlspec.utils.module_loader import import_optional, import_optional_attr, module_available
 
 if TYPE_CHECKING:
     from sqlspec._typing import (

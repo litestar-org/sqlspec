@@ -37,20 +37,6 @@ SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase, default=SyncDr
 logger = get_logger("sqlspec.service")
 
 
-class _TransactionState:
-    __slots__ = ("driver", "origin", "owner")
-
-    def __init__(self, driver: AsyncDriverAdapterBase | SyncDriverAdapterBase) -> None:
-        self.driver: AsyncDriverAdapterBase | SyncDriverAdapterBase | None = driver
-        self.owner = _execution_owner()
-        self.origin = _owner_identity(self.owner)
-
-
-_TRANSACTIONS: ContextVar[dict[object, _TransactionState] | None] = ContextVar(
-    "sqlspec_service_transactions", default=None
-)
-
-
 def _execution_owner() -> tuple[int, object]:
     try:
         task = asyncio.current_task()
@@ -63,78 +49,18 @@ def _owner_identity(owner: tuple[int, object]) -> tuple[int, int]:
     return owner[0], id(owner[1])
 
 
-def _active_transaction(key: object) -> _TransactionState | None:
-    state = (_TRANSACTIONS.get() or {}).get(key)
-    if state is None:
-        return None
-    if state.driver is None:
-        if state.origin == _owner_identity(_execution_owner()):
-            _discard_transaction(state)
-            return None
-        msg = "The inherited service transaction is no longer active."
-        raise ImproperConfigurationError(msg)
-    if state.owner != _execution_owner():
-        msg = "A service transaction cannot be implicitly reused by another task or thread; pass session= explicitly."
-        raise ImproperConfigurationError(msg)
-    return state
+class _TransactionState:
+    __slots__ = ("driver", "origin", "owner")
+
+    def __init__(self, driver: AsyncDriverAdapterBase | SyncDriverAdapterBase) -> None:
+        self.driver: AsyncDriverAdapterBase | SyncDriverAdapterBase | None = driver
+        self.owner = _execution_owner()
+        self.origin = _owner_identity(self.owner)
 
 
-def _live_transaction(key: object) -> _TransactionState | None:
-    current = _TRANSACTIONS.get()
-    state = None if current is None else current.get(key)
-    if state is None:
-        return None
-    if state.driver is None:
-        _discard_transaction(state)
-        return None
-    return _active_transaction(key)
-
-
-def _discard_transaction(state: _TransactionState) -> None:
-    current = _TRANSACTIONS.get()
-    if current is not None and any(value is state for value in current.values()):
-        _TRANSACTIONS.set({key: value for key, value in current.items() if value is not state} or None)
-
-
-def _session_transaction(state: _TransactionState | None) -> _TransactionState | None:
-    if state is None or state.driver is None:
-        return None
-    if state.owner != _execution_owner():
-        msg = (
-            "A service transaction is active in another task or thread; nested begin_transaction() blocks must "
-            "run in the task or thread that entered the outer block."
-        )
-        raise ImproperConfigurationError(msg)
-    return state
-
-
-def _connection_in_transaction(driver: AsyncDriverAdapterBase | SyncDriverAdapterBase) -> bool:
-    try:
-        return driver._connection_in_transaction()
-    except NotImplementedError:
-        return False
-
-
-def _transaction_session(key: object) -> AsyncDriverAdapterBase | SyncDriverAdapterBase | None:
-    state = _active_transaction(key)
-    return None if state is None else state.driver
-
-
-def _bind_transaction(
-    key: object, driver: AsyncDriverAdapterBase | SyncDriverAdapterBase
-) -> tuple[_TransactionState, Token[dict[object, _TransactionState] | None]]:
-    state = _TransactionState(driver)
-    token = _TRANSACTIONS.set({**(_TRANSACTIONS.get() or {}), key: state})
-    return state, token
-
-
-def _release_transaction(state: _TransactionState, token: Token[dict[object, _TransactionState] | None]) -> None:
-    state.driver = None
-    state.owner = (0, None)
-    try:
-        _TRANSACTIONS.reset(token)
-    except ValueError:
-        _discard_transaction(state)
+_TRANSACTIONS: ContextVar[dict[object, _TransactionState] | None] = ContextVar(
+    "sqlspec_service_transactions", default=None
+)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -701,6 +627,80 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             The underlying driver session bound to the active transaction.
         """
         return _SyncBeginTransactionContext(self)
+
+
+def _active_transaction(key: object) -> _TransactionState | None:
+    state = (_TRANSACTIONS.get() or {}).get(key)
+    if state is None:
+        return None
+    if state.driver is None:
+        if state.origin == _owner_identity(_execution_owner()):
+            _discard_transaction(state)
+            return None
+        msg = "The inherited service transaction is no longer active."
+        raise ImproperConfigurationError(msg)
+    if state.owner != _execution_owner():
+        msg = "A service transaction cannot be implicitly reused by another task or thread; pass session= explicitly."
+        raise ImproperConfigurationError(msg)
+    return state
+
+
+def _live_transaction(key: object) -> _TransactionState | None:
+    current = _TRANSACTIONS.get()
+    state = None if current is None else current.get(key)
+    if state is None:
+        return None
+    if state.driver is None:
+        _discard_transaction(state)
+        return None
+    return _active_transaction(key)
+
+
+def _discard_transaction(state: _TransactionState) -> None:
+    current = _TRANSACTIONS.get()
+    if current is not None and any(value is state for value in current.values()):
+        _TRANSACTIONS.set({key: value for key, value in current.items() if value is not state} or None)
+
+
+def _session_transaction(state: _TransactionState | None) -> _TransactionState | None:
+    if state is None or state.driver is None:
+        return None
+    if state.owner != _execution_owner():
+        msg = (
+            "A service transaction is active in another task or thread; nested begin_transaction() blocks must "
+            "run in the task or thread that entered the outer block."
+        )
+        raise ImproperConfigurationError(msg)
+    return state
+
+
+def _connection_in_transaction(driver: AsyncDriverAdapterBase | SyncDriverAdapterBase) -> bool:
+    try:
+        return driver._connection_in_transaction()
+    except NotImplementedError:
+        return False
+
+
+def _transaction_session(key: object) -> AsyncDriverAdapterBase | SyncDriverAdapterBase | None:
+    state = _active_transaction(key)
+    return None if state is None else state.driver
+
+
+def _bind_transaction(
+    key: object, driver: AsyncDriverAdapterBase | SyncDriverAdapterBase
+) -> tuple[_TransactionState, Token[dict[object, _TransactionState] | None]]:
+    state = _TransactionState(driver)
+    token = _TRANSACTIONS.set({**(_TRANSACTIONS.get() or {}), key: state})
+    return state, token
+
+
+def _release_transaction(state: _TransactionState, token: Token[dict[object, _TransactionState] | None]) -> None:
+    state.driver = None
+    state.owner = (0, None)
+    try:
+        _TRANSACTIONS.reset(token)
+    except ValueError:
+        _discard_transaction(state)
 
 
 class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
