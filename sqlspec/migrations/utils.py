@@ -50,8 +50,7 @@ def resolve_default_schema(migration_config: "Mapping[str, Any] | None") -> str 
 
 
 def resolve_migration_schema(
-    migration: "Mapping[str, Any]",
-    migration_config: "Mapping[str, Any] | None",
+    migration: "Mapping[str, Any]", migration_config: "Mapping[str, Any] | None"
 ) -> str | None:
     """Resolve the active schema for a migration.
 

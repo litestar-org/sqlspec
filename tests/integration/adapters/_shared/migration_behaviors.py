@@ -141,8 +141,7 @@ def _drop_schema_sql(schema: str) -> str:
 def _drop_schema_sync(driver: Any, case: MigrationCase, schema: str) -> None:
     if case.schema_dialect == "mssql":
         tables = driver.select(
-            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = :schema",
-            schema=schema,
+            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = :schema", schema=schema
         )
         for row in tables:
             tbl = row[0] if isinstance(row, (tuple, list)) else row["TABLE_NAME"]

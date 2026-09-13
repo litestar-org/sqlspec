@@ -248,16 +248,6 @@ directive:
         title NVARCHAR(255)
     );
 
-For Python migration scripts, define the directive as a top-level variable:
-
-.. code-block:: python
-
-    schema = "analytics"
-
-
-    def up():
-        return ["CREATE TABLE reports (id INT PRIMARY KEY, title NVARCHAR(255))"]
-
 When applied, the runner switches to the requested schema for that specific
 migration and restores the session schema afterward.
 

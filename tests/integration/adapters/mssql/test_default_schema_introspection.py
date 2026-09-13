@@ -11,19 +11,12 @@ from sqlspec.adapters.pymssql import PymssqlConfig
 pytestmark = [pytest.mark.mssql, pytest.mark.xdist_group("mssql")]
 
 
-def test_mssql_python_introspects_connection_default_schema(
-    mssql_migration_connection_config: dict[str, Any],
-) -> None:
+def test_mssql_python_introspects_connection_default_schema(mssql_migration_connection_config: dict[str, Any]) -> None:
     """mssql-python data dictionary uses connection default schema when schema is omitted."""
     schema = f"introspect_{uuid4().hex[:8]}"
     table = f"tbl_{uuid4().hex[:8]}"
     conn_config = dict(mssql_migration_connection_config)
-    conn_config.update({
-        "encrypt": False,
-        "trust_server_certificate": True,
-        "autocommit": False,
-        "pool_enabled": False,
-    })
+    conn_config.update({"encrypt": False, "trust_server_certificate": True, "autocommit": False, "pool_enabled": False})
     config = MssqlPythonConfig(connection_config=conn_config)
     try:
         with config.provide_session() as driver:
@@ -50,9 +43,7 @@ def test_mssql_python_introspects_connection_default_schema(
         config.close_pool()
 
 
-def test_pymssql_introspects_connection_default_schema(
-    mssql_migration_connection_config: dict[str, Any],
-) -> None:
+def test_pymssql_introspects_connection_default_schema(mssql_migration_connection_config: dict[str, Any]) -> None:
     """pymssql data dictionary uses connection default schema when schema is omitted."""
     schema = f"introspect_{uuid4().hex[:8]}"
     table = f"tbl_{uuid4().hex[:8]}"

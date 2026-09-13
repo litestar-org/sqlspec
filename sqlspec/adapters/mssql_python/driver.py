@@ -269,7 +269,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 _execute_cursor(cursor, "SELECT SCHEMA_NAME() AS schema_name;", None)
                 row = cursor.fetchone()
                 if row is not None:
-                    self._migration_schema_restore = _scalar(row, "schema_name", 0)
+                    self._migration_schema_restore = str(row[0])
             _execute_cursor(cursor, f"ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = {quoted_schema};", None)
 
     def reset_migration_session_schema(self) -> None:
@@ -506,17 +506,6 @@ def _coerce_bulk_copy_result(result: Any, cursor: "MssqlPythonRawCursor") -> Mss
 
 def _quote_tsql_identifier(identifier: str) -> str:
     return f"[{identifier.replace(']', ']]')}]"
-
-
-def _scalar(row: Any, key: str, index: int) -> str:
-    if isinstance(row, dict):
-        return str(row[key])
-    if isinstance(row, (tuple, list)):
-        return str(row[index])
-    try:
-        return str(row[key])
-    except Exception:
-        return str(row[index])
 
 
 register_driver_profile("mssql_python", driver_profile, allow_override=True)

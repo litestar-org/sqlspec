@@ -59,9 +59,7 @@ def test_mssql_python_has_schema_returns_false_for_missing_schema() -> None:
     driver = MssqlPythonDriver(cast("Any", FakeConnection(cursor)))
 
     assert driver.has_schema("missing") is False
-    assert cursor.executed == [
-        ("SELECT 1 FROM sys.schemas WHERE name = ?", ("missing",)),
-    ]
+    assert cursor.executed == [("SELECT 1 FROM sys.schemas WHERE name = ?", ("missing",))]
 
 
 def test_mssql_python_migration_schema_escapes_bracket_identifier() -> None:

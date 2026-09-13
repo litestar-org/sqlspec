@@ -32,7 +32,7 @@ def ensure_mssql_migration_login(mssql_service: "MSSQLService") -> None:
 
     conn = pymssql.connect(
         server=mssql_service.host,
-        port=mssql_service.port,
+        port=str(mssql_service.port),
         user=mssql_service.user,
         password=mssql_service.password,
         database=mssql_service.database,

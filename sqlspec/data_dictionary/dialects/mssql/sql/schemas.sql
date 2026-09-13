@@ -11,4 +11,3 @@ ORDER BY s.name;
 -- name: current
 -- dialect: mssql
 SELECT SCHEMA_NAME() AS schema_name;
-

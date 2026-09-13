@@ -258,9 +258,9 @@ class PymssqlDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             if self._migration_schema_restore is None:
                 cursor.execute("SELECT SCHEMA_NAME() AS schema_name;")
-                row = cursor.fetchone()
+                row: Any = cursor.fetchone()
                 if row is not None:
-                    self._migration_schema_restore = _scalar(row, "schema_name", 0)
+                    self._migration_schema_restore = str(row["schema_name"] if isinstance(row, dict) else row[0])
             cursor.execute(f"ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = {quoted_schema};")
 
     def reset_migration_session_schema(self) -> None:
@@ -307,17 +307,6 @@ def _pymssql_error_type() -> "type[BaseException]":
 
 def _quote_tsql_identifier(identifier: str) -> str:
     return f"[{identifier.replace(']', ']]')}]"
-
-
-def _scalar(row: Any, key: str, index: int) -> str:
-    if isinstance(row, dict):
-        return str(row[key])
-    if isinstance(row, (tuple, list)):
-        return str(row[index])
-    try:
-        return str(row[key])
-    except Exception:
-        return str(row[index])
 
 
 register_driver_profile("pymssql", driver_profile)

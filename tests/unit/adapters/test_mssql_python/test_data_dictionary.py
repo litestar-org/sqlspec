@@ -15,6 +15,9 @@ class FakeSyncDriver:
     def __init__(self) -> None:
         self.select_calls: list[tuple[Any, dict[str, Any]]] = []
 
+    def select_value_or_none(self, _statement: Any, **_kwargs: Any) -> str:
+        return "dbo"
+
     def select_one_or_none(self, _statement: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
             "version_string": "Microsoft SQL Server 2022 - 16.0.4131.2 (X64)",
@@ -89,16 +92,16 @@ def test_sync_data_dictionary_selects_columns_by_table() -> None:
 
 
 class FakeDriverWithSchema:
-    """Fake driver that supports execute for connection schema introspection."""
+    """Fake driver exposing the scalar query used for connection schema introspection."""
 
     def __init__(self, current_schema: Any = "tenant_a") -> None:
         self.current_schema = current_schema
         self.executed: list[tuple[Any, Any]] = []
         self.select_calls: list[tuple[Any, dict[str, Any]]] = []
 
-    def execute(self, statement: Any, *parameters: Any, **kwargs: Any) -> Any:
-        self.executed.append((statement, parameters or kwargs))
-        return [(self.current_schema,)]
+    def select_value_or_none(self, statement: Any, **kwargs: Any) -> Any:
+        self.executed.append((statement, kwargs))
+        return self.current_schema
 
     def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
         self.select_calls.append((statement, kwargs))
@@ -135,4 +138,3 @@ def test_sync_data_dictionary_explicit_schema_skips_connection_lookup() -> None:
     data_dictionary.get_tables(cast(Any, driver), schema="custom")
     assert driver.select_calls[0][1]["schema_name"] == "custom"
     assert len(driver.executed) == 0
-
