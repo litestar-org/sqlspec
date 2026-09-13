@@ -3,6 +3,7 @@
 Tests deprecation warning utilities including decorator and warning functions.
 """
 
+import inspect
 import warnings
 
 import pytest
@@ -145,14 +146,28 @@ def test_deprecation_warning_stacklevel() -> None:
         warnings.simplefilter("always")
         warnings.simplefilter("ignore", ResourceWarning)
 
-        def wrapper_function() -> None:
+        def wrapper_function() -> int:
             warn_deprecation(version="1.0.0", deprecated_name="test", kind="function")
+            return inspect.currentframe().f_lineno - 1  # type: ignore[union-attr]
 
-        wrapper_function()
+        call_line = wrapper_function()
 
         assert len(warning_list) == 1
         warning = warning_list[0]
+        assert warning.filename == __file__
+        assert warning.lineno == call_line
 
-        # Check that the warning points to the correct location
-        # The stacklevel=2 should make it point to wrapper_function, not warn_deprecation
-        assert "wrapper_function" in str(warning.filename) or warning.lineno > 0
+
+def test_deprecation_warning_attributes_through_package_frames() -> None:
+    """Warnings raised inside SQLSpec code point at the user call, not at package internals."""
+    from sqlspec import sql
+
+    with warnings.catch_warnings(record=True) as warning_list:
+        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", ResourceWarning)
+        _ = sql.user_id
+        call_line = inspect.currentframe().f_lineno - 1  # type: ignore[union-attr]
+
+    assert len(warning_list) == 1
+    assert warning_list[0].filename == __file__
+    assert warning_list[0].lineno == call_line
