@@ -206,3 +206,12 @@ def test_mariadb_and_cockroachdb_dialect_aliases() -> None:
     postgres_sql = cockroach_query.build(dialect="postgres").sql
     assert "FOR UPDATE SKIP LOCKED" in cockroach_sql
     assert cockroach_sql == postgres_sql
+
+
+def test_dialect_class_override_and_alias_metadata() -> None:
+    from sqlglot.dialects.mysql import MySQL
+
+    query = sql.select("id").from_("products").limit(10)
+    assert query.build(dialect=MySQL).sql == query.build(dialect="mysql").sql
+    assert query.build(dialect=MySQL()).sql == query.build(dialect="mysql").sql
+    assert query.build(dialect="mssql").dialect == "tsql"

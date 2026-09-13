@@ -15,17 +15,12 @@ from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.builder._select import ReturningClauseMixin
 from sqlspec.core import SQLResult
-from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.serializers import schema_dump, serialize_collection
 from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.builder._base import BuiltQuery
 
 
 __all__ = ("Insert",)
@@ -99,77 +94,6 @@ class Insert(
     def get_insert_expression(self) -> exp.Insert:
         """Get the insert expression (public API)."""
         return self._insert_expression()
-
-    def build(self, dialect: "DialectType | None" = None) -> "BuiltQuery":
-        """Builds the SQL query string and parameters for INSERT.
-
-        Args:
-            dialect: Optional dialect override for SQL generation.
-
-        Returns:
-            BuiltQuery: A dataclass containing the SQL string and parameters.
-        """
-        target_dialect = str(dialect) if dialect else self.dialect_name
-
-        insert_expr = self._insert_expression()
-        conflict = insert_expr.args.get("conflict")
-        if conflict is None and isinstance(insert_expr, exp.Expr):
-            conflict = insert_expr.find(exp.OnConflict)
-
-        original_conflict = conflict.copy() if isinstance(conflict, exp.Expr) else None
-        had_conflict = "conflict" in insert_expr.args
-
-        try:
-            if conflict is not None and isinstance(conflict, exp.OnConflict) and target_dialect:
-                try:
-                    config = get_dialect_config(target_dialect)
-                except ValueError:
-                    config = None
-
-                if config is not None and config.get_feature_flag("supports_on_conflict") is False:
-                    normalized_dialect = target_dialect.lower()
-                    if normalized_dialect in {"mysql", "mariadb"}:
-                        first_col: str | None = None
-                        conflict_keys = conflict.args.get("conflict_keys")
-                        if conflict_keys:
-                            first_key = conflict_keys[0]
-                            first_col = (
-                                first_key.name if hasattr(first_key, "name") and first_key.name else str(first_key)
-                            )
-                        if not first_col and self._columns:
-                            first_col = self._columns[0]
-                        if not first_col and isinstance(insert_expr.this, exp.Schema) and insert_expr.this.expressions:
-                            first_col = insert_expr.this.expressions[0].name
-                        if not first_col:
-                            first_col = "id"
-
-                        is_do_nothing = (
-                            not conflict.args.get("expressions")
-                            or str(conflict.args.get("action", "")).upper() == "DO NOTHING"
-                        )
-                        conflict_expressions: list[exp.Expr] | None
-                        if is_do_nothing:
-                            col_expr = exp.column(first_col)
-                            self_assign = exp.EQ(this=col_expr, expression=col_expr.copy())
-                            conflict_expressions = [self_assign]
-                        else:
-                            conflict_expressions = conflict.args.get("expressions")
-
-                        new_conflict = exp.OnConflict(
-                            duplicate=True, action=exp.var("UPDATE"), expressions=conflict_expressions
-                        )
-                        insert_expr.set("conflict", new_conflict)
-                    else:
-                        self._raise_builder_error(
-                            f"Dialect '{target_dialect}' does not support ON CONFLICT; use sql.merge() instead."
-                        )
-
-            return super().build(dialect=dialect)
-        finally:
-            if had_conflict:
-                insert_expr.set("conflict", original_conflict)
-            elif "conflict" in insert_expr.args:
-                insert_expr.set("conflict", None)
 
     def _bind_mapping_values(self, data: "Mapping[str, Any]") -> "Self":
         """Bind a single mapping row."""

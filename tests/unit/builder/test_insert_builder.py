@@ -418,3 +418,40 @@ def test_on_conflict_postgres_unchanged() -> None:
     assert "ON CONFLICT" in stmt.sql
     assert "DO UPDATE" in stmt.sql
     assert "ON DUPLICATE KEY UPDATE" not in stmt.sql
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "tsql", "sqlite"])
+def test_to_statement_checks_unsupported_locking(dialect: str) -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.select("id").from_("users").for_update()
+    with pytest.raises(SQLBuilderError, match="does not support FOR UPDATE"):
+        query.to_statement(StatementConfig(dialect=dialect))
+
+
+def test_to_statement_translates_conflict_without_mutating_builder() -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(
+        name=exp.column("name", table="excluded")
+    )
+    original = query.build(dialect="postgres").sql
+    statement = query.to_statement(StatementConfig(dialect="mysql"))
+    assert "ON DUPLICATE KEY UPDATE" in statement.sql
+    assert "VALUES(" in statement.sql
+    assert "excluded" not in statement.sql.lower()
+    assert query.build(dialect="postgres").sql == original
+
+
+def test_to_statement_rejects_unsupported_conflict() -> None:
+    from sqlspec.core import StatementConfig
+
+    query = sql.insert("users").values(id=1).on_conflict("id").do_nothing()
+    with pytest.raises(SQLBuilderError, match=r"sql\.merge\(\)"):
+        query.to_statement(StatementConfig(dialect="oracle"))
+
+
+def test_mysql_do_nothing_requires_known_column() -> None:
+    query = sql.insert("users").values(1).on_conflict().do_nothing()
+    with pytest.raises(SQLBuilderError, match="requires a conflict column"):
+        query.build(dialect="mysql")

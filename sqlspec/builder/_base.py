@@ -614,29 +614,8 @@ class QueryBuilder:
         if self.enable_optimization and isinstance(final_expression, exp.Expr):
             final_expression = self._optimize_expression(final_expression)
 
-        target_dialect = str(dialect) if dialect else self.dialect_name
-
-        if target_dialect:
-            try:
-                config = get_dialect_config(target_dialect)
-            except ValueError:
-                config = None
-
-            if config is not None and isinstance(final_expression, exp.Expr):
-                locks = list(final_expression.find_all(exp.Lock))
-                if locks:
-                    if config.get_feature_flag("supports_for_update") is False:
-                        self._raise_builder_error(
-                            f"Dialect '{target_dialect}' does not support FOR UPDATE / row locking."
-                        )
-                    if config.get_feature_flag("supports_skip_locked") is False:
-                        for lock in locks:
-                            if lock.args.get("wait") is False:
-                                self._raise_builder_error(f"Dialect '{target_dialect}' does not support SKIP LOCKED.")
-
-        target_dialect = (
-            DIALECT_BUILD_ALIASES.get(target_dialect.lower(), target_dialect) if target_dialect else target_dialect
-        )
+        target_dialect = self._build_dialect(dialect)
+        final_expression = self._prepare_dialect_expression(final_expression, target_dialect)
 
         try:
             if isinstance(final_expression, exp.Expr):
@@ -657,8 +636,60 @@ class QueryBuilder:
             self._raise_builder_error(err_msg, e)
 
         return BuiltQuery(
-            sql=sql_string, parameters=self._parameters.copy(), dialect=_resolve_dialect(dialect, self.dialect)
+            sql=sql_string, parameters=self._parameters.copy(), dialect=target_dialect
         )
+
+    def _build_dialect(self, dialect: DialectType = None) -> str | None:
+        resolved = dialect or self.dialect
+        if resolved is None:
+            return None
+        if isinstance(resolved, str):
+            name = resolved.lower()
+        elif isinstance(resolved, type):
+            name = resolved.__name__.lower()
+        else:
+            name = type(resolved).__name__.lower()
+        return DIALECT_BUILD_ALIASES.get(name, name)
+
+    def _prepare_dialect_expression(self, expression: exp.Expr, dialect: str | None) -> exp.Expr:
+        """Validate and translate a copy so builds never mutate the builder AST."""
+        if dialect is None:
+            return expression
+        try:
+            config = get_dialect_config(dialect)
+        except ValueError:
+            return expression
+        for lock in expression.find_all(exp.Lock):
+            if config.get_feature_flag("supports_for_update") is False:
+                self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
+            if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
+                self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
+        if config.get_feature_flag("supports_on_conflict") is not False or not expression.find(exp.OnConflict):
+            return expression
+        if dialect != "mysql":
+            self._raise_builder_error(f"Dialect '{dialect}' does not support ON CONFLICT; use sql.merge() instead.")
+        expression = expression.copy()
+        for conflict in expression.find_all(exp.OnConflict):
+            if conflict.args.get("duplicate"):
+                continue
+            assignments = conflict.args.get("expressions")
+            if str(conflict.args.get("action", "")).upper() == "DO NOTHING":
+                keys = conflict.args.get("conflict_keys")
+                insert = conflict.find_ancestor(exp.Insert)
+                schema = insert.this if insert is not None else None
+                columns = keys or (schema.expressions if isinstance(schema, exp.Schema) else None)
+                if not columns:
+                    self._raise_builder_error("MySQL DO NOTHING requires a conflict column or explicit insert columns.")
+                column = exp.column(columns[0].name)
+                assignments = [exp.EQ(this=column, expression=column.copy())]
+            elif not assignments:
+                self._raise_builder_error("ON CONFLICT DO UPDATE requires at least one assignment.")
+            for assignment in assignments:
+                for column in list(assignment.find_all(exp.Column)):
+                    if column.table.lower() == "excluded":
+                        column.replace(exp.Anonymous(this="VALUES", expressions=[exp.column(column.name)]))
+            conflict.replace(exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=assignments))
+        return expression
 
     def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
         """Return SQL string with optional parameter substitution.
@@ -850,11 +881,13 @@ class QueryBuilder:
 
     def _create_builder_cache_entry(self, config: "StatementConfig | None") -> "_BuilderCacheEntry":
         dialect_override = config.dialect if config is not None else None
-        resolved_dialect = _resolve_dialect(dialect_override, self.dialect)
+        resolved_dialect = self._build_dialect(dialect_override)
         statement_expression = self._build_final_expression(copy=True)
 
         if self.enable_optimization and isinstance(statement_expression, exp.Expr):
             statement_expression = self._optimize_expression(statement_expression)
+
+        statement_expression = self._prepare_dialect_expression(statement_expression, resolved_dialect)
 
         if statement_expression.find(exp.Lock):
             register_lock_generator(resolved_dialect)
@@ -867,6 +900,8 @@ class QueryBuilder:
         kwargs, parameters = self._statement_parameters(self._parameters.copy())
 
         statement_config = config
+        if statement_config is not None and statement_config.dialect != cache_entry.dialect:
+            statement_config = statement_config.replace(dialect=cache_entry.dialect)
         if statement_config is None:
             statement_config = StatementConfig(
                 parameter_config=ParameterStyleConfig(

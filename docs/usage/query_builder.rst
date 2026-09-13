@@ -47,9 +47,12 @@ conflicting rows, or ``.do_update(**columns)`` to update them.
 Dialects natively supporting ``ON CONFLICT`` (PostgreSQL, CockroachDB, SQLite, and DuckDB)
 render standard ``ON CONFLICT`` syntax. For MySQL and MariaDB, the builder automatically
 transpiles ``.on_conflict().do_update()`` to ``ON DUPLICATE KEY UPDATE``, and ``.do_nothing()``
-to a no-op self-assignment (e.g., ``col = col``). Dialects without native upsert clauses
+to a no-op self-assignment (e.g., ``col = col``). This requires a conflict column or
+explicit insert columns. MySQL handles conflicts on any unique key, regardless of the
+requested conflict target; the no-op update can still fire update triggers. References
+to ``excluded.column`` in update expressions become ``VALUES(column)``. Dialects without native upsert clauses
 (Oracle, T-SQL / SQL Server, Spanner, and BigQuery) raise :class:`~sqlspec.exceptions.SQLBuilderError`
-at build time advising the use of :func:`sql.merge`.
+in both ``build()`` and ``to_statement()`` advising the use of :func:`sql.merge`.
 
 .. literalinclude:: /examples/builder/upsert.py
    :language: python
