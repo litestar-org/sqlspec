@@ -3,6 +3,8 @@
 
 import asyncio
 import threading
+import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -10,7 +12,13 @@ import pytest
 from sqlspec import ObservabilityRuntime
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
-from sqlspec.extensions.events import AsyncEventChannel, AsyncEventListener, SyncEventChannel, SyncEventListener
+from sqlspec.extensions.events import (
+    AsyncEventChannel,
+    AsyncEventListener,
+    EventMessage,
+    SyncEventChannel,
+    SyncEventListener,
+)
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -379,3 +387,91 @@ def test_event_channel_custom_retention_seconds_via_extension(tmp_path) -> None:
 
     backend = channel._backend
     assert backend._retention_seconds == 7200
+
+
+class _ControllableSyncBackend:
+    """Mock sync backend for testing listener dequeue interruption and lifecycle."""
+
+    supports_sync = True
+    supports_async = False
+    backend_name = "controllable-sync-test"
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.observed_poll_intervals: list[float] = []
+        self.queued_events: list[EventMessage] = []
+        self.acked_ids: list[str] = []
+
+    def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
+        self.observed_poll_intervals.append(poll_interval)
+        self.entered.set()
+        if self.queued_events:
+            return self.queued_events.pop(0)
+        time.sleep(poll_interval)
+        return None
+
+    def ack(self, event_id: str) -> None:
+        self.acked_ids.append(event_id)
+
+    def nack(self, event_id: str) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
+
+
+def test_sync_listener_idle_stop_joins_promptly_with_bounded_poll(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Idle synchronous listener threads stop promptly without blocking for the full poll interval."""
+    monkeypatch.setattr("sqlspec.extensions.events._channel._LISTENER_POLL_TIMEOUT", 0.02)
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
+    channel = SyncEventChannel(config)
+    backend = _ControllableSyncBackend()
+    channel._backend = backend
+
+    listener = channel.listen("test_channel", lambda _: None, poll_interval=10.0)
+    assert backend.entered.wait(timeout=1.0)
+    assert listener.thread.is_alive()
+
+    listener.stop()
+
+    assert not listener.thread.is_alive()
+    assert listener.stop_event.is_set()
+    assert max(backend.observed_poll_intervals) <= 0.02
+
+
+def test_sync_listener_delivers_and_acknowledges_with_bounded_poll(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Sync listener processes delivered events and acknowledges them while preserving thread lifecycle."""
+    monkeypatch.setattr("sqlspec.extensions.events._channel._LISTENER_POLL_TIMEOUT", 0.02)
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
+    channel = SyncEventChannel(config)
+    backend = _ControllableSyncBackend()
+    now = datetime.now(timezone.utc)
+    event = EventMessage(
+        event_id="evt-101",
+        channel="test_channel",
+        payload={"key": "value"},
+        metadata=None,
+        attempts=0,
+        available_at=now,
+        lease_expires_at=None,
+        created_at=now,
+    )
+    backend.queued_events.append(event)
+    channel._backend = backend
+
+    received: list[EventMessage] = []
+    delivered = threading.Event()
+
+    def handle_event(msg: EventMessage) -> None:
+        received.append(msg)
+        delivered.set()
+
+    listener = channel.listen("test_channel", handle_event, poll_interval=5.0)
+    assert delivered.wait(timeout=1.0)
+    assert len(received) == 1
+    assert received[0].event_id == "evt-101"
+    assert backend.acked_ids == ["evt-101"]
+
+    channel.stop_listener(listener.id)
+    assert not listener.thread.is_alive()
+    assert listener.id not in channel._listeners

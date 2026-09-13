@@ -41,6 +41,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.events.channel")
 _LISTENER_SHUTDOWN_TIMEOUT = 0.5
+_LISTENER_POLL_TIMEOUT = 0.1
 
 
 @dataclass(slots=True)
@@ -419,14 +420,20 @@ class SyncEventChannel:
         poll_interval: float,
         auto_ack: bool,
     ) -> None:
-        """Internal listener loop."""
+        """Internal listener loop.
+
+        Idle dequeue waits are bounded by ``_LISTENER_POLL_TIMEOUT`` so that
+        the stop event is checked periodically, allowing threads to stop and
+        join cleanly without blocking for the full configured poll interval.
+        """
+        wait_interval = min(poll_interval, _LISTENER_POLL_TIMEOUT)
         try:
             while not stop_event.is_set():
                 span = _start_event_span(
                     self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
                 )
                 try:
-                    event = self._backend.dequeue(channel, poll_interval)
+                    event = self._backend.dequeue(channel, wait_interval)
                 except Exception as error:
                     _end_event_span(self._runtime, span, error=error)
                     raise
