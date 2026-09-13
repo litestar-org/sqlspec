@@ -6,13 +6,6 @@ The table and index guards also make this safe after a fresh 0001 installation.
 
 from typing import TYPE_CHECKING
 
-from sqlspec.adapters.mssql_python import MssqlPythonConfig
-from sqlspec.adapters.mssql_python.adk.store import (
-    MssqlPythonADKMemoryStore,
-    _create_index_sql,
-    _escape_sql_literal,
-    _table_ref,
-)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk._config_utils import _adk_memory_migration_enabled
 
@@ -28,8 +21,18 @@ async def up(context: "MigrationContext | None" = None) -> list[str]:
         msg = "Migration context must have a config to determine store class"
         raise SQLSpecError(msg)
     config = context.config
-    if not isinstance(config, MssqlPythonConfig) or not _adk_memory_migration_enabled(config):
+    if not _adk_memory_migration_enabled(config):
         return []
+    if not any(cls.__module__.startswith("sqlspec.adapters.mssql_python.") for cls in type(config).__mro__):
+        return []
+
+    from sqlspec.adapters.mssql_python.adk.store import (
+        MssqlPythonADKMemoryStore,
+        _create_index_sql,
+        _escape_sql_literal,
+        _table_ref,
+    )
+
     store = MssqlPythonADKMemoryStore(config)
     statements = [store._memory_table_ddl()]  # pyright: ignore[reportPrivateUsage]
     for index_name, table, columns in store._memory_index_specs():  # pyright: ignore[reportPrivateUsage]

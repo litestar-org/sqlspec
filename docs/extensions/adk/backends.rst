@@ -301,8 +301,9 @@ SQL Server (mssql-python and pymssql)
 ``mssql_python`` and ``pymssql`` provide SQL Server-backed ADK storage:
 
 - Session and event storage use SQL Server tables with ``DATETIME2(6)`` and
-  ``NVARCHAR(MAX)`` JSON payload columns, with an opt-in ``native_json`` switch
-  to use native ``JSON`` columns.
+  JSON payload columns. ``mssql_python`` detects native ``JSON`` support from
+  the server version; ``pymssql`` defaults to ``NVARCHAR(MAX)``. Set
+  ``native_json`` explicitly to select native or fallback storage.
 - ``append_event_and_update_state()`` commits the session update, event row, and
   scoped state in one transaction.
 - Memory search is ``LIKE``-based across memory entries.
