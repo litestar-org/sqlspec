@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder._column import ColumnExpression
+    from sqlspec.core import StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -75,15 +76,17 @@ CURRENT_DATE_KEYWORD = "CURRENT_DATE"
 CURRENT_TIME_KEYWORD = "CURRENT_TIME"
 
 
-def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | None" = None) -> "exp.Expr":
-    """Build SQLGlot expression for a column definition."""
+def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | None") -> exp.DataType:
     try:
-        data_type = exp.DataType.build(col.dtype, dialect=dialect)
+        return exp.DataType.build(dtype, dialect=dialect)
     except ParseError as exc:
-        msg = f"Column {col.name!r}: cannot parse type {col.dtype!r} for dialect {dialect!r}"
+        msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
         raise SQLBuilderError(msg) from exc
 
-    col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=data_type)
+
+def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | None" = None) -> "exp.Expr":
+    """Build SQLGlot expression for a column definition."""
+    col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=_parse_column_type(col.name, col.dtype, dialect))
 
     constraints: list[exp.ColumnConstraint] = []
 
@@ -245,14 +248,22 @@ class DDLBuilder(QueryBuilder):
     def _expected_result_type(self) -> "type[SQLResult]":
         return SQLResult
 
-    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
+    def _prepare_expression(self, dialect: "DialectType" = None) -> None:
         target_dialect = dialect or self.dialect_name
         if self._expression is not None and target_dialect != self._expression_dialect:
             self._expression = None
         self._expression_dialect = target_dialect
         if self._expression is None:
             self._expression = self._create_base_expression()
+
+    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
+        self._prepare_expression(dialect)
         return super().build(dialect=dialect)
+
+    def to_statement(self, config: "StatementConfig | None" = None) -> SQL:
+        """Build a SQL statement using the configured target dialect for column types."""
+        self._prepare_expression(config.dialect if config is not None else None)
+        return super().to_statement(config)
 
 
 @trait
@@ -1489,7 +1500,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
                 self._raise_builder_error("New type required for ALTER COLUMN TYPE")
             return exp.AlterColumn(
                 this=exp.to_identifier(op.column_name),
-                dtype=exp.DataType.build(op.new_type),
+                dtype=_parse_column_type(op.column_name, op.new_type, self._expression_dialect or self.dialect_name),
                 using=exp.maybe_parse(op.using_expression) if op.using_expression else None,
             )
 

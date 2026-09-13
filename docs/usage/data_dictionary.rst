@@ -308,3 +308,26 @@ Related Guides
 - :doc:`drivers_and_querying` for driver sessions and query execution.
 - :doc:`/reference/adapters/index` for adapter-specific data dictionary support.
 - :doc:`/reference/driver` for the ``SyncDataDictionaryBase`` and ``AsyncDataDictionaryBase`` interface.
+
+
+Logical Column Types
+====================
+
+Use ``get_dialect_config(dialect).get_optimal_type(logical_type)`` to select a
+column type for generated DDL. Every registered dialect maps ``integer``,
+``bigint``, ``float``, and ``varchar``, in addition to its existing mappings
+such as ``text``, ``boolean``, and ``timestamp``.
+
+For bounded strings, pass ``length`` directly to ``DialectConfig.get_optimal_type``:
+
+.. code-block:: python
+
+    from sqlspec.data_dictionary import get_dialect_config
+
+    config = get_dialect_config("mssql")
+    config.get_optimal_type("varchar", length=255)  # NVARCHAR(255)
+    config.get_optimal_type("varchar")  # NVARCHAR(MAX)
+
+Omitting the length selects the dialect's unbounded text mapping. SQLite,
+DuckDB, and BigQuery use their unbounded string mapping even when a length is
+provided. The driver-level type lookup methods do not accept ``length``.

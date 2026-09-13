@@ -8,6 +8,7 @@ from sqlspec.builder._ddl import (
     CONSTRAINT_TYPE_CHECK,
     CONSTRAINT_TYPE_FOREIGN_KEY,
     VALID_FOREIGN_KEY_ACTIONS,
+    AlterTable,
     ColumnDefinition,
     ConstraintDefinition,
     CreateIndex,
@@ -15,6 +16,7 @@ from sqlspec.builder._ddl import (
     build_column_expression,
     build_constraint_expression,
 )
+from sqlspec.core import StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 
 
@@ -173,3 +175,27 @@ def test_alter_table_add_column_with_target_dialect() -> None:
 
     dt2_result = sql.alter_table("t").add_column("b", "DATETIME2(6)").build(dialect="tsql")
     assert "DATETIME2(6)" in dt2_result.sql
+
+
+@pytest.mark.parametrize("enable_caching", [True, False])
+@pytest.mark.parametrize("operation", ["create", "add", "alter"])
+def test_ddl_to_statement_uses_configured_dialect(operation: str, enable_caching: bool) -> None:
+    if operation == "create":
+        builder: CreateTable | AlterTable = sql.create_table("t").column("a", "DATETIME2(6)")
+    elif operation == "add":
+        builder = sql.alter_table("t").add_column("a", "DATETIME2(6)")
+    else:
+        builder = sql.alter_table("t").alter_column_type("a", "DATETIME2(6)")
+
+    result = builder.to_statement(StatementConfig(dialect="tsql", enable_caching=enable_caching))
+    assert "DATETIME2(6)" in result.sql
+    with pytest.raises(SQLBuilderError, match="Column 'a'"):
+        builder.to_statement(StatementConfig(enable_caching=enable_caching))
+    assert "DATETIME2(6)" in builder.build(dialect="tsql").sql
+
+
+def test_alter_column_type_uses_target_dialect() -> None:
+    builder = sql.alter_table("t").alter_column_type("a", "DATETIME2(6)")
+    assert "DATETIME2(6)" in builder.build(dialect="tsql").sql
+    with pytest.raises(SQLBuilderError, match="Column 'a'"):
+        builder.build()
