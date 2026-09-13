@@ -1167,8 +1167,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def remove_extension_migrations(self, name: str) -> bool:
         """Unregister migrations previously registered for an extension.
 
-        Removes the extension entry from ``extension_config`` (and ``extension_configs``
-        if present) and from ``migration_config["include_extensions"]``. If anything
+        Removes the extension entry from ``extension_config`` and from
+        ``migration_config["include_extensions"]``. If anything
         was removed, cached migration commands are rebuilt so the extension is no
         longer discovered.
 
@@ -1182,11 +1182,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         extension_config = cast("dict[str, Any]", self.extension_config)
         if isinstance(extension_config, dict) and name in extension_config:
             del extension_config[name]
-            removed = True
-
-        extra_configs = getattr(self, "extension_configs", None)
-        if isinstance(extra_configs, dict) and name in extra_configs:
-            del extra_configs[name]
             removed = True
 
         migration_config = cast("dict[str, Any]", self.migration_config)
