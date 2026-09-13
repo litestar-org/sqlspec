@@ -63,3 +63,53 @@ def test_lazy_dialects_attribute_still_works() -> None:
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_postgres_extension_operator_registration_is_idempotent() -> None:
+    """Repeated registration preserves the installed operator table."""
+    from sqlglot.parsers.postgres import PostgresParser
+
+    from sqlspec.dialects.postgres._operators import PGVECTOR_OPERATOR_TOKENS, register_postgres_extension_operators
+
+    register_postgres_extension_operators()
+    factor_before = PostgresParser.FACTOR
+    register_postgres_extension_operators()
+    assert PostgresParser.FACTOR is factor_before
+    assert all(token in factor_before for token in PGVECTOR_OPERATOR_TOKENS.values())
+
+
+def test_spanner_property_parser_registration_is_idempotent() -> None:
+    """Repeated registration preserves the installed property parser tables."""
+    from sqlglot.parsers.bigquery import BigQueryParser
+    from sqlglot.parsers.postgres import PostgresParser
+
+    from sqlspec.dialects.spanner._parsers import register_spanner_property_parsers
+
+    register_spanner_property_parsers()
+    before = (BigQueryParser.PROPERTY_PARSERS, PostgresParser.PROPERTY_PARSERS)
+    register_spanner_property_parsers()
+    assert BigQueryParser.PROPERTY_PARSERS is before[0]
+    assert PostgresParser.PROPERTY_PARSERS is before[1]
+    assert "INTERLEAVE" in before[0]
+
+
+def test_concurrent_first_use_registers_all_dialects() -> None:
+    """Parallel first parses resolve all custom dialects in a fresh interpreter."""
+    code = (
+        "import concurrent.futures, sys\n"
+        "import sqlglot\n"
+        "assert not [m for m in sys.modules if m.startswith('sqlspec')]\n"
+        "QUERIES = {'pgvector': 'SELECT a <=> b FROM t', 'paradedb': \"SELECT * FROM t WHERE body @@@ 'shoes'\",\n"
+        "           'spanner': 'SELECT 1', 'spangres': 'SELECT 1'}\n"
+        "def run(name):\n"
+        "    return sqlglot.parse_one(QUERIES[name], dialect=name).sql(dialect=name)\n"
+        "with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:\n"
+        "    results = list(pool.map(run, list(QUERIES) * 8))\n"
+        "assert len(results) == 32 and all(results)\n"
+        "from sqlspec.dialects.postgres import _operators\n"
+        "assert _operators._REGISTERED is True\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
