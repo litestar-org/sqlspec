@@ -8,6 +8,7 @@ from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 
 class FakeCursor:
     def __init__(self, current_schema: str = "dbo", schema_exists: bool = True) -> None:
+        self.user_name = "sqlspec_migrator"
         self.current_schema = current_schema
         self.schema_exists = schema_exists
         self.executed: list[tuple[str, Any]] = []
@@ -20,7 +21,7 @@ class FakeCursor:
             return None
         last_sql = self.executed[-1][0]
         if "SCHEMA_NAME()" in last_sql:
-            return (self.current_schema,)
+            return (self.user_name, self.current_schema)
         if "FROM sys.schemas" in last_sql:
             return (1,) if self.schema_exists else None
         return None
@@ -32,24 +33,31 @@ class FakeCursor:
 class FakeConnection:
     def __init__(self, cursor: FakeCursor) -> None:
         self._cursor = cursor
+        self.commits = 0
 
     def cursor(self) -> FakeCursor:
         return self._cursor
 
+    def commit(self) -> None:
+        self.commits += 1
+
 
 def test_mssql_python_migration_schema_hooks() -> None:
     cursor = FakeCursor()
-    driver = MssqlPythonDriver(cast("Any", FakeConnection(cursor)))
+    connection = FakeConnection(cursor)
+    driver = MssqlPythonDriver(cast("Any", connection))
 
     driver.set_migration_session_schema("tenant")
+    assert connection.commits == 0
     assert driver.has_schema("tenant") is True
     driver.reset_migration_session_schema()
+    assert connection.commits == 1
 
     assert cursor.executed == [
-        ("SELECT SCHEMA_NAME() AS schema_name;", None),
-        ("ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = [tenant];", None),
+        ("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None),
+        ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [tenant];", None),
         ("SELECT 1 FROM sys.schemas WHERE name = ?", ("tenant",)),
-        ("ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = [dbo];", None),
+        ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [dbo];", None),
     ]
     assert MssqlPythonConfig.supports_migration_schemas is True
 
@@ -68,8 +76,8 @@ def test_mssql_python_migration_schema_escapes_bracket_identifier() -> None:
 
     driver.set_migration_session_schema("tenant]s")
     assert cursor.executed == [
-        ("SELECT SCHEMA_NAME() AS schema_name;", None),
-        ("ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = [tenant]]s];", None),
+        ("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None),
+        ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [tenant]]s];", None),
     ]
 
 

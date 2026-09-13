@@ -98,18 +98,12 @@ class _MssqlDataDictionaryMixin:
         """Return the dialect configuration for this data dictionary."""
         return get_dialect_config(type(self).dialect)
 
-    def resolve_schema(self, schema: str | None) -> str | None:
-        """Return a schema name using dialect defaults when missing."""
-        if schema is not None:
-            return schema
-        return self.get_dialect_config().default_schema
-
-    def resolve_connection_schema(self, driver: Any, schema: str | None) -> str:
+    def resolve_connection_schema(self, driver: Any, schema: str | None) -> str | None:
         """Resolve the schema to introspect, defaulting to the connection's current schema."""
         if schema is not None:
             return schema
         current_schema = driver.select_value_or_none(self.get_domain_query("schemas", "current"))
-        return str(current_schema) if current_schema else "dbo"
+        return str(current_schema) if current_schema else self.get_dialect_config().default_schema
 
     def list_available_features(self) -> list[str]:
         """List available feature flags for this dialect."""

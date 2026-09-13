@@ -229,9 +229,11 @@ raises ``MigrationError`` before any DDL is issued.
    * - ``duckdb``
      - ``SET search_path``. Validates against ``information_schema.schemata``.
    * - ``mssql_python``, ``pymssql``
-     - ``ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = [<schema>]``. Validates
-       against ``sys.schemas`` and restores the previous default schema after
-       the migration session completes.
+     - ``ALTER USER [<user>] WITH DEFAULT_SCHEMA = [<schema>]`` for the
+       connected database user (``USER_NAME()``). Validates against
+       ``sys.schemas`` and restores the previous default schema after each
+       migration. The setting is persistent on the user, so it is restored
+       even when the migration fails, and ``dbo`` cannot be switched.
 
 Per-migration schema directives
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

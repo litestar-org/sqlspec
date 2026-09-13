@@ -15,7 +15,7 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import _load_migration_sql, get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
-from sqlspec.migrations.utils import resolve_migration_schema as _resolve_migration_schema
+from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
 from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem, parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -367,7 +367,7 @@ class BaseMigrationRunner:
         schema_match = _SCHEMA_DIRECTIVE_PATTERN.search(content)
         schema = None
         if schema_match:
-            candidate_schema = schema_match.group(1).strip()
+            candidate_schema = schema_match.group(1)
             if not _SCHEMA_IDENTIFIER_PATTERN.fullmatch(candidate_schema):
                 msg = f"Invalid schema directive '{candidate_schema}' in migration {file_path.name}"
                 raise MigrationError(msg)
@@ -498,15 +498,17 @@ class BaseMigrationRunner:
         return bool(migration_config.get("transactional", True))
 
     def _resolve_migration_schema(self, migration: "LoadedMigrationMetadata") -> str | None:
-        """Resolve the effective migration schema for execution."""
+        """Return the migration's schema directive when present, otherwise the configured default."""
         config = self.context.config if self.context else None
-        migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
-        schema = _resolve_migration_schema(migration, migration_config)
-        if migration.get("schema") is not None and not getattr(config, "supports_migration_schemas", False):
+        directive_schema = migration.get("schema")
+        if directive_schema is None:
+            migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
+            return _resolve_default_schema(migration_config)
+        if not getattr(config, "supports_migration_schemas", False):
             adapter = type(config).__name__ if config else "Adapter"
-            msg = f"{adapter} does not support migration schema directives; schema={schema!r}"
+            msg = f"{adapter} does not support migration schema directives; schema={directive_schema!r}"
             raise MigrationError(msg)
-        return schema
+        return directive_schema
 
     def _resolve_use_transaction(self, migration: "LoadedMigrationMetadata", use_transaction: "bool | None") -> bool:
         """Resolve the effective transaction flag for a migration."""
@@ -713,8 +715,9 @@ class SyncMigrationRunner(BaseMigrationRunner):
         start_time: float,
     ) -> int:
         default_schema = self._resolve_migration_schema(migration)
-        if default_schema and migration.get("schema") and not driver.has_schema(default_schema):
-            msg = f"Migration schema '{default_schema}' does not exist"
+        directive_schema = migration.get("schema")
+        if directive_schema is not None and not driver.has_schema(directive_schema):
+            msg = f"Migration schema '{directive_schema}' does not exist"
             raise MigrationError(msg)
         if use_transaction:
             driver.begin()
@@ -969,8 +972,9 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         start_time: float,
     ) -> int:
         default_schema = self._resolve_migration_schema(migration)
-        if default_schema and migration.get("schema") and not await driver.has_schema(default_schema):
-            msg = f"Migration schema '{default_schema}' does not exist"
+        directive_schema = migration.get("schema")
+        if directive_schema is not None and not await driver.has_schema(directive_schema):
+            msg = f"Migration schema '{directive_schema}' does not exist"
             raise MigrationError(msg)
         if use_transaction:
             await driver.begin()

@@ -47,7 +47,7 @@ class LoadedMigrationMetadata(TypedDict):
     checksum: str
     content: str
     transactional: "bool | None"
-    schema: "str | None"
+    schema: NotRequired["str | None"]
     has_upgrade: NotRequired[bool]
     has_downgrade: NotRequired[bool]
     loader: NotRequired[Any]

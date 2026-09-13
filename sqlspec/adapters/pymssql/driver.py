@@ -140,7 +140,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
-        self._migration_schema_restore: str | None = None
+        self._migration_schema_restore: tuple[str, str] | None = None
         self._transaction_active = False
         self._explicit_transaction = False
 
@@ -253,25 +253,26 @@ class PymssqlDriver(SyncDriverAdapterBase):
         self.execute_script(f"ROLLBACK TRANSACTION {validate_savepoint_name(name)}")
 
     def set_migration_session_schema(self, schema: str) -> None:
-        """Set default schema for the current migration session."""
-        quoted_schema = _quote_tsql_identifier(schema)
+        """Point the database user's default schema at the migration schema, remembering the prior one."""
         with self.with_cursor(self.connection) as cursor:
             if self._migration_schema_restore is None:
-                cursor.execute("SELECT SCHEMA_NAME() AS schema_name;")
+                cursor.execute("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;")
                 row: Any = cursor.fetchone()
-                if row is not None:
-                    self._migration_schema_restore = str(row["schema_name"] if isinstance(row, dict) else row[0])
-            cursor.execute(f"ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = {quoted_schema};")
+                user_name, current_schema = (
+                    (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
+                )
+                self._migration_schema_restore = (str(user_name), str(current_schema))
+            cursor.execute(_alter_default_schema_sql(self._migration_schema_restore[0], schema))
 
     def reset_migration_session_schema(self) -> None:
-        """Reset default schema back to the original value prior to migration execution."""
+        """Restore the user's default schema captured by set_migration_session_schema and commit it."""
         if self._migration_schema_restore is None:
             return
-        restore_schema = self._migration_schema_restore
+        user_name, previous_schema = self._migration_schema_restore
         self._migration_schema_restore = None
-        quoted_schema = _quote_tsql_identifier(restore_schema)
         with self.with_cursor(self.connection) as cursor:
-            cursor.execute(f"ALTER USER CURRENT_USER WITH DEFAULT_SCHEMA = {quoted_schema};")
+            cursor.execute(_alter_default_schema_sql(user_name, previous_schema))
+        self.connection.commit()
 
     def has_schema(self, schema: str) -> bool:
         """Return whether the specified schema exists."""
@@ -307,6 +308,10 @@ def _pymssql_error_type() -> "type[BaseException]":
 
 def _quote_tsql_identifier(identifier: str) -> str:
     return f"[{identifier.replace(']', ']]')}]"
+
+
+def _alter_default_schema_sql(user_name: str, schema: str) -> str:
+    return f"ALTER USER {_quote_tsql_identifier(user_name)} WITH DEFAULT_SCHEMA = {_quote_tsql_identifier(schema)};"
 
 
 register_driver_profile("pymssql", driver_profile)

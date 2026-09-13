@@ -34,7 +34,8 @@ def test_mssql_python_introspects_connection_default_schema(mssql_migration_conn
                 assert table in table_names
             finally:
                 driver.reset_migration_session_schema()
-                driver.commit()
+        with config.provide_session() as verify:
+            assert verify.select_value("SELECT SCHEMA_NAME()") == "dbo"
     finally:
         with config.provide_session() as driver:
             driver.execute_script(f"DROP TABLE IF EXISTS [{schema}].[{table}];")
@@ -64,7 +65,8 @@ def test_pymssql_introspects_connection_default_schema(mssql_migration_connectio
                 assert table in table_names
             finally:
                 driver.reset_migration_session_schema()
-                driver.commit()
+        with config.provide_session() as verify:
+            assert verify.select_value("SELECT SCHEMA_NAME()") == "dbo"
     finally:
         with config.provide_session() as driver:
             driver.execute_script(f"DROP TABLE IF EXISTS [{schema}].[{table}];")

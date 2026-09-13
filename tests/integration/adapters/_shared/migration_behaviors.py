@@ -144,7 +144,7 @@ def _drop_schema_sync(driver: Any, case: MigrationCase, schema: str) -> None:
             "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = :schema", schema=schema
         )
         for row in tables:
-            tbl = row[0] if isinstance(row, (tuple, list)) else row["TABLE_NAME"]
+            tbl = row["TABLE_NAME"]
             driver.execute_script(f"DROP TABLE IF EXISTS [{schema}].[{tbl}]")
         driver.execute_script(f"DROP SCHEMA IF EXISTS [{schema}]")
     else:

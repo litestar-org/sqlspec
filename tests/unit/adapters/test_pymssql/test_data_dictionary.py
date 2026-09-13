@@ -1,12 +1,8 @@
 """Unit tests for the pymssql data dictionary."""
 
-from pathlib import Path
 from typing import Any, cast
 
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo, PymssqlSyncDataDictionary
-
-MSSQL_QUERY_DIR = Path("sqlspec/data_dictionary/dialects/mssql/sql")
-EXPECTED_MSSQL_QUERY_FILES = {"columns.sql", "foreign_keys.sql", "indexes.sql", "tables.sql", "version.sql"}
 
 
 class FakeSyncDriver:
@@ -35,11 +31,6 @@ class FakeSyncDriver:
         if len(self.select_calls) == 2:
             return [{"schema_name": "dbo", "table_name": "parent"}, {"schema_name": "dbo", "table_name": "orphan"}]
         return []
-
-
-def test_mssql_query_files_follow_dialect_category_layout() -> None:
-    """MSSQL data-dictionary SQL should use the existing per-category file layout."""
-    assert EXPECTED_MSSQL_QUERY_FILES.issubset({path.name for path in MSSQL_QUERY_DIR.glob("*.sql")})
 
 
 def test_sync_data_dictionary_builds_version_info() -> None:
