@@ -22,7 +22,7 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   :class:`~sqlspec.extensions.events.SyncTableEventQueue` and
   :class:`~sqlspec.extensions.events.AsyncTableEventQueue` delegate to them for dialect-aware
   row-limiting, row-locking, and claim lease verification.
-  (`#777 <https://github.com/litestar-org/sqlspec/issues/777>`_)
+  (`#776 <https://github.com/litestar-org/sqlspec/pull/776>`_)
 
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when

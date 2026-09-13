@@ -110,9 +110,6 @@ class _BaseTableEventQueue:
         base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE event_id = :event_id"
         return base + limit_clause
 
-    def _uses_tsql_limit(self) -> bool:
-        return bool(select_limit_prefix(self._dialect, 1))
-
     def _row_limit_clause(self) -> str:
         return row_limit_clause(self._dialect, 1)
 
