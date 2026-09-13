@@ -21,6 +21,7 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
+    from threading import Event
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -281,7 +282,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         self._runtime.increment_metric("events.publish", len(records))
         return event_ids
 
-    def dequeue(self, channel: str, poll_interval: float | None = None) -> "EventMessage | None":
+    def dequeue(
+        self, channel: str, poll_interval: float | None = None, *, stop_event: "Event | None" = None
+    ) -> "EventMessage | None":
         attempt = 0
         while attempt < self._max_claim_attempts:
             attempt += 1
@@ -293,14 +296,20 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 self._runtime.increment_metric("events.poll.empty")
                 delay = self._next_empty_poll_delay(channel, poll_interval)
                 if delay > 0:
-                    time.sleep(delay)
+                    if stop_event is None:
+                        time.sleep(delay)
+                    else:
+                        stop_event.wait(delay)
                 return None
             row = self._fetch_candidate(channel)
             if row is None:
                 self._runtime.increment_metric("events.poll.empty")
                 delay = self._next_empty_poll_delay(channel, poll_interval)
                 if delay > 0:
-                    time.sleep(delay)
+                    if stop_event is None:
+                        time.sleep(delay)
+                    else:
+                        stop_event.wait(delay)
                 return None
             now = self._utcnow()
             leased_until = now + timedelta(seconds=self._lease_seconds)

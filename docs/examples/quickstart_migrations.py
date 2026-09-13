@@ -24,14 +24,19 @@ def run_migration_quickstart() -> None:
         os.chdir(temp_path)
         try:
             config_path = "database:database_config"
-            runner.invoke(add_migration_commands(), ["--config", config_path, "show-config"])
-            runner.invoke(add_migration_commands(), ["--config", config_path, "init", "--no-prompt"])
-            runner.invoke(
-                add_migration_commands(),
-                ["--config", config_path, "create-migration", "-m", "create users table", "--no-prompt"],
+            commands = (
+                ["show-config"],
+                ["init", "--no-prompt"],
+                ["create-migration", "-m", "create users table", "--no-prompt"],
+                ["upgrade", "--no-prompt"],
+                ["show-current-revision"],
             )
-            runner.invoke(add_migration_commands(), ["--config", config_path, "upgrade", "--no-prompt"])
-            runner.invoke(add_migration_commands(), ["--config", config_path, "show-current-revision"])
+            for command in commands:
+                result = runner.invoke(add_migration_commands(), ["--config", config_path, *command])
+                print(result.output, end="")
+                if result.exit_code:
+                    message = f"Migration command failed: {' '.join(command)}"
+                    raise RuntimeError(message) from result.exception
         finally:
             os.chdir(old_cwd)
             if str(temp_path) in sys.path:

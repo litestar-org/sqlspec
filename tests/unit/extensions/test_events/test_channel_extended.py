@@ -420,28 +420,8 @@ class _ControllableSyncBackend:
         pass
 
 
-def test_sync_listener_idle_stop_joins_promptly_with_bounded_poll(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Idle synchronous listener threads stop promptly without blocking for the full poll interval."""
-    monkeypatch.setattr("sqlspec.extensions.events._channel._LISTENER_POLL_TIMEOUT", 0.02)
-    config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
-    channel = SyncEventChannel(config)
-    backend = _ControllableSyncBackend()
-    channel._backend = backend
-
-    listener = channel.listen("test_channel", lambda _: None, poll_interval=10.0)
-    assert backend.entered.wait(timeout=1.0)
-    assert listener.thread.is_alive()
-
-    listener.stop()
-
-    assert not listener.thread.is_alive()
-    assert listener.stop_event.is_set()
-    assert max(backend.observed_poll_intervals) <= 0.02
-
-
-def test_sync_listener_delivers_and_acknowledges_with_bounded_poll(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Sync listener processes delivered events and acknowledges them while preserving thread lifecycle."""
-    monkeypatch.setattr("sqlspec.extensions.events._channel._LISTENER_POLL_TIMEOUT", 0.02)
+def test_sync_listener_delivers_and_acknowledges(tmp_path) -> None:
+    """Sync listener processes delivered events and acknowledges them before joining."""
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     channel = SyncEventChannel(config)
     backend = _ControllableSyncBackend()
@@ -466,12 +446,44 @@ def test_sync_listener_delivers_and_acknowledges_with_bounded_poll(monkeypatch: 
         received.append(message)
         delivered.set()
 
-    listener = channel.listen("test_channel", handle_event, poll_interval=5.0)
+    listener = channel.listen("test_channel", handle_event, poll_interval=0.02)
     assert delivered.wait(timeout=1.0)
+    channel.stop_listener(listener.id)
+
     assert len(received) == 1
     assert received[0].event_id == "evt-101"
     assert backend.acked_ids == ["evt-101"]
-
-    channel.stop_listener(listener.id)
+    assert backend.observed_poll_intervals[0] == 0.02
     assert not listener.thread.is_alive()
     assert listener.id not in channel._listeners
+
+
+@pytest.mark.parametrize("select_for_update", [False, True])
+def test_sync_table_listener_preserves_idle_poll_interval(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, select_for_update: bool
+) -> None:
+    """Stopping a long idle table poll wakes the listener without extra queries."""
+    from sqlspec.extensions.events._queue import SyncTableEventQueue
+
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
+    channel = SyncEventChannel(config)
+    polled = threading.Event()
+    polls: list[str] = []
+
+    def fetch_candidate(self, channel_name: str):
+        polls.append(channel_name)
+        polled.set()
+        return
+
+    monkeypatch.setattr(channel._backend, "_select_for_update", select_for_update)
+    candidate_method = "_claim_locked_candidate" if select_for_update else "_fetch_candidate"
+    monkeypatch.setattr(SyncTableEventQueue, candidate_method, fetch_candidate)
+    listener = channel.listen("test_channel", lambda _: None, poll_interval=10.0)
+    try:
+        assert polled.wait(timeout=1.0)
+        # Several old 0.1-second polling windows must not trigger more queries.
+        time.sleep(0.3)
+        assert polls == ["test_channel"]
+    finally:
+        channel.stop_listener(listener.id)
+    assert not listener.thread.is_alive()

@@ -389,8 +389,8 @@ jobs:
           cleanup() {
             local exit_code=$?
             trap - EXIT INT TERM
-            if [ -n "$aborter_pid" ] && kill -0 "$aborter_pid" 2>/dev/null; then
-              kill "$aborter_pid" 2>/dev/null || true
+            if [ -n "$aborter_pid" ] && kill -0 -"$aborter_pid" 2>/dev/null; then
+              kill -TERM -"$aborter_pid" 2>/dev/null || true
               wait "$aborter_pid" 2>/dev/null || true
             fi
             if [ -n "$pytest_pgid" ] && kill -0 -"$pytest_pgid" 2>/dev/null; then
@@ -400,7 +400,9 @@ jobs:
             fi
             exit "$exit_code"
           }
-          trap cleanup EXIT INT TERM
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
 
           # covdefaults sets fail_under=100 globally; per-tier coverage
           # only covers a slice, so override to 0. Codecov merges the
@@ -409,7 +411,8 @@ jobs:
             --cov=sqlspec --cov-report=xml:coverage-integration.xml --cov-report=term-missing \
             --cov-fail-under=0 &
           pytest_pid=$!
-          pytest_pgid=$(ps -o pgid= -p "$pytest_pid" | tr -d ' ')
+          # Job control makes the background job leader its process-group leader.
+          pytest_pgid=$pytest_pid
 
           (
             sleep 1320
