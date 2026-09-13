@@ -2606,6 +2606,7 @@ def test_characterize_injected_converter_overrides() -> None:
             strict_named_parameters: bool = True,
             param_info: list[ParameterInfo] | None = None,
             precomputed_plan: tuple[list[ParameterInfo], dict[str, int]] | None = None,
+            preserve_original_batch: bool = False,
         ) -> tuple[str, Any]:
             self.convert_called = True
             return super().convert_placeholder_style(
@@ -2616,6 +2617,7 @@ def test_characterize_injected_converter_overrides() -> None:
                 strict_named_parameters=strict_named_parameters,
                 param_info=param_info,
                 precomputed_plan=precomputed_plan,
+                preserve_original_batch=preserve_original_batch,
             )
 
     custom = CustomConverter()
@@ -2708,3 +2710,40 @@ def test_characterize_static_reverse_evaluation(converter: ParameterConverter) -
     ]
     (fallback_sql, _) = converter._embed_static_parameters(malformed_sql, {"a": 1, "b": 2}, malformed_info)
     assert fallback_sql is not None
+
+
+def test_composed_parameter_acceptance_sqlite_duckdb_and_warm_reuse(processor: ParameterProcessor) -> None:
+    """Acceptance test verifying parameter pipeline composed behavior across engines and cache reuse."""
+    import sqlite3
+
+    import duckdb
+
+    config_sqlite = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON, default_execution_parameter_style=ParameterStyle.QMARK
+    )
+    sql = "SELECT :name AS n, :val AS v, :name AS n2"
+
+    res1 = processor.process(sql, {"name": "alice", "val": 10}, config_sqlite)
+    assert res1.sql == "SELECT ? AS n, ? AS v, ? AS n2"
+    assert res1.parameters == ("alice", 10, "alice")
+
+    res2 = processor.process(sql, {"name": "bob", "val": 20}, config_sqlite)
+    assert res2.parameters == ("bob", 20, "bob")
+
+    sqlite_conn = sqlite3.connect(":memory:")
+    cur = sqlite_conn.execute(res2.sql, res2.parameters)
+    row = cur.fetchone()
+    assert row == ("bob", 20, "bob")
+    sqlite_conn.close()
+
+    config_duckdb = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON, default_execution_parameter_style=ParameterStyle.NUMERIC
+    )
+    res_duck = processor.process(sql, {"name": "charlie", "val": 30}, config_duckdb)
+    assert res_duck.sql == "SELECT $1 AS n, $2 AS v, $1 AS n2"
+    assert res_duck.parameters == ("charlie", 30)
+
+    duck_conn = duckdb.connect(":memory:")
+    duck_res = duck_conn.execute(res_duck.sql, res_duck.parameters).fetchone()
+    assert duck_res == ("charlie", 30, "charlie")
+    duck_conn.close()

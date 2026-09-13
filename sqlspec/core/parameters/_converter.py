@@ -410,9 +410,7 @@ class ParameterConverter:
             missing.append(param.name)
         return sorted(set(missing))
 
-    def _validate_batch_named_parameters(
-        self, param_info: "list[ParameterInfo]", parameters: "Sequence[Any]"
-    ) -> None:
+    def _validate_batch_named_parameters(self, param_info: "list[ParameterInfo]", parameters: "Sequence[Any]") -> None:
         """Validate named parameters across batch rows in original order."""
         for param_set in parameters:
             if isinstance(param_set, Mapping):

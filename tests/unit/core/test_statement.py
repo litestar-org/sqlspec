@@ -44,13 +44,13 @@ from sqlspec.core import (
     get_pipeline_metrics,
     reset_pipeline_registry,
 )
+from sqlspec.core._pipeline import reset_statement_pipeline_cache
 from sqlspec.core._pool import get_processed_state_pool
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.hashing import hash_filters
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import ParameterProcessor
 from sqlspec.core.parameters._processor import structural_fingerprint, value_fingerprint
-from sqlspec.core._pipeline import reset_statement_pipeline_cache
 from sqlspec.core.result._base import SQLResult, StackResult
 from sqlspec.core.splitter import (
     BigQueryDialectConfig,
