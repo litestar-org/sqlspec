@@ -39,6 +39,7 @@ def test_compiled_events_modules_do_not_import_interpreted_events_modules() -> N
     assert "sqlspec/extensions/events/_channel.py" in includes
     assert "sqlspec/extensions/events/_models.py" in includes
     assert "sqlspec/extensions/events/_queue.py" in includes
+    assert "sqlspec/extensions/events/primitives.py" in includes
 
     excluded_modules = {f"{EVENTS_PACKAGE}.{Path(path).stem}" for path in excludes if Path(path).name != "__init__.py"}
     allowed_interpreted_imports: set[str] = set()
