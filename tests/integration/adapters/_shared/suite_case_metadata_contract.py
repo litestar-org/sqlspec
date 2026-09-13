@@ -32,7 +32,6 @@ MYSQL_ROW_LOCKING_CASE_IDS = {
     "asyncmy-async",
     "mysqlconnector-async",
     "mysqlconnector-sync",
-    "pymssql-sync",
     "pymysql-sync",
 }
 DATA_DICTIONARY_CASE_IDS = {
@@ -72,6 +71,7 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
     "psqlpy-async",
     "psycopg-async",
     "psycopg-sync",
+    "pymssql-sync",
     "pymysql-sync",
     "sqlite-sync",
 }
