@@ -17,8 +17,10 @@ from sqlspec.core.parameters._declared import (
 )
 from sqlspec.core.parameters._processor import (
     ParameterProcessor,
+    apply_type_coercion,
     structural_fingerprint,
     type_coercion_dispatcher,
+    type_coercion_fallbacks,
     value_fingerprint,
 )
 from sqlspec.core.parameters._registry import (
@@ -68,6 +70,7 @@ __all__ = (
     "ParameterStyleConfig",
     "ParameterValidator",
     "TypedParameter",
+    "apply_type_coercion",
     "build_literal_inlining_transform",
     "build_null_pruning_transform",
     "build_statement_config_from_profile",
@@ -84,6 +87,7 @@ __all__ = (
     "resolve_param_type",
     "structural_fingerprint",
     "type_coercion_dispatcher",
+    "type_coercion_fallbacks",
     "validate_parameter_alignment",
     "value_fingerprint",
     "wrap_with_type",

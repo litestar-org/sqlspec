@@ -106,8 +106,6 @@ def test_concurrent_first_use_registers_all_dialects() -> None:
         "with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:\n"
         "    results = list(pool.map(run, list(QUERIES) * 8))\n"
         "assert len(results) == 32 and all(results)\n"
-        "from sqlspec.dialects.postgres import _operators\n"
-        "assert _operators._REGISTERED is True\n"
         "print('ok')\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)

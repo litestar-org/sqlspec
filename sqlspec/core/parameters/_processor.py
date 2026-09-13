@@ -517,7 +517,7 @@ class ParameterProcessor:
         type_coercion_map: "dict[type, Callable[[Any], Any]]",
         is_many: bool = False,
     ) -> "ConvertedParameters":
-        fallback_items = _type_coercion_fallbacks(type_coercion_map)
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
         result = _coerce_parameters_payload(parameters, type_coercion_map, fallback_items, is_many)
         # Fast type narrowing - _coerce_parameters_payload returns object but produces concrete types
         if result is None:
@@ -937,17 +937,21 @@ def type_coercion_dispatcher(
     return dispatcher
 
 
-def _type_coercion_fallbacks(
-    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+def type_coercion_fallbacks(
+    type_coercion_map: "dict[type, Callable[[Any], Any]] | None",
 ) -> "tuple[TypeCoercionFallback, ...]":
+    """Return the ordered fallback items for a coercion map, empty when none is configured."""
+    if not type_coercion_map:
+        return ()
     return tuple(type_coercion_map.items())
 
 
-def _type_coercion(
+def apply_type_coercion(
     value: object,
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> object:
+    """Coerce a value by exact type first, then by the shared subclass/ABC dispatcher."""
     value_type = type(value)
     exact_converter = type_coercion_map.get(value_type)
     if exact_converter is not None:
@@ -989,12 +993,12 @@ def _coerce_parameter_value(
         wrapped_value: object = typed_param.value
         if wrapped_value is None:
             return wrapped_value
-        coerced = _type_coercion(wrapped_value, type_coercion_map, fallback_items)
+        coerced = apply_type_coercion(wrapped_value, type_coercion_map, fallback_items)
         if coerced is wrapped_value:
             return wrapped_value
         return _coerce_nested_value(coerced, type_coercion_map, fallback_items)
 
-    coerced = _type_coercion(value, type_coercion_map, fallback_items)
+    coerced = apply_type_coercion(value, type_coercion_map, fallback_items)
     if coerced is value:
         return value
     return _coerce_nested_value(coerced, type_coercion_map, fallback_items)

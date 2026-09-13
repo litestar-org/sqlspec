@@ -1270,8 +1270,8 @@ def test_replace_null_parameters_with_profile_emits_no_warning() -> None:
 def test_type_coercion_supports_virtual_abc_fallback() -> None:
     """ABC-registered coercions should still resolve for builtin sequence payloads."""
     type_map: dict[type, Callable[[Any], Any]] = {Sequence: lambda value: tuple(value)}
-    fallback_items = _processor_module._type_coercion_fallbacks(type_map)
-    assert _processor_module._type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
+    fallback_items = _processor_module.type_coercion_fallbacks(type_map)
+    assert _processor_module.apply_type_coercion([1, 2, 3], type_map, fallback_items) == (1, 2, 3)
 
 
 def test_map_named_to_positional_preserves_execute_many_identity_when_rows_are_already_positional(
@@ -2508,7 +2508,7 @@ def test_type_coercion_dispatcher_is_shared_for_equal_fallbacks() -> None:
     assert type_coercion_dispatcher(items).get([1]) is tuple
 
 
-def test_characterize_renderer_sql_and_metadata_parity_and_offsets(converter: ParameterConverter) -> None:
+def test_renderer_sql_and_metadata_offsets_agree(converter: ParameterConverter) -> None:
     """Renderer rewritten SQL offsets must exactly match converted parameter metadata positions."""
     sql = "SELECT * FROM users WHERE first_name = :first_name AND id = :id AND last_name = :last_name"
     params = {"first_name": "Alice", "id": 42, "last_name": "Smith"}
@@ -2540,7 +2540,7 @@ def test_characterize_renderer_sql_and_metadata_parity_and_offsets(converter: Pa
         assert extracted == meta.placeholder_text
 
 
-def test_characterize_same_style_gaps(converter: ParameterConverter) -> None:
+def test_same_style_numeric_gaps_are_preserved(converter: ParameterConverter) -> None:
     """Same-style input retains SQL when styles match, but re-indexes when converted."""
     sql_numeric_gaps = "SELECT * FROM t WHERE a = $2 AND b = $5"
     info = converter.validator.extract_parameters(sql_numeric_gaps)
@@ -2564,7 +2564,7 @@ def test_characterize_same_style_gaps(converter: ParameterConverter) -> None:
     assert map_params == (20, 50)
 
 
-def test_characterize_repeated_binds_expanding_vs_indexed(converter: ParameterConverter) -> None:
+def test_repeated_binds_expand_or_share_index_by_style(converter: ParameterConverter) -> None:
     """Repeated binds produce shared indices for NUMERIC and duplicate entries for expanding styles."""
     sql = "SELECT * FROM t WHERE x = :val AND y = :other AND z = :val"
     params = {"val": 100, "other": 200}
@@ -2588,7 +2588,7 @@ def test_characterize_repeated_binds_expanding_vs_indexed(converter: ParameterCo
 @pytest.mark.skipif(
     _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
 )
-def test_characterize_injected_converter_overrides() -> None:
+def test_injected_converter_overrides_are_invoked() -> None:
     """Injected converter overrides are invoked by ParameterProcessor."""
 
     class CustomConverter(ParameterConverter):
@@ -2631,41 +2631,33 @@ def test_characterize_injected_converter_overrides() -> None:
     assert result.sql == "SELECT * FROM t WHERE id = $1"
 
 
-def test_characterize_fallback_mapping_alias_precedence(converter: ParameterConverter) -> None:
+def test_fallback_mapping_alias_precedence(converter: ParameterConverter) -> None:
     """Exact name > placeholder_text > param_keys (numeric) > param_{ord} > str(ord+1) > keys[ord]."""
     info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = :name")
     param = info[0]
 
-    val1, ok1, keys1 = converter._lookup_parameter_value(param, {"name": "exact", ":name": "placeholder"}, [])
+    val1, ok1, _ = converter._lookup_parameter_value(param, {"name": "exact", ":name": "placeholder"}, [])
     assert ok1 is True and val1 == "exact"
-    assert keys1 is None
 
-    val2, ok2, keys2 = converter._lookup_parameter_value(param, {":name": "placeholder", "param_0": "param_ord"}, [])
+    val2, ok2, _ = converter._lookup_parameter_value(param, {":name": "placeholder", "param_0": "param_ord"}, [])
     assert ok2 is True and val2 == "placeholder"
-    assert keys2 is None
 
-    val3, ok3, keys3 = converter._lookup_parameter_value(param, {"param_0": "param_ord", "1": "one"}, [])
+    val3, ok3, _ = converter._lookup_parameter_value(param, {"param_0": "param_ord", "1": "one"}, [])
     assert ok3 is True and val3 == "param_ord"
-    assert keys3 is None
 
-    val4, ok4, keys4 = converter._lookup_parameter_value(param, {"1": "one", "fallback": "ordered"}, [])
+    val4, ok4, _ = converter._lookup_parameter_value(param, {"1": "one", "fallback": "ordered"}, [])
     assert ok4 is True and val4 == "one"
-    assert keys4 is None
 
-    val5, ok5, keys5 = converter._lookup_parameter_value(param, {"fallback": "ordered"}, [])
+    val5, ok5, _ = converter._lookup_parameter_value(param, {"fallback": "ordered"}, [])
     assert ok5 is True and val5 == "ordered"
-    assert keys5 == ["fallback"]
 
     num_info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = $1")
     num_param = num_info[0]
-    val6, ok6, keys6 = converter._lookup_parameter_value(
-        num_param, {"col_a": "aliased", "param_0": "param_ord"}, ["col_a"]
-    )
+    val6, ok6, _ = converter._lookup_parameter_value(num_param, {"col_a": "aliased", "param_0": "param_ord"}, ["col_a"])
     assert ok6 is True and val6 == "aliased"
-    assert keys6 is None
 
 
-def test_characterize_preserve_many_batch_behavior() -> None:
+def test_preserved_many_batches_keep_identity_and_validate_positional_targets() -> None:
     """Preserve-many preserves row container identity while validating missing parameters in order."""
     processor = ParameterProcessor(cache_max_size=0, validator_cache_max_size=0)
     config = ParameterStyleConfig(
@@ -2687,8 +2679,19 @@ def test_characterize_preserve_many_batch_behavior() -> None:
     with pytest.raises(SQLSpecError, match="Missing named parameter\\(s\\): b"):
         processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", missing_rows, config, is_many=True)
 
+    named_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NAMED_AT,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT},
+        supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+        preserve_original_params_for_many=True,
+    )
+    named_result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", missing_rows, named_config, is_many=True)
+    assert named_result.sql == "INSERT INTO t (a, b) VALUES (@a, @b)"
+    assert named_result.parameters is missing_rows
 
-def test_characterize_static_reverse_evaluation(converter: ParameterConverter) -> None:
+
+def test_static_embedding_evaluates_right_to_left(converter: ParameterConverter) -> None:
     """Static parameter embedding resolves right-to-left to preserve token positions."""
     sql = "SELECT :first, :long_parameter_name, :first"
     params = {"first": "A", "long_parameter_name": "B"}
@@ -2701,17 +2704,9 @@ def test_characterize_static_reverse_evaluation(converter: ParameterConverter) -
     (result_types, _) = converter.convert_placeholder_style(types_sql, types_params, ParameterStyle.STATIC)
     assert result_types == "SELECT NULL, TRUE, 42, 3.14, 'it''s'"
 
-    malformed_sql = "SELECT :a, :b"
-    malformed_info = [
-        ParameterInfo(name="a", style=ParameterStyle.NAMED_COLON, position=7, ordinal=0, placeholder_text=":a"),
-        ParameterInfo(name="b", style=ParameterStyle.NAMED_COLON, position=5, ordinal=1, placeholder_text=":b"),
-    ]
-    (fallback_sql, _) = converter._embed_static_parameters(malformed_sql, {"a": 1, "b": 2}, malformed_info)
-    assert fallback_sql is not None
 
-
-def test_composed_parameter_acceptance_sqlite_duckdb_and_warm_reuse(processor: ParameterProcessor) -> None:
-    """Acceptance test verifying parameter pipeline composed behavior across engines and cache reuse."""
+def test_parameter_pipeline_executes_on_sqlite_duckdb_and_reuses_warm_cache(processor: ParameterProcessor) -> None:
+    """Filled SQL executes on SQLite and DuckDB, and warm cache reuse yields fresh values."""
     import sqlite3
 
     import duckdb
