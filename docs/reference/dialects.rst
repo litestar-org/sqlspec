@@ -12,7 +12,7 @@ group, so ``sqlglot.parse_one(..., dialect="pgvector")`` resolves them in any
 environment where SQLSpec is installed; importing ``sqlspec`` alone does not load
 them. Import the classes directly when you need them as objects::
 
-   from sqlspec.dialects import PGVector, ParadeDB, Spanner, Spangres
+   from sqlspec.dialects import PGTextSearch, PGVector, ParadeDB, Spanner, Spangres
 
 Performance builds compile the custom dialect helper modules alongside
 ``sqlglot[c]``: generator transforms, operator registries, and compatibility
@@ -50,6 +50,26 @@ Adds support for pgvector distance operators:
    * - ``<%>``
      - Jaccard distance (binary vectors)
 
+PGTextSearch
+------------
+
+.. autoclass:: sqlspec.dialects.postgres.PGTextSearch
+   :members:
+   :show-inheritance:
+   :no-index:
+
+Adds support for the native PostgreSQL and Google Cloud AlloyDB / AlloyDB Omni ``pg_textsearch`` BM25 extension:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Operator
+     - Description
+   * - ``<@>``
+     - BM25 score ranking operator (returns negative score for ASC index scans)
+
+Indices are created with ``USING bm25 (column) WITH (text_config='english')`` and queries order by ``column <@> 'query' ASC``.
+
 ParadeDB
 --------
 
@@ -58,7 +78,7 @@ ParadeDB
    :show-inheritance:
    :no-index:
 
-Extends PGVector with ParadeDB pg_search operators:
+Extends PostgreSQL with ParadeDB (pg_search) operators:
 
 .. list-table::
    :header-rows: 1

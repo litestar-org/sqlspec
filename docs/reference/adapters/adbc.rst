@@ -29,7 +29,7 @@ Supported Backends
    * - PostgreSQL
      - ``postgres``, ``postgresql``, ``pg``
      - ``adbc_driver_postgresql``
-     - Numeric parameters; optional pgvector and ParadeDB dialect detection.
+     - Numeric parameters; optional pgvector, pg_textsearch, and ParadeDB dialect detection.
    * - SQLite
      - ``sqlite``, ``sqlite3``
      - ``adbc_driver_sqlite``
@@ -212,13 +212,15 @@ first connection and upgrades the SQL dialect accordingly:
 
 - **pgvector** — If the ``vector`` extension is installed, switches to the ``pgvector``
   dialect which supports distance operators (``<->``, ``<=>``, ``<#>``, ``<+>``, ``<~>``, ``<%>``).
-- **ParadeDB** — If the ``pg_search`` extension is installed (alongside ``vector``),
-  switches to the ``paradedb`` dialect which adds BM25 search operators (``@@@``, ``&&&``,
-  ``|||``, ``===``) on top of pgvector operators.
+- **pg_textsearch** — If the ``pg_textsearch`` extension is installed, switches to the
+  ``pg_textsearch`` dialect which supports BM25 score ranking (``<@>``).
+- **ParadeDB** — If the ``pg_search`` extension is installed, switches to the ``paradedb``
+  dialect which adds BM25 search operators (``@@@``, ``&&&``, ``|||``, ``===``).
 
-Detection is controlled by two driver feature flags:
+Detection is controlled by driver feature flags:
 
 - ``enable_pgvector`` — Defaults to ``True`` when the ``pgvector`` Python package is installed.
+- ``enable_pg_textsearch`` — Defaults to ``True``.
 - ``enable_paradedb`` — Defaults to ``True``.
 
 Detection runs once per config instance and caches the result. Non-PostgreSQL backends

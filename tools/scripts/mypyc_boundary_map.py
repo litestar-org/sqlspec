@@ -171,6 +171,10 @@ EXCLUSION_REVALIDATION_SEED: dict[str, dict[str, str]] = {
         "bucket": "hard_block",
         "reason": "SQLGlot dialect subclass module fails native class import under mypyc.",
     },
+    "sqlspec/dialects/postgres/_pg_textsearch.py": {
+        "bucket": "hard_block",
+        "reason": "SQLGlot dialect subclass module fails native class import under mypyc.",
+    },
     "sqlspec/dialects/spanner/_spanner.py": {
         "bucket": "hard_block",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc.",
