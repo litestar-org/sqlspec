@@ -43,11 +43,7 @@ from sqlspec.utils.uuids import uuid4
 
 __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
-DIALECT_BUILD_ALIASES: dict[str, str] = {
-    "mssql": "tsql",
-    "mariadb": "mysql",
-    "cockroachdb": "postgres",
-}
+DIALECT_BUILD_ALIASES: dict[str, str] = {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres"}
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
@@ -636,14 +632,10 @@ class QueryBuilder:
                     if config.get_feature_flag("supports_skip_locked") is False:
                         for lock in locks:
                             if lock.args.get("wait") is False:
-                                self._raise_builder_error(
-                                    f"Dialect '{target_dialect}' does not support SKIP LOCKED."
-                                )
+                                self._raise_builder_error(f"Dialect '{target_dialect}' does not support SKIP LOCKED.")
 
         target_dialect = (
-            DIALECT_BUILD_ALIASES.get(target_dialect.lower(), target_dialect)
-            if target_dialect
-            else target_dialect
+            DIALECT_BUILD_ALIASES.get(target_dialect.lower(), target_dialect) if target_dialect else target_dialect
         )
 
         try:

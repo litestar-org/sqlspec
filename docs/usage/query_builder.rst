@@ -49,7 +49,7 @@ render standard ``ON CONFLICT`` syntax. For MySQL and MariaDB, the builder autom
 transpiles ``.on_conflict().do_update()`` to ``ON DUPLICATE KEY UPDATE``, and ``.do_nothing()``
 to a no-op self-assignment (e.g., ``col = col``). Dialects without native upsert clauses
 (Oracle, T-SQL / SQL Server, Spanner, and BigQuery) raise :class:`~sqlspec.exceptions.SQLBuilderError`
-at build time advising the use of :func:`sql.merge()`.
+at build time advising the use of :func:`sql.merge`.
 
 .. literalinclude:: /examples/builder/upsert.py
    :language: python

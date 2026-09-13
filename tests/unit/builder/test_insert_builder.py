@@ -387,13 +387,7 @@ def test_on_conflict_with_values_from() -> None:
 
 def test_on_conflict_mysql_transpiles() -> None:
     """Test ON CONFLICT transpiles to ON DUPLICATE KEY UPDATE for MySQL and MariaDB."""
-    query = (
-        sql
-        .insert("users")
-        .values(id=1, name="John")
-        .on_conflict("id")
-        .do_update(name="Updated")
-    )
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
     mysql_stmt = query.build(dialect="mysql")
     assert "ON DUPLICATE KEY UPDATE" in mysql_stmt.sql
     assert "ON CONFLICT" not in mysql_stmt.sql
@@ -403,13 +397,7 @@ def test_on_conflict_mysql_transpiles() -> None:
     assert "ON DUPLICATE KEY UPDATE" in mariadb_stmt.sql
     assert "ON CONFLICT" not in mariadb_stmt.sql
 
-    nothing_query = (
-        sql
-        .insert("users")
-        .values(id=1, name="John")
-        .on_conflict("id")
-        .do_nothing()
-    )
+    nothing_query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_nothing()
     nothing_mysql = nothing_query.build(dialect="mysql")
     assert "ON DUPLICATE KEY UPDATE" in nothing_mysql.sql
     assert "id = id" in nothing_mysql.sql or "`id` = `id`" in nothing_mysql.sql
@@ -418,26 +406,14 @@ def test_on_conflict_mysql_transpiles() -> None:
 @pytest.mark.parametrize("dialect", ["oracle", "tsql", "mssql", "spanner", "bigquery"])
 def test_on_conflict_raises_oracle_tsql(dialect: str) -> None:
     """Test ON CONFLICT raises SQLBuilderError mentioning sql.merge() on unsupported dialects."""
-    query = (
-        sql
-        .insert("users")
-        .values(id=1, name="John")
-        .on_conflict("id")
-        .do_update(name="Updated")
-    )
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
     with pytest.raises(SQLBuilderError, match=r"sql\.merge\(\)"):
         query.build(dialect=dialect)
 
 
 def test_on_conflict_postgres_unchanged() -> None:
     """Test ON CONFLICT on postgres retains standard ON CONFLICT clause."""
-    query = (
-        sql
-        .insert("users")
-        .values(id=1, name="John")
-        .on_conflict("id")
-        .do_update(name="Updated")
-    )
+    query = sql.insert("users").values(id=1, name="John").on_conflict("id").do_update(name="Updated")
     stmt = query.build(dialect="postgres")
     assert "ON CONFLICT" in stmt.sql
     assert "DO UPDATE" in stmt.sql

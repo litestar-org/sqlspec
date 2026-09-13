@@ -134,9 +134,7 @@ class Insert(
                         if conflict_keys:
                             first_key = conflict_keys[0]
                             first_col = (
-                                first_key.name
-                                if hasattr(first_key, "name") and first_key.name
-                                else str(first_key)
+                                first_key.name if hasattr(first_key, "name") and first_key.name else str(first_key)
                             )
                         if not first_col and self._columns:
                             first_col = self._columns[0]
@@ -158,9 +156,7 @@ class Insert(
                             conflict_expressions = conflict.args.get("expressions")
 
                         new_conflict = exp.OnConflict(
-                            duplicate=True,
-                            action=exp.var("UPDATE"),
-                            expressions=conflict_expressions,
+                            duplicate=True, action=exp.var("UPDATE"), expressions=conflict_expressions
                         )
                         insert_expr.set("conflict", new_conflict)
                     else:
