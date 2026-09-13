@@ -227,3 +227,17 @@ def test_select_from_values_preserves_attached_cte() -> None:
     query = sql.select("*").from_(values, alias="v")
     assert "WITH" in query.build(dialect="postgres").sql
     assert "WITH" in values.build(dialect="postgres").sql
+
+
+@pytest.mark.parametrize("source_alias", [None, "original"])
+def test_select_from_values_replaces_alias_and_preserves_columns(source_alias: str | None) -> None:
+    source = sql.values([(1, "alice")], alias=source_alias, columns=["id", "name"])
+    query = sql.select("renamed.id", "renamed.name").from_(source, alias="renamed")
+    expression = query._build_final_expression(copy=True)
+    from_source = expression.args["from_"].this
+
+    assert isinstance(from_source, exp.Values)
+    assert from_source.alias == "renamed"
+    assert [column.name for column in from_source.args["alias"].columns] == ["id", "name"]
+    assert source.alias_name == source_alias
+    assert query.build(dialect="postgres").parameters == {"renamed_id": 1, "renamed_name": "alice"}

@@ -77,3 +77,13 @@ async def test_values_cte_bulk_update(asyncpg_tasks_session: AsyncpgDriver) -> N
     await asyncpg_tasks_session.execute(bulk_update)
     all_rows = (await asyncpg_tasks_session.execute("SELECT id, status FROM test_builder_tasks ORDER BY id")).data
     assert all_rows == [("task-1", "completed"), ("task-2", "failed"), ("task-3", "pending")]
+
+
+@pytest.mark.parametrize("source_alias", [None, "original"])
+async def test_select_from_values_with_alias_override(
+    asyncpg_async_driver: AsyncpgDriver, source_alias: str | None
+) -> None:
+    source = sql.values([("first", "alice"), ("second", "bob")], alias=source_alias, columns=["id", "name"])
+    query = sql.select("renamed.id", "renamed.name").from_(source, alias="renamed").order_by("renamed.id")
+
+    assert (await asyncpg_async_driver.execute(query)).data == [("first", "alice"), ("second", "bob")]

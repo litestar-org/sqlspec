@@ -349,8 +349,14 @@ class SelectClauseMixin:
             if param_mapping:
                 subquery_copy = base_builder._update_placeholders(subquery_copy, param_mapping)
 
-            wrapped_subquery = exp.paren(subquery_copy)
-            from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
+            if isinstance(subquery_copy, exp.Values):
+                if alias:
+                    columns = getattr(table, "columns", None)
+                    subquery_copy = exp.alias_(subquery_copy, alias, table=columns or True)
+                from_expr = subquery_copy
+            else:
+                wrapped_subquery = exp.paren(subquery_copy)
+                from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
         else:
             from_expr = table
 
