@@ -5,6 +5,7 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.core import StatementConfig
 
 
 def test_update_from_select_builder_matrix() -> None:
@@ -78,3 +79,19 @@ def test_update_from_multiple_sources() -> None:
     query = sql.update("t").set(a=1).from_(s1, alias="s1").from_(s2, alias="s2").where("t.id = s1.id")
     stmt = query.build(dialect="postgres")
     assert "AS s1" in stmt.sql and "AS s2" in stmt.sql
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "oracle", "mariadb"])
+def test_update_from_statement_config_rejects_unsupported_dialect(dialect: str) -> None:
+    query = sql.update("t").set(a=1).from_("source")
+    with pytest.raises(SQLBuilderError, match="MERGE"):
+        query.to_statement(StatementConfig(dialect=dialect))
+
+
+def test_update_from_select_expression_is_parenthesized() -> None:
+    source = exp.select("id").from_("source")
+    query = sql.update("t").set(a=1).from_(source, alias="s")
+    expression = query.get_expression()
+    assert expression is not None
+    assert isinstance(expression.args["from_"].this, exp.Subquery)
+    assert source.args.get("alias") is None

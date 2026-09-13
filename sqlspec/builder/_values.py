@@ -134,6 +134,9 @@ class Values(QueryBuilder):
         if isinstance(first_row, Mapping):
             if self._columns is None:
                 self._columns = list(first_row.keys())
+            if not self._columns:
+                msg = "VALUES clause rows must contain at least one column."
+                raise SQLBuilderError(msg)
             expected_keys = set(self._columns)
             normalized_rows: list[list[Any]] = []
             for idx, r in enumerate(rows):
@@ -166,6 +169,9 @@ class Values(QueryBuilder):
                 msg = f"Column count ({len(self._columns)}) does not match row width ({expected_len})."
                 raise SQLBuilderError(msg)
 
+        if self._rows and len(normalized_rows[0]) != len(self._rows[0]):
+            msg = "All rows in VALUES clause must have the same number of columns."
+            raise SQLBuilderError(msg)
         self._rows.extend(normalized_rows)
         self._rebuild_expression()
         return self

@@ -373,7 +373,12 @@ class UpdateFromClauseMixin:
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
         elif isinstance(table, exp.Expr):
-            table_expr = exp.alias_(table, alias) if alias else table
+            if isinstance(table, exp.Select):
+                table_expr = exp.Subquery(this=table.copy())
+                if alias:
+                    table_expr = exp.alias_(table_expr, alias, table=True)
+            else:
+                table_expr = exp.alias_(table.copy(), alias, table=True) if alias else table.copy()
         elif (
             hasattr(table, "build")
             or hasattr(table, "to_statement")
@@ -395,6 +400,8 @@ class UpdateFromClauseMixin:
             subquery_copy = raw_expression.copy() if hasattr(raw_expression, "copy") else raw_expression
             base_builder = cast("QueryBuilder", self)
             builder_alias = getattr(table, "alias_name", None) or getattr(table, "alias", None)
+            if not isinstance(builder_alias, str):
+                builder_alias = None
             if not builder_alias and hasattr(raw_expression, "alias_or_name"):
                 builder_alias = raw_expression.alias_or_name
             effective_alias = alias or builder_alias or "subquery"
@@ -416,8 +423,15 @@ class UpdateFromClauseMixin:
                     table_expr = exp.alias_(subquery_copy, alias, table=cols or False)
                 else:
                     table_expr = subquery_copy
+            elif isinstance(subquery_copy, exp.Subquery):
+                table_expr = exp.alias_(subquery_copy, alias, table=True) if alias else subquery_copy
+            elif isinstance(subquery_copy, exp.Select):
+                table_expr = exp.Subquery(this=subquery_copy)
+                if alias or builder_alias:
+                    table_expr = exp.alias_(table_expr, alias or builder_alias, table=True)
             else:
-                table_expr = exp.Subquery(this=subquery_copy, alias=alias or builder_alias)
+                msg = "UPDATE FROM builder sources must be SELECT, VALUES, or subquery expressions."
+                raise SQLBuilderError(msg)
         else:
             msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)

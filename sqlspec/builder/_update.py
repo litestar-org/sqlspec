@@ -13,10 +13,8 @@ from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._dml import UpdateFromClauseMixin, UpdateSetClauseMixin, UpdateTableClauseMixin
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._join import build_join_clause
-from sqlspec.builder._parsing_utils import _resolve_dialect
 from sqlspec.builder._select import ReturningClauseMixin, WhereClauseMixin
 from sqlspec.core import SQLResult
-from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
@@ -133,23 +131,5 @@ class Update(
         if not self._expression.args.get("expressions"):
             msg = "At least one SET clause must be specified for UPDATE statement."
             raise SQLBuilderError(msg)
-
-        if self._expression.args.get("from_") is not None:
-            target_dialect = _resolve_dialect(dialect, self.dialect)
-            dialect_name = (
-                getattr(target_dialect, "name", str(target_dialect))
-                if target_dialect
-                else (self.dialect_name or "default")
-            )
-            try:
-                config = get_dialect_config(dialect_name)
-                if not config.feature_flags.get("supports_update_from", True):
-                    msg = (
-                        f"Dialect '{dialect_name}' does not support UPDATE ... FROM clauses. "
-                        "Consider using MERGE or a JOIN-based UPDATE instead."
-                    )
-                    raise SQLBuilderError(msg)
-            except ValueError:
-                pass
 
         return super().build(dialect=dialect)

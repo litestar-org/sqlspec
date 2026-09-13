@@ -176,3 +176,15 @@ def test_values_add_rows_validation_errors() -> None:
 
     with pytest.raises(SQLBuilderError, match=r"(?i)must be sequences or mappings"):
         Values(cast(Any, [1, 2]))
+
+
+def test_values_rejects_row_width_changes_between_calls() -> None:
+    values = sql.values([(1, 2)])
+    with pytest.raises(SQLBuilderError, match="same number of columns"):
+        values.add_rows([(3,)])
+    assert list(values.build().parameters.values()) == [1, 2]
+
+
+def test_values_rejects_empty_mapping() -> None:
+    with pytest.raises(SQLBuilderError, match="at least one column"):
+        sql.values([{}])

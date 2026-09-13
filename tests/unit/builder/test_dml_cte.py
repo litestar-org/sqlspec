@@ -82,3 +82,12 @@ def test_duplicate_cte_alias_raises_error() -> None:
 
     with pytest.raises(SQLBuilderError, match=r"CTE with alias 'c' already exists"):
         query.with_cte("c", cte)
+
+
+@pytest.mark.parametrize("operation", ["update", "delete", "select"])
+def test_recursive_cte_flag_is_rendered(operation: str) -> None:
+    query = getattr(sql, operation)("t")
+    if operation == "update":
+        query = query.set(a=1)
+    query = query.with_cte("c", sql.select("id").from_("source"), recursive=True)
+    assert query.build(dialect="postgres").sql.startswith("WITH RECURSIVE")

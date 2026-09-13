@@ -326,6 +326,8 @@ class QueryBuilder:
                 if cte_node not in existing_with.expressions:
                     existing_with.append("expressions", cte_node)
 
+        if any(cte.meta.get("recursive") for cte in self._with_ctes.values()):
+            final_expression.args["with_"].set("recursive", True)
         return final_expression
 
     def _spawn_like_self(self: Self) -> Self:
@@ -339,13 +341,13 @@ class QueryBuilder:
             simplify_expressions=self.simplify_expressions,
         )
 
-    def _resolve_cte_query(self, alias: str, query: "QueryBuilder | exp.Select | exp.Values | str | Any") -> exp.Expr:
+    def _resolve_cte_query(self, alias: str, query: "QueryBuilder | exp.Select | exp.SetOperation | exp.Values | str | Any") -> exp.Expr:
         """Resolve a CTE query into a Select or Values expression with merged parameters."""
         if isinstance(query, QueryBuilder):
             query_expr = query._build_final_expression(copy=True)
             if query_expr is None:
                 self._raise_cte_query_error(alias, "query builder has no expression")
-            if not isinstance(query_expr, (exp.Select, exp.Values)):
+            if not isinstance(query_expr, (exp.Select, exp.SetOperation, exp.Values)):
                 self._raise_cte_query_error(
                     alias, f"expression must be a Select or Values, got {type(query_expr).__name__}"
                 )
@@ -367,7 +369,7 @@ class QueryBuilder:
             )
             if raw_query_expr is None:
                 self._raise_cte_query_error(alias, "query builder has no expression")
-            if not isinstance(raw_query_expr, (exp.Select, exp.Values)):
+            if not isinstance(raw_query_expr, (exp.Select, exp.SetOperation, exp.Values)):
                 self._raise_cte_query_error(
                     alias, f"expression must be a Select or Values, got {type(raw_query_expr).__name__}"
                 )
@@ -386,13 +388,13 @@ class QueryBuilder:
                 parsed_expression = sqlglot.parse_one(query, read=self.dialect_name)
             except SQLGlotParseError as e:  # pragma: no cover
                 self._raise_cte_parse_error(e)
-            if not isinstance(parsed_expression, (exp.Select, exp.Values)):
+            if not isinstance(parsed_expression, (exp.Select, exp.SetOperation, exp.Values)):
                 self._raise_cte_query_error(
                     alias, f"query string must parse to SELECT or VALUES, got {type(parsed_expression).__name__}"
                 )
             return parsed_expression
 
-        if isinstance(query, (exp.Select, exp.Values)):
+        if isinstance(query, (exp.Select, exp.SetOperation, exp.Values)):
             return query
 
         self._raise_cte_query_error(alias, f"invalid query type: {type(query).__name__}")
@@ -610,7 +612,7 @@ class QueryBuilder:
     def with_cte(
         self: Self,
         alias: str,
-        query: "QueryBuilder | exp.Select | exp.Values | str | Any",
+        query: "QueryBuilder | exp.Select | exp.SetOperation | exp.Values | str | Any",
         recursive: bool = False,
         columns: "list[str] | None" = None,
     ) -> Self:
@@ -646,12 +648,13 @@ class QueryBuilder:
         else:
             alias_node = exp.to_table(alias)
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=alias_node)
+        self._with_ctes[alias].meta["recursive"] = recursive
         return self
 
     def with_(
         self: Self,
         name: str,
-        query: "QueryBuilder | exp.Select | exp.Values | str | Any",
+        query: "QueryBuilder | exp.Select | exp.SetOperation | exp.Values | str | Any",
         recursive: bool = False,
         columns: "list[str] | None" = None,
     ) -> Self:
@@ -679,6 +682,7 @@ class QueryBuilder:
             BuiltQuery: A dataclass containing the SQL string and parameters.
         """
         final_expression = self._build_final_expression()
+        self._validate_update_from(final_expression, _resolve_dialect(dialect, self.dialect))
 
         if self.enable_optimization and isinstance(final_expression, exp.Expr):
             final_expression = self._optimize_expression(final_expression)
@@ -988,10 +992,28 @@ class QueryBuilder:
         cache_entry = self._create_builder_cache_entry(config)
         return self._statement_from_cache_entry(cache_entry, config)
 
+    def _validate_update_from(self, expression: exp.Expr, dialect: DialectType) -> None:
+        if not dialect or not any(node.args.get("from_") is not None for node in expression.find_all(exp.Update)):
+            return
+        from sqlspec.data_dictionary import get_dialect_config
+
+        dialect_name = dialect.lower() if isinstance(dialect, str) else type(Dialect.get_or_raise(dialect)).__name__.lower()
+        try:
+            config = get_dialect_config(dialect_name)
+        except ValueError:
+            return
+        if not config.feature_flags.get("supports_update_from", True):
+            msg = (
+                f"Dialect '{dialect_name}' does not support UPDATE ... FROM clauses. "
+                "Consider using MERGE or a JOIN-based UPDATE instead."
+            )
+            raise SQLBuilderError(msg)
+
     def _create_builder_cache_entry(self, config: "StatementConfig | None") -> "_BuilderCacheEntry":
         dialect_override = config.dialect if config is not None else None
         resolved_dialect = self._build_dialect(dialect_override)
         statement_expression = self._build_final_expression(copy=True)
+        self._validate_update_from(statement_expression, resolved_dialect)
 
         if self.enable_optimization and isinstance(statement_expression, exp.Expr):
             statement_expression = self._optimize_expression(statement_expression)
