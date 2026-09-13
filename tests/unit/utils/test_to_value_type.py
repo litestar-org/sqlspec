@@ -95,7 +95,7 @@ def test_foreign_key_metadata_list_conversion() -> None:
         pytest.param([], list, id="empty_list"),
     ],
 )
-def test_identity_conversions(value: Any, target_type: type) -> None:
+def test_identity_conversions(value: Any, target_type: type[object]) -> None:
     """Exact type match returns the same object instance."""
     result = to_value_type(value, target_type)
     assert result is value
@@ -119,7 +119,11 @@ def test_subclass_bug_fixes_bool_to_int(val: bool, expected: int) -> None:
         pytest.param(datetime.time, datetime.time, datetime.time(12, 30, 45), id="datetime_to_time"),
     ],
 )
-def test_subclass_bug_fixes_datetime_subtypes(target_type: type, expected_type: type, expected_value: Any) -> None:
+def test_subclass_bug_fixes_datetime_subtypes(
+    target_type: type[datetime.date] | type[datetime.time],
+    expected_type: type[datetime.date] | type[datetime.time],
+    expected_value: datetime.date | datetime.time,
+) -> None:
     """Datetime instances should convert to strict date or time instances."""
     dt = datetime.datetime(2024, 1, 15, 12, 30, 45)
     result = to_value_type(dt, target_type)
@@ -476,7 +480,9 @@ class UserTypedDict(TypedDict):
         pytest.param(UserAttrs, '{"name": "Bob", "email": "bob@example.com"}', id="attrs_json"),
     ],
 )
-def test_schema_model_conversions(model_cls: type, payload: Any) -> None:
+def test_schema_model_conversions(
+    model_cls: type[UserPydantic] | type[UserDataclass] | type[UserMsgspec] | type[UserAttrs], payload: Any
+) -> None:
     """Dicts and JSON strings convert to supported schema model instances."""
     result = to_value_type(payload, model_cls)
     assert isinstance(result, model_cls)

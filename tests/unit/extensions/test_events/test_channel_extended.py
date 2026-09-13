@@ -462,8 +462,8 @@ def test_sync_listener_delivers_and_acknowledges_with_bounded_poll(monkeypatch: 
     received: list[EventMessage] = []
     delivered = threading.Event()
 
-    def handle_event(msg: EventMessage) -> None:
-        received.append(msg)
+    def handle_event(message: EventMessage) -> None:
+        received.append(message)
         delivered.set()
 
     listener = channel.listen("test_channel", handle_event, poll_interval=5.0)
