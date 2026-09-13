@@ -136,6 +136,7 @@ class ParameterConverter:
         strict_named_parameters: bool = True,
         param_info: "list[ParameterInfo] | None" = None,
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
+        preserve_original_batch: bool = False,
     ) -> "tuple[str, ConvertedParameters]":
         extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
 
@@ -156,6 +157,7 @@ class ParameterConverter:
             preserve_parameter_format=True,
             is_many=is_many,
             strict_named_parameters=strict_named_parameters,
+            preserve_original_batch=preserve_original_batch,
         )
         return converted_sql, converted_parameters
 
@@ -272,6 +274,7 @@ class ParameterConverter:
         strict_named_parameters: bool = True,
         param_info: "list[ParameterInfo] | None" = None,
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
+        preserve_original_batch: bool = False,
     ) -> "tuple[str, ConvertedParameters, list[ParameterInfo]]":
         """Convert placeholder style and return SQL, parameters, and metadata together."""
         extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
@@ -286,15 +289,27 @@ class ParameterConverter:
             or type(self).convert_parameter_info_style is not ParameterConverter.convert_parameter_info_style
         )
         if is_subclassed:
-            converted_sql, converted_parameters = self.convert_placeholder_style(
-                sql,
-                parameters,
-                target_style,
-                is_many,
-                strict_named_parameters=strict_named_parameters,
-                param_info=extracted_param_info,
-                precomputed_plan=precomputed_plan,
-            )
+            try:
+                converted_sql, converted_parameters = self.convert_placeholder_style(
+                    sql,
+                    parameters,
+                    target_style,
+                    is_many,
+                    strict_named_parameters=strict_named_parameters,
+                    param_info=extracted_param_info,
+                    precomputed_plan=precomputed_plan,
+                    preserve_original_batch=preserve_original_batch,
+                )
+            except TypeError:
+                converted_sql, converted_parameters = self.convert_placeholder_style(
+                    sql,
+                    parameters,
+                    target_style,
+                    is_many,
+                    strict_named_parameters=strict_named_parameters,
+                    param_info=extracted_param_info,
+                    precomputed_plan=precomputed_plan,
+                )
             converted_param_info = self.convert_parameter_info_style(
                 extracted_param_info, target_style, precomputed_plan=precomputed_plan
             )
@@ -319,6 +334,7 @@ class ParameterConverter:
             preserve_parameter_format=True,
             is_many=is_many,
             strict_named_parameters=strict_named_parameters,
+            preserve_original_batch=preserve_original_batch,
         )
         return converted_sql, converted_parameters, converted_param_info
 
@@ -394,6 +410,17 @@ class ParameterConverter:
             missing.append(param.name)
         return sorted(set(missing))
 
+    def _validate_batch_named_parameters(
+        self, param_info: "list[ParameterInfo]", parameters: "Sequence[Any]"
+    ) -> None:
+        """Validate named parameters across batch rows in original order."""
+        for param_set in parameters:
+            if isinstance(param_set, Mapping):
+                missing_names = self._missing_named_parameters(param_info, param_set)
+                if missing_names:
+                    msg = f"Missing named parameter(s): {', '.join(missing_names)}"
+                    raise SQLSpecError(msg)
+
     def _preserve_original_format(
         self, param_values: "list[Any]", original_parameters: object
     ) -> "PositionalParameterOutput":
@@ -411,6 +438,7 @@ class ParameterConverter:
         is_many: bool = False,
         *,
         strict_named_parameters: bool = True,
+        preserve_original_batch: bool = False,
     ) -> "ConvertedParameters":
         if not parameters or not param_info:
             # When parameters is falsy, it's either None or empty - return None
@@ -429,6 +457,11 @@ class ParameterConverter:
             and not isinstance(parameters, (str, bytes, bytearray))
             and parameters
         ):
+            if preserve_original_batch and isinstance(parameters, (list, tuple)):
+                if strict_named_parameters:
+                    self._validate_batch_named_parameters(param_info, parameters)
+                return parameters
+
             normalized_sets: list[Any] = [
                 self._convert_parameter_format(
                     param_set,
