@@ -34,7 +34,8 @@ __all__ = (
 MSSQL_MIGRATION_LOGIN = "sqlspec_migrator"
 MSSQL_MIGRATION_PASSWORD = "Password123!"
 
-_STORE_EXTENSION_CONFIG: "dict[str, Any]" = {"litestar": {"session_table": "litestar_contract_sessions"}}
+_STORE_TABLE = "litestar_contract_sessions"
+_STORE_EXTENSION_CONFIG: "dict[str, Any]" = {"litestar": {"session_table": _STORE_TABLE}}
 
 
 def _mssql_events_migration_config(tmp_path: Path, suffix: str) -> "dict[str, Any]":
@@ -183,10 +184,20 @@ async def contract_mssql_python_store(mssql_service: "MSSQLService") -> "AsyncGe
         connection_config=_mssql_python_connection_config(mssql_service), extension_config=_STORE_EXTENSION_CONFIG
     )
     store = MssqlPythonStore(config)
+    with contextlib.suppress(Exception):
+        with config.provide_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}")
+            conn.commit()
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
         await store.delete_all()
+    with contextlib.suppress(Exception):
+        with config.provide_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}")
+            conn.commit()
     config.close_pool()
 
 
@@ -197,10 +208,20 @@ async def contract_pymssql_store(mssql_service: "MSSQLService") -> "AsyncGenerat
         connection_config=_mssql_connection_config(mssql_service), extension_config=_STORE_EXTENSION_CONFIG
     )
     store = PymssqlStore(config)
+    with contextlib.suppress(Exception):
+        with config.provide_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}")
+            conn.commit()
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
         await store.delete_all()
+    with contextlib.suppress(Exception):
+        with config.provide_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}")
+            conn.commit()
     config.close_pool()
 
 

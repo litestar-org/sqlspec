@@ -1773,10 +1773,24 @@ async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenera
         driver_features={"dbms_name": "Microsoft SQL Server"},
     )
     store = ArrowOdbcStore(config)
+    with contextlib.suppress(Exception):
+        with config.provide_session() as driver:
+            driver.execute_script(
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}; "
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}_chunks', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}_chunks;"
+            )
+            driver.commit()
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
         await store.delete_all()
+    with contextlib.suppress(Exception):
+        with config.provide_session() as driver:
+            driver.execute_script(
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}; "
+                f"IF OBJECT_ID(N'dbo.{_STORE_TABLE}_chunks', N'U') IS NOT NULL DROP TABLE dbo.{_STORE_TABLE}_chunks;"
+            )
+            driver.commit()
     config.close_pool()
 
 
