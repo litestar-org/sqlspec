@@ -47,6 +47,12 @@ Unreleased
   up their migration tracker.
   (`#747 <https://github.com/litestar-org/sqlspec/issues/747>`_)
 
+**Deprecated:**
+
+* Dynamic column access on the ``sql`` factory (``sql.some_column``) now emits a
+  ``DeprecationWarning``. Use ``sql.column("some_column")`` or ``Column("some_column")``;
+  the dynamic form will be removed in the next major release.
+
 **Removed:**
 
 * Removed the undocumented ``sqlspec.exceptions.wrap_exceptions`` helper,
