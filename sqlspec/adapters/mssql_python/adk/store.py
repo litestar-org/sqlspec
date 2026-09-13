@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
@@ -10,16 +10,19 @@ from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPyth
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import timedelta
 
     from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
     from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
     from sqlspec.extensions.adk import SessionOrderBy
+    from sqlspec.extensions.adk.memory._types import StoredMemory
 
-__all__ = ("MssqlPythonADKConfig", "MssqlPythonADKStore")
+__all__ = ("MssqlPythonADKConfig", "MssqlPythonADKMemoryStore", "MssqlPythonADKStore")
 
 MSSQL_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
@@ -415,6 +418,179 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return rowcount
 
 
+class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
+    """SQL Server ADK memory store using mssql-python."""
+
+    __slots__ = ()
+
+    def __init__(self, config: "MssqlPythonConfig") -> None:
+        super().__init__(config)
+
+    def create_tables(self) -> None:
+        """Create the memory table (idempotent T-SQL) and DD-gated indexes."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+
+        if not self._enabled:
+            return
+        with self._config.provide_session() as driver:
+            driver.execute_script(self._memory_table_ddl())
+            existing_indexes = _casefold_names(
+                driver.data_dictionary.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name"
+            )
+            for index_name, index_table, columns in self._memory_index_specs():
+                if _bare_name(index_name) not in existing_indexes:
+                    driver.execute(_create_index_sql(index_table, index_name, columns))
+            driver.commit()
+
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
+        """Bulk insert memory entries with event-id deduplication."""
+        if not self._enabled:
+            msg = "ADK memory store is disabled"
+            raise RuntimeError(msg)
+        if not entries:
+            return 0
+
+        owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+        owner_value = ", ?" if self._owner_id_column_name else ""
+        sql = f"""
+        IF NOT EXISTS (SELECT 1 FROM {_table_ref(self._memory_table)} WHERE event_id = ?)
+        BEGIN
+            INSERT INTO {_table_ref(self._memory_table)} (
+                id, session_id, app_name, user_id, scope, event_id, author, timestamp,
+                content_json, content_text, metadata_json{owner_column}
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_value});
+        END;
+        """
+        inserted = 0
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            for entry in entries:
+                params: tuple[Any, ...] = (
+                    entry["event_id"],
+                    entry["id"],
+                    entry["session_id"],
+                    entry["app_name"],
+                    entry["user_id"],
+                    entry.get("scope", "user"),
+                    entry["event_id"],
+                    entry.get("author"),
+                    entry["timestamp"],
+                    to_json(entry["content_json"]),
+                    entry["content_text"],
+                    to_json(entry.get("metadata_json")),
+                )
+                if self._owner_id_column_name:
+                    params = (*params, owner_id)
+                cursor.execute(sql, params)
+                inserted += _cursor_rowcount(cursor)
+            conn.commit()
+        return inserted
+
+    def search_entries(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: "int | None" = None,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
+    ) -> "list[StoredMemory]":
+        """Search memory entries by text query."""
+        if not self._enabled:
+            msg = "ADK memory store is disabled"
+            raise RuntimeError(msg)
+        limit_value = limit or self._max_results
+        where_scope, scope_params = _build_mssql_scope_where(app_name, user_id, scope_filter)
+        sql = f"""
+        SELECT TOP (?)
+            id, session_id, app_name, user_id, scope, event_id, author, timestamp,
+            content_json, content_text, metadata_json, inserted_at
+        FROM {_table_ref(self._memory_table)}
+        WHERE {where_scope} AND content_text LIKE ?
+        ORDER BY timestamp DESC
+        """
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{query}%"))
+        return [_memory_record_from_row(row) for row in rows]
+
+    def delete_entries_by_session(self, session_id: str) -> int:
+        """Delete all memory entries for a specific session."""
+        return self._execute(
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True
+        )
+
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
+        """Delete memory entries older than the retention window."""
+        clauses = ["inserted_at < DATEADD(day, -?, SYSUTCDATETIME())"]
+        params: list[Any] = [days]
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if scope is not None:
+            clauses.append("scope = ?")
+            params.append(scope)
+        where_sql = " AND ".join(clauses)
+        return self._execute(
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
+        )
+
+    def _memory_table_ddl(self) -> str:
+        owner_line = f",\n            {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(self._memory_table)}'
+    AND schema_id = SCHEMA_ID(N'dbo'))
+BEGIN
+    CREATE TABLE {_table_ref(self._memory_table)} (
+        id NVARCHAR(128) NOT NULL,
+        session_id NVARCHAR(128) NOT NULL,
+        app_name NVARCHAR(128) NOT NULL,
+        user_id NVARCHAR(128) NOT NULL,
+        scope NVARCHAR(16) NOT NULL CONSTRAINT {_constraint_ref("df", self._memory_table, "scope")} DEFAULT N'user',
+        event_id NVARCHAR(128) NOT NULL,
+        author NVARCHAR(256) NULL,
+        timestamp DATETIME2(6) NOT NULL,
+        content_json NVARCHAR(MAX) NOT NULL,
+        content_text NVARCHAR(MAX) NOT NULL,
+        metadata_json NVARCHAR(MAX) NULL,
+        inserted_at DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", self._memory_table, "inserted_at")}
+            DEFAULT SYSUTCDATETIME(){owner_line},
+        CONSTRAINT {_constraint_ref("pk", self._memory_table, "id")} PRIMARY KEY (id),
+        CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (event_id)
+    );
+END;
+"""
+
+    def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
+        """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
+        return [
+            (
+                f"idx_{self._memory_table}_app_scope_user_time",
+                self._memory_table,
+                "app_name, scope, user_id, timestamp DESC",
+            ),
+            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, scope"),
+            (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
+            (f"idx_{self._memory_table}_timestamp", self._memory_table, "timestamp DESC"),
+        ]
+
+    def _drop_memory_table_sql(self) -> "list[str]":
+        return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
+
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            return list(cursor.fetchall())
+
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            rowcount = _cursor_rowcount(cursor)
+            if commit:
+                conn.commit()
+            return rowcount
+
+
 def _adk_config(config: Any) -> MssqlPythonADKConfig:
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):
@@ -428,9 +604,7 @@ def _adk_config(config: Any) -> MssqlPythonADKConfig:
 def _configured_json_column_type(native_json: "bool | None") -> "str | None":
     if native_json is True:
         return JSON_NATIVE_COLUMN_TYPE
-    if native_json is False:
-        return JSON_FALLBACK_COLUMN_TYPE
-    return None
+    return JSON_FALLBACK_COLUMN_TYPE
 
 
 def _json_column_type_from_sync_driver(driver: "MssqlPythonDriver") -> str:
@@ -646,6 +820,37 @@ def _event_record_from_row(row: Any) -> StoredEvent:
         timestamp=row[5],
         event_data=_json_dict(row[6]),
     )
+
+
+def _memory_record_from_row(row: Any) -> "StoredMemory":
+    return cast(
+        "StoredMemory",
+        {
+            "id": row[0],
+            "session_id": row[1],
+            "app_name": row[2],
+            "user_id": row[3],
+            "scope": row[4],
+            "event_id": row[5],
+            "author": row[6],
+            "timestamp": row[7],
+            "content_json": _json_dict(row[8]),
+            "content_text": row[9],
+            "metadata_json": _json_dict(row[10]) if row[10] is not None else None,
+            "inserted_at": row[11],
+            "embedding": None,
+        },
+    )
+
+
+def _build_mssql_scope_where(
+    app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> "tuple[str, tuple[Any, ...]]":
+    if scope_filter == "all":
+        return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (app_name, user_id)
+    if scope_filter == "user":
+        return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
+    return "app_name = ? AND scope = 'app'", (app_name,)
 
 
 def _json_dict(value: Any) -> "dict[str, Any]":
