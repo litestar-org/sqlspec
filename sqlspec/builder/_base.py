@@ -657,7 +657,10 @@ class QueryBuilder:
                     lock.set("sqlspec_share_mode", True)
         for lock in expression.find_all(exp.Lock):
             if dialect in {"spanner", "spangres"} and (
-                not lock.args.get("update") or lock.args.get("wait") is not None or lock.expressions or lock.args.get("key")
+                not lock.args.get("update")
+                or lock.args.get("wait") is not None
+                or lock.expressions
+                or lock.args.get("key")
             ):
                 self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
             if lock.args.get("key") and dialect != "postgres":
@@ -718,7 +721,9 @@ class QueryBuilder:
                     ):
                         self._raise_builder_error("Spanner PostgreSQL conflict updates require excluded column values.")
                     assigned_columns.add(assignment.this.name)
-                if isinstance(schema, exp.Schema) and assigned_columns != {column.name for column in schema.expressions}:
+                if isinstance(schema, exp.Schema) and assigned_columns != {
+                    column.name for column in schema.expressions
+                }:
                     self._raise_builder_error("Spanner PostgreSQL conflict updates must assign every inserted column.")
 
     def to_sql(self, show_parameters: bool = False, dialect: DialectType = None) -> str:
@@ -917,7 +922,9 @@ class QueryBuilder:
         if self.enable_optimization and isinstance(statement_expression, exp.Expr):
             statement_expression = self._optimize_expression(statement_expression)
 
-        statement_expression = self._prepare_dialect_expression(statement_expression, resolved_dialect, dialect_override)
+        statement_expression = self._prepare_dialect_expression(
+            statement_expression, resolved_dialect, dialect_override
+        )
 
         if statement_expression.find(exp.Lock):
             register_lock_generator(resolved_dialect)

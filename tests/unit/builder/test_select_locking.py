@@ -318,10 +318,7 @@ def test_spanner_statement_locking(dialect: str) -> None:
 
 @pytest.mark.parametrize("dialect", ["mysql", "mariadb", "oracle"])
 def test_postgresql_key_lock_modes_rejected_elsewhere(dialect: str) -> None:
-    for query in (
-        sql.select("id").from_("job").for_no_key_update(),
-        sql.select("id").from_("job").for_key_share(),
-    ):
+    for query in (sql.select("id").from_("job").for_no_key_update(), sql.select("id").from_("job").for_key_share()):
         with pytest.raises(SQLBuilderError, match="PostgreSQL key lock modes"):
             query.build(dialect=dialect)
 
