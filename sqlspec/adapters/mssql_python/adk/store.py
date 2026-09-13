@@ -604,7 +604,9 @@ def _adk_config(config: Any) -> MssqlPythonADKConfig:
 def _configured_json_column_type(native_json: "bool | None") -> "str | None":
     if native_json is True:
         return JSON_NATIVE_COLUMN_TYPE
-    return JSON_FALLBACK_COLUMN_TYPE
+    if native_json is False:
+        return JSON_FALLBACK_COLUMN_TYPE
+    return None
 
 
 def _json_column_type_from_sync_driver(driver: "MssqlPythonDriver") -> str:

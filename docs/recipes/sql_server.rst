@@ -25,11 +25,11 @@ SQLSpec offers three drivers for Microsoft SQL Server depending on workload requ
    * - ``mssql-python``
      - qmark (``?``)
      - Native BulkCopy and Arrow
-     - Microsoft's official driver; fast C bindings, native Arrow and BulkCopy.
+     - Microsoft's driver with BulkCopy and SQLSpec Arrow loading.
    * - ``pymssql``
      - qmark (``?``) / pyformat (``%(name)s``)
      - ``execute_many`` only
-     - FreeTDS-based wrapper; multi-platform, pure-Python fallback.
+     - FreeTDS-based driver.
    * - ``arrow-odbc``
      - qmark (``?``)
      - Arrow-first ODBC streaming
@@ -80,7 +80,7 @@ The ``provide_session()`` context manager acquires a driver instance from the po
            "encrypt": False,
            "trust_server_certificate": True,
            "pool_size": 10,
-           "pool_idle_timeout": 30.0,
+           "pool_idle_timeout": 30,
            "pool_enabled": True,
        }
    )
@@ -98,8 +98,7 @@ The ``provide_session()`` context manager acquires a driver instance from the po
    )
 
    with mssql_config.provide_session() as driver:
-       result = driver.execute("SELECT 1 AS ready")
-       rows = result.fetchall()
+       rows = driver.select("SELECT 1 AS ready")
 
    mssql_config.close_pool()
    pymssql_config.close_pool()
@@ -136,21 +135,21 @@ Positional and named parameter styles must never be mixed within the same query.
    )
 
    with mssql_config.provide_session() as driver:
-       user = driver.execute(
+       user = driver.select_one_or_none(
            "SELECT id, username, email FROM users WHERE id = ?",
            (42,),
-       ).fetchone()
+       )
 
    with pymssql_config.provide_session() as driver:
-       user_qmark = driver.execute(
+       user_qmark = driver.select_one_or_none(
            "SELECT id, username, email FROM users WHERE id = ?",
            (42,),
-       ).fetchone()
+       )
 
-       user_named = driver.execute(
+       user_named = driver.select_one_or_none(
            "SELECT id, username, email FROM users WHERE username = %(name)s",
            {"name": "ada"},
-       ).fetchone()
+       )
 
 Running Multi-Batch Scripts with GO
 ===================================
@@ -185,6 +184,7 @@ The ``execute_script`` method splits input text on ``GO`` separators and runs ea
 
    with config.provide_session() as driver:
        driver.execute_script(script)
+       driver.commit()
 
 Transactions and Savepoints
 ===========================
@@ -232,6 +232,9 @@ Bulk Loading with BulkCopy and Arrow
 The ``mssql-python`` adapter provides high-throughput bulk insertion via Microsoft BulkCopy and Apache Arrow streaming.
 In contrast, ``pymssql`` does not support native BulkCopy and uses batched ``execute_many`` operations.
 
+The three examples below use separate, pre-created tables with ``id``,
+``event_type``, and ``created_at`` columns.
+
 .. code-block:: python
 
    import pyarrow as pa
@@ -278,13 +281,19 @@ In contrast, ``pymssql`` does not support native BulkCopy and uses batched ``exe
            batch_size=10000,
            table_lock=True,
        )
-       driver.load_from_arrow("dbo.events", arrow_table)
+       driver.commit()
+
+   # Arrow loading is an alternative to bulk_copy; use a separate target.
+   with mssql_config.provide_session() as driver:
+       driver.load_from_arrow("dbo.events_arrow", arrow_table)
+       driver.commit()
 
    with pymssql_config.provide_session() as driver:
        driver.execute_many(
-           "INSERT INTO dbo.events (id, event_type, created_at) VALUES (?, ?, ?)",
+           "INSERT INTO dbo.events_pymssql (id, event_type, created_at) VALUES (?, ?, ?)",
            rows,
        )
+       driver.commit()
 
 Migrations
 ==========
@@ -319,7 +328,10 @@ Google ADK Session and Memory Stores
 
 SQL Server supports Google ADK session storage via ``MssqlPythonADKStore`` and ``PymssqlADKStore``, as well as memory storage via ``MssqlPythonADKMemoryStore`` and ``PymssqlADKMemoryStore``.
 Setting ``native_json: False`` configures ``NVARCHAR(MAX)`` columns for JSON payloads.
-Call ``ensure_tables()`` to provision tables.
+Call ``ensure_tables()`` to provision tables. Existing migration-managed
+installations should run the ADK extension upgrade: migration ``0002`` creates
+the newly supported mssql-python memory table and indexes if missing. Downgrading
+that repair preserves memory data; a full downgrade of ``0001`` removes it.
 Because both SQL Server drivers are synchronous, asynchronous ADK runners should wrap store operations using ``anyio.to_thread.run_sync``.
 
 .. code-block:: python
@@ -352,6 +364,8 @@ Because both SQL Server drivers are synchronous, asynchronous ADK runners should
    async def run_agent() -> None:
        session = await anyio.to_thread.run_sync(
            session_store.get_session,
+           "app",
+           "user-123",
            "session-123",
        )
 
@@ -430,14 +444,19 @@ Server-side session storage is provided by ``MssqlPythonStore`` and ``PymssqlSto
    session_config = ServerSideSessionConfig()
 
 
-   @get("/users")
+   async def prepare_sessions() -> None:
+       await session_store.create_table()
+
+
+   @get("/users", sync_to_thread=True)
    def get_users(db_session: MssqlPythonDriver) -> list[dict[str, object]]:
-       return db_session.execute("SELECT id, username FROM users").fetchall()
+       return db_session.select("SELECT id, username FROM users")
 
 
    app = Litestar(
        route_handlers=[get_users],
        plugins=[plugin],
+       on_startup=[prepare_sessions],
        middleware=[session_config.middleware],
        stores={"sessions": session_store},
    )

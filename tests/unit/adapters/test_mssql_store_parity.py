@@ -28,7 +28,7 @@ def _qmark(sql: str) -> str:
 
 def test_adk_session_and_event_ddl_match() -> None:
     """ADK session and event table DDL and indexes match across drivers."""
-    mssql_cfg = MssqlPythonConfig(extension_config={"adk": {}})
+    mssql_cfg = MssqlPythonConfig(extension_config={"adk": {"native_json": False}})
     pymssql_cfg = PymssqlConfig(extension_config={"adk": {}})
     mssql_store = MssqlPythonADKStore(mssql_cfg)
     pymssql_store = PymssqlADKStore(pymssql_cfg)
@@ -41,7 +41,7 @@ def test_adk_session_and_event_ddl_match() -> None:
 
 def test_adk_memory_ddl_and_indexes_match() -> None:
     """ADK memory table DDL and indexes match across drivers."""
-    mssql_cfg = MssqlPythonConfig(extension_config={"adk": {}})
+    mssql_cfg = MssqlPythonConfig(extension_config={"adk": {"native_json": False}})
     pymssql_cfg = PymssqlConfig(extension_config={"adk": {}})
     mssql_memory = MssqlPythonADKMemoryStore(mssql_cfg)
     pymssql_memory = PymssqlADKMemoryStore(pymssql_cfg)
@@ -53,7 +53,7 @@ def test_adk_memory_ddl_and_indexes_match() -> None:
 
 def test_adk_session_list_query_matches_modulo_placeholder(monkeypatch: "pytest.MonkeyPatch") -> None:
     """ADK session list SQL matches modulo parameter placeholder style."""
-    mssql_cfg = MssqlPythonConfig(extension_config={"adk": {}})
+    mssql_cfg = MssqlPythonConfig(extension_config={"adk": {"native_json": False}})
     pymssql_cfg = PymssqlConfig(extension_config={"adk": {}})
     calls: dict[str, tuple[str, tuple[Any, ...]]] = {}
 

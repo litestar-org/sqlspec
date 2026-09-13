@@ -243,3 +243,17 @@ def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
     """Drop memory table statement uses T-SQL IF EXISTS syntax."""
     store = MssqlPythonADKMemoryStore(_mock_config())
     assert store._drop_memory_table_sql() == ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
+
+
+@pytest.mark.parametrize(("major", "expected"), [(16, "NVARCHAR(MAX)"), (17, "JSON")])
+def test_sync_store_detects_json_support_by_default(major: int, expected: str) -> None:
+    """Omitting native_json preserves server-version detection."""
+    from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
+
+    config = _mock_config()
+    driver = config.provide_session.return_value.__enter__.return_value
+    driver.data_dictionary.get_version.return_value = MssqlVersionInfo(major=major)
+    store = MssqlPythonADKStore(config)
+
+    assert f"state {expected} NOT NULL" in store._sessions_table_ddl()
+    driver.data_dictionary.get_version.assert_called_once_with(driver)
