@@ -1834,7 +1834,7 @@ def test_convert_placeholders_to_style_skips_sort_for_position_ordered_params(
         raise AssertionError("sorted() should not run for already ordered parameter metadata")
 
     monkeypatch.setattr("builtins.sorted", fail_sorted)
-    converted_sql = converter._convert_placeholders_to_style(sql, param_info, ParameterStyle.NUMERIC)
+    converted_sql = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC, param_info=param_info)[0]
     assert converted_sql == "SELECT $1, $2, $3"
 
 
@@ -1843,7 +1843,7 @@ def test_convert_placeholders_to_style_sorts_unsafely_ordered_params_as_fallback
     sql = "SELECT :a, :b, :c"
     param_info = converter.validator.extract_parameters(sql)
     unordered = [param_info[2], param_info[0], param_info[1]]
-    converted_sql = converter._convert_placeholders_to_style(sql, unordered, ParameterStyle.NUMERIC)
+    converted_sql = converter.convert_placeholder_style(sql, None, ParameterStyle.NUMERIC, param_info=unordered)[0]
     assert converted_sql == "SELECT $1, $2, $3"
 
 
@@ -2689,6 +2689,46 @@ def test_preserved_many_batches_keep_identity_and_validate_positional_targets() 
     named_result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", missing_rows, named_config, is_many=True)
     assert named_result.sql == "INSERT INTO t (a, b) VALUES (@a, @b)"
     assert named_result.parameters is missing_rows
+
+
+@pytest.mark.skipif(
+    _CONVERTER_COMPILED, reason="interpreted subclass cannot override mypyc-compiled ParameterConverter methods"
+)
+def test_preserved_many_batches_keep_identity_with_overridden_converter() -> None:
+    """An injected converter override still returns the caller's batch by identity."""
+
+    class CustomConverter(ParameterConverter):
+        def convert_placeholder_style(self, *args: Any, **kwargs: Any) -> tuple[str, Any]:
+            return super().convert_placeholder_style(*args, **kwargs)
+
+    processor = ParameterProcessor(converter=CustomConverter(), cache_max_size=0, validator_cache_max_size=0)
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        preserve_original_params_for_many=True,
+    )
+    rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+    result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
+    assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
+    assert result.parameters is rows
+
+    with pytest.raises(SQLSpecError, match="Missing named parameter\\(s\\): b"):
+        processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", [{"a": 1, "b": 2}, {"a": 3}], config, is_many=True)
+
+
+def test_static_execution_style_outside_script_compilation_is_rejected(processor: ParameterProcessor) -> None:
+    """STATIC reaching execution conversion raises instead of embedding batch rows."""
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.STATIC,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON},
+        supported_execution_parameter_styles={ParameterStyle.STATIC},
+        needs_static_script_compilation=True,
+    )
+    with pytest.raises(ValueError, match="Unsupported target parameter style"):
+        processor.process("INSERT INTO t (a) VALUES (:a)", [{"a": 1}, {"a": 2}], config, is_many=True)
 
 
 def test_static_embedding_evaluates_right_to_left(converter: ParameterConverter) -> None:

@@ -178,13 +178,12 @@ class ParameterConverter:
         target_style: "ParameterStyle",
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
         *,
-        render_sql: bool = True,
         collect_metadata: bool = False,
     ) -> "tuple[str, list[ParameterInfo]]":
         """Rewrite placeholders to the target style and describe them in one traversal.
 
-        Returns the rendered SQL (``sql`` unchanged when ``render_sql`` is false) and the
-        converted parameter metadata (empty unless ``collect_metadata`` is true).
+        Returns the rendered SQL and the converted parameter metadata (empty unless
+        ``collect_metadata`` is true).
         """
         generator = self._placeholder_generators.get(target_style)
         if generator is None:
@@ -215,9 +214,8 @@ class ParameterConverter:
                 name = _named_parameter_name(param)
                 new_placeholder = generator(name)
 
-            if render_sql:
-                segments.extend((sql[last_end : param.position], new_placeholder))
-                last_end = param.position + len(param.placeholder_text)
+            segments.extend((sql[last_end : param.position], new_placeholder))
+            last_end = param.position + len(param.placeholder_text)
 
             if collect_metadata:
                 converted_param_info.append(
@@ -231,20 +229,8 @@ class ParameterConverter:
                 )
                 delta += len(new_placeholder) - len(param.placeholder_text)
 
-        if not render_sql:
-            return sql, converted_param_info
         segments.append(sql[last_end:])
         return "".join(segments), converted_param_info
-
-    def _convert_placeholders_to_style(
-        self,
-        sql: str,
-        param_info: "list[ParameterInfo]",
-        target_style: "ParameterStyle",
-        precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
-    ) -> str:
-        rendered_sql, _ = self._render_conversion(sql, param_info, target_style, precomputed_plan)
-        return rendered_sql
 
     def convert_parameter_info_style(
         self,
@@ -253,7 +239,7 @@ class ParameterConverter:
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
     ) -> "list[ParameterInfo]":
         _, converted_param_info = self._render_conversion(
-            "", param_info, target_style, precomputed_plan, render_sql=False, collect_metadata=True
+            "", param_info, target_style, precomputed_plan, collect_metadata=True
         )
         return converted_param_info
 
@@ -320,6 +306,8 @@ class ParameterConverter:
             converted_param_info = self.convert_parameter_info_style(
                 extracted_param_info, target_style, precomputed_plan=precomputed_plan
             )
+            if preserve_original_batch and is_many and isinstance(parameters, (list, tuple)):
+                return converted_sql, parameters, converted_param_info
             return converted_sql, converted_parameters, converted_param_info
 
         return self._convert_builtin(

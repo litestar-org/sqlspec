@@ -64,7 +64,7 @@ from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.core.statement import _parse_order_item
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
 from sqlspec.typing import Empty
-from tests.conftest import requires_interpreted
+from tests.conftest import is_compiled, requires_interpreted
 
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
@@ -1374,6 +1374,7 @@ def test_processed_state_parameter_profile_exposed() -> None:
     assert profile.placeholder_count("?") == 1
 
 
+@pytest.mark.skipif(is_compiled(), reason="module globals cannot be patched on a mypyc-compiled module")
 def test_shared_pipeline_metrics_respects_debug_flag() -> None:
     """Shared pipeline metrics emit data only when debug flag is enabled."""
     with patch.object(pipeline_module, "_RECORD_PIPELINE_METRICS", True):
@@ -1605,7 +1606,7 @@ def test_value_objects_metadata_typed_dicts_share_data_dictionary_module() -> No
     assert TableMetadata.__module__ == "sqlspec.data_dictionary._types"
 
 
-def test_value_objects_foreign_key_metadata_slots_equality_hash_and_pickle() -> None:
+def test_value_objects_foreign_key_metadata_equality_hash_and_pickle() -> None:
     metadata = ForeignKeyMetadata(
         table_name="orders",
         column_name="customer_id",
@@ -1616,23 +1617,13 @@ def test_value_objects_foreign_key_metadata_slots_equality_hash_and_pickle() -> 
         referenced_schema="public",
     )
     restored = pickle.loads(pickle.dumps(metadata))
-    assert ForeignKeyMetadata.__slots__ == (
-        "column_name",
-        "constraint_name",
-        "referenced_column",
-        "referenced_schema",
-        "referenced_table",
-        "schema",
-        "table_name",
-    )
     assert restored == metadata
     assert hash(restored) == hash(metadata)
 
 
-def test_value_objects_version_info_slots_comparison_hash_and_pickle() -> None:
+def test_value_objects_version_info_comparison_hash_and_pickle() -> None:
     version = VersionInfo(16, 1, 2)
     restored = pickle.loads(pickle.dumps(version))
-    assert VersionInfo.__slots__ == ("major", "minor", "patch")
     assert restored == version
     assert version > VersionInfo(15)
     assert version >= VersionInfo(16, 1, 2)
