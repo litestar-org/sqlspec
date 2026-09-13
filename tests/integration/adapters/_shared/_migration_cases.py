@@ -93,7 +93,7 @@ SYNC_MIGRATION_CASES = (
         marks=(ORACLE_XDIST_MARK,),
     ),
     MigrationCase(
-        "mssql_python-sync",
+        "mssql-python-sync",
         "migration_config_mssql_python",
         "mssql_python",
         "sync",
