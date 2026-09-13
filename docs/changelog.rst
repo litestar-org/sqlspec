@@ -191,7 +191,8 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   ``MssqlPythonStore`` and ``PymssqlStore`` (``CONVERT(VARBINARY(MAX), ?)``), removed unsupported
   ``FOR UPDATE`` hints from ``PymssqlConfig.get_event_runtime_hints()`` for event queue polling,
   and corrected the documentation feature table and metadata to designate ``mssql-python`` as
-  a sync-only driver with Arrow support.
+  a sync-only driver with Arrow support. SQL Server ADK memory inserts now
+  deduplicate concurrent event IDs with a single key-range-locked statement.
   (`#781 <https://github.com/litestar-org/sqlspec/pull/781>`_)
 
 * Query builder keeps ``ON CONFLICT ... DO UPDATE`` and ``ON DUPLICATE KEY UPDATE`` assignments in written
