@@ -698,7 +698,7 @@ class ParameterProcessor:
                 return tuple(updated_rows)
             return updated_rows
 
-        if param_type is dict or isinstance(parameters, Mapping):
+        if isinstance(parameters, Mapping):
             if strict:
                 missing = [name for name in named_order if name not in parameters]
                 if missing:
@@ -879,9 +879,7 @@ class ParameterProcessor:
         execution_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
             param_info, target_style
         )
-        preserve_batch = (
-            is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple))
-        )
+        preserve_batch = is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple))
         processed_sql, processed_parameters, converted_param_info = self._converter._convert_with_metadata(
             sql,
             parameters,

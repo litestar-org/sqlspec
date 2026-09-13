@@ -39,9 +39,9 @@ from sqlspec.core import (
     is_copy_operation,
     is_copy_to_operation,
 )
+from sqlspec.core._pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core._pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.statement import get_default_config
 from tests.conftest import requires_interpreted
 
