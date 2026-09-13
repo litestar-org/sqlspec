@@ -136,7 +136,6 @@ class ParameterConverter:
         strict_named_parameters: bool = True,
         param_info: "list[ParameterInfo] | None" = None,
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
-        preserve_original_batch: bool = False,
     ) -> "tuple[str, ConvertedParameters]":
         extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
 
@@ -157,7 +156,6 @@ class ParameterConverter:
             preserve_parameter_format=True,
             is_many=is_many,
             strict_named_parameters=strict_named_parameters,
-            preserve_original_batch=preserve_original_batch,
         )
         return converted_sql, converted_parameters
 
@@ -184,9 +182,6 @@ class ParameterConverter:
         collect_metadata: bool = False,
     ) -> "tuple[str | None, list[ParameterInfo] | None]":
         """Render placeholder conversion emitting rewritten SQL and metadata in one traversal."""
-        if sql is None and not collect_metadata:
-            return None, None
-
         generator = self._placeholder_generators.get(target_style)
         if generator is None:
             msg = f"Unsupported target parameter style: {target_style}"
@@ -280,8 +275,8 @@ class ParameterConverter:
         extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
 
         if target_style == ParameterStyle.STATIC:
-            static_sql, static_params = self._embed_static_parameters(sql, parameters, extracted_param_info)
-            return static_sql, static_params, []
+            static_sql, _ = self._embed_static_parameters(sql, parameters, extracted_param_info)
+            return static_sql, None, []
 
         is_subclassed = (
             type(self).convert_placeholder_style is not ParameterConverter.convert_placeholder_style
@@ -289,27 +284,15 @@ class ParameterConverter:
             or type(self).convert_parameter_info_style is not ParameterConverter.convert_parameter_info_style
         )
         if is_subclassed:
-            try:
-                converted_sql, converted_parameters = self.convert_placeholder_style(
-                    sql,
-                    parameters,
-                    target_style,
-                    is_many,
-                    strict_named_parameters=strict_named_parameters,
-                    param_info=extracted_param_info,
-                    precomputed_plan=precomputed_plan,
-                    preserve_original_batch=preserve_original_batch,
-                )
-            except TypeError:
-                converted_sql, converted_parameters = self.convert_placeholder_style(
-                    sql,
-                    parameters,
-                    target_style,
-                    is_many,
-                    strict_named_parameters=strict_named_parameters,
-                    param_info=extracted_param_info,
-                    precomputed_plan=precomputed_plan,
-                )
+            converted_sql, converted_parameters = self.convert_placeholder_style(
+                sql,
+                parameters,
+                target_style,
+                is_many,
+                strict_named_parameters=strict_named_parameters,
+                param_info=extracted_param_info,
+                precomputed_plan=precomputed_plan,
+            )
             converted_param_info = self.convert_parameter_info_style(
                 extracted_param_info, target_style, precomputed_plan=precomputed_plan
             )
