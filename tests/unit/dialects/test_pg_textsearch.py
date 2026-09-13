@@ -1,6 +1,6 @@
 """Unit tests for the PGTextSearch sqlglot dialect."""
 
-from sqlglot import parse_one
+from sqlglot import exp, parse_one
 
 from sqlspec.dialects.postgres import PGTextSearch
 
@@ -43,3 +43,18 @@ def test_pg_textsearch_bm25_index_ddl() -> None:
     rendered = expression.sql(dialect=PGTextSearch)
     assert "USING bm25" in rendered
     assert "text_config" in rendered
+
+
+def test_pg_textsearch_uses_postgres_custom_operator_precedence() -> None:
+    expression = parse_one("SELECT title || content <@> 'query' FROM documents", read=PGTextSearch)
+    ranking = expression.expressions[0]
+    assert isinstance(ranking, exp.Operator)
+    assert isinstance(ranking.this, exp.DPipe)
+    assert ranking.expression == exp.Literal.string("query")
+
+
+def test_pg_textsearch_preserves_postgres_containment_operators() -> None:
+    expression = parse_one("SELECT ARRAY[1] <@ ARRAY[1, 2], ARRAY[1, 2] @> ARRAY[1]", read=PGTextSearch)
+    assert "<@" in expression.sql(dialect=PGTextSearch)
+    assert "@>" in expression.sql(dialect=PGTextSearch)
+    assert not list(expression.find_all(exp.Operator))

@@ -9,8 +9,8 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
-----------
+v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
+---------------------------------------------------------------------------------------------------
 
 **Added:**
 
@@ -22,19 +22,7 @@ Unreleased
   and adapter modules, with ``active_extensions`` capability tracking on runtime driver features.
 * Exposed ``pg_textsearch_available`` property across ``AsyncpgConfig``, ``PsycopgSyncConfig``,
   ``PsycopgAsyncConfig``, ``AdbcConfig``, and ``PsqlpyConfig``.
-
-**Changed:**
-
-* Decoupled the ``ParadeDB`` dialect so it inherits directly from ``Postgres`` rather than ``PGVector``,
-  allowing clean independent combinations of vector search and BM25 extensions.
-* Standardized PostgreSQL extension detection across all adapters on a single first-connection probe
-  via :func:`~sqlspec.core.config_runtime.build_postgres_extension_probe_names`, removing ad-hoc ADK
-  probe branches.
-
-v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
----------------------------------------------------------------------------------------------------
-
-**Added:**
+  (`#782 <https://github.com/litestar-org/sqlspec/pull/782>`_)
 
 * Public table-queue primitives extracted to :mod:`sqlspec.extensions.events.primitives`
   and exported from :mod:`sqlspec.extensions.events`: :func:`~sqlspec.extensions.events.lock_clause`,
@@ -164,6 +152,13 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   (`#774 <https://github.com/litestar-org/sqlspec/pull/774>`_)
 
 **Changed:**
+
+* Decoupled the ``ParadeDB`` dialect so it inherits directly from ``Postgres`` rather than ``PGVector``,
+  allowing clean independent combinations of vector search and BM25 extensions.
+* Standardized PostgreSQL extension detection across all adapters on a single first-connection probe
+  via :func:`~sqlspec.core.config_runtime.build_postgres_extension_probe_names`, removing ad-hoc ADK
+  probe branches.
+  (`#782 <https://github.com/litestar-org/sqlspec/pull/782>`_)
 
 * Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
   :meth:`~sqlspec.driver.SyncDriverAdapterBase.select`, etc.) enforce keyword argument parameter passing

@@ -55,19 +55,30 @@ def _build_operator_factory(operator: str) -> Callable[[exp.Expr | None, exp.Exp
     return _factory
 
 
+def _parse_pg_textsearch_operator(
+    _parser: PostgresParser, this: exp.Expr | None, expression: exp.Expr | None
+) -> exp.Operator:
+    node = exp.Operator(this=this, expression=expression, operator="<@>")
+    node.meta[_CUSTOM_OPERATOR_META_KEY] = "<@>"
+    return node
+
+
 def register_postgres_extension_operators() -> None:
-    """Patch the compiled Postgres parser with pgvector and ParadeDB operators."""
+    """Patch the compiled Postgres parser with PostgreSQL extension operators."""
     global _REGISTERED
 
     if _REGISTERED:
         return
 
     factor: dict[TokenType, Any] = dict(PostgresParser.FACTOR)
-    extension_tokens = {**PGVECTOR_OPERATOR_TOKENS, **PARADEDB_OPERATOR_TOKENS, **PG_TEXTSEARCH_OPERATOR_TOKENS}
+    extension_tokens = {**PGVECTOR_OPERATOR_TOKENS, **PARADEDB_OPERATOR_TOKENS}
     for operator, token in extension_tokens.items():
         factor[token] = _build_operator_factory(operator)
 
     setattr(PostgresParser, "FACTOR", factor)
+    operators = dict(PostgresParser.JSON_OPERATORS)
+    operators[PG_TEXTSEARCH_OPERATOR_TOKENS["<@>"]] = _parse_pg_textsearch_operator
+    setattr(PostgresParser, "JSON_OPERATORS", operators)
     _REGISTERED = True
 
 

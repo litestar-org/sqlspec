@@ -1,5 +1,7 @@
 """Unit tests for ADBC postgres extension detection logic."""
 
+from unittest.mock import MagicMock
+
 from pytest import MonkeyPatch
 
 from sqlspec.adapters.adbc.config import AdbcConfig
@@ -209,3 +211,20 @@ def test_adbc_config_provide_session_skips_extension_probe_for_non_postgres(monk
     assert config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
     assert config.statement_config.dialect == "sqlite"
+
+
+def test_adbc_explicit_pg_textsearch_dialect_probes_extensions(monkeypatch: MonkeyPatch) -> None:
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgres", "uri": "postgresql://localhost/test"},
+        statement_config=get_statement_config("pg_textsearch"),
+        driver_features={"enable_pgvector": False, "enable_paradedb": False},
+    )
+    connection = MagicMock()
+    connection.cursor.return_value.fetchall.return_value = [("pg_textsearch",)]
+    monkeypatch.setattr(AdbcConfig, "create_connection", lambda _self: connection)
+
+    config._detect_extensions_if_needed()  # pyright: ignore[reportPrivateUsage]
+
+    assert config.pg_textsearch_available is True
+    assert config.driver_features["active_extensions"] == {"pg_textsearch"}
+    connection.close.assert_called_once()

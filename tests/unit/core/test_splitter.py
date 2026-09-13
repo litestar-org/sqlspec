@@ -46,6 +46,7 @@ def test_dialect_class_map_contains_expected_aliases() -> None:
         "paradedb": splitter_module.PostgreSQLDialectConfig,
         "pgvector": splitter_module.PostgreSQLDialectConfig,
         "pg_textsearch": splitter_module.PostgreSQLDialectConfig,
+        "pgtextsearch": splitter_module.PostgreSQLDialectConfig,
         "mysql": splitter_module.MySQLDialectConfig,
         "sqlite": splitter_module.SQLiteDialectConfig,
         "duckdb": splitter_module.DuckDBDialectConfig,

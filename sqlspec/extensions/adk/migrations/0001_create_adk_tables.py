@@ -40,7 +40,7 @@ logger = get_logger("sqlspec.migrations.adk.create")
 CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector"
 CREATE_PG_TEXTSEARCH_EXTENSION = "CREATE EXTENSION IF NOT EXISTS pg_textsearch"
 
-_POSTGRES_DIALECTS = frozenset({"postgres", "postgresql", "pgvector", "paradedb"})
+_POSTGRES_DIALECTS = frozenset({"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch", "pgtextsearch"})
 _VECTOR_COLUMN_PATTERN = re.compile(r"\bVECTOR\s*\(", re.IGNORECASE)
 _BM25_INDEX_PATTERN = re.compile(r"\bUSING\s+bm25\s*\(", re.IGNORECASE)
 

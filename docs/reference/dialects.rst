@@ -58,7 +58,10 @@ PGTextSearch
    :show-inheritance:
    :no-index:
 
-Adds support for the native PostgreSQL and Google Cloud AlloyDB / AlloyDB Omni ``pg_textsearch`` BM25 extension:
+Adds support for PostgreSQL deployments with the ``pg_textsearch`` BM25 extension installed.
+AlloyDB currently provides this extension in preview on PostgreSQL 17 and 18; see
+`AlloyDB BM25 requirements <https://docs.cloud.google.com/alloydb/docs/ai/create-bm25-index>`_.
+Server packaging and version support are independent of SQLSpec dialect availability.
 
 .. list-table::
    :header-rows: 1
@@ -68,7 +71,25 @@ Adds support for the native PostgreSQL and Google Cloud AlloyDB / AlloyDB Omni `
    * - ``<@>``
      - BM25 score ranking operator (returns negative score for ASC index scans)
 
-Indices are created with ``USING bm25 (column) WITH (text_config='english')`` and queries order by ``column <@> 'query' ASC``.
+Indexes are created with ``USING bm25 (column) WITH (text_config='english')`` and queries order by ``column <@> 'query' ASC``.
+Enable the extension in the database before using its operators or index method.
+The dialect also supports pgvector distance operators for hybrid queries.
+
+Asyncpg, psycopg, psqlpy, and PostgreSQL-backed ADBC configurations probe enabled
+extensions on first connection. ``enable_pg_textsearch`` defaults to ``True``;
+setting it to ``False`` disables detection, not the installed server extension.
+``pg_textsearch_available`` and ``is_postgres_extension_active()`` report the cached,
+enabled-and-detected state, and remain false before a successful probe.
+ADK ``enable_bm25`` requires successful pg_textsearch detection.
+
+The dialect label remains selected in priority order: ``paradedb``,
+``pg_textsearch``, then ``pgvector`` for an otherwise default PostgreSQL
+configuration. The active extension set records all enabled discoveries;
+ParadeDB includes both text-search operator families so a coinstalled
+``pg_search`` does not hide ``pg_textsearch`` syntax.
+An explicitly selected non-default dialect is preserved; select a dialect that
+supports the operators your queries use. Extension detection does not override
+that choice, and a dialect label alone does not mark an extension as available.
 
 ParadeDB
 --------

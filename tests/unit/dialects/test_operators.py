@@ -20,16 +20,16 @@ def test_pg_textsearch_operator_tokens_definition() -> None:
     assert PG_TEXTSEARCH_OPERATOR_TOKENS["<@>"] == TokenType.RING
 
 
-def test_pg_textsearch_factor_registration() -> None:
-    """Verify pg_textsearch operator is registered in PostgresParser.FACTOR."""
+def test_pg_textsearch_operator_registration() -> None:
+    """Verify pg_textsearch operator is registered in PostgresParser.JSON_OPERATORS."""
     register_postgres_extension_operators()
     ring_token = PG_TEXTSEARCH_OPERATOR_TOKENS["<@>"]
-    assert ring_token in PostgresParser.FACTOR
+    assert ring_token in PostgresParser.JSON_OPERATORS
 
-    factory = PostgresParser.FACTOR[ring_token]
+    factory = PostgresParser.JSON_OPERATORS[ring_token]
     left = exp.var("content")
     right = exp.Literal.string("search query")
-    node = factory(left, right)
+    node = factory(None, left, right)
 
     assert isinstance(node, exp.Operator)
     assert is_postgres_extension_operator(node)

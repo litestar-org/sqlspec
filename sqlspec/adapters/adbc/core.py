@@ -460,15 +460,21 @@ def resolve_dialect_name(dialect: Any) -> str:
     """Return the normalized dialect name string."""
     if dialect is None:
         return ""
+    if isinstance(dialect, str):
+        return dialect.lower()
+    if isinstance(dialect, type) and issubclass(dialect, sqlglot.Dialect):
+        return dialect.__name__.lower()
+    if isinstance(dialect, sqlglot.Dialect):
+        return type(dialect).__name__.lower()
     return str(dialect)
 
 
 def is_postgres_dialect(dialect_name: str) -> bool:
     """Return True when the dialect indicates PostgreSQL.
 
-    Includes pgvector and paradedb which are PostgreSQL extension dialects.
+    Includes pgvector, paradedb, and pg_textsearch extension dialects.
     """
-    return dialect_name in {"postgres", "postgresql", "pgvector", "paradedb"}
+    return dialect_name in {"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch", "pgtextsearch"}
 
 
 def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = None) -> None:
@@ -731,7 +737,8 @@ def build_profile() -> "DriverParameterProfile":
 def get_statement_config(detected_dialect: str) -> StatementConfig:
     """Create statement configuration for the specified dialect."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+        "postgres" if is_postgres_dialect(detected_dialect) else detected_dialect,
+        (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
     )
 
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
@@ -749,7 +756,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
 
-    if detected_dialect in {"postgres", "postgresql"}:
+    if is_postgres_dialect(detected_dialect):
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(

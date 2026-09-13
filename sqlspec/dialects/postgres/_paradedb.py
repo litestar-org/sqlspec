@@ -12,7 +12,7 @@ Adds support for ParadeDB pg_search operators (pg_search 0.18.0+):
 Scoring and snippets are plain functions in ParadeDB (``pdb.score()``,
 ``pdb.snippet()``), not operators, so they need no dialect support.
 
-Also inherits the pgvector distance operators from PGVector. Registered with
+Also supports pgvector distance operators and pg_textsearch ranking independently. Registered with
 sqlglot through the ``sqlglot.dialects`` entry-point group in
 ``pyproject.toml`` and by the ``Dialect`` metaclass on import.
 """
@@ -22,6 +22,7 @@ from sqlglot.dialects.postgres import Postgres
 from sqlspec.dialects.postgres._generators import ParadeDBGenerator
 from sqlspec.dialects.postgres._operators import (
     PARADEDB_OPERATOR_TOKENS,
+    PG_TEXTSEARCH_OPERATOR_TOKENS,
     PGVECTOR_OPERATOR_TOKENS,
     register_postgres_extension_operators,
 )
@@ -34,7 +35,12 @@ register_postgres_extension_operators()
 class ParadeDBTokenizer(Postgres.Tokenizer):
     """Tokenizer with ParadeDB search operators and pgvector distance operators."""
 
-    KEYWORDS = {**Postgres.Tokenizer.KEYWORDS, **PARADEDB_OPERATOR_TOKENS, **PGVECTOR_OPERATOR_TOKENS}
+    KEYWORDS = {
+        **Postgres.Tokenizer.KEYWORDS,
+        **PARADEDB_OPERATOR_TOKENS,
+        **PGVECTOR_OPERATOR_TOKENS,
+        **PG_TEXTSEARCH_OPERATOR_TOKENS,
+    }
 
 
 class ParadeDB(Postgres):
