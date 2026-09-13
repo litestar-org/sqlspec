@@ -357,6 +357,48 @@ For example, configure a PostgreSQL queue for a write-heavy workload:
 
 .. autofunction:: sqlspec.extensions.events.build_queue_backend
 
+Building your own leased queue
+------------------------------
+
+When implementing custom leased-row queue tables or competing-consumer workers,
+SQLSpec exports the core dialect and claim-verification primitives used by
+:class:`~sqlspec.extensions.events.SyncTableEventQueue` and
+:class:`~sqlspec.extensions.events.AsyncTableEventQueue`. These pure helpers
+render dialect-safe row-limiting, locking clauses, and verify leases against
+rowcount-blind drivers:
+
+.. code-block:: python
+
+    from datetime import datetime, timedelta, timezone
+    from sqlspec.extensions.events import (
+        claim_verified,
+        lock_clause,
+        row_limit_clause,
+        select_limit_prefix,
+    )
+
+    dialect = "postgres"
+    top = select_limit_prefix(dialect, 1)
+    limit = row_limit_clause(dialect, 1)
+    lock = lock_clause(select_for_update=True, skip_locked=True)
+
+    select_sql = (
+        f"SELECT {top}id, payload FROM custom_queue WHERE status = 'pending'"
+        f"{limit}{lock}"
+    )
+
+    now = datetime.now(timezone.utc)
+    lease_expires_at = now + timedelta(seconds=30)
+    won = claim_verified(fetched_row, lease_expires_at)
+
+.. autofunction:: sqlspec.extensions.events.lock_clause
+
+.. autofunction:: sqlspec.extensions.events.row_limit_clause
+
+.. autofunction:: sqlspec.extensions.events.select_limit_prefix
+
+.. autofunction:: sqlspec.extensions.events.claim_verified
+
 Store
 =====
 

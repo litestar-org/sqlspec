@@ -14,6 +14,16 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
 
 **Added:**
 
+* Public table-queue primitives extracted to :mod:`sqlspec.extensions.events.primitives`
+  and exported from :mod:`sqlspec.extensions.events`: :func:`~sqlspec.extensions.events.lock_clause`,
+  :func:`~sqlspec.extensions.events.row_limit_clause`,
+  :func:`~sqlspec.extensions.events.select_limit_prefix`, and
+  :func:`~sqlspec.extensions.events.claim_verified`.
+  :class:`~sqlspec.extensions.events.SyncTableEventQueue` and
+  :class:`~sqlspec.extensions.events.AsyncTableEventQueue` delegate to them for dialect-aware
+  row-limiting, row-locking, and claim lease verification.
+  (`#777 <https://github.com/litestar-org/sqlspec/issues/777>`_)
+
 * Sync and async drivers provide :meth:`~sqlspec.driver.SyncDriverAdapterBase.transaction`, a context manager that begins a
   transaction, commits when the block succeeds, and rolls back and re-raises when
   it fails; a failed commit is followed by a rollback attempt. A block entered while

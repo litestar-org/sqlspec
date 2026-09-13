@@ -13,6 +13,7 @@ from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hint
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
 from sqlspec.extensions.events._payload import coerce_dict, coerce_optional_dict, parse_event_timestamp
+from sqlspec.extensions.events.primitives import claim_verified, lock_clause, row_limit_clause, select_limit_prefix
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
@@ -97,31 +98,23 @@ class _BaseTableEventQueue:
         return f"INSERT INTO {self._table_name} ({columns}) VALUES ({values})"
 
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
-        top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
+        top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
         base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC, event_id ASC"
-        locking_clause = ""
-        if select_for_update:
-            locking_clause = " FOR UPDATE"
-            if skip_locked:
-                locking_clause += " SKIP LOCKED"
+        locking_clause = lock_clause(select_for_update=select_for_update, skip_locked=skip_locked)
         return base + limit_clause + locking_clause
 
     def _select_by_id_sql(self) -> str:
-        top_clause = "TOP 1 " if self._uses_tsql_limit() else ""
+        top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = self._row_limit_clause()
         base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE event_id = :event_id"
         return base + limit_clause
 
     def _uses_tsql_limit(self) -> bool:
-        return self._dialect in {"mssql", "tsql"} or "sql server" in self._dialect
+        return bool(select_limit_prefix(self._dialect, 1))
 
     def _row_limit_clause(self) -> str:
-        if self._uses_tsql_limit():
-            return ""
-        if "oracle" in self._dialect:
-            return " FETCH FIRST 1 ROWS ONLY"
-        return " LIMIT 1"
+        return row_limit_clause(self._dialect, 1)
 
     def _uses_oracle_locking_select(self, select_for_update: bool | None = None) -> bool:
         locking_enabled = self._select_for_update if select_for_update is None else select_for_update
@@ -209,12 +202,7 @@ class _BaseTableEventQueue:
         from a lost race. The persisted ``lease_expires_at`` value identifies
         the winning claimer.
         """
-        if row is None:
-            return False
-        lease_value = row.get("lease_expires_at")
-        if lease_value is None:
-            return False
-        return parse_event_timestamp(lease_value) == leased_until
+        return claim_verified(row, leased_until)
 
     @staticmethod
     def _hydrate_event(row: "dict[str, Any]", lease_expires_at: "datetime | None") -> EventMessage:

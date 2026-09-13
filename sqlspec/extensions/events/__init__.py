@@ -31,6 +31,7 @@ from sqlspec.extensions.events._store import (
     normalize_event_channel_name,
     normalize_queue_table_name,
 )
+from sqlspec.extensions.events.primitives import claim_verified, lock_clause, row_limit_clause, select_limit_prefix
 
 __all__ = (
     "MAX_NOTIFY_BYTES",
@@ -48,11 +49,13 @@ __all__ = (
     "SyncEventListener",
     "SyncTableEventQueue",
     "build_queue_backend",
+    "claim_verified",
     "decode_notify_payload",
     "encode_notify_payload",
     "fits_notify_payload",
     "get_runtime_hints",
     "load_native_backend",
+    "lock_clause",
     "measure_notify_payload",
     "normalize_event_channel_name",
     "normalize_queue_table_name",
@@ -60,4 +63,6 @@ __all__ = (
     "resolve_adapter_name",
     "resolve_event_poll_interval",
     "resolve_poll_interval",
+    "row_limit_clause",
+    "select_limit_prefix",
 )
