@@ -2,6 +2,8 @@
 
 import sqlite3
 
+import pytest
+
 from sqlspec.adapters.aiosqlite.core import create_mapped_exception
 from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError, UniqueViolationError
 
@@ -117,3 +119,12 @@ def test_primary_key_error_name_maps_to_unique_violation() -> None:
     result = create_mapped_exception(err)
     assert isinstance(result, UniqueViolationError)
     assert result.__cause__ is err
+
+
+@pytest.mark.parametrize("table", ["busy", "locked", "interrupt", "readonly"])
+@pytest.mark.parametrize(("code", "name"), [(1555, None), (None, "SQLITE_CONSTRAINT_PRIMARYKEY")])
+def test_primary_key_identity_takes_precedence_over_message(table: str, code: int | None, name: str | None) -> None:
+    error = _SqliteIntegrityError(f"UNIQUE constraint failed: {table}.id", code, name)
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, UniqueViolationError)
+    assert mapped.__cause__ is error

@@ -340,6 +340,12 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         error_name = None
     error_msg = str(error).lower()
 
+    if error_code in (SQLITE_CONSTRAINT_UNIQUE_CODE, SQLITE_CONSTRAINT_PRIMARYKEY_CODE) or error_name in (
+        "SQLITE_CONSTRAINT_UNIQUE",
+        "SQLITE_CONSTRAINT_PRIMARYKEY",
+    ):
+        return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
+
     # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
     # SQLITE_BUSY means another process has the database locked
     # SQLITE_LOCKED means another connection has the table/rows locked
@@ -363,12 +369,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
     if "permission denied" in error_msg or "readonly" in error_msg:
         return _create_sqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
-
-    if error_code in (SQLITE_CONSTRAINT_UNIQUE_CODE, SQLITE_CONSTRAINT_PRIMARYKEY_CODE) or error_name in (
-        "SQLITE_CONSTRAINT_UNIQUE",
-        "SQLITE_CONSTRAINT_PRIMARYKEY",
-    ):
-        return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
     if not error_code:
         if "unique constraint" in error_msg:
