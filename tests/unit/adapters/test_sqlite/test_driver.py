@@ -1,5 +1,13 @@
 import sqlite3
 from typing import Any, cast
+from unittest.mock import Mock
+
+import pytest
+from sqlglot import parse_one
+
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite.core import resolve_lastrowid
+from sqlspec.core.compiler import OperationType
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -65,3 +73,59 @@ def test_pool_no_duplicate_typedef_pool_creates_connection_after_cleanup() -> No
     pool.close()
     assert row is not None
     assert row[0] == 1
+
+
+@pytest.mark.parametrize(
+    ("operation_type", "rowcount"),
+    [
+        ("SELECT", 1),
+        ("UPDATE", 1),
+        ("DELETE", 1),
+        ("DDL", 1),
+        ("SCRIPT", 1),
+        ("COMMAND", 1),
+        ("INSERT", 0),
+        ("INSERT", -1),
+    ],
+)
+def test_lastrowid_guard_skips_metadata(operation_type: OperationType, rowcount: int) -> None:
+    """Ensure resolve_lastrowid returns None without accessing connection or cursor attributes."""
+    connection = Mock(spec=[])
+    cursor = Mock(spec=[])
+    cache = cast("dict[tuple[str | None, str], bool]", Mock(spec=[]))
+    expression = parse_one("INSERT INTO test (value) VALUES ('x')", read="sqlite")
+
+    assert resolve_lastrowid(connection, cursor, operation_type, rowcount, expression, cache) is None
+
+
+def test_non_insert_operations_skip_metadata_pragma() -> None:
+    """Ensure non-INSERT statements skip schema pragma queries during execution and statement cache hits."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as session:
+        session.execute_script("CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)")
+        session.execute("INSERT INTO test_table (id, value) VALUES (?, ?)", (1, "initial"))
+        session.commit()
+
+        statements: list[str] = []
+        session.connection.set_trace_callback(statements.append)
+        try:
+            statements.clear()
+            select_res = session.execute("SELECT id, value FROM test_table WHERE id = ?", (1,))
+            assert select_res.data is not None and len(select_res.data) == 1
+            assert select_res.last_inserted_id is None
+
+            select_repeat_res = session.execute("SELECT id, value FROM test_table WHERE id = ?", (1,))
+            assert select_repeat_res.data is not None and len(select_repeat_res.data) == 1
+            assert select_repeat_res.last_inserted_id is None
+
+            update_res = session.execute("UPDATE test_table SET value = ? WHERE id = ?", ("updated", 1))
+            assert update_res.rows_affected == 1
+            assert update_res.last_inserted_id is None
+
+            delete_res = session.execute("DELETE FROM test_table WHERE id = ?", (1,))
+            assert delete_res.rows_affected == 1
+            assert delete_res.last_inserted_id is None
+
+            assert not any("PRAGMA" in sql.upper() for sql in statements)
+        finally:
+            session.connection.set_trace_callback(None)
