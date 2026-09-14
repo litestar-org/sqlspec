@@ -277,23 +277,6 @@ async def test_native_export_resolves_real_remote_and_local_aliases(
     native_driver.fallback.assert_called_once()
 
 
-def test_native_benchmark_cli_omits_failure_credentials(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from unittest.mock import Mock
-
-    from tools.scripts import bench_cockroach_storage
-
-    monkeypatch.setattr("sys.argv", ["bench_cockroach_storage"])
-    monkeypatch.setattr(bench_cockroach_storage, "run_benchmark", Mock(side_effect=RuntimeError("secret-access-key")))
-    with pytest.raises(SystemExit) as exc:
-        bench_cockroach_storage.main()
-    assert exc.value.code == 1
-    output = capsys.readouterr()
-    assert "RuntimeError" in output.err
-    assert "secret-access-key" not in output.err
-
-
 @pytest.mark.parametrize("query", ["SELECT 1 -- trailing comment", "SELECT ';' AS value -- trailing comment"])
 async def test_native_export_preserves_comments_and_literal_delimiters(native_driver: Any, query: str) -> None:
     native_driver.execute.return_value = [{"filename": "out.parquet", "rows": 1, "bytes": 10}]

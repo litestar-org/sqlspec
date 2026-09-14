@@ -3,6 +3,8 @@
 
 import asyncio
 import threading
+import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -10,7 +12,13 @@ import pytest
 from sqlspec import ObservabilityRuntime
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
-from sqlspec.extensions.events import AsyncEventChannel, AsyncEventListener, SyncEventChannel, SyncEventListener
+from sqlspec.extensions.events import (
+    AsyncEventChannel,
+    AsyncEventListener,
+    EventMessage,
+    SyncEventChannel,
+    SyncEventListener,
+)
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -129,22 +137,23 @@ def test_event_channel_rejects_retired_backend_with_migration_guidance(
         SyncEventChannel(config)
 
 
-def test_event_channel_honors_driver_feature_backend(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Adapter driver features select the backend when extension config does not."""
-    selected: list[str | None] = []
-
-    def capture_backend(config: Any, backend_name: str | None, settings: dict[str, Any], adapter_name: str) -> None:
-        selected.append(backend_name)
-
-    monkeypatch.setattr("sqlspec.extensions.events._channel.load_native_backend", capture_backend)
+def test_event_channel_honors_driver_feature_backend(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """An unavailable driver-feature backend reports the requested transport."""
     config = SqliteConfig(
         connection_config={"database": str(tmp_path / "test.db")}, driver_features={"events_backend": "notify"}
     )
-
     channel = SyncEventChannel(config)
 
     assert channel._backend_name == "poll_queue"
-    assert selected == ["notify"]
+    warnings = [record.__dict__["extra_fields"] for record in caplog.records if record.message == "event.listen"]
+    assert warnings == [
+        {
+            "adapter_name": "sqlite",
+            "backend_name": "notify",
+            "fallback_backend": "poll_queue",
+            "status": "backend_unavailable",
+        }
+    ]
 
 
 def test_event_extension_backend_takes_precedence_over_driver_feature(tmp_path) -> None:
@@ -379,3 +388,111 @@ def test_event_channel_custom_retention_seconds_via_extension(tmp_path) -> None:
 
     backend = channel._backend
     assert backend._retention_seconds == 7200
+
+
+class _ControllableSyncBackend:
+    """Mock sync backend for testing listener dequeue interruption and lifecycle."""
+
+    supports_sync = True
+    supports_async = False
+    backend_name = "controllable-sync-test"
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.observed_poll_intervals: list[float] = []
+        self.queued_events: list[EventMessage] = []
+        self.acked_ids: list[str] = []
+
+    def dequeue(self, channel: str, poll_interval: float) -> EventMessage | None:
+        self.observed_poll_intervals.append(poll_interval)
+        self.entered.set()
+        if self.queued_events:
+            return self.queued_events.pop(0)
+        time.sleep(poll_interval)
+        return None
+
+    def ack(self, event_id: str) -> None:
+        self.acked_ids.append(event_id)
+
+    def nack(self, event_id: str) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
+
+
+def test_sync_listener_delivers_and_acknowledges(tmp_path) -> None:
+    """Sync listener processes delivered events and acknowledges them before joining."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
+    channel = SyncEventChannel(config)
+    backend = _ControllableSyncBackend()
+    now = datetime.now(timezone.utc)
+    event = EventMessage(
+        event_id="evt-101",
+        channel="test_channel",
+        payload={"key": "value"},
+        metadata=None,
+        attempts=0,
+        available_at=now,
+        lease_expires_at=None,
+        created_at=now,
+    )
+    backend.queued_events.append(event)
+    channel._backend = backend
+
+    received: list[EventMessage] = []
+    delivered = threading.Event()
+
+    def handle_event(message: EventMessage) -> None:
+        received.append(message)
+        delivered.set()
+
+    listener = channel.listen("test_channel", handle_event, poll_interval=0.02)
+    assert delivered.wait(timeout=1.0)
+    channel.stop_listener(listener.id)
+
+    assert len(received) == 1
+    assert received[0].event_id == "evt-101"
+    assert backend.acked_ids == ["evt-101"]
+    assert backend.observed_poll_intervals[0] == 0.02
+    assert not listener.thread.is_alive()
+    assert listener.id not in channel._listeners
+
+
+@pytest.mark.parametrize("select_for_update", [False, True])
+def test_sync_table_listener_preserves_idle_poll_interval(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, select_for_update: bool
+) -> None:
+    """Stopping a long idle table poll wakes the listener without extra queries."""
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    polled = threading.Event()
+    polls: list[str] = []
+
+    def trace(statement: str) -> None:
+        if statement.startswith("SELECT") and "sqlspec_event_queue" in statement:
+            polls.append(statement)
+            polled.set()
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "test.db")},
+        migration_config={"script_location": str(migrations_dir), "include_extensions": ["events"]},
+        driver_features={"on_connection_create": lambda connection: connection.set_trace_callback(trace)},
+    )
+    SyncMigrationCommands(config).upgrade()
+    polls.clear()
+    polled.clear()
+    channel = SyncEventChannel(config)
+    monkeypatch.setattr(channel._backend, "_select_for_update", select_for_update)
+    listener = channel.listen("test_channel", lambda _: None, poll_interval=10.0)
+    try:
+        assert polled.wait(timeout=1.0)
+        # Several old 0.1-second polling windows must not trigger more queries.
+        time.sleep(0.3)
+        assert len(polls) == 1
+    finally:
+        channel.stop_listener(listener.id)
+        config.close_pool()
+    assert not listener.thread.is_alive()

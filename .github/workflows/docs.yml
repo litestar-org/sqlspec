@@ -40,12 +40,12 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Build documentation
-        run: uv run python tools/build_docs.py docs-build
+        run: make docs
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
-          path: docs-build
+          path: docs/_build/html
 
   deploy:
     needs: build

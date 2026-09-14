@@ -61,25 +61,18 @@ extensions = [
     "sphinx.ext.githubpages",
     "sphinx.ext.viewcode",
     "tools.sphinx_ext.missing_references",
-    "tools.sphinx_ext.changelog",
     "tools.sphinx_ext.guarded_imports",
     "sphinx_autodoc_typehints",
     "myst_parser",
     "auto_pytabs.sphinx_ext",
     "sphinx_copybutton",
-    "sphinx.ext.todo",
     "sphinx_click",
     "click_extra.sphinx",
     "sphinx_design",
-    "sphinx_tabs.tabs",
-    "sphinx_togglebutton",
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
     "numpydoc",
     "sphinx_iconify",
-    "sphinx_datatables",
-    "jupyter_sphinx",
-    "nbsphinx",
     "tools.sphinx_ext.playground",
 ]
 intersphinx_mapping = {
@@ -162,14 +155,10 @@ autosectionlabel_prefix_document = True
 # https://sphinx-copybutton.readthedocs.io/en/latest/use.html#strip-and-configure-input-prompts-for-code-cells
 copybutton_prompt_text = "$ "
 
-nbsphinx_requirejs_path = ""
-jupyter_sphinx_require_url = ""
-
 # -- Style configuration -----------------------------------------------------
 html_theme = "shibuya"
 html_title = "SQLSpec"
 html_short_title = "SQLSpec"
-todo_include_todos = True
 
 html_static_path = ["_static"]
 html_favicon = "_static/favicon.png"
@@ -180,7 +169,6 @@ exclude_patterns = [
     "_build",
     "Thumbs.db",
     ".DS_Store",
-    "PYPI_README.md",
     "STYLE_GUIDE.md",
     "VOICE_AUDIT_REPORT.md",
     "autoapi/sqlspec/index.rst",
@@ -307,18 +295,7 @@ def update_html_context(
     context["generate_toctree_html"] = partial(context["generate_toctree_html"], startdepth=0)
 
 
-def _ensure_static_dir(app: Sphinx, exception: Any) -> None:
-    """Ensure _static directory exists for extensions that write to it."""
-    if exception is None and hasattr(app.builder, "outdir"):
-        from pathlib import Path
-
-        static_dir = Path(app.builder.outdir) / "_static"
-        static_dir.mkdir(parents=True, exist_ok=True)
-
-
 def setup(app: Sphinx) -> dict[str, bool]:
+    """Configure Sphinx application plugins."""
     app.setup_extension("shibuya")
-    # Ensure _static exists before sphinx_datatables tries to write to it
-    # Use priority < 500 to run before sphinx_datatables' finish handler
-    app.connect("build-finished", _ensure_static_dir, priority=100)
     return {"parallel_read_safe": True, "parallel_write_safe": True}

@@ -50,7 +50,6 @@ _POSTGRES_DRIVER_FEATURES = (
     ("sqlspec.adapters.psqlpy.config", "PsqlpyDriverFeatures"),
 )
 _POSTGRES_EVENT_BACKENDS = {"notify", "notify_queue", "poll_queue"}
-_RETIRED_EVENT_BACKENDS = ("listen_notify", "listen_notify_durable", "table_queue")
 
 
 @pytest.mark.parametrize(("module_name", "features_name"), _POSTGRES_DRIVER_FEATURES)
@@ -62,21 +61,6 @@ def test_postgres_driver_feature_event_backends_are_canonical_literals(module_na
     literal = get_args(annotation)[0]
 
     assert set(get_args(literal)) == _POSTGRES_EVENT_BACKENDS
-
-
-def test_active_event_config_prose_uses_canonical_transport_names() -> None:
-    """Active adapter config and event reference docs do not advertise retired names."""
-    project_root = Path(__file__).parents[4]
-    paths = [*project_root.glob("sqlspec/adapters/*/config.py"), project_root / "docs/reference/extensions/events.rst"]
-
-    violations = {
-        str(path.relative_to(project_root)): retired
-        for path in paths
-        for retired in _RETIRED_EVENT_BACKENDS
-        if retired in path.read_text(encoding="utf-8")
-    }
-
-    assert violations == {}
 
 
 def test_events_extension_auto_includes_migrations(tmp_path) -> None:

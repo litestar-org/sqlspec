@@ -34,7 +34,7 @@ Guidelines for writing code
   - All code must be fully typed (enforced via `mypy <https://mypy.readthedocs.io/en/stable/>`_ and `pyright <https://microsoft.github.io/pyright/>`_). Avoid ``Any`` whenever possible.
   - Use PEP 585 built-in collection types (``dict``, ``list``, ``tuple``, ``set``) rather than their ``typing`` module equivalents.
   - Use PEP 604 union types (``T | None``), never ``Optional[T]`` or ``Union[T, None]``.
-  - Package modules must **not** import ``from __future__ import annotations``. Prek checks this using an AST-based local hook.
+  - Package modules must **not** import ``from __future__ import annotations``. This is enforced via Ruff rule ``TID251`` (banned API).
 
 - **Comments & Documentation**:
   - **Never use in-line comments in Python code**. If code requires explanation, document the rationale in the class or function docstring.
@@ -72,8 +72,7 @@ Writing and running tests
   - Use unit tests (`tests/unit/`) for code that does not need a database (parsing, config normalization, parameter formatting).
   - Review the `test placement guide <https://github.com/litestar-org/sqlspec/blob/main/tests/README.md>`_ for detailed fixture conventions.
 - **Integration Resources**:
-  - Integration tests use ``pytest-databases`` fixtures.
-  - Run database containers locally before running integration tests if testing locally (e.g. via ``make infra-up``).
+  - Integration tests use ``pytest-databases`` fixtures to provision and manage database containers automatically.
 - **Coverage Requirements**:
   - The repository-wide coverage floor is temporarily 76%.
   - Every new commit must keep changed-code coverage at or above **90%**.

@@ -1,6 +1,7 @@
 """Integration tests for Psqlpy ADK store owner_id_column feature."""
 
-from collections.abc import AsyncGenerator
+import copy
+from collections.abc import AsyncGenerator, Generator
 
 import pytest
 
@@ -11,22 +12,33 @@ pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.postgres, pytest.
 
 
 @pytest.fixture
-async def psqlpy_store_with_fk(psqlpy_config: PsqlpyConfig) -> "AsyncGenerator[PsqlpyADKStore, None]":
+def isolated_psqlpy_config(psqlpy_config: PsqlpyConfig) -> Generator[PsqlpyConfig, None, None]:
+    """Provide a test-scoped isolated psqlpy configuration that restores previous state on cleanup."""
+    previous_config = copy.deepcopy(psqlpy_config.extension_config)
+    try:
+        yield psqlpy_config
+    finally:
+        psqlpy_config.extension_config = previous_config
+
+
+@pytest.fixture
+async def psqlpy_store_with_fk(isolated_psqlpy_config: PsqlpyConfig) -> AsyncGenerator[PsqlpyADKStore, None]:
     """Create Psqlpy ADK store with owner_id_column configured."""
-    psqlpy_config.extension_config = {
+    isolated_psqlpy_config.extension_config = {
         "adk": {
             "session_table": "test_sessions_fk_psqlpy",
             "events_table": "test_events_fk_psqlpy",
             "owner_id_column": "tenant_id INTEGER NOT NULL",
         }
     }
-    store = PsqlpyADKStore(psqlpy_config)
+    store = PsqlpyADKStore(isolated_psqlpy_config)
     await store.create_tables()
-    yield store
-
-    async with psqlpy_config.provide_connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS test_events_fk_psqlpy CASCADE", [])
-        await conn.execute("DROP TABLE IF EXISTS test_sessions_fk_psqlpy CASCADE", [])
+    try:
+        yield store
+    finally:
+        async with isolated_psqlpy_config.provide_connection() as conn:
+            await conn.execute("DROP TABLE IF EXISTS test_events_fk_psqlpy CASCADE", [])
+            await conn.execute("DROP TABLE IF EXISTS test_sessions_fk_psqlpy CASCADE", [])
 
 
 async def test_store_owner_id_column_initialization(psqlpy_store_with_fk: PsqlpyADKStore) -> None:
@@ -35,16 +47,16 @@ async def test_store_owner_id_column_initialization(psqlpy_store_with_fk: Psqlpy
     assert psqlpy_store_with_fk.owner_id_column_name == "tenant_id"
 
 
-async def test_store_inherits_owner_id_column(psqlpy_config: PsqlpyConfig) -> None:
+async def test_store_inherits_owner_id_column(isolated_psqlpy_config: PsqlpyConfig) -> None:
     """Test that store correctly inherits owner_id_column from base class."""
-    psqlpy_config.extension_config = {
+    isolated_psqlpy_config.extension_config = {
         "adk": {
             "session_table": "test_inherit_psqlpy",
             "events_table": "test_events_inherit_psqlpy",
             "owner_id_column": "org_id UUID",
         }
     }
-    store = PsqlpyADKStore(psqlpy_config)
+    store = PsqlpyADKStore(isolated_psqlpy_config)
 
     assert hasattr(store, "_owner_id_column_ddl")
     assert hasattr(store, "_owner_id_column_name")
@@ -52,12 +64,12 @@ async def test_store_inherits_owner_id_column(psqlpy_config: PsqlpyConfig) -> No
     assert store.owner_id_column_name == "org_id"
 
 
-async def test_store_without_owner_id_column(psqlpy_config: PsqlpyConfig) -> None:
+async def test_store_without_owner_id_column(isolated_psqlpy_config: PsqlpyConfig) -> None:
     """Test that store works without owner_id_column (default behavior)."""
-    psqlpy_config.extension_config = {
+    isolated_psqlpy_config.extension_config = {
         "adk": {"session_table": "test_no_fk_psqlpy", "events_table": "test_events_no_fk_psqlpy"}
     }
-    store = PsqlpyADKStore(psqlpy_config)
+    store = PsqlpyADKStore(isolated_psqlpy_config)
 
     assert store.owner_id_column_ddl is None
     assert store.owner_id_column_name is None

@@ -17,7 +17,7 @@ from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_event_channel_name
 from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
-from sqlspec.extensions.events._queue import build_queue_backend
+from sqlspec.extensions.events._queue import SyncTableEventQueue, build_queue_backend
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
@@ -419,14 +419,21 @@ class SyncEventChannel:
         poll_interval: float,
         auto_ack: bool,
     ) -> None:
-        """Internal listener loop."""
+        """Internal listener loop.
+
+        Table queue waits preserve the polling interval and wake on stop.
+        Native backends retain their configured notification wait interval.
+        """
         try:
             while not stop_event.is_set():
                 span = _start_event_span(
                     self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="sync"
                 )
                 try:
-                    event = self._backend.dequeue(channel, poll_interval)
+                    if isinstance(self._backend, SyncTableEventQueue):
+                        event = self._backend.dequeue(channel, poll_interval, stop_event=stop_event)
+                    else:
+                        event = self._backend.dequeue(channel, poll_interval)
                 except Exception as error:
                     _end_event_span(self._runtime, span, error=error)
                     raise

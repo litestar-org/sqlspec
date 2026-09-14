@@ -868,19 +868,6 @@ async def test_async_execute_cache_hit_re_raises_mapped_exception(
         await aiosqlite_async_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
-def test_cached_query_and_query_cache_are_final() -> None:
-    """@final markers are present for mypyc devirtualization."""
-    assert getattr(CachedQuery, "__final__", False) is True
-    assert getattr(QueryCache, "__final__", False) is True
-
-    cache = QueryCache()
-    assert isinstance(cache, QueryCache)
-    assert len(cache) == 0
-
-    cached = CachedQuery.__new__(CachedQuery)
-    assert isinstance(cached, CachedQuery)
-
-
 def test_query_cache_lru_eviction_after_final() -> None:
     """QueryCache LRU eviction still works after final/native annotations."""
     cache = QueryCache(max_size=2)

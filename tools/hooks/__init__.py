@@ -1,1 +1,0 @@
-"""Local quality-gate hooks."""

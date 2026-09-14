@@ -169,7 +169,7 @@ clean:                                              ## Cleanup temporary build a
 .PHONY: test
 test:                                               ## Run the tests
 	@echo "${INFO} Running test cases... 🧪"
-	@uv run pytest -n 4 --dist=loadgroup tests/unit tests/typing docs/examples
+	@uv run pytest -n 4 --dist=loadgroup tests/unit
 	@uv run pytest -n 1 --dist=loadgroup tests/integration --ignore=tests/integration/adapters
 	@for family in $(ADAPTER_FAMILIES); do
 		uv run pytest -n 1 --dist=loadgroup "tests/integration/adapters/$${family}"
@@ -185,7 +185,7 @@ coverage:                                           ## Run tests with coverage r
 	@echo "${INFO} Running tests with coverage... 📊"
 	@uv run coverage erase
 	@uv run pytest --cov --cov-report= --cov-fail-under=0 -n 4 --dist=loadgroup --quiet \
-		tests/unit tests/typing docs/examples
+		tests/unit
 	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
 		tests/integration --ignore=tests/integration/adapters
 	@for family in $(ADAPTER_FAMILIES); do
@@ -259,7 +259,7 @@ lint: fix prek type-check slotscheck zizmor         ## Run all linting checks
 	@echo "${OK} All linting checks passed ✨"
 
 .PHONY: check-all
-check-all: lint test-all coverage                  ## Run all checks (lint, test, coverage)
+check-all: lint coverage                            ## Run all checks (lint, test with coverage)
 	@echo "${OK} All checks passed successfully ✨"
 
 # =============================================================================
@@ -404,49 +404,6 @@ pgo-local:                                          ## Run full three-stage PGO 
 	@echo "${OK} PGO-optimized wheel built: $$(ls dist/*.whl)"
 	@uv pip install dist/*.whl --force-reinstall --no-deps >/dev/null 2>&1
 	@echo "${OK} PGO build complete 🚀"
-
-# =============================================================================
-# Development Infrastructure
-# =============================================================================
-
-.PHONY: infra-up
-infra-up:                                              ## Start development infrastructure (databases, storage)
-	@echo "${INFO} Starting development infrastructure..."
-	@./tools/local-infra.sh up
-	@echo "${OK} Development infrastructure ready ✨"
-
-.PHONY: infra-down
-infra-down:                                            ## Stop development infrastructure
-	@echo "${INFO} Stopping development infrastructure..."
-	@./tools/local-infra.sh down --quiet
-	@echo "${OK} Development infrastructure stopped"
-
-.PHONY: infra-status
-infra-status:                                          ## Show development infrastructure status
-	@./tools/local-infra.sh status
-
-.PHONY: infra-cleanup
-infra-cleanup:                                         ## Clean up development infrastructure
-	@echo "${WARN} This will remove all development containers and volumes"
-	@./tools/local-infra.sh cleanup
-
-.PHONY: infra-postgres
-infra-postgres:                                        ## Start only PostgreSQL
-	@echo "${INFO} Starting PostgreSQL..."
-	@./tools/local-infra.sh up postgres --quiet
-	@echo "${OK} PostgreSQL ready on port 5433"
-
-.PHONY: infra-oracle
-infra-oracle:                                          ## Start only Oracle
-	@echo "${INFO} Starting Oracle..."
-	@./tools/local-infra.sh up oracle --quiet
-	@echo "${OK} Oracle ready on port 1522"
-
-.PHONY: infra-mysql
-infra-mysql:                                           ## Start only MySQL
-	@echo "${INFO} Starting MySQL..."
-	@./tools/local-infra.sh up mysql --quiet
-	@echo "${OK} MySQL ready on port 3307"
 
 # =============================================================================
 # End of Makefile

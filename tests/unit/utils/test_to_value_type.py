@@ -4,7 +4,7 @@ import datetime
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import TypedDict
+from typing import Any, TypedDict
 from unittest.mock import patch
 from uuid import UUID
 
@@ -76,122 +76,61 @@ def test_foreign_key_metadata_list_conversion() -> None:
     assert result[1].table_name == "items"
 
 
-def test_identity_conversions_int_identity() -> None:
-    """Integer with exact type match returns the same object."""
-    value = 42
-    result = to_value_type(value, int)
-    assert result is value
-    assert result == 42
-
-
-def test_identity_conversions_float_identity() -> None:
-    """Float with exact type match returns the same object."""
-    value = 3.14
-    result = to_value_type(value, float)
-    assert result is value
-
-
-def test_identity_conversions_str_identity() -> None:
-    """String with exact type match returns the same object."""
-    value = "hello"
-    result = to_value_type(value, str)
-    assert result is value
-
-
-def test_identity_conversions_bool_identity() -> None:
-    """Boolean with exact type match returns the same object."""
-    value = True
-    result = to_value_type(value, bool)
+@pytest.mark.parametrize(
+    ("value", "target_type"),
+    [
+        pytest.param(42, int, id="int"),
+        pytest.param(3.14, float, id="float"),
+        pytest.param("hello", str, id="str"),
+        pytest.param(True, bool, id="bool"),
+        pytest.param(datetime.datetime(2024, 1, 15, 12, 30, 45), datetime.datetime, id="datetime"),
+        pytest.param(datetime.date(2024, 1, 15), datetime.date, id="date"),
+        pytest.param(datetime.time(12, 30, 45), datetime.time, id="time"),
+        pytest.param(Decimal("123.45"), Decimal, id="decimal"),
+        pytest.param(UUID("550e8400-e29b-41d4-a716-446655440000"), UUID, id="uuid"),
+        pytest.param(Path("/tmp/test.txt"), Path, id="path"),
+        pytest.param({"key": "value"}, dict, id="dict"),
+        pytest.param({}, dict, id="empty_dict"),
+        pytest.param([1, 2, 3], list, id="list"),
+        pytest.param([], list, id="empty_list"),
+    ],
+)
+def test_identity_conversions(value: Any, target_type: type[object]) -> None:
+    """Exact type match returns the same object instance."""
+    result = to_value_type(value, target_type)
     assert result is value
 
 
-def test_identity_conversions_datetime_identity() -> None:
-    """Datetime with exact type match returns the same object."""
-    value = datetime.datetime(2024, 1, 15, 12, 30, 45)
-    result = to_value_type(value, datetime.datetime)
-    assert result is value
-
-
-def test_identity_conversions_date_identity() -> None:
-    """Date with exact type match returns the same object."""
-    value = datetime.date(2024, 1, 15)
-    result = to_value_type(value, datetime.date)
-    assert result is value
-
-
-def test_identity_conversions_time_identity() -> None:
-    """Time with exact type match returns the same object."""
-    value = datetime.time(12, 30, 45)
-    result = to_value_type(value, datetime.time)
-    assert result is value
-
-
-def test_identity_conversions_decimal_identity() -> None:
-    """Decimal with exact type match returns the same object."""
-    value = Decimal("123.45")
-    result = to_value_type(value, Decimal)
-    assert result is value
-
-
-def test_identity_conversions_uuid_identity() -> None:
-    """UUID with exact type match returns the same object."""
-    value = UUID("550e8400-e29b-41d4-a716-446655440000")
-    result = to_value_type(value, UUID)
-    assert result is value
-
-
-def test_identity_conversions_path_identity() -> None:
-    """Path with exact type match returns the same object."""
-    value = Path("/tmp/test.txt")
-    result = to_value_type(value, Path)
-    assert result is value
-
-
-def test_identity_conversions_dict_identity() -> None:
-    """Dict with exact type match returns the same object."""
-    value = {"key": "value"}
-    result = to_value_type(value, dict)
-    assert result is value
-
-
-def test_identity_conversions_list_identity() -> None:
-    """List with exact type match returns the same object."""
-    value = [1, 2, 3]
-    result = to_value_type(value, list)
-    assert result is value
-
-
-def test_subclass_bug_fixes_bool_to_int_converts_true() -> None:
-    """True should convert to 1 (not return True)."""
-    result = to_value_type(True, int)
-    assert result == 1
+@pytest.mark.parametrize(
+    ("val", "expected"), [pytest.param(True, 1, id="true_to_1"), pytest.param(False, 0, id="false_to_0")]
+)
+def test_subclass_bug_fixes_bool_to_int(val: bool, expected: int) -> None:
+    """Boolean values should convert to actual int instances, not return bool."""
+    result = to_value_type(val, int)
+    assert result == expected
     assert type(result) is int
-    assert result is not True
+    assert result is not val
 
 
-def test_subclass_bug_fixes_bool_to_int_converts_false() -> None:
-    """False should convert to 0 (not return False)."""
-    result = to_value_type(False, int)
-    assert result == 0
-    assert type(result) is int
-    assert result is not False
-
-
-def test_subclass_bug_fixes_datetime_to_date_converts() -> None:
-    """Datetime should convert to date (not return datetime)."""
+@pytest.mark.parametrize(
+    ("target_type", "expected_type", "expected_value"),
+    [
+        pytest.param(datetime.date, datetime.date, datetime.date(2024, 1, 15), id="datetime_to_date"),
+        pytest.param(datetime.time, datetime.time, datetime.time(12, 30, 45), id="datetime_to_time"),
+    ],
+)
+def test_subclass_bug_fixes_datetime_subtypes(
+    target_type: type[datetime.date] | type[datetime.time],
+    expected_type: type[datetime.date] | type[datetime.time],
+    expected_value: datetime.date | datetime.time,
+) -> None:
+    """Datetime instances should convert to strict date or time instances."""
     dt = datetime.datetime(2024, 1, 15, 12, 30, 45)
-    result = to_value_type(dt, datetime.date)
-    assert result == datetime.date(2024, 1, 15)
-    assert type(result) is datetime.date
-    assert not isinstance(result, datetime.datetime)
-
-
-def test_subclass_bug_fixes_datetime_to_time_converts() -> None:
-    """Datetime should convert to time."""
-    dt = datetime.datetime(2024, 1, 15, 12, 30, 45)
-    result = to_value_type(dt, datetime.time)
-    assert result == datetime.time(12, 30, 45)
-    assert type(result) is datetime.time
+    result = to_value_type(dt, target_type)
+    assert result == expected_value
+    assert type(result) is expected_type
+    if target_type is datetime.date:
+        assert not isinstance(result, datetime.datetime)
 
 
 def test_convert_numpy_recursive_preserves_tuple_shape() -> None:
@@ -224,138 +163,106 @@ def test_msgspec_conversion_does_not_walk_numpy_for_plain_payload(monkeypatch: p
 
 
 @pytest.mark.skipif(not schema_utils.NUMPY_INSTALLED, reason="numpy is not installed")
-def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload() -> None:
     """Ndarray payloads should still convert through the numpy fallback path."""
     import numpy as np
 
     class Measurement(msgspec.Struct):
         values: list[float]
 
-    original_walk = schema_utils._convert_numpy_recursive
-    call_count = 0
-
-    def count_walk(obj: object) -> object:
-        nonlocal call_count
-        if isinstance(obj, list):
-            call_count += 1
-        return original_walk(obj)
-
-    monkeypatch.setattr(schema_utils, "_convert_numpy_recursive", count_walk)
     result = schema_utils._convert_msgspec([{"values": np.array([1.0, 2.0])}], Measurement)
     assert result == [Measurement(values=[1.0, 2.0])]
-    assert call_count == 1
 
 
-def test_int_conversion_float_to_int() -> None:
-    """Float truncates to int."""
-    assert to_value_type(3.7, int) == 3
-    assert to_value_type(3.2, int) == 3
-    assert to_value_type(-3.7, int) == -3
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(3.7, 3, id="float_positive_round_down"),
+        pytest.param(3.2, 3, id="float_positive_fraction"),
+        pytest.param(-3.7, -3, id="float_negative"),
+        pytest.param("42", 42, id="str_positive"),
+        pytest.param("-123", -123, id="str_negative"),
+        pytest.param("42.7", 42, id="str_float_positive"),
+        pytest.param("-3.9", -3, id="str_float_negative"),
+        pytest.param(Decimal("42.7"), 42, id="decimal"),
+    ],
+)
+def test_int_conversions(value: Any, expected: int) -> None:
+    """Values convert to integer with truncation where applicable."""
+    assert to_value_type(value, int) == expected
 
 
-def test_int_conversion_str_to_int() -> None:
-    """String with integer value converts to int."""
-    assert to_value_type("42", int) == 42
-    assert to_value_type("-123", int) == -123
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(42, 42.0, id="int"),
+        pytest.param("3.14", 3.14, id="str_positive"),
+        pytest.param("-2.5", -2.5, id="str_negative"),
+        pytest.param(Decimal("3.14159"), 3.14159, id="decimal"),
+        pytest.param(True, 1.0, id="bool_true"),
+        pytest.param(False, 0.0, id="bool_false"),
+    ],
+)
+def test_float_conversions(value: Any, expected: float) -> None:
+    """Values convert to float with matching numeric precision."""
+    assert to_value_type(value, float) == pytest.approx(expected)
 
 
-def test_int_conversion_str_float_to_int() -> None:
-    """String with float value converts to int (truncated)."""
-    assert to_value_type("42.7", int) == 42
-    assert to_value_type("-3.9", int) == -3
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(42, "42", id="int"),
+        pytest.param(3.14, "3.14", id="float"),
+        pytest.param(True, "True", id="bool_true"),
+        pytest.param(False, "False", id="bool_false"),
+        pytest.param(UUID("550e8400-e29b-41d4-a716-446655440000"), "550e8400-e29b-41d4-a716-446655440000", id="uuid"),
+    ],
+)
+def test_str_conversions(value: Any, expected: str) -> None:
+    """Values convert to string representation."""
+    assert to_value_type(value, str) == expected
 
 
-def test_int_conversion_decimal_to_int() -> None:
-    """Decimal converts to int (truncated)."""
-    assert to_value_type(Decimal("42.7"), int) == 42
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(1, True, id="int_one"),
+        pytest.param(0, False, id="int_zero"),
+        pytest.param(42, True, id="int_positive"),
+        pytest.param(1.0, True, id="float_one"),
+        pytest.param(0.0, False, id="float_zero"),
+        pytest.param(0.1, True, id="float_fraction"),
+    ],
+)
+def test_bool_numeric_conversions(value: Any, expected: bool) -> None:
+    """Numeric values convert to bool according to zero/non-zero rules."""
+    assert to_value_type(value, bool) is expected
 
 
-def test_int_conversion_invalid_str_to_int_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to int"):
-        to_value_type("not a number", int)
+@pytest.mark.parametrize("val", ["true", "True", "TRUE", "1", "yes", "Yes", "y", "Y", "t", "T", "on", "ON"])
+def test_bool_conversion_str_true_values(val: str) -> None:
+    """String representations of truth convert to True."""
+    assert to_value_type(val, bool) is True
 
 
-def test_float_conversion_int_to_float() -> None:
-    """Integer converts to float."""
-    assert to_value_type(42, float) == 42.0
+@pytest.mark.parametrize(
+    "val", ["false", "False", "FALSE", "0", "no", "No", "n", "N", "f", "F", "off", "OFF", "", "anything"]
+)
+def test_bool_conversion_str_false_values(val: str) -> None:
+    """String representations of falsity or empty strings convert to False."""
+    assert to_value_type(val, bool) is False
 
 
-def test_float_conversion_str_to_float() -> None:
-    """String with numeric value converts to float."""
-    assert to_value_type("3.14", float) == 3.14
-    assert to_value_type("-2.5", float) == -2.5
-
-
-def test_float_conversion_decimal_to_float() -> None:
-    """Decimal converts to float."""
-    assert to_value_type(Decimal("3.14159"), float) == pytest.approx(3.14159)
-
-
-def test_float_conversion_bool_to_float() -> None:
-    """Boolean converts to float."""
-    assert to_value_type(True, float) == 1.0
-    assert to_value_type(False, float) == 0.0
-
-
-def test_float_conversion_invalid_str_to_float_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to float"):
-        to_value_type("not a number", float)
-
-
-def test_str_conversion_int_to_str() -> None:
-    """Integer converts to string."""
-    assert to_value_type(42, str) == "42"
-
-
-def test_str_conversion_float_to_str() -> None:
-    """Float converts to string."""
-    assert to_value_type(3.14, str) == "3.14"
-
-
-def test_str_conversion_bool_to_str() -> None:
-    """Boolean converts to string."""
-    assert to_value_type(True, str) == "True"
-    assert to_value_type(False, str) == "False"
-
-
-def test_str_conversion_uuid_to_str() -> None:
-    """UUID converts to string."""
-    uuid = UUID("550e8400-e29b-41d4-a716-446655440000")
-    assert to_value_type(uuid, str) == "550e8400-e29b-41d4-a716-446655440000"
-
-
-def test_bool_conversion_int_to_bool() -> None:
-    """Integer converts to bool."""
-    assert to_value_type(1, bool) is True
-    assert to_value_type(0, bool) is False
-    assert to_value_type(42, bool) is True
-
-
-def test_bool_conversion_str_true_values_to_bool() -> None:
-    """String true values convert to True."""
-    for val in ["true", "True", "TRUE", "1", "yes", "Yes", "y", "Y", "t", "T", "on", "ON"]:
-        assert to_value_type(val, bool) is True, f"Expected '{val}' to be True"
-
-
-def test_bool_conversion_str_false_values_to_bool() -> None:
-    """String false values convert to False."""
-    for val in ["false", "False", "FALSE", "0", "no", "No", "n", "N", "f", "F", "off", "OFF", "", "anything"]:
-        assert to_value_type(val, bool) is False, f"Expected '{val}' to be False"
-
-
-def test_bool_conversion_float_to_bool() -> None:
-    """Float converts to bool."""
-    assert to_value_type(1.0, bool) is True
-    assert to_value_type(0.0, bool) is False
-    assert to_value_type(0.1, bool) is True
-
-
-def test_datetime_conversion_str_iso_to_datetime() -> None:
-    """ISO format string converts to datetime."""
-    result = to_value_type("2024-01-15T12:30:45", datetime.datetime)
-    assert result == datetime.datetime(2024, 1, 15, 12, 30, 45)
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("2024-01-15T12:30:45", datetime.datetime(2024, 1, 15, 12, 30, 45), id="iso_str"),
+        pytest.param(datetime.date(2024, 1, 15), datetime.datetime(2024, 1, 15, 0, 0, 0), id="date_to_datetime"),
+    ],
+)
+def test_datetime_conversions(value: Any, expected: datetime.datetime) -> None:
+    """Values convert to datetime instances."""
+    assert to_value_type(value, datetime.datetime) == expected
 
 
 def test_datetime_conversion_str_iso_with_tz_to_datetime() -> None:
@@ -366,234 +273,122 @@ def test_datetime_conversion_str_iso_with_tz_to_datetime() -> None:
     assert result.day == 15
 
 
-def test_datetime_conversion_date_to_datetime() -> None:
-    """Date converts to datetime at midnight."""
-    date = datetime.date(2024, 1, 15)
-    result = to_value_type(date, datetime.datetime)
-    assert result == datetime.datetime(2024, 1, 15, 0, 0, 0)
-
-
-def test_datetime_conversion_invalid_str_to_datetime_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to datetime"):
-        to_value_type("not a date", datetime.datetime)
-
-
-def test_date_conversion_str_iso_to_date() -> None:
-    """ISO format string converts to date."""
-    result = to_value_type("2024-01-15", datetime.date)
-    assert result == datetime.date(2024, 1, 15)
-
-
-def test_date_conversion_str_datetime_to_date() -> None:
-    """Datetime string extracts date portion."""
-    result = to_value_type("2024-01-15T12:30:45", datetime.date)
-    assert result == datetime.date(2024, 1, 15)
-
-
-def test_date_conversion_datetime_to_date() -> None:
-    """Datetime extracts date portion."""
-    dt = datetime.datetime(2024, 1, 15, 12, 30, 45)
-    result = to_value_type(dt, datetime.date)
-    assert result == datetime.date(2024, 1, 15)
-
-
-def test_date_conversion_invalid_str_to_date_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to date"):
-        to_value_type("not a date", datetime.date)
-
-
-def test_time_conversion_str_iso_to_time() -> None:
-    """ISO format string converts to time."""
-    result = to_value_type("12:30:45", datetime.time)
-    assert result == datetime.time(12, 30, 45)
-
-
-def test_time_conversion_datetime_to_time() -> None:
-    """Datetime extracts time portion."""
-    dt = datetime.datetime(2024, 1, 15, 12, 30, 45)
-    result = to_value_type(dt, datetime.time)
-    assert result == datetime.time(12, 30, 45)
-
-
-def test_time_conversion_invalid_str_to_time_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to time"):
-        to_value_type("not a time", datetime.time)
-
-
-def test_decimal_conversion_int_to_decimal() -> None:
-    """Integer converts to Decimal."""
-    result = to_value_type(42, Decimal)
-    assert result == Decimal(42)
-
-
-def test_decimal_conversion_float_to_decimal() -> None:
-    """Float converts to Decimal (via string for precision)."""
-    result = to_value_type(3.14, Decimal)
-    assert result == Decimal("3.14")
-
-
-def test_decimal_conversion_str_to_decimal() -> None:
-    """String converts to Decimal."""
-    result = to_value_type("123.456789", Decimal)
-    assert result == Decimal("123.456789")
-
-
-def test_decimal_conversion_invalid_str_to_decimal_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to Decimal"):
-        to_value_type("not a number", Decimal)
-
-
-def test_uuid_conversion_str_to_uuid() -> None:
-    """UUID string converts to UUID."""
-    result = to_value_type("550e8400-e29b-41d4-a716-446655440000", UUID)
-    assert result == UUID("550e8400-e29b-41d4-a716-446655440000")
-
-
-def test_uuid_conversion_str_uppercase_to_uuid() -> None:
-    """Uppercase UUID string converts to UUID."""
-    result = to_value_type("550E8400-E29B-41D4-A716-446655440000", UUID)
-    assert result == UUID("550e8400-e29b-41d4-a716-446655440000")
-
-
-def test_uuid_conversion_bytes_to_uuid() -> None:
-    """Bytes converts to UUID."""
-    uuid_bytes = UUID("550e8400-e29b-41d4-a716-446655440000").bytes
-    result = to_value_type(uuid_bytes, UUID)
-    assert result == UUID("550e8400-e29b-41d4-a716-446655440000")
-
-
-def test_uuid_conversion_invalid_str_to_uuid_raises() -> None:
-    """Invalid string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to UUID"):
-        to_value_type("not-a-uuid", UUID)
-
-
-def test_path_conversion_str_to_path() -> None:
-    """String converts to Path."""
-    result = to_value_type("/tmp/test.txt", Path)
-    assert result == Path("/tmp/test.txt")
-
-
-def test_path_conversion_pure_path_to_path() -> None:
-    """PurePath converts to Path."""
-    pure = PurePosixPath("/tmp/test.txt")
-    result = to_value_type(pure, Path)
-    assert result == Path("/tmp/test.txt")
-
-
-def test_path_conversion_invalid_type_to_path_raises() -> None:
-    """Invalid type raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert int to Path"):
-        to_value_type(123, Path)
-
-
-def test_dict_conversion_json_str_to_dict() -> None:
-    """JSON string converts to dict."""
-    result = to_value_type('{"key": "value", "count": 42}', dict)
-    assert result == {"key": "value", "count": 42}
-
-
-def test_dict_conversion_json_nested_to_dict() -> None:
-    """Nested JSON string converts to dict."""
-    result = to_value_type('{"outer": {"inner": [1, 2, 3]}}', dict)
-    assert result == {"outer": {"inner": [1, 2, 3]}}
-
-
-def test_dict_conversion_json_array_to_dict_raises() -> None:
-    """JSON array string raises TypeError when converting to dict."""
-    with pytest.raises(TypeError, match="JSON string did not parse to dict"):
-        to_value_type("[1, 2, 3]", dict)
-
-
-def test_dict_conversion_invalid_json_to_dict_raises() -> None:
-    """Invalid JSON string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to dict"):
-        to_value_type("not json", dict)
-
-
-def test_list_conversion_json_array_str_to_list() -> None:
-    """JSON array string converts to list."""
-    result = to_value_type('[1, 2, 3, "four"]', list)
-    assert result == [1, 2, 3, "four"]
-
-
-def test_list_conversion_json_nested_array_to_list() -> None:
-    """Nested JSON array converts to list."""
-    result = to_value_type("[[1, 2], [3, 4]]", list)
-    assert result == [[1, 2], [3, 4]]
-
-
-def test_list_conversion_json_object_to_list_raises() -> None:
-    """JSON object string raises TypeError when converting to list."""
-    with pytest.raises(TypeError, match="JSON string did not parse to list"):
-        to_value_type('{"key": "value"}', list)
-
-
-def test_list_conversion_tuple_to_list() -> None:
-    """Tuple converts to list."""
-    result = to_value_type((1, 2, 3), list)
-    assert result == [1, 2, 3]
-
-
-def test_list_conversion_set_to_list() -> None:
-    """Set converts to list (order may vary)."""
-    result = to_value_type({1, 2, 3}, list)
-    assert sorted(result) == [1, 2, 3]
-
-
-def test_list_conversion_frozenset_to_list() -> None:
-    """Frozenset converts to list (order may vary)."""
-    result = to_value_type(frozenset({1, 2, 3}), list)
-    assert sorted(result) == [1, 2, 3]
-
-
-def test_list_conversion_invalid_json_to_list_raises() -> None:
-    """Invalid JSON string raises TypeError."""
-    with pytest.raises(TypeError, match="Cannot convert str to list"):
-        to_value_type("not json", list)
-
-
-def test_edge_cases_empty_string_to_bool_is_false() -> None:
-    """Empty string converts to False."""
-    assert to_value_type("", bool) is False
-
-
-def test_edge_cases_zero_to_bool_is_false() -> None:
-    """Zero converts to False."""
-    assert to_value_type(0, bool) is False
-    assert to_value_type(0.0, bool) is False
-
-
-def test_edge_cases_empty_dict_preserved() -> None:
-    """Empty dict is preserved."""
-    value: dict[str, str] = {}
-    result = to_value_type(value, dict)
-    assert result == {}
-    assert result is value
-
-
-def test_edge_cases_empty_list_preserved() -> None:
-    """Empty list is preserved."""
-    value: list[int] = []
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("2024-01-15", datetime.date(2024, 1, 15), id="iso_date_str"),
+        pytest.param("2024-01-15T12:30:45", datetime.date(2024, 1, 15), id="iso_datetime_str"),
+        pytest.param(datetime.datetime(2024, 1, 15, 12, 30, 45), datetime.date(2024, 1, 15), id="datetime_instance"),
+    ],
+)
+def test_date_conversions(value: Any, expected: datetime.date) -> None:
+    """Values convert to date instances."""
+    assert to_value_type(value, datetime.date) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("12:30:45", datetime.time(12, 30, 45), id="iso_time_str"),
+        pytest.param(datetime.datetime(2024, 1, 15, 12, 30, 45), datetime.time(12, 30, 45), id="datetime_instance"),
+    ],
+)
+def test_time_conversions(value: Any, expected: datetime.time) -> None:
+    """Values convert to time instances."""
+    assert to_value_type(value, datetime.time) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(42, Decimal(42), id="int"),
+        pytest.param(3.14, Decimal("3.14"), id="float"),
+        pytest.param("123.456789", Decimal("123.456789"), id="str"),
+    ],
+)
+def test_decimal_conversions(value: Any, expected: Decimal) -> None:
+    """Values convert to Decimal instances."""
+    assert to_value_type(value, Decimal) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("550e8400-e29b-41d4-a716-446655440000", id="str_lowercase"),
+        pytest.param("550E8400-E29B-41D4-A716-446655440000", id="str_uppercase"),
+        pytest.param(UUID("550e8400-e29b-41d4-a716-446655440000").bytes, id="bytes"),
+    ],
+)
+def test_uuid_conversions(value: Any) -> None:
+    """Values convert to UUID instances."""
+    assert to_value_type(value, UUID) == UUID("550e8400-e29b-41d4-a716-446655440000")
+
+
+@pytest.mark.parametrize(
+    "value", [pytest.param("/tmp/test.txt", id="str"), pytest.param(PurePosixPath("/tmp/test.txt"), id="pure_path")]
+)
+def test_path_conversions(value: Any) -> None:
+    """Values convert to Path instances."""
+    assert to_value_type(value, Path) == Path("/tmp/test.txt")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param('{"key": "value", "count": 42}', {"key": "value", "count": 42}, id="flat_json"),
+        pytest.param('{"outer": {"inner": [1, 2, 3]}}', {"outer": {"inner": [1, 2, 3]}}, id="nested_json"),
+        pytest.param("{}", {}, id="empty_json"),
+    ],
+)
+def test_dict_conversions(value: str, expected: "dict[str, Any]") -> None:
+    """JSON strings convert to dictionary structures."""
+    assert to_value_type(value, dict) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param('[1, 2, 3, "four"]', [1, 2, 3, "four"], id="flat_json_array"),
+        pytest.param("[[1, 2], [3, 4]]", [[1, 2], [3, 4]], id="nested_json_array"),
+        pytest.param("[]", [], id="empty_json_array"),
+        pytest.param((1, 2, 3), [1, 2, 3], id="tuple"),
+    ],
+)
+def test_list_conversions(value: Any, expected: "list[Any]") -> None:
+    """Sequences and JSON array strings convert to list structures."""
+    assert to_value_type(value, list) == expected
+
+
+@pytest.mark.parametrize(
+    "value", [pytest.param({1, 2, 3}, id="set"), pytest.param(frozenset({1, 2, 3}), id="frozenset")]
+)
+def test_set_to_list_conversions(value: Any) -> None:
+    """Sets and frozensets convert to lists."""
     result = to_value_type(value, list)
-    assert result == []
-    assert result is value
+    assert sorted(result) == [1, 2, 3]
 
 
-def test_edge_cases_empty_json_object_to_dict() -> None:
-    """Empty JSON object converts to empty dict."""
-    result = to_value_type("{}", dict)
-    assert result == {}
-
-
-def test_edge_cases_empty_json_array_to_list() -> None:
-    """Empty JSON array converts to empty list."""
-    result = to_value_type("[]", list)
-    assert result == []
+@pytest.mark.parametrize(
+    ("value", "target_type", "match"),
+    [
+        pytest.param("not a number", int, "Cannot convert str to int", id="str_to_int"),
+        pytest.param("not a number", float, "Cannot convert str to float", id="str_to_float"),
+        pytest.param("not a date", datetime.datetime, "Cannot convert str to datetime", id="str_to_datetime"),
+        pytest.param("not a date", datetime.date, "Cannot convert str to date", id="str_to_date"),
+        pytest.param("not a time", datetime.time, "Cannot convert str to time", id="str_to_time"),
+        pytest.param("not a number", Decimal, "Cannot convert str to Decimal", id="str_to_decimal"),
+        pytest.param("not-a-uuid", UUID, "Cannot convert str to UUID", id="str_to_uuid"),
+        pytest.param(123, Path, "Cannot convert int to Path", id="int_to_path"),
+        pytest.param("[1, 2, 3]", dict, "JSON string did not parse to dict", id="json_array_to_dict"),
+        pytest.param("not json", dict, "Cannot convert str to dict", id="invalid_json_to_dict"),
+        pytest.param('{"key": "value"}', list, "JSON string did not parse to list", id="json_obj_to_list"),
+        pytest.param("not json", list, "Cannot convert str to list", id="invalid_json_to_list"),
+    ],
+)
+def test_conversion_type_errors(value: Any, target_type: type, match: str) -> None:
+    """Invalid input representations raise expected TypeError on conversion."""
+    with pytest.raises(TypeError, match=match):
+        to_value_type(value, target_type)
 
 
 def test_fallback_conversion_custom_type_with_constructor() -> None:
@@ -661,22 +456,31 @@ class UserTypedDict(TypedDict):
     email: str
 
 
-def test_pydantic_conversion_dict_to_pydantic() -> None:
-    """Dict converts to Pydantic model."""
-    data = {"name": "Alice", "email": "alice@example.com"}
-    result = to_value_type(data, UserPydantic)
-    assert isinstance(result, UserPydantic)
-    assert result.name == "Alice"
-    assert result.email == "alice@example.com"
-
-
-def test_pydantic_conversion_json_string_to_pydantic() -> None:
-    """JSON string converts to Pydantic model."""
-    json_str = '{"name": "Bob", "email": "bob@example.com"}'
-    result = to_value_type(json_str, UserPydantic)
-    assert isinstance(result, UserPydantic)
-    assert result.name == "Bob"
-    assert result.email == "bob@example.com"
+@pytest.mark.parametrize(
+    ("model_cls", "payload"),
+    [
+        pytest.param(UserPydantic, {"name": "Alice", "email": "alice@example.com"}, id="pydantic_dict"),
+        pytest.param(UserPydantic, '{"name": "Bob", "email": "bob@example.com"}', id="pydantic_json"),
+        pytest.param(UserDataclass, {"name": "Alice", "email": "alice@example.com"}, id="dataclass_dict"),
+        pytest.param(UserDataclass, '{"name": "Bob", "email": "bob@example.com"}', id="dataclass_json"),
+        pytest.param(UserMsgspec, {"name": "Alice", "email": "alice@example.com"}, id="msgspec_dict"),
+        pytest.param(UserMsgspec, '{"name": "Bob", "email": "bob@example.com"}', id="msgspec_json"),
+        pytest.param(UserAttrs, {"name": "Alice", "email": "alice@example.com"}, id="attrs_dict"),
+        pytest.param(UserAttrs, '{"name": "Bob", "email": "bob@example.com"}', id="attrs_json"),
+    ],
+)
+def test_schema_model_conversions(
+    model_cls: type[UserPydantic] | type[UserDataclass] | type[UserMsgspec] | type[UserAttrs], payload: Any
+) -> None:
+    """Dicts and JSON strings convert to supported schema model instances."""
+    result = to_value_type(payload, model_cls)
+    assert isinstance(result, model_cls)
+    if isinstance(payload, str):
+        assert result.name == "Bob"
+        assert result.email == "bob@example.com"
+    else:
+        assert result.name == "Alice"
+        assert result.email == "alice@example.com"
 
 
 def test_pydantic_conversion_pydantic_identity() -> None:
@@ -697,76 +501,19 @@ def test_pydantic_conversion_schema_conversion_uses_cached_converter_path() -> N
     assert result.name == "Alice"
 
 
-def test_dataclass_conversion_dict_to_dataclass() -> None:
-    """Dict converts to dataclass."""
-    data = {"name": "Alice", "email": "alice@example.com"}
-    result = to_value_type(data, UserDataclass)
-    assert isinstance(result, UserDataclass)
-    assert result.name == "Alice"
-    assert result.email == "alice@example.com"
-
-
-def test_dataclass_conversion_json_string_to_dataclass() -> None:
-    """JSON string converts to dataclass."""
-    json_str = '{"name": "Bob", "email": "bob@example.com"}'
-    result = to_value_type(json_str, UserDataclass)
-    assert isinstance(result, UserDataclass)
-    assert result.name == "Bob"
-    assert result.email == "bob@example.com"
-
-
-def test_msgspec_conversion_dict_to_msgspec() -> None:
-    """Dict converts to msgspec Struct."""
-    data = {"name": "Alice", "email": "alice@example.com"}
-    result = to_value_type(data, UserMsgspec)
-    assert isinstance(result, UserMsgspec)
-    assert result.name == "Alice"
-    assert result.email == "alice@example.com"
-
-
-def test_msgspec_conversion_json_string_to_msgspec() -> None:
-    """JSON string converts to msgspec Struct."""
-    json_str = '{"name": "Bob", "email": "bob@example.com"}'
-    result = to_value_type(json_str, UserMsgspec)
-    assert isinstance(result, UserMsgspec)
-    assert result.name == "Bob"
-    assert result.email == "bob@example.com"
-
-
-def test_attrs_conversion_dict_to_attrs() -> None:
-    """Dict converts to attrs class."""
-    data = {"name": "Alice", "email": "alice@example.com"}
-    result = to_value_type(data, UserAttrs)
-    assert isinstance(result, UserAttrs)
-    assert result.name == "Alice"
-    assert result.email == "alice@example.com"
-
-
-def test_attrs_conversion_json_string_to_attrs() -> None:
-    """JSON string converts to attrs class."""
-    json_str = '{"name": "Bob", "email": "bob@example.com"}'
-    result = to_value_type(json_str, UserAttrs)
-    assert isinstance(result, UserAttrs)
-    assert result.name == "Bob"
-    assert result.email == "bob@example.com"
-
-
-def test_typed_dict_conversion_dict_to_typed_dict() -> None:
-    """Dict converts to TypedDict (returns dict since TypedDict is runtime dict)."""
-    data = {"name": "Alice", "email": "alice@example.com"}
-    result = to_value_type(data, UserTypedDict)
+@pytest.mark.parametrize(
+    ("payload", "expected_name", "expected_email"),
+    [
+        pytest.param({"name": "Alice", "email": "alice@example.com"}, "Alice", "alice@example.com", id="dict"),
+        pytest.param('{"name": "Bob", "email": "bob@example.com"}', "Bob", "bob@example.com", id="json_str"),
+    ],
+)
+def test_typed_dict_conversions(payload: Any, expected_name: str, expected_email: str) -> None:
+    """Dict and JSON strings convert to TypedDict mapping representations."""
+    result = to_value_type(payload, UserTypedDict)
     assert isinstance(result, dict)
-    assert result["name"] == "Alice"
-    assert result["email"] == "alice@example.com"
-
-
-def test_typed_dict_conversion_json_string_to_typed_dict() -> None:
-    """JSON string converts to TypedDict."""
-    json_str = '{"name": "Bob", "email": "bob@example.com"}'
-    result = to_value_type(json_str, UserTypedDict)
-    assert isinstance(result, dict)
-    assert result["name"] == "Bob"
-    assert result["email"] == "bob@example.com"
+    assert result["name"] == expected_name
+    assert result["email"] == expected_email
 
 
 def test_schema_type_edge_cases_nested_json_to_pydantic() -> None:

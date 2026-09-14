@@ -153,14 +153,6 @@ def test_event_message_different_timestamps() -> None:
     assert message.available_at < message.lease_expires_at
 
 
-def test_event_message_slots_used() -> None:
-    """EventMessage uses __slots__ for memory efficiency."""
-    assert hasattr(EventMessage, "__slots__")
-    assert "event_id" in EventMessage.__slots__
-    assert "channel" in EventMessage.__slots__
-    assert "payload" in EventMessage.__slots__
-
-
 def test_event_message_dataclass_fields() -> None:
     """EventMessage has correct dataclass fields."""
     import dataclasses

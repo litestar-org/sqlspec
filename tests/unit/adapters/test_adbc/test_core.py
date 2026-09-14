@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import UUID
 
 from adbc_driver_manager import AdbcStatusCode, DatabaseError
 
@@ -14,6 +15,7 @@ from sqlspec.adapters.adbc.core import (
     get_statement_config,
     prepare_parameters_with_casts,
     prepare_postgres_parameters,
+    prepare_postgres_uuid_bindings,
     resolve_column_names,
     resolve_many_rowcount,
 )
@@ -357,3 +359,13 @@ def test_pg_textsearch_class_and_instance_resolve_as_postgres_family() -> None:
     for dialect in (PGTextSearch, PGTextSearch()):
         name = adbc_core.resolve_dialect_name(dialect)
         assert adbc_core.is_postgres_dialect(name)
+
+
+def test_adbc_postgres_uuid_binding_runs_across_mypyc_boundary() -> None:
+    """The compiled ADBC core should retain UUID rewrite behavior."""
+    value = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    sql, parameters = prepare_postgres_uuid_bindings("SELECT $1", [value], is_many=False, dialect="postgres")
+
+    assert sql == "SELECT CAST($1 AS UUID)"
+    assert parameters == [str(value)]

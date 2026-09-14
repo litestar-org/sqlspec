@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.utils.correlation import CorrelationContext, get_correlation_adapter
+from sqlspec.utils.correlation import CorrelationContext, correlation_context, get_correlation_adapter
 
 
 def setup_function() -> None:
@@ -462,3 +462,25 @@ def test_generate_produces_valid_uuids() -> None:
 
         parsed_uuid = uuid.UUID(correlation_id)
         assert str(parsed_uuid) == correlation_id
+
+
+def test_correlation_context_function_is_public() -> None:
+    """correlation_context is a public helper that manages correlation IDs."""
+    import sqlspec.utils.correlation as correlation_module
+
+    assert "correlation_context" in correlation_module.__all__
+    assert hasattr(correlation_module, "correlation_context")
+    with correlation_context("request-id") as correlation_id:
+        assert correlation_id == "request-id"
+        assert CorrelationContext.get() == "request-id"
+    assert CorrelationContext.get() is None
+
+
+def test_correlation_context_with_generated_id() -> None:
+    """correlation_context generates a UUID when called with no ID."""
+    with correlation_context() as correlation_id:
+        assert isinstance(correlation_id, str)
+        assert len(correlation_id) > 0
+        assert CorrelationContext.get() == correlation_id
+        uuid.UUID(correlation_id)
+    assert CorrelationContext.get() is None

@@ -1,13 +1,6 @@
 default_language_version:
   python: "3"
 repos:
-  - repo: local
-    hooks:
-      - id: no-future-annotations
-        name: Disallow future annotations in package code
-        entry: python tools/hooks/no_future_annotations.py
-        language: python
-        files: ^sqlspec/.*\.py$
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:
@@ -52,10 +45,3 @@ repos:
     hooks:
       - id: sphinx-lint
         args: ["--jobs", "1"]
-  - repo: local
-    hooks:
-      - id: pypi-readme
-        name: pypi-readme
-        language: python
-        entry: python tools/pypi_readme.py
-        types: [markdown]

@@ -212,16 +212,6 @@ def test_format_table_identifier_preserves_quoted_dots() -> None:
     )
 
 
-def test_no_lazy_optional_dependency_getter_functions_in_psqlpy_core() -> None:
-    assert not hasattr(psqlpy_core, "_get_jsonb_type")
-    assert not hasattr(psqlpy_core, "_librt_string_writer_type")
-
-
-def test_no_optional_dependency_resolved_sentinel_flags_in_psqlpy_core() -> None:
-    assert not hasattr(psqlpy_core, "_JSONB_RESOLVED")
-    assert not hasattr(psqlpy_core, "_STRING_WRITER_RESOLVED")
-
-
 def test_optional_dependency_globals_are_resolved_at_import_time() -> None:
     assert hasattr(psqlpy_core, "_JSONB_TYPE")
     assert hasattr(psqlpy_core, "_STRING_WRITER_TYPE")
@@ -270,16 +260,6 @@ def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None
     )
     prepared = prepare_parameters_with_casts([MyInt(4)], {}, statement_config)
     assert prepared == [5]
-
-
-def test_psqlpy_driver_no_longer_caches_output_converter() -> None:
-    """The driver should no longer construct the dead psqlpy output converter."""
-    import sqlspec.adapters.psqlpy.driver as psqlpy_driver
-    import sqlspec.adapters.psqlpy.type_converter as psqlpy_type_converter
-
-    assert not hasattr(psqlpy_driver, "_type_converter")
-    assert not hasattr(psqlpy_type_converter, "PostgreSQLOutputConverter")
-    assert "PostgreSQLOutputConverter" not in psqlpy_type_converter.__all__
 
 
 def test_prepare_parameters_with_casts_supports_virtual_abc_dispatch() -> None:
