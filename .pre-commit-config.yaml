@@ -36,7 +36,7 @@ repos:
         exclude: "test*|tools"
         args: ["--use-tuple"]
   - repo: https://github.com/ariebovenberg/slotscheck
-    rev: v0.21.0b1
+    rev: v0.21.0
     hooks:
       - id: slotscheck
         exclude: "docs|.github"

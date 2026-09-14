@@ -9,6 +9,16 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.63.1 - Service class subclassing and slotscheck compatibility
+----------------------------------------------------------------
+
+**Fixed:**
+
+* Update :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`
+  ``@mypyc_attr`` decorators to include ``native_class=False``, allowing downstream applications
+  and frameworks to define interpreted subclasses and dynamic attributes across the compiled C boundary
+  without native class memory layout restrictions.
+
 v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
 ---------------------------------------------------------------------------------------------------
 

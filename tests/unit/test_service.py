@@ -7,6 +7,7 @@ The non-suppression guarantee is what lets callers ``return`` from inside the
 block without a trailing unreachable ``raise`` to satisfy type checkers.
 """
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -72,3 +73,43 @@ def test_sync_begin_transaction_rolls_back_and_propagates() -> None:
     session.begin.assert_called_once()
     session.rollback.assert_called_once()
     session.commit.assert_not_called()
+
+
+async def test_async_service_interpreted_subclass() -> None:
+    """Interpreted subclasses can instantiate and define custom attributes and methods."""
+    session = AsyncMock()
+    session._transaction_depth = 0
+    session._connection_in_transaction = MagicMock(return_value=False)
+
+    class CustomAsyncService(SQLSpecAsyncService[Any]):
+        def __init__(self, session: Any, custom_tag: str) -> None:
+            super().__init__(session=session)
+            self.custom_tag = custom_tag
+
+        def custom_method(self) -> str:
+            return f"tag:{self.custom_tag}"
+
+    service = CustomAsyncService(session, custom_tag="interpreted")
+    assert service.custom_tag == "interpreted"
+    assert service.custom_method() == "tag:interpreted"
+    assert service.session is session
+
+
+def test_sync_service_interpreted_subclass() -> None:
+    """Interpreted subclasses can instantiate and define custom attributes and methods."""
+    session = MagicMock()
+    session._transaction_depth = 0
+    session._connection_in_transaction.return_value = False
+
+    class CustomSyncService(SQLSpecSyncService[Any]):
+        def __init__(self, session: Any, custom_tag: str) -> None:
+            super().__init__(session=session)
+            self.custom_tag = custom_tag
+
+        def custom_method(self) -> str:
+            return f"tag:{self.custom_tag}"
+
+    service = CustomSyncService(session, custom_tag="interpreted")
+    assert service.custom_tag == "interpreted"
+    assert service.custom_method() == "tag:interpreted"
+    assert service.session is session

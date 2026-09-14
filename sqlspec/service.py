@@ -63,7 +63,7 @@ _TRANSACTIONS: ContextVar[dict[object, _TransactionState] | None] = ContextVar(
 )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SQLSpecAsyncService(Generic[AsyncDriverT]):
     """Base class for asynchronous SQLSpec services.
 
@@ -346,7 +346,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         return _AsyncBeginTransactionContext(self)
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SQLSpecSyncService(Generic[SyncDriverT]):
     """Base class for synchronous SQLSpec services.
 
