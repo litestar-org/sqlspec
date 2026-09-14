@@ -251,7 +251,9 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     # --- 1. SQL object construction ---
 
     from sqlspec import sql
+    from sqlspec.core import ParameterDeclaration
     from sqlspec.core.statement import SQL
+    from sqlspec.driver._common import _check_declared_parameters
 
     def bench_sql_construction_no_params() -> None:
         SQL("INSERT INTO test (value) VALUES (?)")
@@ -450,6 +452,34 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
             bench_fn=bench_driver_parameters,
             iterations=iterations,
             description="Format a 3-element positional parameter set",
+        )
+    )
+
+    declared_declarations = (ParameterDeclaration("value", "str"), ParameterDeclaration("id", "int"))
+    declared_stmt = SQL("SELECT :value, :id", {"value": "x", "id": 1}, declared_parameters=declared_declarations)
+    undeclared_stmt = SQL("SELECT :value, :id", {"value": "x", "id": 1})
+
+    def bench_check_declared_parameters_two() -> None:
+        _check_declared_parameters(declared_stmt)
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="_check_declared_parameters (2 declared)",
+            bench_fn=bench_check_declared_parameters_two,
+            iterations=iterations,
+            description="Validate parameters against 2 declarations",
+        )
+    )
+
+    def bench_check_declared_parameters_none() -> None:
+        _check_declared_parameters(undeclared_stmt)
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="_check_declared_parameters (none declared)",
+            bench_fn=bench_check_declared_parameters_none,
+            iterations=iterations,
+            description="Validate parameters when none are declared",
         )
     )
 

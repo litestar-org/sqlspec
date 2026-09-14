@@ -26,7 +26,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec import SQLSpec
+from sqlspec import ParameterDeclaration, SQLFileLoader, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.schema import _convert_numpy_recursive, to_schema, transform_dict_keys
@@ -59,6 +59,7 @@ __all__ = (
     "raw_psycopg_sync_rows",
     "raw_spanner_strings",
     "raw_sqlite_complex_parameters",
+    "raw_sqlite_declared_parameters",
     "raw_sqlite_dict_key_transform",
     "raw_sqlite_initialization",
     "raw_sqlite_iterative_inserts",
@@ -118,6 +119,7 @@ __all__ = (
     "sqlspec_psycopg_sync_rows",
     "sqlspec_spanner_strings",
     "sqlspec_sqlite_complex_parameters",
+    "sqlspec_sqlite_declared_parameters",
     "sqlspec_sqlite_dict_key_transform",
     "sqlspec_sqlite_initialization",
     "sqlspec_sqlite_iterative_inserts",
@@ -179,6 +181,8 @@ ORACLE_LOB_ENV_VARS = (
 POSTGRES_DSN_ENV = "SQLSPEC_BENCH_POSTGRES_DSN"
 COCKROACH_DSN_ENV = "SQLSPEC_BENCH_COCKROACH_DSN"
 SQLITE_EXTENDED_SCENARIOS = (
+    ("raw", "declared_parameters"),
+    ("sqlspec", "declared_parameters"),
     ("raw", "dict_key_transform"),
     ("sqlspec", "dict_key_transform"),
     ("raw", "schema_mapping"),
@@ -1440,6 +1444,46 @@ def sqlalchemy_sqlite_repeated_queries() -> None:
             for i in range(ROWS_TO_INSERT):
                 result = conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
                 result.fetchone()
+
+
+def raw_sqlite_declared_parameters() -> None:
+    """Repeated single-row queries with named parameters using raw sqlite3."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        try:
+            _optimize_raw_sqlite(conn)
+            conn.execute(CREATE_TEST_TABLE)
+            data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            conn.executemany(INSERT_TEST_VALUE, data)
+            conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                cursor = conn.execute(SELECT_BY_VALUE_SQLA, {"value": f"value_{i % 100}"})
+                try:
+                    row = cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == f"value_{i % 100}"
+                finally:
+                    cursor.close()
+        finally:
+            conn.close()
+
+
+def sqlspec_sqlite_declared_parameters() -> None:
+    """Repeated single-row queries with declared parameter validation."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        loader = SQLFileLoader()
+        loader.add_named_sql("select_by_value", SELECT_BY_VALUE_SQLA, parameters=[ParameterDeclaration("value", "str")])
+        declared_sql = loader.get_sql("select_by_value")
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_TEST_VALUE, data)
+            for i in range(ROWS_TO_INSERT):
+                row = session.fetch_one_or_none(declared_sql, value=f"value_{i % 100}")
+                assert row is not None
+                assert row["value"] == f"value_{i % 100}"
 
 
 # Aiosqlite implementations
@@ -2970,6 +3014,8 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "asyncpg", "iterative_inserts"): sqlalchemy_asyncpg_iterative_inserts,
     ("sqlalchemy", "asyncpg", "repeated_queries"): sqlalchemy_asyncpg_repeated_queries,
     # Extended SQLite scenarios (raw vs sqlspec only)
+    ("raw", "sqlite", "declared_parameters"): raw_sqlite_declared_parameters,
+    ("sqlspec", "sqlite", "declared_parameters"): sqlspec_sqlite_declared_parameters,
     ("raw", "sqlite", "dict_key_transform"): raw_sqlite_dict_key_transform,
     ("sqlspec", "sqlite", "dict_key_transform"): sqlspec_sqlite_dict_key_transform,
     ("raw", "sqlite", "schema_mapping"): raw_sqlite_schema_mapping,
