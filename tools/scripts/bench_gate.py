@@ -9,6 +9,7 @@ Thresholds define the maximum acceptable overhead (%) of sqlspec vs raw driver:
 - repeated_queries: < 5% overhead
 - write_heavy: < 10% overhead
 - read_heavy: < 12% overhead
+- declared_parameters: < 15% overhead
 
 Run with::
 
@@ -19,6 +20,7 @@ Run with::
 
 import importlib.util
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -57,10 +59,11 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "repeated_queries": 5.0,
     "write_heavy": 10.0,
     "read_heavy": 12.0,
+    "declared_parameters": 15.0,
 }
 
 # Core scenarios to gate on
-GATE_SCENARIOS = ["iterative_inserts", "repeated_queries", "write_heavy", "read_heavy"]
+GATE_SCENARIOS = ["iterative_inserts", "repeated_queries", "write_heavy", "read_heavy", "declared_parameters"]
 
 # PRD benchmark matrix for mypyc expansion work. This keeps the benchmark
 # expectations next to the scripts that actually exercise them.
@@ -72,6 +75,9 @@ BENCHMARK_SCENARIO_MATRIX: dict[str, dict[str, str | tuple[str, ...]]] = {
             "prepare_driver_parameters (tuple)",
             "prepare_driver_parameters (dict)",
             "_driver_parameters (3 params)",
+            "_check_declared_parameters (2 declared)",
+            "_check_declared_parameters (none declared)",
+            "declared_parameters",
             "complex_parameters",
         ),
     },
@@ -144,12 +150,14 @@ def run_gate(
     # Run benchmarks using the same infrastructure as bench.py
     errors: list[str] = []
     bench_results = bench_mod.run_benchmark("sqlite", errors, iterations=iterations, warmup=warmup)
+    declared_results = _run_gate_scenario("sqlite", "declared_parameters", errors, iterations=iterations, warmup=warmup)
+    bench_results.extend(declared_results)
 
-    # Build lookup: (library, scenario) -> median time
-    time_lookup: dict[tuple[str, str], float] = {}
+    # Build lookup: (library, scenario) -> result dict
+    row_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for result in bench_results:
         key = (result["library"], result["scenario"])
-        time_lookup[key] = result["time"]
+        row_lookup[key] = result
 
     # Determine sqlspec label (may include "(mypyc)")
     sqlspec_label = bench_mod.SQLSPEC_LABEL
@@ -160,23 +168,67 @@ def run_gate(
     for scenario in GATE_SCENARIOS:
         threshold = thresholds.get(scenario, 100.0)
 
-        raw_time = time_lookup.get(("raw", scenario))
-        sqlspec_time = time_lookup.get((sqlspec_label, scenario))
+        raw = row_lookup.get(("raw", scenario))
+        sqlspec_row = row_lookup.get((sqlspec_label, scenario))
 
-        if raw_time is None or sqlspec_time is None:
+        raw_time = raw.get("time") if raw is not None else None
+        sqlspec_time = sqlspec_row.get("time") if sqlspec_row is not None else None
+
+        raw_valid = (
+            raw_time is not None and isinstance(raw_time, (int, float)) and math.isfinite(raw_time) and raw_time > 0
+        )
+        sqlspec_valid = (
+            sqlspec_time is not None
+            and isinstance(sqlspec_time, (int, float))
+            and math.isfinite(sqlspec_time)
+            and sqlspec_time > 0
+        )
+
+        if raw is not None and "noisy" in raw and sqlspec_row is not None and "noisy" in sqlspec_row:
+            raw_noisy = bool(raw["noisy"])
+            sqlspec_noisy = bool(sqlspec_row["noisy"])
+            raw_noise_ratio = float(raw["noise_ratio"])
+            sqlspec_noise_ratio = float(sqlspec_row["noise_ratio"])
+            noise = {
+                "raw_noisy": raw_noisy,
+                "raw_noise_ratio": raw_noise_ratio,
+                "sqlspec_noisy": sqlspec_noisy,
+                "sqlspec_noise_ratio": sqlspec_noise_ratio,
+                "noisy": raw_noisy or sqlspec_noisy,
+                "noise_ratio": max(raw_noise_ratio, sqlspec_noise_ratio),
+            }
+        else:
+            noise = {
+                "raw_noisy": bool(raw["noisy"])
+                if (raw is not None and "noisy" in raw and raw["noisy"] is not None)
+                else None,
+                "raw_noise_ratio": float(raw["noise_ratio"])
+                if (raw is not None and "noise_ratio" in raw and raw["noise_ratio"] is not None)
+                else None,
+                "sqlspec_noisy": bool(sqlspec_row["noisy"])
+                if (sqlspec_row is not None and "noisy" in sqlspec_row and sqlspec_row["noisy"] is not None)
+                else None,
+                "sqlspec_noise_ratio": float(sqlspec_row["noise_ratio"])
+                if (sqlspec_row is not None and "noise_ratio" in sqlspec_row and sqlspec_row["noise_ratio"] is not None)
+                else None,
+                "noisy": None,
+                "noise_ratio": None,
+            }
+
+        if not raw_valid or not sqlspec_valid:
             gate_results.append({
                 "scenario": scenario,
-                "raw_time": raw_time,
-                "sqlspec_time": sqlspec_time,
+                "raw_time": raw_time if raw_valid else None,
+                "sqlspec_time": sqlspec_time if sqlspec_valid else None,
                 "overhead_pct": None,
                 "threshold_pct": threshold,
                 "passed": False,
+                **noise,
             })
             all_passed = False
             continue
 
-        overhead_pct = (sqlspec_time - raw_time) / raw_time * 100.0 if raw_time > 0 else 0.0
-
+        overhead_pct = (sqlspec_time - raw_time) / raw_time * 100.0
         passed = overhead_pct <= threshold
 
         if not passed:
@@ -189,6 +241,7 @@ def run_gate(
             "overhead_pct": overhead_pct,
             "threshold_pct": threshold,
             "passed": passed,
+            **noise,
         })
 
     if errors:
@@ -212,6 +265,7 @@ def print_gate_table(results: list[dict[str, Any]]) -> None:
     table.add_column("sqlspec (s)", justify="right", style="yellow")
     table.add_column("Overhead %", justify="right")
     table.add_column("Threshold %", justify="right", style="dim")
+    table.add_column("Noise", justify="center")
     table.add_column("Status", justify="center")
 
     for row in results:
@@ -221,6 +275,7 @@ def print_gate_table(results: list[dict[str, Any]]) -> None:
         overhead = row["overhead_pct"]
         threshold = row["threshold_pct"]
         passed = row["passed"]
+        noisy = row.get("noisy")
 
         raw_str = f"{raw_t:.4f}" if raw_t is not None else "ERROR"
         sqlspec_str = f"{sqlspec_t:.4f}" if sqlspec_t is not None else "ERROR"
@@ -233,9 +288,16 @@ def print_gate_table(results: list[dict[str, Any]]) -> None:
 
         threshold_str = f"<= {threshold:.0f}%"
 
+        if noisy is None:
+            noise_str = "ERROR"
+        elif noisy:
+            noise_str = "[yellow]yes[/yellow]"
+        else:
+            noise_str = ""
+
         status_str = "[bold green]PASS[/bold green]" if passed else "[bold red]FAIL[/bold red]"
 
-        table.add_row(scenario, raw_str, sqlspec_str, overhead_str, threshold_str, status_str)
+        table.add_row(scenario, raw_str, sqlspec_str, overhead_str, threshold_str, noise_str, status_str)
 
     console.print(table)
 
@@ -309,6 +371,13 @@ def _write_json_results(
     show_default=True,
     help="Max overhead % for read_heavy",
 )
+@click.option(
+    "--threshold-declared",
+    "threshold_declared",
+    default=DEFAULT_THRESHOLDS["declared_parameters"],
+    show_default=True,
+    help="Max overhead % for declared_parameters",
+)
 def main(
     rows: int,
     iterations: int,
@@ -317,6 +386,7 @@ def main(
     threshold_repeated: float,
     threshold_write: float,
     threshold_read: float,
+    threshold_declared: float,
     json_output: str | None,
 ) -> None:
     """Run performance regression gate.
@@ -330,6 +400,7 @@ def main(
         "repeated_queries": threshold_repeated,
         "write_heavy": threshold_write,
         "read_heavy": threshold_read,
+        "declared_parameters": threshold_declared,
     }
 
     click.echo(f"Running performance gate (rows={rows}, iterations={iterations}, warmup={warmup})")
@@ -360,6 +431,46 @@ def main(
         failed = [r["scenario"] for r in results if not r["passed"]]
         click.secho(f"\nGate FAILED. Scenarios exceeding threshold: {', '.join(failed)}", fg="red")
         sys.exit(1)
+
+
+def _run_gate_scenario(
+    driver: str | list[str] = "sqlite",
+    scenario: str = "declared_parameters",
+    errors: list[str] | None = None,
+    *,
+    iterations: int = bench_mod.DEFAULT_BENCH_ITERATIONS,
+    warmup: int = bench_mod.DEFAULT_BENCH_WARMUP,
+) -> list[dict[str, Any]]:
+    """Run a specific benchmark scenario for raw and sqlspec libraries."""
+    if isinstance(driver, list):
+        errors = driver
+        driver = "sqlite"
+    if errors is None:
+        errors = []
+
+    results: list[dict[str, Any]] = []
+    for lib in ("raw", "sqlspec"):
+        func = bench_mod.SCENARIO_REGISTRY.get((lib, driver, scenario))
+        if func is None:
+            errors.append(f"No implementation for library={lib}, driver={driver}, scenario={scenario}")
+            continue
+
+        try:
+            times = bench_mod._run_benchmark_iterations(func, is_async=False, iterations=iterations, warmup=warmup)
+            stats = bench_mod._summarize_times(times)
+            label = bench_mod._benchmark_library_label(lib)
+            results.append({
+                "driver": driver,
+                "library": label,
+                "library_key": lib,
+                "scenario": scenario,
+                "times": times,
+                **stats,
+            })
+        except Exception as exc:
+            errors.append(f"{lib}/{driver}/{scenario}: {exc}")
+
+    return results
 
 
 if __name__ == "__main__":
