@@ -189,11 +189,11 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   probe branches.
   (`#782 <https://github.com/litestar-org/sqlspec/pull/782>`_)
 
-* Driver execution methods (:meth:`~sqlspec.driver.SyncDriverAdapterBase.execute`,
-  :meth:`~sqlspec.driver.SyncDriverAdapterBase.select`, etc.) enforce keyword argument parameter passing
-  (``execute(sql, a=1, b=2)`` or ``execute(sql, **params)``). Passing positional dictionary literals
-  is prohibited across documentation, examples, and internal extensions to take advantage of the driver
-  fast-path parameter dispatch.
+* Docs, examples, and built-in extensions now pass named query values as keyword arguments
+  (``execute(sql, a=1, b=2)`` or ``execute(sql, **params)``). Drivers still accept a dict, list,
+  or tuple as a positional argument. Existing calls need no changes.
+  ``execute_many`` still accepts a collection of rows.
+  (`#769 <https://github.com/litestar-org/sqlspec/pull/769>`_)
 
 * The Litestar extension now requires ``litestar>=2.23.0``.
 
@@ -212,10 +212,21 @@ v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs param
   consumption without intermediate tuple relays.
   (`#771 <https://github.com/litestar-org/sqlspec/pull/771>`_)
 
-* ``sql.values`` creates a :class:`~sqlspec.builder.Values` builder for parameterized bulk row lists rather than resolving as a column named ``values``. Use ``sql.column("values")`` to construct column expressions referencing that identifier.
+* ``sql.values(...)`` creates a :class:`~sqlspec.builder.Values` builder that binds values for bulk row lists.
+  Use ``sql.column("values")`` to refer to a column named ``values``.
   (`#779 <https://github.com/litestar-org/sqlspec/pull/779>`_)
 
+* Removed unused private helpers and shared repeated code across builders, drivers, and migrations.
+  Loader, service, and ADK artifact modules now group public methods before private helpers.
+  Supported public APIs and query behavior stay the same.
+  (`#784 <https://github.com/litestar-org/sqlspec/pull/784>`_)
+
 **Fixed:**
+
+* Cached statements no longer retry SQL when a query or result conversion fails. This prevents
+  duplicate writes. Cached dict and record rows keep their values. With pymssql, statement stacks
+  leave the caller's open transaction in place.
+  (`#742 <https://github.com/litestar-org/sqlspec/pull/742>`_)
 
 * Preserve JSON objects and arrays as individual query parameters after placeholder conversion,
   instead of reinterpreting them as batches during parameter validation.
